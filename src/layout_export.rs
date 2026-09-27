@@ -482,7 +482,7 @@ impl<'a> Html<'a> {
             );
         }
         if let Geom::Text(run) = &shape.geom {
-            if run.on_path.is_some() {
+            if run.on_path.is_some() || run.frame.is_some() {
                 let mut art=shape.clone(); art.rotation=0.; art.opacity=1.; art.blend=crate::color::Blend::Normal;
                 out.push_str(&crate::svg::shape_fragment(&art));
                 out.push_str("</div>");
