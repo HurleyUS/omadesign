@@ -94,6 +94,7 @@ fn schedule(scene: &str) -> Vec<Action> {
             event(20., Key(egui::Key::Escape, Modifiers::NONE)),
             event(22., Key(egui::Key::Z, ctrl())),
             event(24., Key(egui::Key::Z, Modifiers{shift:true,..ctrl()})),
+            event(25., ScrollAt(At(1480.,560.), -650.)),
             event(26., Click(Text("Line breaking"))),
             event(27., Click(Text("Hyphenate"))),
         ],
@@ -1296,7 +1297,7 @@ fn main() -> eframe::Result {
                 .expect("invalid FPS")
         })
         .unwrap_or(FPS);
-    assert!(matches!(fps, 30 | 60), "FPS must be 30 or 60");
+    assert!(matches!(fps, 10 | 30 | 60), "FPS must be 10, 30 or 60");
     // Keep the real desktop HOME/theme, isolate every app write and credential.
     let profile = std::env::temp_dir().join(format!("omadesign-recording-{}", std::process::id()));
     for (variable, name) in [
