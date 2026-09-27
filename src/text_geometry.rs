@@ -223,10 +223,11 @@ pub fn layout_on_path(run: &TypeRun) -> TextGeometryLayout {
     plain.wrap_width = None;
     plain.content = plain.content.replace('\n', " ");
     plain.tracking += on.spacing;
+    for span in &mut plain.spans { if let Some(tracking) = &mut span.tracking { *tracking += on.spacing / plain.px.max(1.) * 1000.; } }
     let lines = crate::text::compose(&plain);
     let mut result = TextGeometryLayout::default();
     let width = lines.iter().map(|line| line.width).fold(0f32, f32::max);
-    let offset = match run.align {
+    let offset = match crate::text::paragraph_style(run, 0).align {
         TextAlign::Start => 0.,
         TextAlign::Center => (span - width).max(0.) * 0.5,
         TextAlign::End => (span - width).max(0.),
@@ -684,3 +685,15 @@ mod lifecycle_tests {
     }
 }
 
+#[cfg(test)] mod range_path_tests {
+    use super::*;
+    #[test] fn curve_spacing_adds_to_explicit_range_tracking_and_paragraph_alignment() {
+        let guide=Shape::new(Geom::Line{a:Pt::ZERO,b:Pt::new(1000.,0.)},Default::default());
+        let mut run=TypeRun{content:"ABCD".into(),px:20.,on_path:Some(TextOnPath{path_id:guide.id,cache:guide_path(&guide),..Default::default()}),..Default::default()};
+        run.set_character_style(0,4,|span|span.tracking=Some(100.));let original=layout_on_path(&run);
+        run.on_path.as_mut().unwrap().spacing=3.;let spaced=layout_on_path(&run);let x=|layout:&TextGeometryLayout,index|layout.carets.iter().find(|c|c.0==index).unwrap().1.x;
+        assert!((x(&spaced,1)-x(&original,1)-3.).abs()<0.01);
+        run.update_paragraphs(0,4,|p|p.align=TextAlign::Center);let centered=layout_on_path(&run);assert!(x(&centered,0)>400.);
+        run.update_paragraphs(0,4,|p|p.align=TextAlign::End);let right=layout_on_path(&run);assert!(x(&right,0)>x(&centered,0)+300.);
+    }
+}
