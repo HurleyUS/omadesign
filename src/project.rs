@@ -5,7 +5,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(crate) const VERSION: u32 = 6;
+pub(crate) const VERSION: u32 = 9;
 
 #[derive(Serialize, Deserialize)]
 struct File {
@@ -19,7 +19,7 @@ pub fn encode(doc: &Document) -> Result<String, String> {
     serde_json::to_string(&File {
         // Older readers must not silently strip a mask or change stroke placement.
         // Keep plain documents compatible with v5; v1-v6 remain readable here.
-        version: if doc
+        version: if doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(&s.geom, crate::geom::Geom::Text(t) if t.on_path.is_some())) { 9 } else if doc
             .layers
             .iter()
             .filter_map(|l| l.kind.shapes())
@@ -61,6 +61,7 @@ pub fn decode(s: &str) -> Result<Document, String> {
             }
         }
     }
+    crate::text_geometry::reflow(&mut doc);
     doc.ensure_ids();
     doc.validate_hierarchy()?;
     Ok(doc)

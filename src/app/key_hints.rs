@@ -460,6 +460,7 @@ impl Studio {
                     }
                     Tool::Text => {
                         add("Click", "Place or edit text", false);
+                        add("Click path", "Type on its outline", false);
                     }
                     Tool::Gradient => {
                         add(

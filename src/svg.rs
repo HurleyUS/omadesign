@@ -414,6 +414,7 @@ fn write_shape(
     // may not have the brand font. Text stays editable in the original document.
     if let Geom::Text(run) = &shape.geom
         && !text_as_paths
+        && run.on_path.is_none()
         && !run.font.starts_with("omatype:")
     {
         let family = crate::text::label_for(&run.font);
