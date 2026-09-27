@@ -513,6 +513,8 @@ fn buzz_shape(_bytes: &[u8], run: &TypeRun) -> Option<Vec<Vec<Pt>>> {
 
 mod composer;
 mod edit;
+mod opentype;
+pub use opentype::{font_features, feature_value, feature_css, glyph_alternates};
 pub mod hyphenation;
 pub use composer::{compose, compose_plain, glyph_contours, paragraph_style, LayoutGlyph, LayoutLine};
 
@@ -538,14 +540,26 @@ pub fn selection_rects(run:&TypeRun,a:usize,b:usize)->Vec<(Pt,Pt)> {
     }).collect()
 }
 pub fn char_to_byte(s:&str,char_idx:usize)->usize {s.char_indices().nth(char_idx).map(|(i,_)|i).unwrap_or(s.len())}
+pub fn styled_html(run:&TypeRun,start:usize,text:&str)->String {
+    let escape=|s:&str|s.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;");
+    let mut out=String::new();let mut from=0;let chars:Vec<_>=text.chars().collect();
+    while from<chars.len() {
+        let style=run.character_style(start+from);let mut to=from+1;
+        while to<chars.len()&&run.character_style(start+to)==style {to+=1;}
+        let mut features=vec![(*b"kern",u32::from(run.kern)),(*b"liga",u32::from(run.liga)),(*b"clig",u32::from(run.liga)),(*b"tnum",u32::from(run.tnum)),(*b"smcp",u32::from(run.smcp)),(*b"c2sc",u32::from(run.smcp))];
+        for &(tag,value) in run.features.iter().chain(&style.features) {features.retain(|(t,_)|*t!=tag);features.push((tag,value));}
+        out.push_str(&format!("<span style=\"font-feature-settings:{};{}\">{}</span>",feature_css(&features),if style.no_break{"white-space:nowrap"}else{""},escape(&chars[from..to].iter().collect::<String>())));
+        from=to;
+    }
+    out
+}
 pub fn paragraph_html(run:&TypeRun)->String {
     use crate::geom::{TextAlign,LastLine,BreakMode};
-    let escape=|s:&str|s.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;");
     let mut base=0;let mut html=String::new();
     for text in run.content.split('\n') {
         let p=paragraph_style(run,base);
         let (align,last)=match p.align {TextAlign::Start=>("left","auto"),TextAlign::Center=>("center","auto"),TextAlign::End=>("right","auto"),TextAlign::Justify{last}=>("justify",match last{LastLine::Start=>"left",LastLine::Center=>"center",LastLine::End=>"right",LastLine::Justify=>"justify"})};
-        html.push_str(&format!("<span style=\"display:block;min-height:1em;text-align:{align};text-align-last:{last};white-space:{};word-break:{};overflow-wrap:{};hyphens:{}\">{}</span>",if p.break_mode==BreakMode::KeepAll{"pre"}else{"pre-wrap"},if p.break_mode==BreakMode::BreakAll{"break-all"}else{"normal"},if p.overflow_wrap{"anywhere"}else{"normal"},if p.hyphenate{"auto"}else{"manual"},escape(text)));
+        html.push_str(&format!("<span style=\"display:block;min-height:1em;text-align:{align};text-align-last:{last};white-space:{};word-break:{};overflow-wrap:{};hyphens:{}\">{}</span>",if p.break_mode==BreakMode::KeepAll{"pre"}else{"pre-wrap"},if p.break_mode==BreakMode::BreakAll{"break-all"}else{"normal"},if p.overflow_wrap{"anywhere"}else{"normal"},if p.hyphenate{"auto"}else{"manual"},styled_html(run,base,text)));
         base+=text.chars().count()+1;
     }
     html
