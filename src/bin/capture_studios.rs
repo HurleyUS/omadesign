@@ -27,6 +27,7 @@ enum Target {
     FrameText(usize),
     Text(&'static str),
     AttachmentRemove(&'static str),
+    AttachmentHistory,
     Prompt,
     FieldNth(&'static str, usize),
     Any(&'static str),
@@ -121,7 +122,12 @@ fn schedule(scene: &str) -> Vec<Action> {
             event(21., AttachmentCount(9)),
             event(22., Click(Any("Send"))),
             event(24., Expect("Attachment delivery verified.")),
-            event(25., Click(Any("History"))),
+            event(25., Click(Any("New"))),
+            event(26., Click(Any("History"))),
+            event(27., Click(AttachmentHistory)),
+            event(28., Expect("Continue in saved document")),
+            event(29., Click(Any("Continue in saved document"))),
+            event(30., Expect("Conversation loaded · Connect to continue")),
         ],
         "independent-effects" => vec![
             event(0.5, Scroll(-1200.)),
@@ -1223,7 +1229,7 @@ impl Capture {
             "spacing" => 40,
             "path-type" => 57,
             "area-type" => 44,
-            "agent-attachments" => 28,
+            "agent-attachments" => 32,
             "welcome-browse" => 23,
             "welcome-vector" | "welcome-layout" => 9,
             "welcome-raster" => 8,
@@ -1330,6 +1336,13 @@ impl Capture {
                     })
                     .min_by(|(_, a), (_, b)| a.left().total_cmp(&b.left()))
                     .map(|(_, r)| r.center())
+            }
+            Target::AttachmentHistory => {
+                let title = &self.studio.agent.history.iter().find(|thread| {
+                    thread.messages.iter().any(|entry| entry.role == "user" && entry.attachments.len() == 9)
+                })?.title;
+                self.labels.iter().find(|(text, rect)| text == title && rect.left() > 1100.)
+                    .map(|(_, rect)| rect.center())
             }
             Target::Any(s) => label(s, false).map(|r| r.center()),
             Target::Left(s) => self
