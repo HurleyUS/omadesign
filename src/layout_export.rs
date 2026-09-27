@@ -482,6 +482,12 @@ impl<'a> Html<'a> {
             );
         }
         if let Geom::Text(run) = &shape.geom {
+            if run.on_path.is_some() {
+                let mut art=shape.clone(); art.rotation=0.; art.opacity=1.; art.blend=crate::color::Blend::Normal;
+                out.push_str(&crate::svg::shape_fragment(&art));
+                out.push_str("</div>");
+                return Ok(());
+            }
             let (font, asc, desc) = self.font(run);
             let b = shape.geom.bbox();
             if run.wrap_width.is_none() {
