@@ -665,6 +665,8 @@ pub struct TypeRun {
     pub paragraphs: Vec<ParagraphStyle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<CharSpan>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<([u8; 4], u32)>,
     /// Installed font path or portable `omatype:` content ID. Empty picks system sans.
     #[serde(default)]
     pub font: String,
@@ -700,6 +702,7 @@ impl Default for TypeRun {
             align: TextAlign::Start,
             paragraphs: vec![],
             spans: vec![],
+            features: vec![],
             font: String::new(),
             kern: true,
             liga: true,
@@ -766,7 +769,7 @@ impl Default for ParagraphStyle { fn default() -> Self { Self { start: 0, align:
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct CharSpan { pub start: usize, pub end: usize, pub no_break: bool }
+pub struct CharSpan { pub start: usize, pub end: usize, pub no_break: bool, pub features: Vec<([u8;4],u32)> }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PathContour {
