@@ -1054,6 +1054,7 @@ fn character_studio(ui: &mut Ui, studio: &mut Studio) {
             }
         });
     });
+    super::paragraph::show(ui, studio);
     if studio.type_edit.is_some() {
         ui.label(
             RichText::new("Typing on the canvas. Esc finishes.")
