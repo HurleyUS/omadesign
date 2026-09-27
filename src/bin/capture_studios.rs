@@ -79,6 +79,27 @@ fn schedule(scene: &str) -> Vec<Action> {
     use ActionKind::*;
     use Target::*;
     match scene {
+        "path-type" => vec![
+            event(0.7, Key(egui::Key::T, Modifiers::NONE)),
+            event(1.1, Click(World(300.,120.))),
+            drag(1.6,3.,Type("EDITABLE TYPE FOLLOWS THE CURVE")),
+            event(5.,Key(egui::Key::Escape,Modifiers::NONE)),
+            event(5.6,Expect("Type on path")),
+            event(6.1,Click(Text("Flip side and direction"))),
+            event(8.,Click(Text("Flip side and direction"))),
+            drag(9.,1.6,Drag(World(300.,120.),World(440.,179.))),
+            event(11.1,Key(egui::Key::Z,ctrl())),
+            event(12.2,Key(egui::Key::Z,Modifiers{shift:true,..ctrl()})),
+            event(13.2,Key(egui::Key::T,Modifiers::NONE)),
+            event(13.7,Click(World(560.,475.))),
+            drag(14.1,2.6,Type("Open curves remain live")),
+            event(17.,Key(egui::Key::Escape,Modifiers::NONE)),
+            event(17.6,Key(egui::Key::A,Modifiers::NONE)),
+            event(18.1,Click(World(900.,475.))),
+            drag(18.7,1.6,Drag(World(900.,475.),World(920.,500.))),
+            event(21.,Key(egui::Key::Z,ctrl())),
+            event(22.,Key(egui::Key::Z,Modifiers{shift:true,..ctrl()})),
+        ],
         "paragraphs" => vec![
             event(1., Key(egui::Key::A, ctrl())),
             event(2., Key(egui::Key::J, Modifiers{shift:true,..ctrl()})),
@@ -667,6 +688,18 @@ fn seed(scene: &str) -> Studio {
     s.recents.clear();
     s.path = None;
     match scene {
+        "path-type" => {
+            use omadesign::{geom::Anchor,document::{Shape,Style,Fill,Stroke}};
+            s.doc=Document::new("Live type on paths · issue 149",960.,680.,96.);
+            let guide=Style{fill:Fill::None,stroke:Some(Stroke{width:2.,color:Rgba::from_hex(0x7295AD),..Default::default()})};
+            let circle=Shape::new(Geom::Ellipse{center:Pt::new(300.,320.),radii:Pt::splat(200.)},guide.clone());
+            let mut a=Anchor::corner(Pt::new(560.,475.));a.h_out=Pt::new(100.,-200.);
+            let mut b=Anchor::corner(Pt::new(900.,475.));b.h_in=Pt::new(-100.,-200.);
+            let curve=Shape::new(Geom::Path{anchors:vec![a,b],closed:false},guide);
+            s.doc.layers[1].kind.shapes_mut().unwrap().extend([circle,curve]);
+            s.active_layer=Some(1);s.persona=Persona::Design;s.tool=Tool::Text;s.text_px=32.;
+            s.style=Style{fill:Fill::Solid(Rgba::from_hex(0x18364A)),stroke:None};
+        }
         "paragraphs" => {
             use omadesign::{geom::{TypeRun,ParagraphStyle},document::{Shape,Style,Fill}};
             s.doc=Document::new("Paragraph composition · issue 148",960.,680.,96.);
@@ -820,6 +853,7 @@ impl Capture {
         let studio = seed(&scene);
         let seconds = match scene.as_str() {
             "paragraphs" => 30,
+            "path-type" => 25,
             "welcome-browse" => 23,
             "welcome-vector" | "welcome-layout" => 9,
             "welcome-raster" => 8,
@@ -1216,6 +1250,17 @@ impl eframe::App for Capture {
                         &self.directory.join(format!("{}-final.oma", self.scene)),
                     )
                     .unwrap();
+                }
+                if self.scene=="path-type" {
+                    let project=omadesign::project::encode(&self.studio.doc).unwrap();
+                    fs::write(self.directory.join("path-type.oma"),&project).unwrap();
+                    let restored=omadesign::project::decode(&project).unwrap();
+                    let paths:Vec<_>=restored.layers.iter().filter_map(|l|l.kind.shapes()).flatten().filter_map(|s|if let Geom::Text(t)=&s.geom{t.on_path.as_ref().map(|on|(s.id,on.path_id,t.content.clone(),t.contours.len()))}else{None}).collect();
+                    assert!(paths.len()>=2,"two editable path text runs created by UI");
+                    assert!(paths.iter().all(|p|p.3>0),"path contours survive save/load");
+                    assert!(self.errors.is_empty(),"all native UI targets resolved");
+                    fs::write(self.directory.join("path-type-export.svg"),omadesign::svg::export(&restored).unwrap()).unwrap();
+                    fs::write(self.directory.join("path-type-result.json"),serde_json::to_vec_pretty(&serde_json::json!({"saved_and_reopened":true,"paths":paths,"unresolved_input_targets":self.errors,"renderer":"native WGPU","recording_frames":self.frame})).unwrap()).unwrap();
                 }
                 if self.scene=="paragraphs" {
                     let saved=omadesign::project::encode(&self.studio.doc).unwrap();

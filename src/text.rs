@@ -498,6 +498,7 @@ fn fallback_block(content: &str, px: f32, origin: Pt) -> Vec<Vec<Pt>> {
 
 /// Shape `run` into closed contours in world space.
 pub fn shape(run: &TypeRun) -> Vec<Vec<Pt>> {
+    if run.on_path.is_some() { return crate::text_geometry::shape_on_path(run); }
     let Some(path) = resolve_path(run) else {
         return fallback_block(&run.content, run.px, run.origin);
     };
@@ -521,11 +522,13 @@ pub fn measure(run:&TypeRun)->(f32,f32) {
     let lines=compose(run);(run.wrap_width.unwrap_or_else(||lines.iter().map(|l|l.width).fold(0.,f32::max)),lines.iter().map(|l|l.height).sum())
 }
 pub fn caret_pt(run:&TypeRun,char_idx:usize)->Pt {
+    if let Some((point,_)) = crate::text_geometry::caret_frame(run,char_idx) { return point; }
     let lines=compose(run);let idx=char_idx.min(run.content.chars().count());
     let line=&lines[lines.iter().rposition(|l|l.start<=idx).unwrap_or(0)];
     Pt::new(run.origin.x+line.caret_x(idx),run.origin.y+line.baseline)
 }
 pub fn hit_char(run:&TypeRun,p:Pt)->usize {
+    if let Some(index) = crate::text_geometry::hit_char(run,p) { return index; }
     let lines=compose(run);
     let line=lines.iter().min_by(|a,b|(a.baseline-(p.y-run.origin.y)).abs().total_cmp(&(b.baseline-(p.y-run.origin.y)).abs())).unwrap();
     line.carets.iter().min_by(|(_,a),(_,b)|(run.origin.x+a-p.x).abs().total_cmp(&(run.origin.x+b-p.x).abs())).map_or(line.start,|(i,_)|*i)
