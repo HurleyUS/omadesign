@@ -569,8 +569,7 @@ fn handle_pointer(studio: &mut Studio, resp: &eframe::egui::Response, space: boo
                         _ => None,
                     });
                 if let (Some(c), Some(e)) = (caret, studio.type_edit.as_mut()) {
-                    e.anchor = c;
-                    e.caret = c;
+                    e.pointer_caret(c,false);
                 }
                 return;
             }
@@ -583,7 +582,7 @@ fn handle_pointer(studio: &mut Studio, resp: &eframe::egui::Response, space: boo
                 {
                     let new_caret = crate::text::hit_char(run, pick);
                     if let Some(e) = studio.type_edit.as_mut() {
-                        e.caret = new_caret;
+                        e.pointer_caret(new_caret,true);
                     }
                 }
             }

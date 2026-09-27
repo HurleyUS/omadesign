@@ -2,6 +2,7 @@
 
 mod brand_assets;
 mod clipboard;
+mod type_clipboard;
 mod clipboard_insert;
 mod cloud;
 pub mod deform;
@@ -285,6 +286,15 @@ pub struct TypeEdit {
     pub pending_style: Option<crate::geom::CharSpan>,
 }
 
+impl TypeEdit {
+    /// Pointer moves start a new insertion context, just like keyboard navigation.
+    pub fn pointer_caret(&mut self, caret: usize, extend: bool) {
+        self.caret=caret;
+        if !extend { self.anchor=caret; }
+        self.pending_style=None;
+    }
+}
+
 pub struct Studio {
     pub agent: crate::agent::Workspace,
     pub show_preferences: bool,
@@ -353,7 +363,7 @@ pub struct Studio {
     pub text_smcp: bool,
     pub text_features: Vec<([u8;4],u32)>,
     pub text_character: crate::geom::CharSpan,
-    pub type_clip: Option<(String,Vec<crate::geom::CharSpan>,std::collections::BTreeMap<usize,f32>)>,
+    type_paste_jobs: Vec<type_clipboard::TypePasteJob>,
     pub type_edit: Option<TypeEdit>,
     pub polygon_sides: u32,
     pub star_points: u32,
@@ -596,7 +606,7 @@ impl Studio {
             text_smcp: false,
             text_features: vec![],
             text_character: Default::default(),
-            type_clip: None,
+            type_paste_jobs: Vec::new(),
             type_edit: None,
             polygon_sides: 6,
             star_points: 5,
@@ -2102,8 +2112,7 @@ impl Studio {
                     _ => None,
                 });
             if let (Some(c), Some(e)) = (caret, self.type_edit.as_mut()) {
-                e.caret = c;
-                e.anchor = c;
+                e.pointer_caret(c,false);
             }
             return;
         }
@@ -4484,6 +4493,7 @@ impl eframe::App for Studio {
         self.poll_cloud(&ctx);
         self.poll_file_jobs(&ctx);
         self.poll_clipboard_jobs(&ctx);
+        self.poll_type_clipboard_jobs(&ctx);
         self.photo.poll(&ctx);
         crate::ui::anim_export::poll(&ctx, self);
         crate::ui::run(ui, self);
