@@ -79,6 +79,20 @@ fn schedule(scene: &str) -> Vec<Action> {
     use ActionKind::*;
     use Target::*;
     match scene {
+        "opentype" => vec![
+            event(1., Key(egui::Key::A, ctrl())),
+            event(2., Click(Text("OpenType features"))),
+            event(3., ScrollAt(At(1480.,560.), -320.)),
+            event(4., Click(Text("Small caps"))),
+            event(6., Key(egui::Key::ArrowRight, Modifiers::NONE)),
+            event(7., Type(" new text")),
+            event(9., Key(egui::Key::Home, Modifiers::NONE)),
+            event(10., Key(egui::Key::ArrowRight, Modifiers{shift:true,..Modifiers::NONE})),
+            event(12., Click(Text("Small caps"))),
+            event(14., Key(egui::Key::Escape, Modifiers::NONE)),
+            event(16., Key(egui::Key::Z, ctrl())),
+            event(18., Key(egui::Key::Z, Modifiers{shift:true,..ctrl()})),
+        ],
         "paragraphs" => vec![
             event(1., Key(egui::Key::A, ctrl())),
             event(2., Key(egui::Key::J, Modifiers{shift:true,..ctrl()})),
@@ -668,10 +682,14 @@ fn seed(scene: &str) -> Studio {
     s.recents.clear();
     s.path = None;
     match scene {
-        "paragraphs" => {
+        "paragraphs" | "opentype" => {
             use omadesign::{geom::{TypeRun,ParagraphStyle},document::{Shape,Style,Fill}};
             s.doc=Document::new("Paragraph composition · issue 148",960.,680.,96.);
             let mut run=TypeRun{origin:Pt::new(90.,130.),content:"Thoughtful typography gives every idea room to breathe. Paragraph composition balances word spacing, line endings, and the rhythm of language.\nEach paragraph carries its own alignment and line breaking choices.".into(),font:"/usr/share/fonts/gsfonts/NimbusRoman-Regular.otf".into(),px:30.,wrap_width:Some(710.),paragraphs:vec![ParagraphStyle{word_spacing:[80.,100.,250.],letter_spacing:[0.,0.,8.],..Default::default()}],..Default::default()};
+            if scene=="opentype" {
+                run.font=fs::canonicalize("tests/assets/fonts/EBGaramond.ttf").unwrap().to_string_lossy().into_owned();
+                run.content="office affine fi ffi 0123456789\nEditable typography and stylistic alternates".into();run.px=44.;run.paragraphs.clear();
+            }
             run.contours=omadesign::text::shape(&run);
             let shape=Shape::new(Geom::Text(run),Style{fill:Fill::Solid(Rgba::from_hex(0x24344A)),stroke:None});
             let id=shape.id;
@@ -821,6 +839,7 @@ impl Capture {
         let studio = seed(&scene);
         let seconds = match scene.as_str() {
             "paragraphs" => 30,
+            "opentype" => 20,
             "welcome-browse" => 23,
             "welcome-vector" | "welcome-layout" => 9,
             "welcome-raster" => 8,
@@ -1211,7 +1230,7 @@ impl eframe::App for Capture {
                 fs::write(self.directory.join(format!("selection-state-{}.json",self.frame)),serde_json::to_vec_pretty(&value).unwrap()).unwrap();
             }
             if self.frame >= self.total {
-                if matches!(self.scene.as_str(), "graphics" | "chroma" | "paragraphs") {
+                if matches!(self.scene.as_str(), "graphics" | "chroma" | "paragraphs" | "opentype") {
                     omadesign::project::save_to(
                         &self.studio.doc,
                         &self.directory.join(format!("{}-final.oma", self.scene)),
@@ -1227,6 +1246,14 @@ impl eframe::App for Capture {
                     let lines=omadesign::text::compose(run);
                     fs::write(self.directory.join("paragraphs-result.json"),serde_json::to_vec_pretty(&serde_json::json!({"saved_and_reopened":true,"paragraphs":run.paragraphs,"visual_lines":lines.len(),"unicode_source":run.content,"unresolved_input_targets":self.errors,"renderer":"native WGPU","recording_frames":self.frame})).unwrap()).unwrap();
                     fs::write(self.directory.join("paragraphs-export.svg"),omadesign::svg::export(&restored).unwrap()).unwrap();
+                }
+                if self.scene=="opentype" {
+                    let saved=omadesign::project::encode(&self.studio.doc).unwrap();let restored=omadesign::project::decode(&saved).unwrap();
+                    let run=restored.layers[1].kind.shapes().unwrap().iter().find_map(|s|if let Geom::Text(t)=&s.geom{Some(t)}else{None}).unwrap();
+                    assert!(run.content.ends_with(" new text"));assert!(!run.spans.is_empty());
+                    fs::write(self.directory.join("opentype-result.json"),serde_json::to_vec_pretty(&serde_json::json!({"saved_and_reopened":true,"spans":run.spans,"source":run.content,"unresolved_input_targets":self.errors,"renderer":"native WGPU","recording_frames":self.frame})).unwrap()).unwrap();
+                    fs::write(self.directory.join("opentype-export.svg"),omadesign::svg::export(&restored).unwrap()).unwrap();
+                    fs::write(self.directory.join("opentype-export.html"),omadesign::text::paragraph_html(run)).unwrap();
                 }
                 self.encoder.take().unwrap().finish();
                 fs::write(

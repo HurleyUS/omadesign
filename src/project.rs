@@ -5,7 +5,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(crate) const VERSION: u32 = 8;
+pub(crate) const VERSION: u32 = 11;
 
 #[derive(Serialize, Deserialize)]
 struct File {
@@ -19,7 +19,7 @@ pub fn encode(doc: &Document) -> Result<String, String> {
     serde_json::to_string(&File {
         // Older readers must not silently strip a mask or change stroke placement.
         // Keep plain documents compatible with v5; v1-v6 remain readable here.
-        version: if doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().any(|s| matches!(&s.geom,crate::geom::Geom::Text(t) if !t.paragraphs.is_empty() || !t.spans.is_empty() || matches!(t.align,crate::geom::TextAlign::Justify{..}))) { 8 } else if doc
+        version: if doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().any(|s| matches!(&s.geom,crate::geom::Geom::Text(t) if !t.features.is_empty() || t.spans.iter().any(|s|!s.features.is_empty()))) { 11 } else if doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().any(|s| matches!(&s.geom,crate::geom::Geom::Text(t) if !t.paragraphs.is_empty() || !t.spans.is_empty() || matches!(t.align,crate::geom::TextAlign::Justify{..}))) { 8 } else if doc
             .layers
             .iter()
             .filter_map(|l| l.kind.shapes())
