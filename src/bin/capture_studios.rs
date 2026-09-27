@@ -1342,7 +1342,7 @@ impl Capture {
                 let title = &self.studio.agent.history.iter().find(|thread| {
                     thread.messages.iter().any(|entry| entry.role == "user" && entry.attachments.len() == 9)
                 })?.title;
-                self.labels.iter().find(|(text, rect)| text == title)
+                self.labels.iter().find(|(text, _)| text == title)
                     .map(|(_, rect)| rect.center())
             }
             Target::Any(s) => label(s, false).map(|r| r.center()),
