@@ -155,6 +155,7 @@ pub fn guide_path(shape: &Shape) -> Option<ArcPath> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextGeometryLayout {
     pub contours: Vec<Vec<Pt>>,
+    pub caret_heights: Vec<(usize, f32)>,
     pub carets: Vec<(usize, Pt, Pt)>, // story index, baseline position, tangent
     pub selections: Vec<(usize, usize, [Pt; 4])>,
     pub overflow: bool,
@@ -257,7 +258,9 @@ pub fn layout_on_path(run: &TypeRun) -> TextGeometryLayout {
         for &(index, x) in &line.carets {
             let distance = (offset + x).clamp(0., span);
             if let Some((point, tangent)) = path_position(run, distance) {
-                result.carets.push((index, point, tangent));
+                let metrics=crate::text::character_metrics(run,index.min(run.content.chars().count().saturating_sub(1)));
+                result.carets.push((index, point-tangent.perp()*metrics.baseline_shift.unwrap(), tangent));
+                result.caret_heights.push((index,run.px*metrics.vscale.unwrap()/100.));
             }
         }
         for pair in line.carets.windows(2) {
@@ -270,14 +273,16 @@ pub fn layout_on_path(run: &TypeRun) -> TextGeometryLayout {
                 path_position(run, (offset + x).min(span)),
                 path_position(run, (offset + y).min(span)),
             ) {
+                let metrics=crate::text::character_metrics(run,a);let height=run.px*metrics.vscale.unwrap()/100.;
+                let p=p-t.perp()*metrics.baseline_shift.unwrap();let q=q-u.perp()*metrics.baseline_shift.unwrap();
                 result.selections.push((
                     a,
                     b,
                     [
-                        p - t.perp() * run.px * 0.9,
-                        q - u.perp() * run.px * 0.9,
-                        q + u.perp() * run.px * 0.2,
-                        p + t.perp() * run.px * 0.2,
+                        p - t.perp() * height * 0.9,
+                        q - u.perp() * height * 0.9,
+                        q + u.perp() * height * 0.2,
+                        p + t.perp() * height * 0.2,
                     ],
                 ));
             }
