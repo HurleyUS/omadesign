@@ -607,7 +607,7 @@ mod paragraph_export_spacing_tests {
     use super::*;
     #[test]
     fn paragraph_export_preserves_desired_spacing_and_adds_tracking() {
-        let mut run = TypeRun { content: "one two\nthree four".into(), font: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/assets/fonts/EBGaramond.ttf").into(), px: 20., tracking: 100., ..Default::default() };
+        let mut run = TypeRun { content: "one two\nthree four".into(), font: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/assets/fonts/EBGaramond.ttf").into(), px: 20., tracking: 2., ..Default::default() };
         run.update_paragraphs(0, 0, |p| { p.word_spacing=[80.,150.,200.]; p.letter_spacing=[0.,10.,20.]; });
         run.update_paragraphs(8, 8, |p| { p.word_spacing=[50.,75.,100.]; p.letter_spacing=[-10.,-5.,0.]; });
         let html=paragraph_html(&run);
