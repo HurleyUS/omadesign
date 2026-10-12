@@ -826,3 +826,28 @@ fn image_integer_width_past_24_bits_keeps_every_column() {
     assert_eq!(pixels.w, width as u32);
     assert_eq!(pixels.data.len(), width as usize * 4);
 }
+
+#[test]
+fn rejects_oversized_raster_dimensions_without_overflow() {
+    let mut small = Document::new("Small", 8., 8., 72.);
+    {
+        let pixels = small.layers[0].kind.pixels_mut().unwrap();
+        pixels.w = 2;
+        pixels.h = 2;
+        pixels.data = vec![
+            255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 0, 0, 255,
+        ];
+    }
+    assert!(write(&small).is_ok());
+
+    let mut huge = Document::new("Huge", 32., 32., 72.);
+    {
+        let pixels = huge.layers[0].kind.pixels_mut().unwrap();
+        // 3e9 * 3e9 fits in u64, but * 4 does not. The length check must
+        // return the export error instead of panicking on that multiply.
+        pixels.w = 3_000_000_000;
+        pixels.h = 3_000_000_000;
+    }
+    let error = write(&huge).expect_err("oversized raster must be an export error");
+    assert!(error.contains("Invalid raster buffer"), "{error}");
+}

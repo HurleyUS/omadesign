@@ -303,10 +303,12 @@ impl Writer {
             return Ok(*id);
         }
         let pixels = layer.kind.pixels().ok_or("Expected a raster layer")?;
-        if pixels.w == 0
-            || pixels.h == 0
-            || pixels.data.len() != pixels.w as usize * pixels.h as usize * 4
-        {
+        // w and h are file or document fields. w*h*4 can overflow usize, and
+        // that panic used to fire inside the check that should reject them.
+        let bytes = u64::from(pixels.w)
+            .checked_mul(u64::from(pixels.h))
+            .and_then(|n| n.checked_mul(4));
+        if pixels.w == 0 || pixels.h == 0 || bytes != Some(pixels.data.len() as u64) {
             return Err("Invalid raster buffer during PDF export".into());
         }
         let mut rgb = Vec::with_capacity(pixels.data.len() / 4 * 3);
