@@ -213,7 +213,7 @@ pub fn stdio() -> Result<(), String> {
         };
         let result = match request["method"].as_str().unwrap_or_default() {
             "initialize" => {
-                json!({"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"omadesign","version":env!("CARGO_PKG_VERSION")}})
+                json!({"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"omadesign","version":env!("OMADESIGN_VERSION")}})
             }
             "ping" => json!({}),
             "tools/list" => json!({"tools":super::tools::catalog()}),

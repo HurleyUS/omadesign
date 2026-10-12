@@ -75,7 +75,7 @@ impl ClipboardQa {
             })
         }).collect();
         json!({
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": env!("OMADESIGN_VERSION"),
             "pid": std::process::id(), "status": self.studio.status,
             "canvas": canvas, "scale": self.studio.view.scale,
             "offset": [self.studio.view.offset.x, self.studio.view.offset.y],

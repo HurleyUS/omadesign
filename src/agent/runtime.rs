@@ -224,7 +224,7 @@ fn run(
         &mut pending,
         &mut next,
         "initialize",
-        json!({"protocolVersion":1,"clientInfo":{"name":"omadesign","title":"Omadesign","version":env!("CARGO_PKG_VERSION")},"clientCapabilities":{"fs":{"readTextFile":true,"writeTextFile":true},"terminal":false}}),
+        json!({"protocolVersion":1,"clientInfo":{"name":"omadesign","title":"Omadesign","version":env!("OMADESIGN_VERSION")},"clientCapabilities":{"fs":{"readTextFile":true,"writeTextFile":true},"terminal":false}}),
         Pending::Initialize,
     )?;
     let mut session: Option<String> = None;

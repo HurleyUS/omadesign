@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { sitePath } from '../site';
+import { NIGHTLY_URL, NIGHTLY_VERSION } from '../release';
 import './brushes.css';
 
 export const Route = createFileRoute('/brushes')({
@@ -28,7 +29,7 @@ function Brushes() {
       <p>Make a tip from a transparent image or dark artwork on white. Adjust its size, spacing, flow, and opacity. Save your settings or export a pack to share.</p>
     </div><div><h2>Start painting.</h2>
       <ol><li>Download a pack.</li><li>Open Pixel → Brush → Import.</li><li>Choose the pack, then select a brush.</li></ol>
-      <p>Brush packs require the brush-pack desktop build. <a href="https://github.com/michaelmonetized/omadesign/issues/198">Follow availability</a>.</p>
+      <p>Brush packs are included in <a href={NIGHTLY_URL}>Omadesign {NIGHTLY_VERSION}</a>. Download the Linux package for your computer, extract it, and open <code>omadesign</code>.</p>
     </div></section>
     <details className="brush-formats"><summary>Adobe import support</summary>
       <p>Photoshop ABR versions 1, 2, 6, 7, and 10: sampled 8/16-bit tips, raw or PackBits compression. Names and spacing come from descriptors when available. Photoshop dynamics, textures, tool presets, pressure, and scattering are not reproduced.</p>

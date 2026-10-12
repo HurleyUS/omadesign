@@ -140,6 +140,27 @@ gh release create vX.Y.Z dist/omadesign-X.Y.Z-*.tar.gz* dist/omadesign-installer
 
 Refuse to ship if `objdump -T` shows GLIBC newer than 2.35.
 
+Nightlies use `BASE-nightly.YYYYMMDD.NNNN`, with a four-digit daily counter starting
+at `0001`, and a `v` prefix on the Git tag. Dates use America/New_York. Fetch tags
+before choosing the next counter. Publish nightlies as prereleases and keep the
+stable download and default installer pointed at the stable release.
+
+```sh
+git fetch origin --tags
+node scripts/version.mjs nightly                 # today's next unused counter
+node scripts/version.mjs nightly 20261011 0001   # choose an explicit date and counter
+VERSION="$(node scripts/version.mjs get)"
+./scripts/release.sh
+gh release create "v$VERSION" --prerelease --latest=false --target HEAD \
+  dist/omadesign-"$VERSION"-*.tar.gz* dist/omadesign-installer-"$VERSION"-*.tar.gz*
+```
+
+Cargo stores the numeric counter without padding because SemVer forbids leading
+zeroes. The build formats the public version for the app, tags, archive names,
+telemetry and update checks. Compare normalized counters numerically and keep
+the public spelling when selecting release assets. A nightly does not offer the
+stable release of the same base version as an update.
+
 ### License
 
 MIT. Phosphor Light is MIT (see `assets/phosphor/LICENSE-MIT`).

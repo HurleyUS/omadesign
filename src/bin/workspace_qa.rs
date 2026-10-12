@@ -647,7 +647,7 @@ impl Qa {
                 self.pass("personal template opens editable unsaved copy", ctx);
             }
             _ => {
-                fs::write(self.output.join("result.json"),serde_json::to_vec_pretty(&serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"checks":self.checks,"renderer":"native WGPU","input":"egui pointer and keyboard events","elapsed_seconds":self.started.elapsed().as_secs_f64()})).unwrap()).unwrap();
+                fs::write(self.output.join("result.json"),serde_json::to_vec_pretty(&serde_json::json!({"version":env!("OMADESIGN_VERSION"),"checks":self.checks,"renderer":"native WGPU","input":"egui pointer and keyboard events","elapsed_seconds":self.started.elapsed().as_secs_f64()})).unwrap()).unwrap();
                 self.studio.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }

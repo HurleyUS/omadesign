@@ -70,7 +70,7 @@ Additional installed Adobe fixtures qualified 428 Photoshop presets (sampled and
 computed; unsupported tool/bristle presets are reported) and 19 Illustrator tips.
 
 The website is live at https://omadesign.app/brushes on production deployment
-`dpl_zK1uhWBkpw3DFVoMpjuQCdy3n54m`. Public desktop release remains v0.6.3; brush
-packs require the feature build until it enters a subsequent desktop release.
-Website availability copy states this. The original accepted 0.5.0 evidence and
+`dpl_zK1uhWBkpw3DFVoMpjuQCdy3n54m`. At that initial website publication, desktop stable was v0.6.3 and packs required
+the feature build. The first brush-pack desktop nightly is documented in
+[0.6.3-nightly.20261011.0001](../../releases/0.6.3-nightly.20261011.0001.md). The original accepted 0.5.0 evidence and
 installed public desktop build were preserved.

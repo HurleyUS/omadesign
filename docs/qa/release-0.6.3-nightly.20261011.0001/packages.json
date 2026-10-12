@@ -1,0 +1,93 @@
+{
+  "version": "0.6.3-nightly.20261011.0001",
+  "tag": "v0.6.3-nightly.20261011.0001",
+  "compiled_source_commit": "a9a5565e726aaea75943085b1c875007c3b3d7b3",
+  "desktop_builds": "local on m1pro16",
+  "glibc_ceiling": "2.35",
+  "tests": {
+    "passed": 1000,
+    "failed": 0,
+    "ignored": 9,
+    "test_threads": 2,
+    "seconds": 1081.77,
+    "initial_run": {
+      "passed": 999,
+      "failed": 1,
+      "reason": "Existing Photo shortcut test exceeded its five-second async save deadline under concurrent compilation. Isolated check and full two-worker rerun passed."
+    }
+  },
+  "installer_tests": 35,
+  "site_tests": 23,
+  "site_typecheck": true,
+  "site_production_build": true,
+  "native": [
+    {
+      "host": "m1pro16",
+      "arch": "aarch64",
+      "executable_sha256": "b9ce7d164e31086ac817849a037183645244369959758c7da1301a4806e79efc",
+      "checks": [
+        "prefixed install matches package",
+        "native WGPU Pixel and About",
+        "exact public version",
+        "original pack exact roundtrip",
+        "real JaxGrass ABR: six tips"
+      ]
+    },
+    {
+      "host": "intelpro",
+      "arch": "x86_64",
+      "executable_sha256": "37b23b644249282c600b53656e20a71323ff7fc9507e728a2326323bb82b61b3",
+      "checks": [
+        "prefixed install matches package",
+        "native WGPU Pixel and About on active DP-1",
+        "exact public version",
+        "original pack exact roundtrip",
+        "real JaxGrass ABR matches ARM64 conversion"
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "name": "omadesign-0.6.3-nightly.20261011.0001-aarch64-unknown-linux-gnu.tar.gz",
+      "bytes": 37120007,
+      "sha256": "2c8a65f8b4c7b5c0f1a17761c57c37f42f4b431e785f674bdc3ad43be91078a8"
+    },
+    {
+      "name": "omadesign-0.6.3-nightly.20261011.0001-aarch64-unknown-linux-gnu.tar.gz.sha256",
+      "bytes": 137,
+      "sha256": "b040d9d396b237e25629e8c8f2ebf19dedfb2143c248903853c352081e2e9908"
+    },
+    {
+      "name": "omadesign-0.6.3-nightly.20261011.0001-x86_64-unknown-linux-gnu.tar.gz",
+      "bytes": 39476131,
+      "sha256": "4e410c3538585d650372ad07e6218c103d21705662949d91335ca127a4241b35"
+    },
+    {
+      "name": "omadesign-0.6.3-nightly.20261011.0001-x86_64-unknown-linux-gnu.tar.gz.sha256",
+      "bytes": 136,
+      "sha256": "28f17f9582bc9b94e528c7036bbd0d749ae8f103b3d7777e15a92f199b960cf6"
+    },
+    {
+      "name": "omadesign-installer-0.6.3-nightly.20261011.0001-aarch64-linux.tar.gz",
+      "bytes": 187947,
+      "sha256": "f527b2de7fb46cbdede754b16319d3ea57be4ba5f746d2d3e0d0027f2d7422a5"
+    },
+    {
+      "name": "omadesign-installer-0.6.3-nightly.20261011.0001-aarch64-linux.tar.gz.sha256",
+      "bytes": 135,
+      "sha256": "d63f8ba2598e57acc324dcbee7c4d2ebf604bca2208d0dda23ad74a720f3cf4a"
+    },
+    {
+      "name": "omadesign-installer-0.6.3-nightly.20261011.0001-x86_64-linux.tar.gz",
+      "bytes": 187951,
+      "sha256": "2f5537c325621f07d1632eb5b1c1d5a110b93d6b45b1baa4b724c831426d469b"
+    },
+    {
+      "name": "omadesign-installer-0.6.3-nightly.20261011.0001-x86_64-linux.tar.gz.sha256",
+      "bytes": 134,
+      "sha256": "89d85f0ff9ea2acc93bc5eca63fcb3d51f3f7e5c2283e6bcd39669aea35ddcfe"
+    }
+  ],
+  "backend_deployment": "https://healthy-buzzard-921.convex.cloud",
+  "nightly_installer": "Default installation uses separate nightly prefix, launcher and configuration; stable remains intact"
+}

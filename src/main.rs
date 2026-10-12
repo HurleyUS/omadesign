@@ -32,7 +32,7 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     if args.iter().any(|arg| arg == "--version" || arg == "-V") {
-        println!("omadesign {}", env!("CARGO_PKG_VERSION"));
+        println!("omadesign {}", env!("OMADESIGN_VERSION"));
         return Ok(());
     }
     if args.iter().any(|a| a == "--export-demo") {
@@ -299,6 +299,7 @@ impl eframe::App for ShotRunner {
         let sized = (size - self.size).abs().max_elem() <= 1.0;
         if !self.requested
             && self.frame >= 28
+            && self.started.elapsed() >= std::time::Duration::from_secs(1)
             && sized
             && omadesign::ui::scene_ready(&ctx, &self.studio)
         {

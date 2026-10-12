@@ -5,13 +5,13 @@
 set -eu
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+VERSION="$(node scripts/version.mjs get)"
 case "$VERSION" in
   ''|*[!A-Za-z0-9.+-]*) echo "invalid package version: $VERSION" >&2; exit 1 ;;
 esac
 DIST="dist"
 mkdir -p "$DIST"
-for tool in cargo readelf tar sha256sum; do
+for tool in node cargo readelf tar sha256sum; do
   command -v "$tool" >/dev/null || { echo "missing release tool: $tool" >&2; exit 1; }
 done
 
@@ -121,7 +121,7 @@ package() {
   done
   install -Dm644 skills/omadesign-create/SKILL.md "$stage/skills/omadesign-create/SKILL.md"
   mkdir -p "$stage/docs"
-  for document in MANUAL.md layout.md format-support.md cloud.md plugins.md CONTRIBUTING.md; do
+  for document in MANUAL.md layout.md format-support.md cloud.md plugins.md brushes.md CONTRIBUTING.md; do
     install -Dm644 "docs/$document" "$stage/docs/$document"
   done
   install -Dm644 site/public/llms.txt "$stage/docs/llms.txt"
