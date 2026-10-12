@@ -36,6 +36,10 @@ if (command === 'get') {
     const hash = createHash('sha256').update(updatedLock).digest('hex');
     fs.writeFileSync(inventory, fs.readFileSync(inventory, 'utf8').replace(/"cargo_lock_sha256": "[a-f0-9]{64}"/, `"cargo_lock_sha256": "${hash}"`));
   }
+  const website = 'site/src/release.ts';
+  if (fs.existsSync(website)) {
+    fs.writeFileSync(website, fs.readFileSync(website, 'utf8').replace(/export const NIGHTLY_VERSION = "[^"]+";/, `export const NIGHTLY_VERSION = "${version}";`));
+  }
   console.log(version);
 } else {
   throw new Error('Usage: node scripts/version.mjs [get | nightly [YYYYMMDD [NNNN]]]');

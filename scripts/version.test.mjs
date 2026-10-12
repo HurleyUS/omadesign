@@ -13,6 +13,8 @@ test('nightly preparation preserves exact public tags and chooses the next daily
     fs.copyFileSync(`${root}scripts/version.mjs`, `${directory}/scripts/version.mjs`);
     fs.writeFileSync(`${directory}/Cargo.toml`, '[package]\nname = "omadesign"\nversion = "0.6.3"\n');
     fs.writeFileSync(`${directory}/Cargo.lock`, '[[package]]\nname = "omadesign"\nversion = "0.6.3"\n');
+    fs.mkdirSync(`${directory}/site/src`, { recursive: true });
+    fs.writeFileSync(`${directory}/site/src/release.ts`, 'export const RELEASE_VERSION = "0.6.3";\nexport const NIGHTLY_VERSION = "0.5.5-nightly.2";\n');
     const git = (...args) => execFileSync('git', args, { cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     const run = (...args) => execFileSync(process.execPath, ['scripts/version.mjs', ...args], { cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
     git('init', '-q');
@@ -20,6 +22,7 @@ test('nightly preparation preserves exact public tags and chooses the next daily
     git('-c', 'user.name=Release QA', '-c', 'user.email=release@omadesign.app', 'commit', '-qm', 'fixture');
     assert.equal(run('nightly', '20261011', '0001'), '0.6.3-nightly.20261011.0001');
     assert.equal(run('get'), '0.6.3-nightly.20261011.0001');
+    assert.equal(fs.readFileSync(`${directory}/site/src/release.ts`, 'utf8'), 'export const RELEASE_VERSION = "0.6.3";\nexport const NIGHTLY_VERSION = "0.6.3-nightly.20261011.0001";\n');
     assert.match(fs.readFileSync(`${directory}/Cargo.lock`, 'utf8'), /version = "0.6.3-nightly.20261011.1"/);
     git('tag', 'v0.6.3-nightly.20261011.0001');
     git('tag', 'v0.6.3-nightly.20261011.0009');
