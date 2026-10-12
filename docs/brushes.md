@@ -5,14 +5,14 @@ Omadesign includes Essentials and Texture: 12 original tips, free to use, modify
 and share under CC0. Get the same portable packs at **omadesign.app/brushes**.
 
 Choose **Import** for `.omabrush`, Photoshop `.abr`, Illustrator `.ai`, PNG,
-JPEG, WebP, TIFF, or SVG. Drop ABR and Omadesign packs into the editor to install
+JPEG, WebP, TIFF, SVG, or EPS artwork (EPS needs Ghostscript). Drop ABR and Omadesign packs into the editor to install
 them. Original source files are never changed. Imported packs live in
 `$XDG_DATA_HOME/omadesign/brushes` (normally `~/.local/share/omadesign/brushes`).
 
 A transparent image uses its alpha as the brush tip. An opaque image uses dark
 pixels as ink and white pixels as empty space. Empty borders are cropped.
 SVG artwork is rendered to a sampled tip. Paint in your chosen foreground color,
-then adjust Size, Spacing, Flow, and Opacity. Save current settings as a brush,
+then adjust Size, Spacing, Flow, and Opacity. Sampled tips include their own edge. Save current settings as a brush,
 or export the selected pack to share it. Third-party licenses still apply.
 
 Photoshop ABR versions 1, 2, 6, 7, and 10 support sampled 8/16-bit tips with raw

@@ -2085,7 +2085,10 @@ fn brush_studio(ui: &mut Ui, studio: &mut Studio) {
     let mut opacity = studio.brush.opacity * 100.0;
     let mut flow = studio.brush.flow * 100.0;
     ui.columns(2, |columns| {
-        number_field(&mut columns[0], "Edge", &mut hardness, 0.0..=100.0, "%");
+        let round_edge = !matches!(studio.tool, Tool::Brush | Tool::Eraser) || studio.brushes.selected.is_none();
+        columns[0].add_enabled_ui(round_edge, |ui| {
+            number_field(ui, "Edge", &mut hardness, 0.0..=100.0, "%");
+        }).response.on_hover_text("Sampled tips include their own edge.");
         number_field(&mut columns[1], "Opacity", &mut opacity, 5.0..=100.0, "%");
     });
     studio.brush.hardness = hardness / 100.0;
