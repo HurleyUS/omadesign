@@ -114,26 +114,36 @@ pub fn load_identity() -> Identity {
 }
 
 pub fn save_identity(identity: &Identity) -> Result<(), String> {
-    if let Some(dir) = identity_path().parent() {
+    write_identity(&identity_path(), identity)
+}
+
+fn write_identity(path: &std::path::Path, identity: &Identity) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let text = serde_json::to_string_pretty(identity).map_err(|e| e.to_string())?;
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let path = identity_path();
-        let temporary = path.with_extension(format!("{}.tmp", crate::document::next_id()));
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let temporary = path.with_extension(format!("{}.tmp", crate::document::next_id()));
+    let mut created = false;
+    let result = (|| {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
             .open(&temporary)
             .map_err(|e| e.to_string())?;
+        created = true;
         file.write_all(text.as_bytes())
             .and_then(|_| file.sync_all())
             .map_err(|e| e.to_string())?;
-        std::fs::rename(temporary, path).map_err(|e| e.to_string())
+        drop(file);
+        std::fs::rename(&temporary, path).map_err(|e| e.to_string())
+    })();
+    if result.is_err() && created {
+        let _ = std::fs::remove_file(&temporary);
     }
+    result
 }
 
 pub fn signed_in(identity: &Identity) -> bool {
@@ -208,5 +218,47 @@ mod tests {
         assert_eq!(unresolved_count(&doc, None), 1);
         doc.comments[0].resolved = true;
         assert_eq!(unresolved_count(&doc, None), 0);
+    }
+
+    #[test]
+    fn failed_identity_save_does_not_leave_the_token_behind() {
+        struct Temp(std::path::PathBuf);
+        impl Drop for Temp {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = Temp(std::env::temp_dir().join(format!(
+            "omadesign-identity-{}-{}",
+            std::process::id(),
+            crate::document::next_id()
+        )));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let path = dir.0.join(IDENTITY_FILE);
+        // A directory in the way makes the final rename fail after the token was written.
+        std::fs::create_dir(&path).unwrap();
+        let token = "cd".repeat(32);
+        let identity = Identity {
+            token: token.clone(),
+            email: "ada@example.com".into(),
+            ..Identity::default()
+        };
+        assert!(write_identity(&path, &identity).is_err());
+        let leftovers: Vec<_> = std::fs::read_dir(&dir.0)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|entry| *entry != path)
+            .collect();
+        assert!(leftovers.is_empty(), "failed save left {leftovers:?}");
+        std::fs::remove_dir(&path).unwrap();
+        write_identity(&path, &identity).unwrap();
+        let saved: Identity =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.token, token);
+        assert_eq!(
+            std::fs::read_dir(&dir.0).unwrap().count(),
+            1,
+            "a successful save left a temporary file"
+        );
     }
 }
