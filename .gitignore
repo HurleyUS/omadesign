@@ -28,3 +28,10 @@ site/.env*
 
 # Root-linked Vercel CLI state for the site/ project.
 /.vercel
+
+# Local worktrees, build scratch, source-drive imports, and QA runs.
+/.worktrees/
+/artifacts/
+/.qa-runs/
+/.vite/
+/.tmp-brush/

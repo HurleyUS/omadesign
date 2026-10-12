@@ -36,6 +36,7 @@ mod character_spacing;
 mod opentype;
 mod raster;
 mod retouch;
+mod brushes;
 mod selection;
 mod studios;
 mod text_geometry;
@@ -77,6 +78,12 @@ pub fn present_layout(ctx: &eframe::egui::Context, studio: &mut Studio) {
 
 /// Point an isolated native capture at its real fixture files without changing
 /// HOME or the application's normal settings, typography, and recovery roots.
+/// Open the global brush library.
+/// Takes the editor context and returns no value; document artwork stays unchanged.
+pub fn show_brush_library(ctx: &eframe::egui::Context) {
+    ctx.data_mut(|d|d.insert_temp(eframe::egui::Id::new("brush-library-open"),true));
+}
+
 pub fn show_plugin_manager(ctx: &eframe::egui::Context) {
     plugins::open(ctx);
 }
@@ -112,6 +119,8 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
             studio.recent.clone(),
         )
     });
+    brushes::poll(&ctx, studio);
+    brushes::window(&ctx, studio);
     studio.poll_pixel_edit(&ctx);
     agent::tick(&ctx, studio);
     if !studio.file_dialog_pending()
@@ -120,6 +129,7 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
         && !pixel_selection::is_open(&ctx)
         && !background_removal::is_open(&ctx)
         && !export_dialog::is_open(&ctx)
+        && !brushes::is_open(&ctx)
         && !plugins::is_open(&ctx)
         && !welcome::modal_open(&ctx)
         && !artboard_dialog::is_open(&ctx)

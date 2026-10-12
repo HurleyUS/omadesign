@@ -1,0 +1,11 @@
+{
+  "frames": 45,
+  "import": "real external JaxGrass ABR through asynchronous editor importer",
+  "input": "egui pointer down, 20 drag samples, pointer up",
+  "packs_after_reload": 3,
+  "painted_pixels": 7178,
+  "renderer": "native WGPU",
+  "save_reopen_exact": true,
+  "seconds": 38.302955627441406,
+  "undo_redo_exact": true
+}

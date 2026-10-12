@@ -1,0 +1,586 @@
+//! Portable brush packs and persistent user libraries.
+mod abr;
+mod descriptor;
+mod illustrator;
+
+use crate::{geom::Pt, paint::Brush};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+const MAX_FILE: usize = 128 * 1024 * 1024;
+const MAX_PIXELS: usize = 16 * 1024 * 1024;
+const MAX_BRUSHES: usize = 2048;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Tip {
+    pub width: u32,
+    pub height: u32,
+    #[serde(with = "alpha_bytes")]
+    pub alpha: Vec<u8>,
+}
+
+mod alpha_bytes {
+    use super::*;
+    pub fn serialize<S: serde::Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&STANDARD.encode(bytes))
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let encoded = String::deserialize(d)?;
+        if encoded.len() > MAX_PIXELS * 4 / 3 + 4 {
+            return Err(serde::de::Error::custom("Brush tip exceeds 16 megapixels"));
+        }
+        STANDARD.decode(encoded).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Preset {
+    pub name: String,
+    pub size: f32,
+    pub spacing: f32,
+    pub hardness: f32,
+    pub flow: f32,
+    pub opacity: f32,
+    pub tip: Arc<Tip>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Pack {
+    pub format: String,
+    pub version: u32,
+    pub name: String,
+    pub author: String,
+    pub license: String,
+    #[serde(default)]
+    pub notes: Vec<String>,
+    pub brushes: Vec<Preset>,
+}
+
+impl Pack {
+    pub fn new(name: &str) -> Self {
+        Self {
+            format: "omadesign-brush-pack".into(),
+            version: 1,
+            name: name.into(),
+            author: String::new(),
+            license: "Private import; check the source license before sharing".into(),
+            notes: vec![],
+            brushes: vec![],
+        }
+    }
+
+    /// Validate a pack before it enters the library.
+    /// Accepts this pack and returns an error for invalid settings or excessive memory.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.format != "omadesign-brush-pack" || self.version != 1 {
+            return Err("Unsupported Omadesign brush pack version".into());
+        }
+        if self.name.trim().is_empty()
+            || self.name.len() > 256
+            || self.brushes.is_empty()
+            || self.brushes.len() > MAX_BRUSHES
+        {
+            return Err("A brush pack needs a name and 1–2048 brushes".into());
+        }
+        let mut total = 0usize;
+        for p in &self.brushes {
+            let t = &p.tip;
+            let pixels = u64::from(t.width) * u64::from(t.height);
+            if t.width == 0
+                || t.height == 0
+                || t.width > 8192
+                || t.height > 8192
+                || pixels > MAX_PIXELS as u64
+                || pixels != t.alpha.len() as u64
+                || !t.alpha.iter().any(|&v| v > 0)
+            {
+                return Err(format!("{} has an empty or invalid brush tip", p.name));
+            }
+            total += t.alpha.len();
+            if total > MAX_FILE
+                || p.name.trim().is_empty()
+                || p.name.len() > 512
+                || !p.size.is_finite()
+                || !(1.0..=2048.0).contains(&p.size)
+                || !p.spacing.is_finite()
+                || !(0.01..=4.0).contains(&p.spacing)
+                || [p.hardness, p.flow, p.opacity]
+                    .iter()
+                    .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            {
+                return Err("Invalid brush settings or pack exceeds 128 MiB of tips".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        let bytes = serde_json::to_vec(self).map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_FILE {
+            return Err("Pack exceeds 128 MiB".into());
+        }
+        Ok(bytes)
+    }
+}
+
+impl Preset {
+    pub fn new(name: String, tip: Tip, spacing: f32) -> Self {
+        Self {
+            name,
+            size: tip.width.max(tip.height).min(256).max(1) as f32,
+            spacing: spacing.clamp(0.01, 4.0),
+            hardness: 1.0,
+            flow: 1.0,
+            opacity: 1.0,
+            tip: Arc::new(tip),
+        }
+    }
+    pub fn apply(&self, brush: &mut Brush) {
+        brush.size = self.size;
+        brush.spacing = self.spacing;
+        brush.hardness = self.hardness;
+        brush.flow = self.flow;
+        brush.opacity = self.opacity;
+    }
+}
+
+pub type ImportJob = Arc<std::sync::Mutex<Option<Result<(Pack, String), String>>>>;
+
+pub struct Library {
+    pub packs: Vec<Pack>,
+    pub selected: Option<(usize, usize)>,
+    pub errors: Vec<String>,
+    pub(crate) directory: PathBuf,
+    fingerprints: Vec<String>,
+}
+
+impl Library {
+    pub fn load(directory: PathBuf) -> Self {
+        let mut library = Self {
+            packs: vec![],
+            selected: None,
+            errors: vec![],
+            directory,
+            fingerprints: vec![],
+        };
+        for bytes in [
+            include_bytes!("../assets/brushes/essentials.omabrush").as_slice(),
+            include_bytes!("../assets/brushes/texture.omabrush").as_slice(),
+        ] {
+            match decode(bytes) {
+                Ok(pack) => {
+                    let hash = format!("{:x}", Sha256::digest(pack.bytes().unwrap()));
+                    library.accept(pack, hash);
+                }
+                Err(e) => library.errors.push(e),
+            }
+        }
+        if let Ok(entries) = std::fs::read_dir(&library.directory) {
+            let mut paths: Vec<_> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| is_pack(p))
+                .collect();
+            paths.sort();
+            for path in paths {
+                match import(&path) {
+                    Ok(pack) => library.packs.push(pack),
+                    Err(e) => library.errors.push(format!("{}: {e}", path.display())),
+                }
+            }
+        }
+        library
+    }
+
+    pub fn tip(&self) -> Option<&Tip> {
+        let (pack, brush) = self.selected?;
+        Some(&self.packs.get(pack)?.brushes.get(brush)?.tip)
+    }
+
+    /// Install a validated pack without replacing another user's file.
+    /// Accepts a pack and returns its library index; identical imports reuse the existing pack.
+    pub fn install(&mut self, pack: Pack) -> Result<usize, String> {
+        let hash = Self::persist(&self.directory, &pack)?;
+        Ok(self.accept(pack, hash))
+    }
+
+    pub(crate) fn persist(directory: &Path, pack: &Pack) -> Result<String, String> {
+        let bytes = pack.bytes()?;
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
+        let path = directory.join(format!("{hash}.omabrush"));
+        if !path.exists() {
+            crate::formats::write_atomic(&path, &bytes)?;
+        }
+        Ok(hash)
+    }
+
+    pub(crate) fn accept(&mut self, pack: Pack, hash: String) -> usize {
+        if let Some(index) = self.fingerprints.iter().position(|h| h == &hash) {
+            return index;
+        }
+        self.fingerprints.push(hash);
+        self.packs.push(pack);
+        self.packs.len() - 1
+    }
+}
+
+pub fn is_pack(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("omabrush"))
+}
+
+fn read(path: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_FILE as u64 {
+        return Err("Choose a brush file smaller than 128 MiB".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_FILE {
+        return Err("Brush file exceeds 128 MiB".into());
+    }
+    Ok(bytes)
+}
+
+pub fn decode(bytes: &[u8]) -> Result<Pack, String> {
+    if bytes.len() > MAX_FILE {
+        return Err("Brush file exceeds 128 MiB".into());
+    }
+    let pack: Pack =
+        serde_json::from_slice(bytes).map_err(|e| format!("Invalid brush pack: {e}"))?;
+    pack.validate()?;
+    Ok(pack)
+}
+
+pub fn import(path: &Path) -> Result<Pack, String> {
+    let bytes = read(path)?;
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Imported brushes");
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let pack = match ext.as_str() {
+        "omabrush" => decode(&bytes)?,
+        "abr" => abr::decode(&bytes, name)?,
+        "ai" => illustrator::decode(&bytes, name)?,
+        "svg" | "eps" | "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" => artwork(path, name)?,
+        _ => {
+            return Err(
+                "Import .omabrush, Photoshop .abr, Illustrator .ai, SVG, or a brush-tip image"
+                    .into(),
+            );
+        }
+    };
+    pack.validate()?;
+    Ok(pack)
+}
+
+fn artwork(path: &Path, name: &str) -> Result<Pack, String> {
+    let tip = match crate::import::open_any(path)? {
+        crate::import::Imported::Raster { image, .. } => {
+            tip_from_rgba(image.w, image.h, &image.data)?
+        }
+        crate::import::Imported::Document(mut doc) => {
+            doc.transparent = true;
+            doc.artboards.clear();
+            let scale = (512.0 / doc.width.max(doc.height).max(1.0)).min(1.0);
+            let pm = crate::compositor::render_export_at(&doc, scale, 0.0, true)?;
+            let pixels = crate::document::Pixels::from_pixmap(&pm);
+            tip_from_rgba(pixels.w, pixels.h, &pixels.data)?
+        }
+        _ => return Err("Use a static image or vector brush tip".into()),
+    };
+    let mut pack = Pack::new(name);
+    pack.brushes.push(Preset::new(name.into(), tip, 0.15));
+    Ok(pack)
+}
+
+pub fn tip_from_rgba(w: u32, h: u32, rgba: &[u8]) -> Result<Tip, String> {
+    if w == 0
+        || h == 0
+        || u64::from(w) * u64::from(h) > MAX_PIXELS as u64
+        || rgba.len() != w as usize * h as usize * 4
+    {
+        return Err("Brush image exceeds 16 megapixels or has invalid pixels".into());
+    }
+    let transparent = rgba.chunks_exact(4).any(|p| p[3] < 255);
+    let alpha = rgba
+        .chunks_exact(4)
+        .map(|p| {
+            if transparent {
+                p[3]
+            } else {
+                255 - ((u32::from(p[0]) * 54 + u32::from(p[1]) * 183 + u32::from(p[2]) * 19) / 256)
+                    as u8
+            }
+        })
+        .collect();
+    crop(Tip {
+        width: w,
+        height: h,
+        alpha,
+    })
+}
+
+fn crop(tip: Tip) -> Result<Tip, String> {
+    let mut x0 = tip.width;
+    let mut y0 = tip.height;
+    let (mut x1, mut y1) = (0, 0);
+    for (i, &a) in tip.alpha.iter().enumerate() {
+        if a > 0 {
+            let x = i as u32 % tip.width;
+            let y = i as u32 / tip.width;
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x + 1);
+            y1 = y1.max(y + 1);
+        }
+    }
+    if x0 >= x1 || y0 >= y1 {
+        return Err("Brush artwork is empty".into());
+    }
+    let mut alpha = Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
+    for y in y0..y1 {
+        alpha.extend_from_slice(
+            &tip.alpha[(y * tip.width + x0) as usize..(y * tip.width + x1) as usize],
+        );
+    }
+    Ok(Tip {
+        width: x1 - x0,
+        height: y1 - y0,
+        alpha,
+    })
+}
+
+/// Paint a sampled tip in the current foreground color.
+/// Arguments are the target, center, brush settings, tip, and erase flag; pixels are blended in place.
+pub fn stamp(pm: &mut tiny_skia::Pixmap, pos: Pt, brush: &Brush, tip: &Tip, erase: bool) {
+    let scale = brush.size.max(1.0) / tip.width.max(tip.height) as f32;
+    let (w, h) = (tip.width as f32 * scale, tip.height as f32 * scale);
+    let (left, top) = (pos.x - w / 2.0, pos.y - h / 2.0);
+    let (x0, y0) = (left.floor().max(0.0) as u32, top.floor().max(0.0) as u32);
+    let (x1, y1) = (
+        (left + w).ceil().clamp(0.0, pm.width() as f32) as u32,
+        (top + h).ceil().clamp(0.0, pm.height() as f32) as u32,
+    );
+    let width = pm.width();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let sx = (x as f32 + 0.5 - left) / scale - 0.5;
+            let sy = (y as f32 + 0.5 - top) / scale - 0.5;
+            let sample = |ix: i32, iy: i32| {
+                if ix < 0 || iy < 0 || ix >= tip.width as i32 || iy >= tip.height as i32 {
+                    0.0
+                } else {
+                    tip.alpha[iy as usize * tip.width as usize + ix as usize] as f32 / 255.0
+                }
+            };
+            let (ix, iy) = (sx.floor() as i32, sy.floor() as i32);
+            let (fx, fy) = (sx - sx.floor(), sy - sy.floor());
+            let coverage = (sample(ix, iy) * (1.0 - fx) + sample(ix + 1, iy) * fx) * (1.0 - fy)
+                + (sample(ix, iy + 1) * (1.0 - fx) + sample(ix + 1, iy + 1) * fx) * fy;
+            let alpha = (coverage
+                * brush.flow
+                * brush.opacity
+                * if erase {
+                    1.0
+                } else {
+                    brush.color.a as f32 / 255.0
+                })
+            .clamp(0.0, 1.0);
+            if alpha == 0.0 {
+                continue;
+            }
+            let dest = &mut pm.pixels_mut()[(y * width + x) as usize];
+            let remain = 1.0 - alpha;
+            let channel = |old: u8, color: u8| {
+                (old as f32 * remain + if erase { 0.0 } else { color as f32 * alpha })
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            };
+            *dest = tiny_skia::PremultipliedColorU8::from_rgba(
+                channel(dest.red(), brush.color.r),
+                channel(dest.green(), brush.color.g),
+                channel(dest.blue(), brush.color.b),
+                (dest.alpha() as f32 * remain + if erase { 0.0 } else { alpha * 255.0 })
+                    .round()
+                    .clamp(0.0, 255.0) as u8,
+            )
+            .unwrap();
+        }
+    }
+}
+
+pub fn stroke(pm: &mut tiny_skia::Pixmap, from: Pt, to: Pt, brush: &Brush, tip: &Tip, erase: bool) {
+    let distance = (to - from).length();
+    let spacing = (brush.size * brush.spacing).max(0.5);
+    let count = (distance / spacing).ceil().max(1.0) as u32;
+    for i in 1..=count {
+        stamp(
+            pm,
+            from.lerp(to, i as f32 / count as f32),
+            brush,
+            tip,
+            erase,
+        );
+    }
+}
+
+pub fn cli(args: &[String]) -> Option<Result<(), String>> {
+    if args.first().is_none_or(|a| a != "--convert-brushes") {
+        return None;
+    }
+    Some((|| {
+        if args.len() != 3 {
+            return Err("Use --convert-brushes INPUT OUTPUT.omabrush".into());
+        }
+        let pack = import(Path::new(&args[1]))?;
+        crate::formats::write_atomic(Path::new(&args[2]), &pack.bytes()?)?;
+        println!("{}: {} brushes", pack.name, pack.brushes.len());
+        for note in pack.notes {
+            println!("{note}");
+        }
+        Ok(())
+    })())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn root() -> PathBuf {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("artifacts/brush-tests")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                crate::document::next_id()
+            ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+    #[test]
+    fn imported_pack_survives_reload_and_duplicate_imports_preserve_files() {
+        let directory = root();
+        let pack = import(Path::new("assets/brushes/texture.omabrush")).unwrap();
+        let mut library = Library::load(directory.clone());
+        let index = library.install(pack.clone()).unwrap();
+        assert_eq!(library.install(pack.clone()).unwrap(), index);
+        let reloaded = Library::load(directory.clone());
+        assert_eq!(
+            reloaded.packs[index].bytes().unwrap(),
+            pack.bytes().unwrap()
+        );
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn malformed_packs_do_not_install_or_replace_existing_brushes() {
+        let directory = root();
+        let mut library = Library::load(directory.clone());
+        let mut pack = library.packs[0].clone();
+        pack.brushes[0].tip = Arc::new(Tip {
+            width: u32::MAX,
+            height: u32::MAX,
+            alpha: vec![255],
+        });
+        assert!(library.install(pack).is_err());
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+        for bad in [
+            br#"{"format":"omadesign-brush-pack","version":500}"#.as_slice(),
+            b"not json",
+        ] {
+            assert!(decode(bad).is_err());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn artwork_uses_transparency_or_dark_ink_and_crops_blank_edges() {
+        let tip = tip_from_rgba(
+            3,
+            1,
+            &[255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255],
+        )
+        .unwrap();
+        assert_eq!(
+            tip,
+            Tip {
+                width: 1,
+                height: 1,
+                alpha: vec![255]
+            }
+        );
+        let tip = tip_from_rgba(2, 1, &[255, 0, 0, 0, 255, 255, 255, 128]).unwrap();
+        assert_eq!(tip.alpha, [128]);
+        assert!(tip_from_rgba(1, 1, &[255, 255, 255, 255]).is_err());
+    }
+    #[test]
+    fn sampled_color_and_erase_match_coverage_and_keep_pixels_outside_tip() {
+        let tip = Tip {
+            width: 2,
+            height: 2,
+            alpha: vec![255, 0, 128, 0],
+        };
+        let mut pm = tiny_skia::Pixmap::new(8, 8).unwrap();
+        let brush = Brush {
+            size: 2.0,
+            flow: 1.0,
+            opacity: 1.0,
+            color: crate::color::Rgba::rgb(240, 20, 40),
+            ..Default::default()
+        };
+        stamp(&mut pm, Pt::new(4.0, 4.0), &brush, &tip, false);
+        assert_eq!(pm.pixel(3, 3).unwrap().demultiply().red(), 240);
+        assert_eq!(pm.pixel(3, 4).unwrap().alpha(), 128);
+        assert_eq!(pm.pixel(4, 3).unwrap().alpha(), 0);
+        let before = pm.clone();
+        stamp(&mut pm, Pt::new(4.0, 4.0), &brush, &tip, true);
+        assert_eq!(pm.pixel(3, 3).unwrap().alpha(), 0);
+        assert!(pm.pixel(3, 4).unwrap().alpha() < before.pixel(3, 4).unwrap().alpha());
+        assert_eq!(pm.pixel(0, 0).unwrap().alpha(), 0);
+    }
+    #[test]
+    #[ignore = "Requires private real source files in OMADESIGN_BRUSH_FIXTURES"]
+    fn real_adobe_sources_decode_paint_and_roundtrip_when_supplied() {
+        let directory =
+            std::env::var("OMADESIGN_BRUSH_FIXTURES").expect("private source fixture directory");
+        for name in [
+            "jaxgrass.abr",
+            "grass20.abr",
+            "rodeo.ai",
+            "photoshop-legacy.abr",
+            "adobe-stock.ai",
+        ] {
+            let pack = import(&Path::new(&directory).join(name)).unwrap();
+            let bytes = pack.bytes().unwrap();
+            let reloaded = decode(&bytes).unwrap();
+            assert_eq!(bytes, reloaded.bytes().unwrap());
+            for preset in &pack.brushes {
+                let mut pm = tiny_skia::Pixmap::new(160, 80).unwrap();
+                let mut brush = Brush::default();
+                preset.apply(&mut brush);
+                brush.size = 60.0;
+                stamp(&mut pm, Pt::new(80.0, 40.0), &brush, &preset.tip, false);
+                assert!(pm.pixels().iter().any(|p| p.alpha() > 0), "{}", preset.name);
+            }
+            eprintln!(
+                "{name}: {} named tips decoded, painted, and roundtripped",
+                pack.brushes.len()
+            );
+        }
+    }
+}

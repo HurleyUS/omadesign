@@ -2071,7 +2071,10 @@ fn brush_studio(ui: &mut Ui, studio: &mut Studio) {
             _ => "Brush",
         },
     );
-    number_field(ui, "Size", &mut studio.brush.size, 1.0..=256.0, " px");
+    if matches!(studio.tool, Tool::Brush | Tool::Eraser) {
+        super::brushes::inspector(ui, studio);
+    }
+    number_field(ui, "Size", &mut studio.brush.size, 1.0..=2048.0, " px");
     if studio.tool == Tool::Smudge {
         let mut strength = studio.brush.flow * 100.0;
         number_field(ui, "Strength", &mut strength, 5.0..=100.0, "%");
@@ -2089,6 +2092,9 @@ fn brush_studio(ui: &mut Ui, studio: &mut Studio) {
     studio.brush.opacity = opacity / 100.0;
     number_field(ui, "Flow", &mut flow, 5.0..=100.0, "%");
     studio.brush.flow = flow / 100.0;
+    let mut spacing = studio.brush.spacing * 100.0;
+    number_field(ui, "Spacing", &mut spacing, 1.0..=400.0, "%");
+    studio.brush.spacing = spacing / 100.0;
     if studio.tool == Tool::Clone {
         ui.checkbox(&mut studio.clone_aligned, "Aligned")
             .on_hover_text("Keep the source offset. Off repeats the same source point.");

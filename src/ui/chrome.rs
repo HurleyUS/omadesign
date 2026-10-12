@@ -315,6 +315,10 @@ fn file_menu(ui: &mut Ui, studio: &mut Studio) {
             ui.close();
         }
         ui.separator();
+        if ui.button("Brush library…").clicked() {
+            super::show_brush_library(ui.ctx());
+            ui.close();
+        }
         if ui.button("Import Lottie…").clicked() {
             studio.import_lottie();
             ui.close();

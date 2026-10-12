@@ -194,7 +194,11 @@ pub(super) fn start(studio: &mut Studio, world: Pt) {
     if let Some(source) = &source {
         paint::heal_stamp(&mut buf, source, point, point + offset, &brush);
     } else {
-        paint::stamp(&mut buf, point, &brush, erase && !mask);
+        if let Some(tip) = studio.brushes.tip() {
+            crate::brushes::stamp(&mut buf, point, &brush, tip, erase && !mask);
+        } else {
+            paint::stamp(&mut buf, point, &brush, erase && !mask);
+        }
     }
     let region = paint::PixelRegion::stroke(buf.width(), buf.height(), point, point, &brush);
     clip_working(studio, layer, mask, &mut buf, &before, region);
@@ -270,7 +274,12 @@ pub(super) fn start_brush(studio: &mut Studio, world: Pt) {
         return;
     };
     let point = studio.mask_point(layer, world);
-    paint::stamp(&mut buf, point, &studio.brush, false);
+    if let Some(tip) = studio.brushes.tip() {
+        let brush=paint::Brush { opacity:1.0,..studio.brush };
+        crate::brushes::stamp(&mut buf, point, &brush, tip, false);
+    } else {
+        paint::stamp(&mut buf, point, &studio.brush, false);
+    }
     let region = paint::PixelRegion::stroke(w, h, point, point, &studio.brush);
     clip_overlay(studio, layer, &mut buf, region);
     let preview = studio.cached_pixel_sel_mask(layer).and_then(|mask| {
@@ -460,7 +469,11 @@ pub(super) fn drag(studio: &mut Studio, world: Pt) {
         if let Some(source) = &source {
             paint::heal_stroke(&mut buf, source, from, point, offset, &brush);
         } else {
-            paint::stroke_to(&mut buf, from, point, &brush, erase && !mask);
+            if let Some(tip) = studio.brushes.tip() {
+                crate::brushes::stroke(&mut buf, from, point, &brush, tip, erase && !mask);
+            } else {
+                paint::stroke_to(&mut buf, from, point, &brush, erase && !mask);
+            }
         }
         let selection_changed = selection_generation != studio.pixel_sel_gen;
         let region = if selection_changed {
@@ -582,7 +595,14 @@ pub(super) fn brush_drag(studio: &mut Studio, world: Pt) {
         |p| studio.mask_point(layer, p),
     );
     let to = studio.mask_point(layer, world);
-    if let Some(_) = last {
+    if let Some(tip) = studio.brushes.tip() {
+        let brush=paint::Brush { opacity:1.0,..studio.brush };
+        if last.is_some() {
+            crate::brushes::stroke(&mut buf, from, to, &brush, tip, erase);
+        } else {
+            crate::brushes::stamp(&mut buf, to, &brush, tip, erase);
+        }
+    } else if last.is_some() {
         paint::stroke_to(&mut buf, from, to, &studio.brush, erase);
     } else {
         paint::stamp(&mut buf, to, &studio.brush, erase);
@@ -1521,5 +1541,23 @@ mod tests {
         assert!(smeared[0] > 80, "smudge should move paint {smeared:?}");
         studio.undo();
         assert_eq!(pixels(&studio, 0, false).unwrap().data, original);
+    }
+}
+
+#[cfg(test)]
+mod brush_pack_tests {
+    use super::*;
+    use crate::{document::{Document,Layer},geom::Pt};
+    #[test]
+    fn pack_brush_clips_selection_undoes_redoes_and_saves_exact_pixels() {
+        let mut s=Studio::new();s.show_welcome=false;s.doc=Document::new("Pack painting",80.,60.,72.);s.doc.transparent=true;s.doc.layers=vec![Layer::raster("Paint",80,60)];s.active_layer=Some(0);s.tool=Tool::Brush;s.persona=crate::tools::Persona::Pixel;
+        s.select_brush(1,0);s.brush.size=20.;
+        s.pixel_sel=Some((0..80*60).map(|i|if i%80<40{255}else{0}).collect());s.pixel_sel_gen+=1;
+        let before=s.doc.layers[0].kind.pixels().unwrap().data.clone();
+        start_brush(&mut s,Pt::new(20.,30.));brush_drag(&mut s,Pt::new(60.,30.));s.end_pixel_stroke(false);
+        let painted=s.doc.layers[0].kind.pixels().unwrap().data.clone();assert_ne!(painted,before);
+        for y in 0..60{for x in 40..80{assert_eq!(painted[(y*80+x)*4+3],0);}}
+        s.undo();assert_eq!(s.doc.layers[0].kind.pixels().unwrap().data,before);s.redo();assert_eq!(s.doc.layers[0].kind.pixels().unwrap().data,painted);
+        let root=std::env::current_dir().unwrap().join("artifacts/brush-tests").join(format!("native-{}",crate::document::next_id()));std::fs::create_dir_all(&root).unwrap();let path=root.join("paint.oma");crate::project::save_to(&s.doc,&path).unwrap();let restored=crate::project::load_from(&path).unwrap();assert_eq!(restored.layers[0].kind.pixels().unwrap().data,painted);std::fs::remove_dir_all(root).unwrap();
     }
 }
