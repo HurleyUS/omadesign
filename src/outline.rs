@@ -100,7 +100,7 @@ pub fn expand(shape: &Shape) -> Option<Geom> {
     if aligned {
         let fill = Geom::Poly {
             contours: shape.world_contours(2048),
-            winding: matches!(shape.geom, Geom::Poly { winding: true, .. }),
+            winding: shape.geom.nonzero_winding(),
         };
         crate::boolean::apply(
             if stroke.alignment == crate::document::StrokeAlignment::Inside {
@@ -120,6 +120,52 @@ pub fn expand(shape: &Shape) -> Option<Geom> {
 mod tests {
     use super::*;
     use crate::document::{Cap, Fill, Join, Stroke, Style};
+    #[test]
+    fn aligned_outline_preserves_compound_path_winding() {
+        let contours = vec![
+            vec![
+                Pt::new(0., 0.),
+                Pt::new(100., 0.),
+                Pt::new(100., 100.),
+                Pt::new(0., 100.),
+            ],
+            vec![
+                Pt::new(30., 30.),
+                Pt::new(70., 30.),
+                Pt::new(70., 70.),
+                Pt::new(30., 70.),
+            ],
+        ];
+        for winding in [false, true] {
+            for alignment in [
+                crate::document::StrokeAlignment::Inside,
+                crate::document::StrokeAlignment::Outside,
+            ] {
+                let polygon = Shape::new(
+                    Geom::Poly {
+                        contours: contours.clone(),
+                        winding,
+                    },
+                    Style {
+                        fill: Fill::None,
+                        stroke: Some(Stroke {
+                            width: 4.,
+                            alignment,
+                            ..Default::default()
+                        }),
+                    },
+                );
+                let paths = Shape::new(polygon.geom.to_path(), polygon.style.clone());
+                let expected = crate::boolean::area(&expand(&polygon).unwrap());
+                let actual = crate::boolean::area(&expand(&paths).unwrap());
+                assert!(
+                    (actual - expected).abs() < 0.1,
+                    "winding={winding}, {alignment:?}: {actual} != {expected}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn stroke_outline_obeys_caps_dashes_and_closed_holes() {
         let mut shape = Shape::new(
