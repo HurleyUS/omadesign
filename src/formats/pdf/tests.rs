@@ -777,3 +777,52 @@ fn render_private_pdf_fixture() {
             .unwrap();
     }
 }
+
+#[test]
+fn image_integer_width_past_24_bits_keeps_every_column() {
+    // 2^24+1 is the first integer f32 cannot represent. It is still under the
+    // 64-megapixel import limit, so the column must be kept.
+    let width: i64 = 16_777_217;
+    let bytes = fixture(&[b"/Im Do"], Dictionary::new(), Dictionary::new());
+    let mut pdf = Pdf::load_mem(&bytes).unwrap();
+    let image = pdf.add_object(Stream::new(
+        dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => width,
+            "Height" => 1i64,
+            "ColorSpace" => "DeviceGray",
+            "BitsPerComponent" => 1i64,
+        },
+        vec![0u8; (width as usize).div_ceil(8)],
+    ));
+    let page_id = pdf.get_pages()[&1];
+    let parent = pdf
+        .get_dictionary(page_id)
+        .unwrap()
+        .get(b"Parent")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    pdf.get_dictionary_mut(parent).unwrap().set(
+        "Resources",
+        dictionary! { "XObject" => dictionary! { "Im" => image } },
+    );
+    let mut bytes = Vec::new();
+    pdf.save_to(&mut bytes).unwrap();
+    let (document, warnings) = read(&bytes, "wide-image.pdf").unwrap();
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| !warning.contains("could not be imported")),
+        "{warnings:?}"
+    );
+    let pixels = document
+        .layers
+        .iter()
+        .find_map(|layer| layer.kind.pixels())
+        .expect("imported image");
+    assert_eq!(pixels.h, 1);
+    assert_eq!(pixels.w, width as u32);
+    assert_eq!(pixels.data.len(), width as usize * 4);
+}
