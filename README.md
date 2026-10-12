@@ -1,5 +1,7 @@
 # omadesign
 
+![omadesign: design, layout, paint, photo and motion in one native Linux app](docs/media/hero-banner.png)
+
 [![downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fomadesign.app%2Fapi%2Fstats%3Fbadge%3Ddownloads&style=flat)](https://github.com/michaelmonetized/omadesign/releases)
 [![Users](https://img.shields.io/endpoint?url=https%3A%2F%2Fomadesign.app%2Fapi%2Fstats%3Fbadge%3Dusers&style=flat)](https://www.producthunt.com/products/omadesign)
 [![upvotes](https://img.shields.io/endpoint?url=https%3A%2F%2Fomadesign.app%2Fapi%2Fstats%3Fbadge%3Dupvotes&style=flat)](https://www.producthunt.com/products/omadesign)
