@@ -1,0 +1,26 @@
+{
+  "url": "https://omadesign.app/brushes",
+  "deployment": "dpl_zK1uhWBkpw3DFVoMpjuQCdy3n54m",
+  "packs": 2,
+  "tips": 12,
+  "license": "CC0-1.0",
+  "desktop": {
+    "width": 1440,
+    "horizontalOverflow": 0,
+    "previewsLoaded": true
+  },
+  "phone": {
+    "width": 390,
+    "horizontalOverflow": 0,
+    "previewsLoaded": true
+  },
+  "browserDownload": {
+    "file": "essentials.omabrush",
+    "bytes": 74654,
+    "byteIdenticalToBundledPack": true
+  },
+  "nativeImportExport": {
+    "tipAlphaNamesAndSettingsIdentical": true
+  },
+  "desktopAvailability": "feature branch; public v0.6.3 does not include brush packs"
+}

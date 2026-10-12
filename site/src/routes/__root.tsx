@@ -121,6 +121,7 @@ function Document() {
               <a href={sitePath("#features")}>Features</a>
               <a href={sitePath("updates")}>Updates</a>
               <a href={sitePath("showcase")}>Showcase</a>
+              <a href={sitePath("brushes")}>Brushes</a>
               <a href={sitePath("docs")}>Docs</a>
             </nav>
             <div className="header-icons">

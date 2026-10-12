@@ -2071,7 +2071,10 @@ fn brush_studio(ui: &mut Ui, studio: &mut Studio) {
             _ => "Brush",
         },
     );
-    number_field(ui, "Size", &mut studio.brush.size, 1.0..=256.0, " px");
+    if matches!(studio.tool, Tool::Brush | Tool::Eraser) {
+        super::brushes::inspector(ui, studio);
+    }
+    number_field(ui, "Size", &mut studio.brush.size, 1.0..=2048.0, " px");
     if studio.tool == Tool::Smudge {
         let mut strength = studio.brush.flow * 100.0;
         number_field(ui, "Strength", &mut strength, 5.0..=100.0, "%");
@@ -2082,13 +2085,19 @@ fn brush_studio(ui: &mut Ui, studio: &mut Studio) {
     let mut opacity = studio.brush.opacity * 100.0;
     let mut flow = studio.brush.flow * 100.0;
     ui.columns(2, |columns| {
-        number_field(&mut columns[0], "Edge", &mut hardness, 0.0..=100.0, "%");
+        let round_edge = !matches!(studio.tool, Tool::Brush | Tool::Eraser) || studio.brushes.selected.is_none();
+        columns[0].add_enabled_ui(round_edge, |ui| {
+            number_field(ui, "Edge", &mut hardness, 0.0..=100.0, "%");
+        }).response.on_hover_text("Sampled tips include their own edge.");
         number_field(&mut columns[1], "Opacity", &mut opacity, 5.0..=100.0, "%");
     });
     studio.brush.hardness = hardness / 100.0;
     studio.brush.opacity = opacity / 100.0;
     number_field(ui, "Flow", &mut flow, 5.0..=100.0, "%");
     studio.brush.flow = flow / 100.0;
+    let mut spacing = studio.brush.spacing * 100.0;
+    number_field(ui, "Spacing", &mut spacing, 1.0..=400.0, "%");
+    studio.brush.spacing = spacing / 100.0;
     if studio.tool == Tool::Clone {
         ui.checkbox(&mut studio.clone_aligned, "Aligned")
             .on_hover_text("Keep the source offset. Off repeats the same source point.");

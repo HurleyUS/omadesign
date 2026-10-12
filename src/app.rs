@@ -337,6 +337,8 @@ pub struct Studio {
     pub style: Style,
     pub gradient: (Rgba, Rgba),
     pub brush: Brush,
+    pub brushes: crate::brushes::Library,
+    pub brush_import_job: Option<crate::brushes::ImportJob>,
     pub fill_tolerance: f32,
     pub clone_source: Option<Pt>,
     /// Keep the source offset while painting. Off samples the same source each dab.
@@ -583,6 +585,8 @@ impl Studio {
             style: Style::default(),
             gradient: (Rgba::from_hex(0xFFD166), Rgba::from_hex(0xE5484D)),
             brush: Brush::default(),
+            brushes: crate::brushes::Library::load(crate::project::data_dir().join("brushes")),
+            brush_import_job: None,
             fill_tolerance: 32.0,
             clone_source: None,
             clone_aligned: true,
@@ -3854,6 +3858,10 @@ impl Studio {
     }
 
     pub fn open_path(&mut self, path: PathBuf) {
+        if crate::brushes::is_pack(&path) || path.extension().is_some_and(|e|e.eq_ignore_ascii_case("abr")) {
+            self.import_brush_pack(&path);
+            return;
+        }
         self.queue_import(path, file_io::ImportMode::Open);
     }
 
@@ -4232,6 +4240,10 @@ impl Studio {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
+        if ext == "abr" || ext == "omabrush" {
+            self.import_brush_pack(path);
+            return;
+        }
         if ext == "oma" || crate::import::classify(path) == "oma" {
             self.open_path(path.to_path_buf());
             return;

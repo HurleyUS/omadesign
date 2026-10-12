@@ -1,0 +1,19 @@
+.brush-page { padding-block: 90px 100px; }
+.brush-page h1 { font-size: clamp(48px, 8vw, 100px); letter-spacing: -.065em; line-height: 1; margin: 20px 0; }
+.brush-intro { font-size: clamp(20px, 2.5vw, 28px); max-width: 630px; }
+.brush-proof { font-size: 13px; opacity: .72; margin-block: 20px 42px; }
+.brush-packs { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 28px; }
+.brush-pack { border: 1px solid var(--border, #56566c); border-radius: 18px; padding: 28px; min-width: 0; }
+.brush-pack h2 { font-size: 32px; margin: 0; letter-spacing: -.03em; }
+.brush-pack p { opacity: .75; margin: 8px 0 22px; }
+.brush-pack img { width: 100%; height: auto; display: block; border-radius: 10px; background: #f8f5ef; }
+.brush-pack ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0; }
+.brush-pack li { font-size: 12px; padding: 5px 9px; border: 1px solid var(--border, #56566c); border-radius: 30px; }
+.brush-download { display: inline-flex; padding: 13px 18px; background: #cba6f7; color: #181825; border-radius: 8px; font-weight: 600; text-decoration: none; }
+.brush-download:focus-visible { outline: 3px solid currentColor; outline-offset: 5px; }
+.brush-guide { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 70px; margin-top: 65px; line-height: 1.7; }
+.brush-guide h2 { font-size: 30px; letter-spacing: -.03em; }
+.brush-guide ol { padding-left: 22px; }
+.brush-formats { margin-top: 50px; border-top: 1px solid var(--border,#56566c); padding-top: 25px; line-height: 1.7; }
+.brush-formats summary { cursor: pointer; font-weight: 600; }
+@media(max-width: 680px) { .brush-page { padding-block: 50px 70px; } .brush-packs,.brush-guide { grid-template-columns: 1fr; gap: 24px; } .brush-pack { padding: 20px; } .brush-guide { margin-top: 35px; } }
