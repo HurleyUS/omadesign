@@ -81,8 +81,15 @@ fn compatible_release(value: &serde_json::Value, current: &Version) -> Option<(V
         return None;
     }
     let tag = value["tag_name"].as_str()?;
-    let version = Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()?;
-    if version <= *current || (current.pre.is_empty() && !version.pre.is_empty()) {
+    let public_version = tag.strip_prefix('v').unwrap_or(tag);
+    let version = Version::parse(&crate::release_version::cargo_version(public_version)).ok()?;
+    if version <= *current
+        || (current.pre.is_empty() && !version.pre.is_empty())
+        || (current.pre.as_str().starts_with("nightly.")
+            && version.pre.is_empty()
+            && (version.major, version.minor, version.patch)
+                == (current.major, current.minor, current.patch))
+    {
         return None;
     }
     let triple = match std::env::consts::ARCH {
@@ -90,7 +97,7 @@ fn compatible_release(value: &serde_json::Value, current: &Version) -> Option<(V
         "aarch64" => "aarch64-unknown-linux-gnu",
         _ => return None,
     };
-    let archive = format!("omadesign-{version}-{triple}.tar.gz");
+    let archive = format!("omadesign-{public_version}-{triple}.tar.gz");
     let names = value["assets"].as_array()?;
     if !names.iter().any(|a| a["name"] == archive)
         || !names
@@ -102,7 +109,7 @@ fn compatible_release(value: &serde_json::Value, current: &Version) -> Option<(V
     Some((
         version.clone(),
         Release {
-            version: version.to_string(),
+            version: public_version.into(),
             tag: tag.into(),
         },
     ))
@@ -131,7 +138,9 @@ fn check_release() -> Result<Option<Release>, String> {
         .map(|(_, r)| r))
 }
 fn install_release(release: &Release) -> Result<PathBuf, String> {
-    let version = Version::parse(&release.version).map_err(|e| e.to_string())?;
+    Version::parse(&crate::release_version::cargo_version(&release.version))
+        .map_err(|e| e.to_string())?;
+    let version = &release.version;
     if release.tag != format!("v{version}") && release.tag != version.to_string() {
         return Err("Invalid update version".into());
     }
@@ -211,7 +220,7 @@ fn install_release(release: &Release) -> Result<PathBuf, String> {
         let launcher = home.join(".local/bin/omadesign-nightly");
         let old = std::fs::read_to_string(&launcher)
             .map_err(|e| format!("Could not update nightly launcher: {e}"))?;
-        let old_target = format!("releases/{}/bin/omadesign", env!("CARGO_PKG_VERSION"));
+        let old_target = format!("releases/{}/bin/omadesign", env!("OMADESIGN_VERSION"));
         if !old.contains(&old_target) {
             return Err("The custom nightly launcher could not be updated automatically. Your workspace remains open.".into());
         }
@@ -335,12 +344,32 @@ mod tests {
         serde_json::json!({"tag_name":tag,"draft":false,"assets":[{"name":format!("omadesign-{}-{}-unknown-linux-gnu.tar.gz",tag.trim_start_matches('v'),std::env::consts::ARCH)},{"name":format!("omadesign-{}-{}-unknown-linux-gnu.tar.gz.sha256",tag.trim_start_matches('v'),std::env::consts::ARCH)}]})
     }
     #[test]
+    fn dated_nightlies_compare_numeric_counters_and_keep_public_asset_names() {
+        let current = Version::parse("0.6.3-nightly.20261011.9").unwrap();
+        let (_, next) =
+            compatible_release(&release("v0.6.3-nightly.20261011.0010"), &current).unwrap();
+        assert_eq!(next.version, "0.6.3-nightly.20261011.0010");
+        assert_eq!(next.tag, "v0.6.3-nightly.20261011.0010");
+        assert!(compatible_release(&release("v0.6.3-nightly.20261012.0001"), &current).is_some());
+        assert!(compatible_release(&release("v0.6.3-nightly.20261010.9999"), &current).is_none());
+        assert!(compatible_release(&release("v0.6.3-nightly.20261011.0000"), &current).is_none());
+        assert!(compatible_release(&release("v0.6.3"), &current).is_none());
+        assert!(
+            compatible_release(
+                &release("v0.6.4-nightly.20261011.0001"),
+                &Version::parse("0.6.3").unwrap()
+            )
+            .is_none()
+        );
+    }
+    #[test]
     fn semantic_versions_respect_channels_and_complete_packages() {
         let nightly = Version::parse("0.5.5-nightly.1").unwrap();
         let stable = Version::parse("0.5.5").unwrap();
         assert!(compatible_release(&release("v0.5.5-nightly.10"), &nightly).is_some());
         assert!(compatible_release(&release("v0.5.6-nightly.1"), &stable).is_none());
-        assert!(compatible_release(&release("v0.5.5"), &nightly).is_some());
+        assert!(compatible_release(&release("v0.5.5"), &nightly).is_none());
+        assert!(compatible_release(&release("v0.5.6"), &nightly).is_some());
         assert!(compatible_release(&release("v0.5.4"), &nightly).is_none());
         let mut missing = release("v0.6.0");
         missing["assets"] = serde_json::json!([]);

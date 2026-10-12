@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-11 · 0.6.3-nightly.20261011.0001 — Brush packs
+
+- Paint with 12 original CC0 tips, import Photoshop ABR and Illustrator libraries, and make tips from your own images or SVG artwork.
+- Browse previews, save brush settings, and export portable Omadesign packs. Packs persist on your computer and work with paint, erasing and masks.
+- Download Essentials and Texture from [the brush library](https://omadesign.app/brushes).
+- Nightly tags now use `BASE-nightly.YYYYMMDD.NNNN`. Update checks compare dated counters and retain the exact public archive names.
+
 ## 2026-10-04 · Install once. Open from there.
 
 - Installer `--launch` opens a complete current or newer installation directly. A missing or older app gets the full setup before opening; missing setup files trigger repair.

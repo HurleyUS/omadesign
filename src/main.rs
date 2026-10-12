@@ -32,7 +32,7 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     if args.iter().any(|arg| arg == "--version" || arg == "-V") {
-        println!("omadesign {}", env!("CARGO_PKG_VERSION"));
+        println!("omadesign {}", env!("OMADESIGN_VERSION"));
         return Ok(());
     }
     if args.iter().any(|a| a == "--export-demo") {

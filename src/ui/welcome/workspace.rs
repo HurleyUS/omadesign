@@ -468,7 +468,7 @@ fn center(ui: &mut Ui, studio: &mut Studio, state: &mut State) {
     logo(ui);
     ui.vertical_centered(|ui| {
         ui.label(
-            RichText::new(format!("alpha-{}", env!("CARGO_PKG_VERSION")))
+            RichText::new(format!("alpha-{}", env!("OMADESIGN_VERSION")))
                 .small()
                 .color(fg_weak()),
         );
@@ -631,10 +631,10 @@ fn center(ui: &mut Ui, studio: &mut Studio, state: &mut State) {
     let links = [
         (
             "newspaper-clipping",
-            format!("What's new in {}", env!("CARGO_PKG_VERSION")),
+            format!("What's new in {}", env!("OMADESIGN_VERSION")),
             format!(
                 "https://omadesign.app/updates/{}",
-                env!("CARGO_PKG_VERSION")
+                env!("OMADESIGN_VERSION")
             ),
         ),
         (

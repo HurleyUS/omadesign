@@ -1,6 +1,18 @@
 use std::{env, fs, path::Path};
+#[path = "src/release_version.rs"]
+mod release_version;
 
 fn main() {
+    let cargo_version = env::var("CARGO_PKG_VERSION").expect("Cargo package version");
+    assert_eq!(
+        release_version::cargo_version(&release_version::public_version(&cargo_version)),
+        cargo_version
+    );
+    println!("cargo:rerun-if-changed=src/release_version.rs");
+    println!(
+        "cargo:rustc-env=OMADESIGN_VERSION={}",
+        release_version::public_version(&cargo_version)
+    );
     const ARCHIVE: &str = "vendor/libraw/LibRaw-0.22.2.tar.gz";
     println!("cargo:rerun-if-changed={ARCHIVE}");
     println!("cargo:rerun-if-changed=src/formats/raw/bridge.cpp");

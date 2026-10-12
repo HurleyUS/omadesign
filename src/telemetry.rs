@@ -211,7 +211,7 @@ pub fn count(metric: &'static str) {
 fn batch(counts: Vec<Count>) -> Batch {
     Batch {
         schema: 1,
-        release: env!("CARGO_PKG_VERSION").into(),
+        release: env!("OMADESIGN_VERSION").into(),
         platform: format!("linux-{}", std::env::consts::ARCH),
         counts,
     }
@@ -289,7 +289,7 @@ pub fn supervise(args: &[String]) -> Option<i32> {
                         .starts_with("omadesign-running-version-")
                 })
             {
-                let _ = std::fs::write(path, env!("CARGO_PKG_VERSION"));
+                let _ = std::fs::write(path, env!("OMADESIGN_VERSION"));
             }
         }
         return None;
@@ -298,7 +298,7 @@ pub fn supervise(args: &[String]) -> Option<i32> {
         "omadesign-running-version-{}",
         crate::project::new_swap_id()
     ));
-    let _ = std::fs::write(&version_path, env!("CARGO_PKG_VERSION"));
+    let _ = std::fs::write(&version_path, env!("OMADESIGN_VERSION"));
     let executable = std::env::current_exe().ok()?;
     let result = std::process::Command::new(executable)
         .args(args)
@@ -308,7 +308,7 @@ pub fn supervise(args: &[String]) -> Option<i32> {
         .ok()?;
     let release = std::fs::read_to_string(&version_path)
         .ok()
-        .filter(|s| semver::Version::parse(s).is_ok());
+        .filter(|s| semver::Version::parse(&crate::release_version::cargo_version(s)).is_ok());
     let _ = std::fs::remove_file(&version_path);
     let metric = match result.signal() {
         Some(11) => Some("crash.segv"),

@@ -117,7 +117,7 @@ fn config(ui: &mut egui::Ui, studio: &mut Studio) {
     }
 }
 fn update(ui: &mut egui::Ui, studio: &mut Studio) {
-    ui.strong(format!("Installed: {}", env!("CARGO_PKG_VERSION")));
+    ui.strong(format!("Installed: {}", env!("OMADESIGN_VERSION")));
     ui.add_space(8.);
     ui.label(&studio.updates.status);
     if studio.updates.busy {
@@ -185,7 +185,7 @@ fn about(ui: &mut egui::Ui, studio: &mut Studio) {
         if let Some(texture) = texture {
             ui.image((texture.id(), texture.size_vec2() * 0.5));
         }
-        let version = env!("CARGO_PKG_VERSION");
+        let version = env!("OMADESIGN_VERSION");
         let base = version.split('-').next().unwrap_or(version);
         ui.label(
             RichText::new(format!(

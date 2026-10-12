@@ -183,6 +183,9 @@ test_version_ordering() {
 0.6.3-alpha.beta 0.6.3-alpha.1 0.6.3-alpha.beta
 0.6.3-alpha 0.6.3-alpha.1 0.6.3-alpha.1
 0.6.3+build.1 0.6.3+build.2 0.6.3+build.1
+0.6.3-nightly.20261011.0009 0.6.3-nightly.20261011.0010 0.6.3-nightly.20261011.0010
+0.6.3-nightly.20261011.0010 0.6.3-nightly.20261011.0009 0.6.3-nightly.20261011.0010
+0.6.3-nightly.20261011.9999 0.6.3-nightly.20261012.0001 0.6.3-nightly.20261012.0001
 CASES
 }
 

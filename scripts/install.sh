@@ -202,6 +202,9 @@ install -Dm644 "$SKILL_DIR/omadesign-create/SKILL.md" "$DATA/omadesign/skills/om
 for document in MANUAL.md layout.md format-support.md cloud.md plugins.md CONTRIBUTING.md; do
   install -Dm644 "$DOCS_DIR/$document" "$DATA/omadesign/docs/$document"
 done
+if [ -f "$DOCS_DIR/brushes.md" ]; then
+  install -Dm644 "$DOCS_DIR/brushes.md" "$DATA/omadesign/docs/brushes.md"
+fi
 install -Dm644 "$DOCS_INDEX" "$DATA/omadesign/docs/llms.txt"
 mkdir -p "$DATA/omadesign/licenses/lua" "$DATA/omadesign/plugin-examples" "$DATA/omadesign/plugins"
 cp "$LUA_LICENSE_DIR/"* "$DATA/omadesign/licenses/lua/"

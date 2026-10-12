@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-VERSION="${1:-$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)}"
+VERSION="${1:-$(node scripts/version.mjs get)}"
 case "$VERSION" in
   ''|*[!A-Za-z0-9.+-]*) echo 'invalid installer version' >&2; exit 1 ;;
 esac
@@ -12,6 +12,11 @@ for ARCH in x86_64 aarch64; do
   rm -rf "$STAGE"
   mkdir -p "$STAGE"
   install -Dm755 scripts/install-remote.sh "$STAGE/omadesign-install"
+  case "$VERSION" in
+    *-nightly.*)
+      sed "s/^TAG=\"\${OMADESIGN_TAG:-}\"$/TAG=\"\${OMADESIGN_TAG:-v${VERSION}}\"/" scripts/install-remote.sh > "$STAGE/omadesign-install"
+      ;;
+  esac
   install -Dm755 scripts/install.sh "$STAGE/install.sh"
   install -Dm644 assets/omadesign.svg "$STAGE/omadesign.svg"
   install -Dm644 LICENSE "$STAGE/LICENSE"
