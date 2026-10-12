@@ -96,7 +96,7 @@ pub(crate) fn normalize_decoded_document(mut doc: Document, version: u32) -> Res
         }
     }
     crate::text_geometry::reflow(&mut doc);
-    doc.ensure_ids();
+    doc.ensure_ids()?;
     doc.validate_hierarchy()?;
     Ok(doc)
 }
@@ -570,7 +570,7 @@ pub fn load_swap(path: &Path) -> Result<SwapMeta, String> {
             }
         }
     }
-    meta.doc.ensure_ids();
+    meta.doc.ensure_ids()?;
     Ok(meta)
 }
 
@@ -1094,5 +1094,36 @@ mod tests {
             decode(&file.to_string()).is_err(),
             "w*h*4 past usize must not be treated as a raw buffer"
         );
+    }
+
+    #[test]
+    fn decode_rejects_extreme_object_ids_instead_of_overflowing_the_allocator() {
+        let mut doc = Document::new("Extreme ids", 64., 64., 72.);
+        let mut shape = Shape::new(
+            Geom::Rect {
+                origin: Pt::new(0., 0.),
+                size: Pt::new(10., 10.),
+                radius: 0.,
+            },
+            Style::default(),
+        );
+        shape.id = u64::MAX;
+        doc.layers[1].kind.shapes_mut().unwrap().push(shape);
+        let encoded = encode(&doc).unwrap();
+        assert!(decode(&encoded).is_err());
+        // A swapped recovery document takes the same validation path.
+        let root = std::env::temp_dir().join(new_swap_id());
+        std::fs::create_dir_all(&root).unwrap();
+        let swap = root.join("extreme.oma.swp");
+        let meta = SwapMeta {
+            id: "extreme".into(),
+            original: None,
+            name: "Extreme ids".into(),
+            saved_at: 0,
+            doc,
+        };
+        std::fs::write(&swap, serde_json::to_string(&meta).unwrap()).unwrap();
+        assert!(load_swap(&swap).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

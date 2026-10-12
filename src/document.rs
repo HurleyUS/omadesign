@@ -19,7 +19,7 @@ pub fn next_id() -> u64 {
 }
 
 pub fn bump_id(seen: u64) {
-    NEXT_ID.fetch_max(seen + 1, Ordering::Relaxed);
+    NEXT_ID.fetch_max(seen.saturating_add(1), Ordering::Relaxed);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1604,7 +1604,7 @@ impl Document {
         out
     }
 
-    pub fn ensure_ids(&mut self) {
+    pub fn ensure_ids(&mut self) -> Result<(), String> {
         let mut max = 0u64;
         for l in &self.layers {
             max = max.max(l.id);
@@ -1623,8 +1623,14 @@ impl Document {
         for token in &self.layout_tokens {
             max = max.max(token.id);
         }
-        bump_id(max);
         self.migrate_artboards();
+        // Brand asset import rejects the same range: ids at the top of u64
+        // would overflow or wrap the id allocator, colliding with new objects.
+        if max >= u64::MAX - 200_000 {
+            return Err("The document contains invalid object IDs".into());
+        }
+        bump_id(max);
+        Ok(())
     }
 }
 
