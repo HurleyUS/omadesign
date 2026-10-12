@@ -299,6 +299,7 @@ impl eframe::App for ShotRunner {
         let sized = (size - self.size).abs().max_elem() <= 1.0;
         if !self.requested
             && self.frame >= 28
+            && self.started.elapsed() >= std::time::Duration::from_secs(1)
             && sized
             && omadesign::ui::scene_ready(&ctx, &self.studio)
         {
