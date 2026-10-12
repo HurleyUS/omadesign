@@ -529,6 +529,19 @@ test_store_launcher_preserved() {
   [ -x "$PREFIX/bin/omadesign" ]
 }
 
+test_nightly_installer_selects_its_packaged_tag() {
+  local version=0.6.3-nightly.20261011.0001 arch
+  arch="$(uname -m)"
+  sh "$REPO/scripts/package-installer.sh" "$version"
+  cp "$REPO/dist/omadesign-installer-$version-$arch-linux/omadesign-install" "$TOOLS/omadesign-install"
+  binary "$PACKAGE/omadesign" "$version"
+  publish "v$version"
+  store_launch --launch -- 'a file.oma'; success; launched
+  [ "${ARGS[0]}" = "$version" ]
+  downloads 2
+  ! grep -q 'releases/latest' "$CURL_LOG"
+}
+
 TESTS=(test_local_arguments test_version_ordering test_current_local test_metadata_repair \
   test_plugin_main_repair test_plugin_assets_repair test_incomplete_legacy_install test_store_owned_guard \
   test_remote_fresh test_remote_current test_remote_upgrade test_remote_newer test_repair_no_downgrade \
@@ -536,7 +549,8 @@ TESTS=(test_local_arguments test_version_ordering test_current_local test_metada
   test_wrong_archive_preserves_install test_wrong_archive_install_only test_portable_plugin_copy \
   test_relative_prefix test_install_only test_invalid_release \
   test_public_parity test_payload_setup test_store_packaged_repair test_store_fresh test_store_current test_store_later test_store_update \
-  test_store_prompt_fallback test_store_explicit_update test_store_launcher_preserved)
+  test_store_prompt_fallback test_store_explicit_update test_store_launcher_preserved \
+  test_nightly_installer_selects_its_packaged_tag)
 for test in "${TESTS[@]}"; do
   COUNT=$((COUNT + 1))
   set +e
