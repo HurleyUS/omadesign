@@ -17,7 +17,7 @@
     }
   },
   "installer_tests": 35,
-  "site_tests": 21,
+  "site_tests": 23,
   "site_typecheck": true,
   "site_production_build": true,
   "native": [
@@ -69,23 +69,25 @@
     },
     {
       "name": "omadesign-installer-0.6.3-nightly.20261011.0001-aarch64-linux.tar.gz",
-      "bytes": 187357,
-      "sha256": "12c1bb412b086ee12710afb140a1a0e8122e01e3e7a3f3104915260db55eb337"
+      "bytes": 187947,
+      "sha256": "f527b2de7fb46cbdede754b16319d3ea57be4ba5f746d2d3e0d0027f2d7422a5"
     },
     {
       "name": "omadesign-installer-0.6.3-nightly.20261011.0001-aarch64-linux.tar.gz.sha256",
       "bytes": 135,
-      "sha256": "a7c343cf34c7b60bac8fc63978389fba2997d9f85e4747ed76d66fae6acbf9de"
+      "sha256": "d63f8ba2598e57acc324dcbee7c4d2ebf604bca2208d0dda23ad74a720f3cf4a"
     },
     {
       "name": "omadesign-installer-0.6.3-nightly.20261011.0001-x86_64-linux.tar.gz",
-      "bytes": 187364,
-      "sha256": "4697bb14713fe88849b1401cf44c732a5c71e45828d00568271d0152adb66f77"
+      "bytes": 187951,
+      "sha256": "2f5537c325621f07d1632eb5b1c1d5a110b93d6b45b1baa4b724c831426d469b"
     },
     {
       "name": "omadesign-installer-0.6.3-nightly.20261011.0001-x86_64-linux.tar.gz.sha256",
       "bytes": 134,
-      "sha256": "c7b9ec5080c5a0968ac55894b80d95950be805d96c64e3aca07fc4a5dd944910"
+      "sha256": "89d85f0ff9ea2acc93bc5eca63fcb3d51f3f7e5c2283e6bcd39669aea35ddcfe"
     }
-  ]
+  ],
+  "backend_deployment": "https://healthy-buzzard-921.convex.cloud",
+  "nightly_installer": "Default installation uses separate nightly prefix, launcher and configuration; stable remains intact"
 }

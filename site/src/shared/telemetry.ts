@@ -15,7 +15,7 @@ function exact(value: unknown, keys: string[]): value is Record<string, unknown>
 }
 export function parseBatch(value: unknown, now = new Date()): Batch | null {
   if (!exact(value, ["schema", "release", "platform", "counts"]) || value.schema !== 1 ||
-    typeof value.release !== "string" || !/^\d{1,4}\.\d{1,4}\.\d{1,4}(?:-(?:nightly|alpha|beta|rc)\.\d{1,6})?$/.test(value.release) ||
+    typeof value.release !== "string" || !/^\d{1,4}\.\d{1,4}\.\d{1,4}(?:-(?:(?:nightly|alpha|beta|rc)\.\d{1,6}|nightly\.\d{8}\.(?!0000)\d{4}))?$/.test(value.release) ||
     !["linux-x86_64", "linux-aarch64"].includes(value.platform as string) || !Array.isArray(value.counts) || value.counts.length < 1 || value.counts.length > 128) return null;
   const seen = new Set<string>();
   for (const item of value.counts) {

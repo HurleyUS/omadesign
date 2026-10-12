@@ -11,6 +11,16 @@ const batch = () => ({ schema: 1 as const, release: "0.5.5-nightly.1", platform:
 beforeEach(() => vi.stubEnv("TELEMETRY_SECRET", "test-server-secret"));
 afterEach(() => vi.unstubAllEnvs());
 describe("Private aggregate telemetry", () => {
+  it("accepts dated nightlies through the HTTP and backend validators", async () => {
+    const dated = { ...batch(), release: "0.6.3-nightly.20261011.0001" };
+    expect(parseBatch(dated)).not.toBeNull();
+    for (const release of ["0.6.3-nightly.20261011.0000", "0.6.3-nightly.20261011.1", "0.6.3-nightly.20261011.10000"]) {
+      expect(parseBatch({ ...dated, release })).toBeNull();
+    }
+    const t = convexTest(schema, modules);
+    const result = await t.mutation(api.telemetry.ingest, { ...dated, secret: "test-server-secret" });
+    expect(result.accepted).toBe(true);
+  });
   it("rejects personal fields, raw text, fake metrics and inflated activity", () => {
     expect(parseBatch(batch())).not.toBeNull();
     for (const key of ["ip", "user", "installation_id", "path", "email", "stacktrace", "message"]) expect(parseBatch({ ...batch(), [key]: "private" })).toBeNull();

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,7 +23,7 @@ export function syncAgentDocs() {
     copyFileSync(input, output);
     return { path: `/${destination}`, sha256: createHash("sha256").update(readFileSync(input)).digest("hex") };
   });
-  const version = readFileSync(resolve(root, "Cargo.toml"), "utf8").match(/^version = "([^"]+)"/m)?.[1];
+  const version = execFileSync(process.execPath, [resolve(root, "scripts/version.mjs"), "get"], { encoding: "utf8" }).trim();
   if (!version) throw new Error("Cannot determine the documentation release version");
   writeFileSync(resolve(root, "site/public/docs/markdown/manifest.json"), `${JSON.stringify({ version, files: manifest }, null, 2)}\n`);
 }

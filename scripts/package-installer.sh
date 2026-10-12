@@ -14,7 +14,17 @@ for ARCH in x86_64 aarch64; do
   install -Dm755 scripts/install-remote.sh "$STAGE/omadesign-install"
   case "$VERSION" in
     *-nightly.*)
-      sed "s/^TAG=\"\${OMADESIGN_TAG:-}\"$/TAG=\"\${OMADESIGN_TAG:-v${VERSION}}\"/" scripts/install-remote.sh > "$STAGE/omadesign-install"
+      {
+        printf '#!/bin/sh\nset -eu\n'
+        printf 'export OMADESIGN_TAG="\044{OMADESIGN_TAG:-v%s}"\n' "$VERSION"
+        cat <<'SH'
+if [ -z "${OMADESIGN_INSTALL_PREFIX:-}" ]; then
+  export OMADESIGN_NIGHTLY_ENTRY="${OMADESIGN_TAG#v}"
+  export OMADESIGN_INSTALL_PREFIX="$HOME/.local/share/omadesign-nightly/releases/$OMADESIGN_NIGHTLY_ENTRY"
+fi
+SH
+        tail -n +2 scripts/install-remote.sh
+      } > "$STAGE/omadesign-install"
       ;;
   esac
   install -Dm755 scripts/install.sh "$STAGE/install.sh"

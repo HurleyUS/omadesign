@@ -534,6 +534,15 @@ test_nightly_installer_selects_its_packaged_tag() {
   arch="$(uname -m)"
   sh "$REPO/scripts/package-installer.sh" "$version"
   cp "$REPO/dist/omadesign-installer-$version-$arch-linux/omadesign-install" "$TOOLS/omadesign-install"
+  sed -n '1,/^fi$/p' "$TOOLS/omadesign-install" > "$CASE_DIR/nightly-environment.sh"
+  cat > "$CASE_DIR/check-nightly-environment.sh" <<'SH'
+#!/bin/sh
+. "$1"
+[ "$OMADESIGN_TAG" = v0.6.3-nightly.20261011.0001 ]
+[ "$OMADESIGN_INSTALL_PREFIX" = "$HOME/.local/share/omadesign-nightly/releases/0.6.3-nightly.20261011.0001" ]
+[ "$OMADESIGN_NIGHTLY_ENTRY" = 0.6.3-nightly.20261011.0001 ]
+SH
+  env -u OMADESIGN_INSTALL_PREFIX -u OMADESIGN_TAG sh "$CASE_DIR/check-nightly-environment.sh" "$CASE_DIR/nightly-environment.sh"
   binary "$PACKAGE/omadesign" "$version"
   publish "v$version"
   store_launch --launch -- 'a file.oma'; success; launched

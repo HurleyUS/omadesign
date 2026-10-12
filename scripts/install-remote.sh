@@ -39,6 +39,49 @@ read_version() {
   '
 }
 
+# Register the isolated nightly app.
+# Args: none; uses the packaged nightly marker. Returns after installing its launcher.
+register_nightly() {
+  nightly="${OMADESIGN_NIGHTLY_ENTRY:-}"
+  [ -n "$nightly" ] || return 0
+  [ "$INSTALL_PREFIX" = "$HOME/.local/share/omadesign-nightly/releases/$nightly" ] || return 0
+  [ "$(read_version "$BIN/omadesign")" = "$nightly" ] || return 0
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
+  temporary="$(mktemp "$HOME/.local/bin/.omadesign-nightly.XXXXXX")"
+  cat > "$temporary" <<EOF
+#!/bin/sh
+export XDG_CONFIG_HOME="\${HOME}/.config/omadesign-nightly"
+export XDG_DATA_HOME="\${HOME}/.local/share/omadesign-nightly"
+exec "\${HOME}/.local/share/omadesign-nightly/releases/$nightly/bin/omadesign" "\$@"
+EOF
+  chmod 755 "$temporary"
+  mv "$temporary" "$HOME/.local/bin/omadesign-nightly"
+  install -Dm644 "$DATA/icons/hicolor/scalable/apps/omadesign.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/omadesign-nightly.svg"
+  temporary="$(mktemp "$HOME/.local/share/applications/.omadesign-nightly.XXXXXX")"
+  cat > "$temporary" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Omadesign Nightly
+Exec="$HOME/.local/bin/omadesign-nightly" %F
+Icon=omadesign-nightly
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;
+EOF
+  chmod 644 "$temporary"
+  mv "$temporary" "$HOME/.local/share/applications/omadesign-nightly.desktop"
+}
+
+# Open a verified installation.
+# Args: app arguments. Registers a default nightly entry, then replaces this process.
+launch_installed() {
+  register_nightly
+  if [ -n "${OMADESIGN_NIGHTLY_ENTRY:-}" ] && [ "$INSTALL_PREFIX" = "$HOME/.local/share/omadesign-nightly/releases/$OMADESIGN_NIGHTLY_ENTRY" ]; then
+    export XDG_CONFIG_HOME="$HOME/.config/omadesign-nightly"
+    export XDG_DATA_HOME="$HOME/.local/share/omadesign-nightly"
+  fi
+  exec "$BIN/omadesign" "$@"
+}
+
 # Check the files needed by an installed app.
 # Args: none; uses BIN and DATA. Returns failure when setup needs repair.
 installation_complete() {
@@ -155,7 +198,7 @@ fi
 if ! command -v curl >/dev/null 2>&1; then
   if [ -n "$INSTALLED" ] && installation_complete; then
     echo "omadesign: curl is unavailable; launching installed $INSTALLED" >&2
-    exec "$BIN/omadesign" "$@"
+    launch_installed "$@"
   fi
   echo "omadesign: missing curl" >&2
   exit 1
@@ -165,7 +208,7 @@ if [ -z "$TAG" ]; then
   if ! release="$(curl -fsSL --connect-timeout 10 --max-time 20 "https://api.github.com/repos/${REPO}/releases/latest")"; then
     if [ -n "$INSTALLED" ] && installation_complete; then
       echo "omadesign: could not check for updates; launching installed $INSTALLED" >&2
-      exec "$BIN/omadesign" "$@"
+      launch_installed "$@"
     fi
     echo "omadesign: could not resolve latest release" >&2
     exit 1
@@ -186,7 +229,7 @@ if ! printf '%s\n' "$VER" | awk '/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0
 fi
 if [ -n "$INSTALLED" ] && version_is_current "$INSTALLED" "$VER"; then
   if installation_complete; then
-    exec "$BIN/omadesign" "$@"
+    launch_installed "$@"
   fi
   if ! version_is_current "$VER" "$INSTALLED"; then
     echo "omadesign: repair installed $INSTALLED with a matching or newer package; latest stable is $VER" >&2
@@ -195,7 +238,7 @@ if [ -n "$INSTALLED" ] && version_is_current "$INSTALLED" "$VER"; then
 fi
 if [ "$PROMPT_UPDATE" = 1 ] && [ -n "$INSTALLED" ] && installation_complete; then
   if ! confirm_update "$INSTALLED" "$VER"; then
-    exec "$BIN/omadesign" "$@"
+    launch_installed "$@"
   fi
 fi
 for tool in sha256sum tar; do
@@ -235,6 +278,7 @@ if [ "$archive_version" != "$VER" ]; then
   exit 1
 fi
 install_payload
+register_nightly
 echo
 echo "omadesign ${VER} is installed"
 if [ "$LAUNCH" = 1 ]; then
@@ -253,5 +297,5 @@ if [ "$LAUNCH" = 1 ]; then
   cd "$LAUNCH_DIR"
   rm -rf "$TMP"
   trap - 0 HUP INT TERM
-  exec "$BIN/omadesign" "$@"
+  launch_installed "$@"
 fi

@@ -1,4 +1,6 @@
 import workspace from "../../../docs/blog/0.6.3-a-workspace-that-moves.md?raw";
+import brushes from "../../../docs/blog/nightly-brush-packs.md?raw";
+import { NIGHTLY_VERSION } from "../release";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import reviewCompose from "../../../docs/blog/0.6.2-review-compose-keep-moving.md?raw";
 import moreControl from "../../../docs/blog/0.6.1-more-control-less-waiting.md?raw";
@@ -15,6 +17,7 @@ import { Markdown } from "../md";
 import { updateBySlug } from "../updates";
 
 const bodies: Record<string, { markdown: string; path: string }> = {
+  "0.6.3-nightly.20261011.0001": { markdown: brushes, path: "docs/blog/nightly-brush-packs.md" },
   "0.6.3": { markdown: workspace, path: "docs/blog/0.6.3-a-workspace-that-moves.md" },
   "0.6.2": {
     markdown: reviewCompose,
@@ -73,7 +76,7 @@ export const Route = createFileRoute("/updates/$slug")({
 function UpdatePost() {
   const { slug } = Route.useParams();
   const post = updateBySlug(slug);
-  const body = bodies[slug];
+  const body = slug === NIGHTLY_VERSION ? { markdown: brushes, path: "docs/blog/nightly-brush-packs.md" } : bodies[slug];
   if (!post || !body) {
     return (
       <main id="main" className="section shell">
