@@ -1,5 +1,6 @@
 use super::*;
 use crate::document::LayerKind;
+use lopdf::content::Operation;
 use lopdf::dictionary;
 
 fn fixture(contents: &[&[u8]], resources: Dictionary, extra: Dictionary) -> Vec<u8> {
@@ -724,6 +725,175 @@ fn imports_cairo_generated_pdf_as_editable_vector_artwork() {
     assert_eq!(shapes(&document).len(), 2, "{warnings:?}");
     assert!(shapes(&document).iter().any(|shape|matches!(shape.geom,Geom::Path {ref anchors,..} if anchors.iter().any(|anchor|anchor.h_out!=Pt::ZERO))));
     std::fs::remove_dir_all(temp).unwrap();
+}
+
+fn pdf_subpaths(geom: Geom, rotation: f32) -> Vec<Vec<Operation>> {
+    let mut document = Document::new("Compound", 220., 160., 72.);
+    let mut shape = Shape::new(
+        geom,
+        Style {
+            fill: Fill::None,
+            stroke: Some(Stroke::default()),
+        },
+    );
+    shape.rotation = rotation;
+    document.layers[1].kind.shapes_mut().unwrap().push(shape);
+    let (bytes, warnings) = write(&document).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let pdf = Pdf::load_mem(&bytes).unwrap();
+    let page = pdf.get_pages()[&1];
+    let content = pdf.get_and_decode_page_content(page).unwrap();
+    let mut subpaths = Vec::new();
+    let mut current = Vec::new();
+    for operation in content.operations {
+        match operation.operator.as_str() {
+            "m" => {
+                if !current.is_empty() {
+                    subpaths.push(std::mem::take(&mut current));
+                }
+                current.push(operation);
+            }
+            "l" | "c" | "h" | "v" | "y" => current.push(operation),
+            _ => {
+                if !current.is_empty() {
+                    subpaths.push(std::mem::take(&mut current));
+                }
+            }
+        }
+    }
+    if !current.is_empty() {
+        subpaths.push(current);
+    }
+    subpaths
+}
+
+fn starts_near(subpath: &[Operation], x: f32, y: f32) -> bool {
+    let Some(moveto) = subpath.first() else {
+        return false;
+    };
+    let n = moveto.operands.len();
+    if n < 2 {
+        return false;
+    }
+    let number = |object: &Object| match object {
+        Object::Real(value) => *value,
+        Object::Integer(value) => *value as f32,
+        _ => f32::NAN,
+    };
+    let px = number(&moveto.operands[n - 2]);
+    let py = number(&moveto.operands[n - 1]);
+    (px - x).abs() < 0.05 && (py - y).abs() < 0.05
+}
+
+#[test]
+fn compound_path_pdf_keeps_each_contour_closed_flag_and_cubics() {
+    let curve = vec![
+        Anchor::corner(Pt::new(20., 20.)),
+        Anchor::smooth(Pt::new(70., 20.), Pt::new(0., -18.)),
+        Anchor::corner(Pt::new(70., 70.)),
+        Anchor::corner(Pt::new(20., 70.)),
+    ];
+    let open = vec![
+        Anchor::corner(Pt::new(100., 30.)),
+        Anchor::corner(Pt::new(150., 30.)),
+        Anchor::corner(Pt::new(150., 80.)),
+    ];
+    let closed_path = Geom::Path {
+        anchors: curve.clone(),
+        closed: true,
+    };
+    let as_compound = Geom::Paths {
+        paths: vec![crate::geom::PathContour {
+            anchors: curve.clone(),
+            closed: true,
+        }],
+        winding: true,
+    };
+    let single = pdf_subpaths(closed_path, 0.35);
+    let compound = pdf_subpaths(as_compound, 0.35);
+    assert_eq!(
+        single.len(),
+        1,
+        "rotated closed path should be one subpath: {single:?}"
+    );
+    assert_eq!(
+        compound.len(),
+        1,
+        "one-contour compound should match a path: {compound:?}"
+    );
+    assert!(
+        single[0].iter().any(|op| op.operator == "c"),
+        "control case lost its cubic: {single:?}"
+    );
+    let numbers = |subpaths: &[Vec<Operation>]| {
+        subpaths
+            .iter()
+            .map(|subpath| {
+                subpath
+                    .iter()
+                    .map(|op| {
+                        (
+                            op.operator.clone(),
+                            op.operands
+                                .iter()
+                                .map(|object| match object {
+                                    Object::Real(value) => *value,
+                                    Object::Integer(value) => *value as f32,
+                                    _ => f32::NAN,
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        numbers(&single),
+        numbers(&compound),
+        "compound export diverged from the single-path emitter\nsingle={single:?}\ncompound={compound:?}"
+    );
+
+    let mixed = pdf_subpaths(
+        Geom::Paths {
+            paths: vec![
+                crate::geom::PathContour {
+                    anchors: curve,
+                    closed: true,
+                },
+                crate::geom::PathContour {
+                    anchors: open,
+                    closed: false,
+                },
+            ],
+            winding: true,
+        },
+        0.0,
+    );
+    let closed = mixed
+        .iter()
+        .find(|subpath| starts_near(subpath, 20., 20.))
+        .unwrap_or_else(|| panic!("missing closed contour: {mixed:?}"));
+    let opened = mixed
+        .iter()
+        .find(|subpath| starts_near(subpath, 100., 30.))
+        .unwrap_or_else(|| panic!("missing open contour: {mixed:?}"));
+    assert!(
+        closed.iter().any(|op| op.operator == "h"),
+        "closed contour was left open: {closed:?}"
+    );
+    assert!(
+        closed.iter().any(|op| op.operator == "c"),
+        "closed compound contour was flattened: {closed:?}"
+    );
+    assert!(
+        opened.iter().all(|op| op.operator != "h"),
+        "open compound contour was closed: {opened:?}"
+    );
+    assert!(
+        opened.iter().all(|op| op.operator != "c"),
+        "straight open contour grew a curve: {opened:?}"
+    );
 }
 
 #[test]
