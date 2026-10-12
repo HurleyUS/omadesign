@@ -8,6 +8,10 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 process.chdir(root);
 const manifest = fs.readFileSync('Cargo.toml', 'utf8');
 const current = manifest.match(/^version = "([^"]+)"/m)[1];
+/**
+ * Format the public nightly counter.
+ * Args: Cargo version. Returns the release version with a four-digit counter.
+ */
 function publicVersion(version) {
   return version.replace(/(-nightly\.\d{8}\.)([1-9]\d{0,3})$/, (_, prefix, counter) => prefix + counter.padStart(4, '0'));
 }
