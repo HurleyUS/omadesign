@@ -1,0 +1,138 @@
+{
+  "version": "0.6.3-nightly.20261013.0001",
+  "compiled_source_commit": "23a972bc1e66d4ea6fb07c2c164ea95d70451836",
+  "desktop_builds": "local ARM64 machine; x86_64 cross-built locally",
+  "glibc_ceiling": "2.35",
+  "native": [
+    {
+      "arch": "aarch64",
+      "executable_sha256": "8c24016c648068bcedaada786ed65076a0be4cf5b5975c560a56cff243db7e3a",
+      "source_code_sections": {
+        ".rodata": "ab1f6f5298cc0411a6c7e647808771225a19518ed06df3fd955347e410e751b4",
+        ".text": "e5aa8c1a677c863267fa2ac577bfa8a3f1671a47c6dd17229d1c21e75ef6334d"
+      },
+      "packaged_code_matches_native_build": true,
+      "glibc_requirements": [
+        "GLIBC_2.17",
+        "GLIBC_2.27",
+        "GLIBC_2.29",
+        "GLIBC_2.35",
+        "GLIBC_2.18",
+        "GLIBC_2.25",
+        "GLIBC_2.28",
+        "GLIBC_2.30",
+        "GLIBC_2.32",
+        "GLIBC_2.33",
+        "GLIBC_2.34"
+      ],
+      "tar_payload_matches_stage": true,
+      "required_payload_verified": true,
+      "checks": [
+        "Exact public version",
+        "Prefixed installation matches archive executable",
+        "Editable design inspection",
+        "Native brush-sheet PNG export",
+        "13 original tips and settings retained; canonical Essentials/Texture roundtrips are byte-exact"
+      ],
+      "gpu_checks": [
+        "Native WGPU About shows exact public version",
+        "Native WGPU 13-tip brush study"
+      ],
+      "capture_mode": "Private headless Sway with native GPU; target .text and .rodata match the stripped package"
+    },
+    {
+      "arch": "x86_64",
+      "executable_sha256": "5c1e5a4ebae532fbe1b1210a544f2c98d31d571b30e47dc9cf665cc675045da2",
+      "source_code_sections": {
+        ".rodata": "99e95771b0d871b8b19e11a0826095490f83fd68f74b2645d5a9af41b0b3ce44",
+        ".text": "6001018035c3d80d1298feba41817d3aa6993a51f93606908c3cb4a73aba30a1"
+      },
+      "packaged_code_matches_native_build": true,
+      "glibc_requirements": [
+        "GLIBC_2.2.5",
+        "GLIBC_2.27",
+        "GLIBC_2.29",
+        "GLIBC_2.35",
+        "GLIBC_2.3",
+        "GLIBC_2.3.4",
+        "GLIBC_2.4",
+        "GLIBC_2.5",
+        "GLIBC_2.6",
+        "GLIBC_2.7",
+        "GLIBC_2.9",
+        "GLIBC_2.10",
+        "GLIBC_2.14",
+        "GLIBC_2.15",
+        "GLIBC_2.16",
+        "GLIBC_2.17",
+        "GLIBC_2.18",
+        "GLIBC_2.25",
+        "GLIBC_2.28",
+        "GLIBC_2.30",
+        "GLIBC_2.32",
+        "GLIBC_2.33",
+        "GLIBC_2.34"
+      ],
+      "tar_payload_matches_stage": true,
+      "required_payload_verified": true,
+      "host": "IntelPro",
+      "checks": [
+        "Native x86_64 exact public version",
+        "Prefixed installation matches archive executable",
+        "Editable design inspection",
+        "Native PNG brush-sheet export",
+        "Canonical Essentials roundtrip matches ARM64 bytes"
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "name": "omadesign-0.6.3-nightly.20261013.0001-aarch64-unknown-linux-gnu.tar.gz",
+      "bytes": 37164141,
+      "sha256": "2f8d312e14a99948a9a4f1c9d87a5773f5124df9209b33fd2ef5687b37df801f"
+    },
+    {
+      "name": "omadesign-0.6.3-nightly.20261013.0001-aarch64-unknown-linux-gnu.tar.gz.sha256",
+      "bytes": 137,
+      "sha256": "990dbe3974990329676ef2e86f32ecc52fe49fa82af9d7795fb4799cd15e9ff6"
+    },
+    {
+      "name": "omadesign-0.6.3-nightly.20261013.0001-x86_64-unknown-linux-gnu.tar.gz",
+      "bytes": 39520624,
+      "sha256": "2ed8d43bbc4069efe297c1adc9e1e5f0c4209d969bd68d2a79a613e63961b108"
+    },
+    {
+      "name": "omadesign-0.6.3-nightly.20261013.0001-x86_64-unknown-linux-gnu.tar.gz.sha256",
+      "bytes": 136,
+      "sha256": "2c7bc140cc4da0c9665e3a4d458c21f0459e7a7a503ad7246a952dee7ea52073"
+    },
+    {
+      "name": "omadesign-installer-0.6.3-nightly.20261013.0001-aarch64-linux.tar.gz",
+      "bytes": 187944,
+      "sha256": "05e72cdd65446d8ce1ad97d21396b587bdb09b3f58cd75cb47a92573a89720c4"
+    },
+    {
+      "name": "omadesign-installer-0.6.3-nightly.20261013.0001-aarch64-linux.tar.gz.sha256",
+      "bytes": 135,
+      "sha256": "a5754186e7c5c6723b7cf3aa43333dff4ec814c9fab25c6fcbab05553b61ce02"
+    },
+    {
+      "name": "omadesign-installer-0.6.3-nightly.20261013.0001-x86_64-linux.tar.gz",
+      "bytes": 187946,
+      "sha256": "399aae8dd7739ba8b638fbcedbf6aa1334fff5bed49207d5aeae7f734855b6ec"
+    },
+    {
+      "name": "omadesign-installer-0.6.3-nightly.20261013.0001-x86_64-linux.tar.gz.sha256",
+      "bytes": 134,
+      "sha256": "612b35470e8225d1aca3adcc8c0dcc37685e23b37eb9bff7165ec333514612c2"
+    }
+  ],
+  "tests": {
+    "library_passed": 1026,
+    "library_failed": 0,
+    "library_ignored": 9,
+    "site_passed": 25,
+    "installer_passed": 35
+  },
+  "build_resume": "ARM64 completed; terminated x86_64 build resumed independently from Cargo cache and completed without compiler errors"
+}

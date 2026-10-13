@@ -1,5 +1,7 @@
 # Drawing fixes — issue #206
 
+Release: [0.6.3-nightly.20261013.0001](../release-0.6.3-nightly.20261013.0001/README.md). This document records the implementation checkpoint before release packaging.
+
 Base: master `f969a0b2`. Work is isolated from the owner's feature checkout and running application.
 
 ## Changed behavior
