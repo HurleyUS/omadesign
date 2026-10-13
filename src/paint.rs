@@ -10,6 +10,16 @@ use tiny_skia::{
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Brush {
     pub size: f32,
+    pub angle: f32,
+    pub follow_direction: bool,
+    pub seed: u64,
+    pub pressure: f32,
+    pub pressure_size: bool,
+    pub pressure_flow: bool,
+    pub scatter: f32,
+    pub angle_jitter: f32,
+    pub size_jitter: f32,
+    pub opacity_jitter: f32,
     pub hardness: f32,
     pub opacity: f32,
     pub flow: f32,
@@ -21,12 +31,51 @@ impl Default for Brush {
     fn default() -> Self {
         Self {
             size: 24.0,
+            angle: 0.0,
+            follow_direction: false,
+            seed: 0,
+            pressure: 1.0,
+            pressure_size: true,
+            pressure_flow: false,
+            scatter: 0.0,
+            angle_jitter: 0.0,
+            size_jitter: 0.0,
+            opacity_jitter: 0.0,
             hardness: 0.75,
             opacity: 1.0,
             flow: 0.85,
             spacing: 0.18,
             color: Rgba::rgb(0xE5, 0x48, 0x4D),
         }
+    }
+}
+
+impl Brush {
+    /// Vary a dab using its position and the configured dynamics.
+    /// Takes a center and returns the scattered center and varied brush settings.
+    pub fn dab(&self, pos: Pt) -> (Pt, Self) {
+        let mut state = (u64::from(pos.x.to_bits()) << 32 | u64::from(pos.y.to_bits())) ^ self.seed;
+        let mut random = || {
+            state = state.wrapping_add(0x9e3779b97f4a7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+            ((z ^ (z >> 31)) >> 40) as f32 / 16777215.0
+        };
+        let direction = random() * std::f32::consts::TAU;
+        let radius = random().sqrt() * self.scatter * self.size;
+        let center = pos + Pt::new(direction.cos(), direction.sin()) * radius;
+        let mut brush = *self;
+        if self.pressure_size {
+            brush.size *= self.pressure.clamp(0.01, 1.0);
+        }
+        if self.pressure_flow {
+            brush.flow *= self.pressure.clamp(0.0, 1.0);
+        }
+        brush.angle += (random() * 2.0 - 1.0) * self.angle_jitter;
+        brush.size *= 1.0 - random() * self.size_jitter;
+        brush.flow *= 1.0 - random() * self.opacity_jitter;
+        (center, brush)
     }
 }
 
@@ -52,7 +101,10 @@ impl PixelRegion {
     }
 
     pub fn stroke(w: u32, h: u32, from: Pt, to: Pt, brush: &Brush) -> Self {
-        let radius = (brush.size * 0.5).max(1.0).ceil() + 2.0;
+        let radius = (brush.size * (std::f32::consts::FRAC_1_SQRT_2 + brush.scatter))
+            .max(1.0)
+            .ceil()
+            + 2.0;
         Self {
             x0: (from.x.min(to.x) - radius).floor().clamp(0.0, w as f32) as usize,
             y0: (from.y.min(to.y) - radius).floor().clamp(0.0, h as f32) as usize,
@@ -73,6 +125,8 @@ fn stamp_path(cx: f32, cy: f32, r: f32) -> Option<tiny_skia::Path> {
 }
 
 pub fn stamp(pm: &mut Pixmap, pos: Pt, brush: &Brush, erase: bool) {
+    let (pos, brush) = brush.dab(pos);
+    let brush = &brush;
     let r = (brush.size * 0.5).max(0.5);
     let Some(path) = stamp_path(pos.x, pos.y, r) else {
         return;
@@ -128,7 +182,7 @@ pub fn stamp(pm: &mut Pixmap, pos: Pt, brush: &Brush, erase: bool) {
 
 pub fn stroke_to(pm: &mut Pixmap, from: Pt, to: Pt, brush: &Brush, erase: bool) {
     let dist = (to - from).length();
-    let spacing = (brush.size * brush.spacing.max(0.05)).clamp(0.5, 64.0);
+    let spacing = (brush.size * brush.spacing.max(0.05)).max(0.5);
     let steps = (dist / spacing).ceil() as usize;
     for i in 0..=steps {
         let t = if steps == 0 {
@@ -138,6 +192,48 @@ pub fn stroke_to(pm: &mut Pixmap, from: Pt, to: Pt, brush: &Brush, erase: bool) 
         };
         stamp(pm, from.lerp(to, t), brush, erase);
     }
+}
+
+/// Visit evenly spaced dabs across successive pointer samples.
+/// Takes a segment, brush, remaining distance and painter; updates the distance after painting.
+pub fn spaced_dabs(
+    from: Pt,
+    to: Pt,
+    brush: &Brush,
+    remaining: &mut f32,
+    mut paint: impl FnMut(Pt, &Brush),
+) {
+    let delta = to - from;
+    let distance = delta.length();
+    if distance < 0.001 {
+        return;
+    }
+    let spacing = (brush.size * brush.spacing).max(0.5);
+    let mut brush = *brush;
+    if brush.follow_direction {
+        brush.angle += delta.y.atan2(delta.x);
+    }
+    let mut at = (*remaining).max(0.0);
+    while at <= distance {
+        paint(from + delta * (at / distance), &brush);
+        at += spacing;
+    }
+    *remaining = at - distance;
+}
+
+/// Paint round dabs with spacing retained between input events.
+/// Takes the target, segment, brush, erase flag and remaining distance; updates both pixels and distance.
+pub fn stroke_spaced(
+    pm: &mut Pixmap,
+    from: Pt,
+    to: Pt,
+    brush: &Brush,
+    erase: bool,
+    remaining: &mut f32,
+) {
+    spaced_dabs(from, to, brush, remaining, |at, brush| {
+        stamp(pm, at, brush, erase)
+    });
 }
 
 pub fn blend_onto(dst: &mut Pixmap, src: &Pixmap, opacity: f32) {
@@ -1031,6 +1127,7 @@ mod tests {
                 flow: 1.0,
                 spacing: 0.2,
                 color: Rgba::rgb(255, 0, 0),
+                ..Default::default()
             },
             false,
         );

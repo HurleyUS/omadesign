@@ -137,6 +137,7 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                     "color",
                     if mask { "#FFFFFF" } else { "#000000" },
                 )?)?,
+                ..Default::default()
             };
             let distance = pts.windows(2).map(|p| (p[1] - p[0]).length()).sum::<f32>();
             let estimate =

@@ -9,6 +9,7 @@ function tip(kind) {
     const noise = ((Math.imul(x + 31, 73856093) ^ Math.imul(y + 17, 19349663)) >>> 0) / 4294967295;
     let v = 0;
     switch (kind) {
+      case 'Square': v = 1; break;
       case 'Round': v = Math.min(1, Math.max(0, (1 - r) * 24)); break;
       case 'Soft': v = Math.max(0, 1 - r) ** 2; break;
       case 'Flat': v = Math.max(0, Math.min(1, (1 - Math.abs(a)) * 20, (.22 - Math.abs(b)) * 30)); break;
@@ -26,7 +27,7 @@ function tip(kind) {
   }
   return {width:n,height:n,alpha:data.toString('base64')};
 }
-const groups = [ ['essentials','Omadesign Essentials',['Round','Soft','Flat','Calligraphy','Pencil','Dry ink']], ['texture','Omadesign Texture',['Chalk','Charcoal','Grain','Stipple','Wash','Spatter']] ];
+const groups = [ ['essentials','Omadesign Essentials',['Round','Soft','Flat','Calligraphy','Pencil','Dry ink','Square']], ['texture','Omadesign Texture',['Chalk','Charcoal','Grain','Stipple','Wash','Spatter']] ];
 for (const [id, name, kinds] of groups) {
   const pack = {format:'omadesign-brush-pack',version:1,name,author:'Omadesign',license:'CC0-1.0',notes:['Original procedural brush tips. Free to use, modify, and redistribute.'],brushes:kinds.map(name=>({name,size:name==='Pencil'?12:48,spacing:name==='Spatter'?.6:.12,hardness:1,flow:name==='Wash'?.45:1,opacity:1,tip:tip(name)}))};
   const file = `${id}.omabrush`;

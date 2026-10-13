@@ -674,6 +674,7 @@ pub(super) fn register(lua: &Lua, state: Shared) -> LuaResult<()> {
                     &t.get::<Option<String>>("color")?
                         .unwrap_or_else(|| "#BAC2DE".into()),
                 )?,
+                ..Default::default()
             });
             Ok(())
         })?,

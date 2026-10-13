@@ -542,6 +542,7 @@ fn pixel(s: &mut Studio) {
                 flow: 0.9,
                 spacing: 0.12,
                 color: Rgba::from_hex(color),
+                ..Default::default()
             };
             crate::paint::stroke_to(
                 &mut pm,
@@ -898,6 +899,7 @@ fn poster(s: &mut Studio) {
             flow: 0.8,
             spacing: 0.2,
             color: orange,
+            ..Default::default()
         };
         crate::paint::stroke_to(
             &mut pm,

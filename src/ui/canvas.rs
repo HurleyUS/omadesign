@@ -823,10 +823,27 @@ fn handle_pixel_pointer_samples(
     let (events, modifiers) = resp.ctx.input(|input| (input.events.clone(), input.modifiers));
     for event in events {
         match event {
-            Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers }
-                if studio.op.is_none() && canvas.contains(pos)
-                    && resp.ctx.layer_id_at(pos) == Some(resp.layer_id)
-                    && !(modifiers.alt && matches!(studio.tool, Tool::Clone | Tool::Heal)) => {
+            Event::Touch { force, phase, .. } => {
+                if phase == eframe::egui::TouchPhase::Cancel {
+                    studio.end_pixel_stroke(true);
+                    studio.brush.pressure = 1.0;
+                } else if phase != eframe::egui::TouchPhase::End {
+                    studio.brush.pressure = force
+                        .filter(|p| p.is_finite())
+                        .unwrap_or(1.0)
+                        .clamp(0.0, 1.0);
+                }
+            }
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers,
+            } if studio.op.is_none()
+                && canvas.contains(pos)
+                && resp.ctx.layer_id_at(pos) == Some(resp.layer_id)
+                && !(modifiers.alt && matches!(studio.tool, Tool::Clone | Tool::Heal)) =>
+            {
                 let point = studio.view.pointer_to_world(origin, from_egui(pos));
                 studio.reset_snap_gesture();
                 start_drag(studio, point, point, modifiers.shift, modifiers.alt);
@@ -843,6 +860,7 @@ fn handle_pixel_pointer_samples(
                 continue_drag(studio, point, modifiers.shift, modifiers.alt);
                 studio.cursor = Some(point);
                 studio.end_pixel_stroke(false);
+                studio.brush.pressure = 1.0;
             }
             _ => {}
         }
@@ -953,6 +971,7 @@ fn start_drag(studio: &mut Studio, pick: Pt, snap: Pt, shift: bool, alt: bool) {
                         orig: snapshot_with_children(studio),
                         handle: i,
                         start_box: b,
+                        angle: selection_angle(studio),
                     });
                     return;
                 }
@@ -1436,21 +1455,72 @@ enum HandleKind {
     Rotate(Pt),
 }
 
+fn selection_angle(studio: &Studio) -> f32 {
+    if studio.is_motion() {
+        return 0.0;
+    }
+    let mut angles = studio.selection.iter().filter_map(|(li, id)| {
+        if *id == RASTER_ID {
+            studio
+                .doc
+                .layers
+                .get(*li)?
+                .kind
+                .raster_xform()
+                .map(|(_, _, r)| r)
+        } else {
+            studio.doc.find_shape(*li, *id).map(|s| s.rotation)
+        }
+    });
+    let angle = angles.next().unwrap_or(0.0);
+    if angles.all(|r| (r - angle).sin().abs() < 1e-4 && (r - angle).cos() > 0.0) {
+        angle
+    } else {
+        0.0
+    }
+}
+
 fn posed_bounds(studio: &Studio) -> Option<Bounds> {
+    let angle = selection_angle(studio);
     let mut b: Option<Bounds> = None;
     for (li, id) in &studio.selection {
         let bb = if *id == RASTER_ID {
             studio.doc.layers.get(*li).and_then(|l| {
-                l.kind
-                    .raster_bounds()
-                    .map(|b| studio.live_pose(l.id).map_bounds(b))
+                l.kind.raster_bounds().map(|b| {
+                    let b = studio.live_pose(l.id).map_bounds(b);
+                    if angle.abs() < 1e-5 {
+                        b
+                    } else {
+                        let (origin, size, rotation) = l.kind.raster_xform().unwrap();
+                        let center = origin + size * 0.5;
+                        let points = [
+                            origin,
+                            origin + Pt::new(size.x, 0.),
+                            origin + size,
+                            origin + Pt::new(0., size.y),
+                        ]
+                        .map(|p| p.rotate_about(center, rotation).rotate(-angle));
+                        let mut bounds = Bounds {
+                            min: points[0],
+                            max: points[0],
+                        };
+                        for p in points {
+                            bounds.union_pt(p);
+                        }
+                        bounds
+                    }
+                })
             })
         } else {
             studio.doc.find_shape(*li, *id).map(|s| {
                 if studio.is_motion() {
                     studio.live_pose(*id).map_bounds(s.world_bbox())
-                } else {
+                } else if angle.abs() < 1e-5 {
                     s.world_bbox()
+                } else {
+                    let bounds = s.geom.bbox();
+                    let offset = bounds.center().rotate(-angle) - bounds.center();
+                    Bounds { min: bounds.min + offset, max: bounds.max + offset }
                 }
             })
         };
@@ -1485,9 +1555,11 @@ fn hit_shape(studio: &Studio, world: Pt, slack: f32) -> Option<(usize, u64)> {
 fn hit_handle(studio: &Studio, world: Pt) -> Option<HandleKind> {
     let b = posed_bounds(studio)?;
     let slack = 8.0 / studio.view.scale.max(0.01);
+    let angle = selection_angle(studio);
+    let world = world.rotate(-angle);
     let rh = b.rotate_handle();
     if (rh - world).length() <= slack {
-        return Some(HandleKind::Rotate(b.center()));
+        return Some(HandleKind::Rotate(b.center().rotate(angle)));
     }
     for i in 0..8 {
         if (b.handle(i) - world).length() <= slack {
@@ -1911,7 +1983,9 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
             orig,
             handle,
             start_box,
+            angle,
         }) => {
+            let world = world.rotate(-*angle);
             let (hx, hy) = match *handle {
                 0 => (0.0, 0.0),
                 1 => (1.0, 0.0),
@@ -2026,12 +2100,18 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                 for snap in orig.iter() {
                     if snap.id == RASTER_ID {
                         let nb = Bounds {
-                            min: start_box.map_pt(snap.origin, dst),
-                            max: start_box.map_pt(snap.origin + snap.size, dst),
+                            min: start_box.map_pt(
+                                (snap.origin + snap.size * 0.5).rotate(-*angle) - snap.size * 0.5,
+                                dst,
+                            ),
+                            max: start_box.map_pt(
+                                (snap.origin + snap.size * 0.5).rotate(-*angle) + snap.size * 0.5,
+                                dst,
+                            ),
                         };
                         if let Some(l) = studio.doc.layers.get_mut(snap.layer) {
                             l.kind.set_raster_xform(
-                                nb.min,
+                                nb.center().rotate(*angle) - Pt::new(nb.width(), nb.height()) * 0.5,
                                 Pt::new(nb.width().max(1.0), nb.height().max(1.0)),
                                 snap.rot,
                             );
@@ -2041,8 +2121,21 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                         studio.doc.find_shape_mut(snap.layer, snap.id),
                     ) {
                         s.geom = geom;
-                        s.geom.map_into(*start_box, dst);
-                        s.rotation = snap.rot;
+                        let center = s.geom.bbox().center();
+                        if (snap.rot - *angle).sin().abs() < 1e-4 && (snap.rot - *angle).cos() > 0.0 {
+                            s.geom.translate(center.rotate(-*angle) - center);
+                            s.geom.map_into(*start_box, dst);
+                            let center = s.geom.bbox().center();
+                            s.geom.translate(center.rotate(*angle) - center);
+                            s.rotation = snap.rot;
+                        } else {
+                            s.geom = s.geom.to_path();
+                            s.geom.rotate_about(center, snap.rot);
+                            s.geom.rotate_about(Pt::ZERO, -*angle);
+                            s.geom.map_into(*start_box, dst);
+                            s.geom.rotate_about(Pt::ZERO, *angle);
+                            s.rotation = 0.0;
+                        }
                     }
                 }
                 let orig_geoms: Vec<_> = orig
@@ -3032,6 +3125,28 @@ fn paint_brush_ring(p: &eframe::egui::Painter, rect: Rect, studio: &Studio) {
     if !rect.contains(center) {
         return;
     }
+    if matches!(studio.tool, Tool::Brush | Tool::Eraser)
+        && let Some(tip) = studio.brushes.tip()
+    {
+        let angle = studio.brush.angle
+            + if studio.brush.follow_direction {
+                studio.brush_heading
+            } else {
+                0.0
+            };
+        for (a, b) in crate::brushes::outline(tip) {
+            let map = |point: Pt| {
+                center
+                    + eframe::egui::vec2(point.rotate(angle).x, point.rotate(angle).y)
+                        * studio.brush.size
+                        * studio.view.scale
+            };
+            let edge = [map(a), map(b)];
+            p.line_segment(edge, Stroke::new(3.0, Color32::BLACK));
+            p.line_segment(edge, Stroke::new(1.0, Color32::WHITE));
+        }
+        return;
+    }
     let radius = (studio.brush.size * studio.view.scale * 0.5).max(1.0);
     p.circle_stroke(center, radius + 1.0, Stroke::new(1.0, Color32::BLACK));
     p.circle_stroke(center, radius, Stroke::new(1.0, Color32::WHITE));
@@ -3209,24 +3324,29 @@ fn draw_overlays(
         && !studio.selection.is_empty()
         && let Some(b) = posed_bounds(studio)
     {
-        let sb = Rect::from_min_max(win(rect, v, b.min), win(rect, v, b.max));
-        p.rect_stroke(
-            sb,
-            0.0,
+        let angle = selection_angle(studio);
+        let points: Vec<_> = [0, 1, 2, 3, 0]
+            .into_iter()
+            .map(|i| win(rect, v, b.handle(i).rotate(angle)))
+            .collect();
+        p.add(eframe::egui::Shape::line(
+            points,
             Stroke::new(1.0, select()),
-            eframe::egui::StrokeKind::Middle,
-        );
+        ));
         let editing = studio
             .selection
             .iter()
             .any(|(li, id)| studio.editing_text(*li, *id));
         if !editing {
             for i in 0..8 {
-                let h = win(rect, v, b.handle(i));
+                let h = win(rect, v, b.handle(i).rotate(angle));
                 p.rect_filled(Rect::from_center_size(h, vec2(7.0, 7.0)), 0.0, select());
             }
-            let rh = win(rect, v, b.rotate_handle());
-            p.line_segment([sb.center_top(), rh], Stroke::new(1.0, select()));
+            let rh = win(rect, v, b.rotate_handle().rotate(angle));
+            p.line_segment(
+                [win(rect, v, b.handle(4).rotate(angle)), rh],
+                Stroke::new(1.0, select()),
+            );
             p.circle_filled(rh, 4.0, accent());
         }
     }
@@ -4644,6 +4764,200 @@ mod tests {
         );
         s.tool = Tool::Select;
         s
+    }
+
+    #[test]
+    fn new_brush_strokes_get_independent_random_patterns() {
+        let (_, mut s) = pen_input_studio();
+        s.tool = Tool::Brush;
+        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300)];
+        s.active_layer = Some(0);
+        s.brush.size = 30.;
+        s.brush.scatter = 2.;
+        s.brush.size_jitter = 0.5;
+        s.brushes.selected = Some((0, s.brushes.packs[0].brushes.len() - 1));
+        let at = Pt::new(100., 100.);
+        start_drag(&mut s, at, at, false, false);
+        let Some(Op::Brush { buf, .. }) = &s.op else { panic!("first brush stroke"); };
+        let first = buf.data().to_vec();
+        s.end_pixel_stroke(true);
+        start_drag(&mut s, at, at, false, false);
+        let Some(Op::Brush { buf, .. }) = &s.op else { panic!("second brush stroke"); };
+        assert_ne!(first, buf.data());
+        s.end_pixel_stroke(true);
+        assert!(s.doc.layers[0].kind.pixels().unwrap().data.iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn tablet_pressure_changes_dab_size_and_release_restores_mouse_pressure() {
+        use eframe::egui::{Event, Modifiers, TouchDeviceId, TouchId, TouchPhase};
+        let (ctx, mut s) = pen_input_studio();
+        s.tool = Tool::Brush;
+        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300)];
+        s.active_layer = Some(0);
+        s.view.offset = Pt::ZERO;
+        s.view.scale = 1.;
+        s.brush.size = 40.;
+        s.brush.spacing = 0.2;
+        s.brush.flow = 1.;
+        s.brushes.selected = Some((0, s.brushes.packs[0].brushes.len() - 1));
+        canvas_frame(&ctx, &mut s, vec![]);
+        let at = Pos2::new(80., 80.);
+        canvas_frame(
+            &ctx,
+            &mut s,
+            vec![
+                Event::Touch {
+                    device_id: TouchDeviceId(1),
+                    id: TouchId(1),
+                    phase: TouchPhase::Start,
+                    pos: at,
+                    force: Some(0.25),
+                },
+                Event::PointerMoved(at),
+                Event::PointerButton {
+                    pos: at,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(s.brush.pressure, 0.25);
+        let Some(Op::Brush { buf, .. }) = &s.op else {
+            panic!("tablet did not start a stroke")
+        };
+        let coverage = buf.pixels().iter().filter(|p| p.alpha() > 0).count();
+        assert!(
+            coverage > 50 && coverage < 160,
+            "light-pressure dab covers {coverage} pixels"
+        );
+        let to = Pos2::new(180., 80.);
+        canvas_frame(
+            &ctx,
+            &mut s,
+            vec![
+                Event::Touch {
+                    device_id: TouchDeviceId(1),
+                    id: TouchId(1),
+                    phase: TouchPhase::Move,
+                    pos: to,
+                    force: Some(1.),
+                },
+                Event::PointerMoved(to),
+            ],
+        );
+        assert_eq!(s.brush.pressure, 1.);
+        canvas_frame(
+            &ctx,
+            &mut s,
+            vec![
+                Event::Touch {
+                    device_id: TouchDeviceId(1),
+                    id: TouchId(1),
+                    phase: TouchPhase::End,
+                    pos: to,
+                    force: Some(0.),
+                },
+                Event::PointerButton {
+                    pos: to,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                },
+                Event::PointerGone,
+            ],
+        );
+        assert!(s.op.is_none());
+        assert_eq!(s.brush.pressure, 1.);
+        assert!(
+            s.doc.layers[0]
+                .kind
+                .pixels()
+                .unwrap()
+                .data
+                .chunks_exact(4)
+                .filter(|p| p[3] > 0)
+                .count()
+                > coverage
+        );
+        s.undo();
+        assert!(
+            s.doc.layers[0]
+                .kind
+                .pixels()
+                .unwrap()
+                .data
+                .iter()
+                .all(|b| *b == 0)
+        );
+    }
+
+    #[test]
+    fn rotated_multi_rectangles_and_paths_resize_in_their_shared_frame() {
+        for paths in [false, true] {
+            let mut s = Studio::new();
+            s.snap.enabled = false;
+            s.tool = Tool::Select;
+            s.finish_create(CreateKind::Rect, Pt::new(40., 40.), Pt::new(140., 100.));
+            let first = s.primary().unwrap();
+            s.finish_create(CreateKind::Rect, Pt::new(160., 40.), Pt::new(260., 100.));
+            let second = s.primary().unwrap();
+            s.selection = vec![first, second];
+            let center = posed_bounds(&s).unwrap().center();
+            s.op = Some(Op::Rotate {
+                orig: snapshot_moving(&s),
+                center,
+                start_angle: 0.,
+            });
+            let angle = std::f32::consts::FRAC_PI_4;
+            let end = center + Pt::new(100., 0.).rotate(angle);
+            continue_drag(&mut s, end, false, false);
+            end_drag(&mut s, end, false, false, false);
+            if paths {
+                for (li, id) in [first, second] {
+                    s.ensure_path(li, id);
+                }
+            }
+            let before: Vec<_> = [first, second]
+                .into_iter()
+                .map(|(li, id)| s.doc.find_shape(li, id).unwrap().clone())
+                .collect();
+            let bounds = posed_bounds(&s).unwrap();
+            let handle = bounds.handle(2).rotate(angle);
+            assert!(matches!(
+                hit_handle(&s, handle),
+                Some(HandleKind::Scale(2, _))
+            ));
+            start_drag(&mut s, handle, handle, false, false);
+            let dst = Bounds {
+                min: bounds.min,
+                max: bounds.min + Pt::new(bounds.width() * 2., bounds.height() * 1.5),
+            };
+            let end = dst.handle(2).rotate(angle);
+            continue_drag(&mut s, end, false, false);
+            end_drag(&mut s, end, false, false, false);
+            for ((li, id), original) in [first, second].into_iter().zip(&before) {
+                let shape = s.doc.find_shape(li, id).unwrap();
+                assert!((shape.rotation - angle).abs() < 1e-4);
+                assert!(
+                    (shape.geom.bbox().width() - original.geom.bbox().width() * 2.).abs() < 0.02
+                );
+                assert!(
+                    (shape.geom.bbox().height() - original.geom.bbox().height() * 1.5).abs() < 0.02
+                );
+                let expected = bounds
+                    .map_pt(original.geom.bbox().center().rotate(-angle), dst)
+                    .rotate(angle);
+                assert!((shape.geom.bbox().center() - expected).length() < 0.02);
+            }
+            s.undo();
+            for ((li, id), original) in [first, second].into_iter().zip(&before) {
+                assert_eq!(s.doc.find_shape(li, id).unwrap().geom, original.geom);
+            }
+            s.redo();
+            assert!((posed_bounds(&s).unwrap().width() - dst.width()).abs() < 0.02);
+        }
     }
 
     #[test]

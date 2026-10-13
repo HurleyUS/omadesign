@@ -334,6 +334,12 @@ fn apply_descriptors(
                 flow: 1.0,
                 opacity: 1.0,
                 tip,
+                angle: 0.0,
+                scatter: 0.0,
+                angle_jitter: 0.0,
+                size_jitter: 0.0,
+                opacity_jitter: 0.0,
+                follow_direction: false,
             });
         }
     }

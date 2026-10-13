@@ -366,7 +366,25 @@ impl State {
                     consumed: false,
                 }
             }
-            // WindowEvent::TouchpadPressure {device_id, pressure, stage, ..  } => {} // TODO(emilk)
+            WindowEvent::TouchpadPressure {
+                device_id,
+                pressure,
+                ..
+            } => {
+                if let Some(pos) = self.pointer_pos_in_points {
+                    self.egui_input.events.push(egui::Event::Touch {
+                        device_id: egui::TouchDeviceId(egui::epaint::util::hash(device_id)),
+                        id: egui::TouchId(u64::MAX),
+                        phase: egui::TouchPhase::Move,
+                        pos,
+                        force: Some(*pressure),
+                    });
+                }
+                EventResponse {
+                    repaint: true,
+                    consumed: self.egui_ctx.egui_is_using_pointer(),
+                }
+            }
             WindowEvent::Touch(touch) => {
                 self.on_touch(window, touch);
                 let consumed = match touch.phase {
@@ -505,7 +523,6 @@ impl State {
             | WindowEvent::Occluded(_)
             | WindowEvent::Resized(_)
             | WindowEvent::Moved(_)
-            | WindowEvent::TouchpadPressure { .. }
             | WindowEvent::CloseRequested => EventResponse {
                 repaint: true,
                 consumed: false,
@@ -930,6 +947,10 @@ impl State {
                     self.egui_input.events.push(egui::Event::PointerGone);
                 }
                 winit::event::TouchPhase::Cancelled => {
+                    self.on_mouse_button_input(
+                        winit::event::ElementState::Released,
+                        winit::event::MouseButton::Left,
+                    );
                     self.pointer_touch_id = None;
                     self.pointer_pos_in_points = None;
                     self.egui_input.events.push(egui::Event::PointerGone);

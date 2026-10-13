@@ -83,6 +83,7 @@ fn main() {
                 flow: 0.9,
                 spacing: 0.15,
                 color: Rgba::from_hex(0xE5484D),
+                ..Default::default()
             };
             // Draw a few strokes
             omadesign::paint::stroke_to(

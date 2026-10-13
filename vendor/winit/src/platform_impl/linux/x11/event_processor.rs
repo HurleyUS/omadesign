@@ -359,7 +359,10 @@ impl EventProcessor {
         let mut devices = self.devices.borrow_mut();
         if let Some(info) = DeviceInfo::get(&window_target.xconn, device as _) {
             for info in info.iter() {
-                devices.insert(DeviceId(info.deviceid as _), Device::new(info));
+                devices.insert(
+                    DeviceId(info.deviceid as _),
+                    Device::new(info, &window_target.xconn),
+                );
             }
         }
     }
@@ -1120,18 +1123,9 @@ impl EventProcessor {
             util::maybe_change(&mut shared_state_lock.cursor_pos, new_cursor_pos)
         });
 
-        if cursor_moved == Some(true) {
-            let position = PhysicalPosition::new(event.event_x, event.event_y);
-
-            let event = Event::WindowEvent {
-                window_id,
-                event: WindowEvent::CursorMoved { device_id, position },
-            };
-            callback(&self.target, event);
-        } else if cursor_moved.is_none() {
+        if cursor_moved.is_none() {
             return;
         }
-
         // More gymnastics, for self.devices
         let mask = unsafe {
             slice::from_raw_parts(event.valuators.mask, event.valuators.mask_len as usize)
@@ -1139,7 +1133,12 @@ impl EventProcessor {
         let mut devices = self.devices.borrow_mut();
         let physical_device = match devices.get_mut(&DeviceId(event.sourceid as xinput::DeviceId)) {
             Some(device) => device,
-            None => return,
+            None => {
+                if cursor_moved == Some(true) {
+                    callback(&self.target, Event::WindowEvent { window_id, event: WindowEvent::CursorMoved { device_id, position: PhysicalPosition::new(event.event_x, event.event_y) } });
+                }
+                return;
+            },
         };
 
         let mut events = Vec::new();
@@ -1151,8 +1150,19 @@ impl EventProcessor {
 
             let x = unsafe { *value };
 
-            let event = if let Some(&mut (_, ref mut info)) =
-                physical_device.scroll_axes.iter_mut().find(|&&mut (axis, _)| axis == i as _)
+            let event = if let Some((_, min, max)) = physical_device
+                .pressure_axis
+                .filter(|(axis, _, _)| *axis == i)
+            {
+                WindowEvent::TouchpadPressure {
+                    device_id,
+                    pressure: ((x - min) / (max - min)).clamp(0.0, 1.0) as f32,
+                    stage: 0,
+                }
+            } else if let Some(&mut (_, ref mut info)) = physical_device
+                .scroll_axes
+                .iter_mut()
+                .find(|&&mut (axis, _)| axis == i as _)
             {
                 let delta = (x - info.position) / info.increment;
                 info.position = x;
@@ -1174,6 +1184,15 @@ impl EventProcessor {
             value = unsafe { value.offset(1) };
         }
 
+        if cursor_moved == Some(true) {
+            events.push(Event::WindowEvent {
+                window_id,
+                event: WindowEvent::CursorMoved {
+                    device_id,
+                    position: PhysicalPosition::new(event.event_x, event.event_y),
+                },
+            });
+        }
         for event in events {
             callback(&self.target, event);
         }

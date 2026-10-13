@@ -9,7 +9,7 @@ export const Route = createFileRoute('/brushes')({
 });
 
 const packs = [
-  { id: 'essentials', name: 'Essentials', subtitle: 'The marks you reach for.', brushes: ['Round', 'Soft', 'Flat', 'Calligraphy', 'Pencil', 'Dry ink'] },
+  { id: 'essentials', name: 'Essentials', subtitle: 'The marks you reach for.', brushes: ['Round', 'Soft', 'Flat', 'Calligraphy', 'Pencil', 'Dry ink', 'Square'] },
   { id: 'texture', name: 'Texture', subtitle: 'Let the surface show.', brushes: ['Chalk', 'Charcoal', 'Grain', 'Stipple', 'Wash', 'Spatter'] },
 ];
 function Brushes() {

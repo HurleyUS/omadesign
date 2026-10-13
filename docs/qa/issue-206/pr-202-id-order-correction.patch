@@ -1,0 +1,17 @@
+--- a/src/document.rs
++++ b/src/document.rs
+@@ -1623,13 +1623,13 @@
+         for token in &self.layout_tokens {
+             max = max.max(token.id);
+         }
+-        self.migrate_artboards();
+         // Brand asset import rejects the same range: ids at the top of u64
+         // would overflow or wrap the id allocator, colliding with new objects.
+         if max >= u64::MAX - 200_000 {
+             return Err("The document contains invalid object IDs".into());
+         }
+         bump_id(max);
++        self.migrate_artboards();
+         Ok(())
+     }
+ }

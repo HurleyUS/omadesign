@@ -26,8 +26,10 @@ use crate::platform_impl::wayland::state::WinitState;
 
 mod keyboard;
 mod pointer;
+mod tablet;
 mod text_input;
 mod touch;
+pub use tablet::TabletState;
 
 pub use pointer::pointer_gesture::{PointerGestureData, PointerGesturesState};
 pub use pointer::relative_pointer::RelativePointerState;
@@ -40,6 +42,9 @@ use touch::TouchPoint;
 
 #[derive(Debug, Default)]
 pub struct WinitSeatState {
+    pub tablet: Option<
+        sctk::reexports::protocols::wp::tablet::zv2::client::zwp_tablet_seat_v2::ZwpTabletSeatV2,
+    >,
     /// The pointer bound on the seat.
     pointer: Option<Arc<ThemedPointer<WinitPointerData>>>,
 
@@ -233,6 +238,10 @@ impl SeatHandler for WinitState {
         if let Some(mgr) = &self.data_device_manager {
             state.data_device = Some(mgr.get_data_device(queue_handle, &seat));
         }
+        state.tablet = self
+            .tablet
+            .as_ref()
+            .map(|manager| manager.seat(&seat, queue_handle));
         self.seats.insert(seat.id(), state);
     }
 
@@ -242,7 +251,11 @@ impl SeatHandler for WinitState {
         _queue_handle: &QueueHandle<Self>,
         seat: WlSeat,
     ) {
-        let _ = self.seats.remove(&seat.id());
+        if let Some(state) = self.seats.remove(&seat.id()) {
+            if let Some(tablet) = state.tablet {
+                tablet.destroy();
+            }
+        }
         self.on_keyboard_destroy(&seat.id());
     }
 }

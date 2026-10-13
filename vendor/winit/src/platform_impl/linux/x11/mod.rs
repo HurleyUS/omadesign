@@ -975,6 +975,7 @@ fn mkdid(w: xinput::DeviceId) -> crate::event::DeviceId {
 pub struct Device {
     _name: String,
     scroll_axes: Vec<(i32, ScrollAxis)>,
+    pressure_axis: Option<(i32, f64, f64)>,
     // For master devices, this is the paired device (pointer <-> keyboard).
     // For slave devices, this is the master.
     attachment: c_int,
@@ -994,14 +995,28 @@ enum ScrollOrientation {
 }
 
 impl Device {
-    fn new(info: &ffi::XIDeviceInfo) -> Self {
+    fn new(info: &ffi::XIDeviceInfo, connection: &XConnection) -> Self {
         let name = unsafe { CStr::from_ptr(info.name).to_string_lossy() };
         let mut scroll_axes = Vec::new();
+        let mut pressure_axis = None;
 
         if Device::physical_device(info) {
             // Identify scroll axes
             for &class_ptr in Device::classes(info) {
                 let ty = unsafe { (*class_ptr)._type };
+                if ty == ffi::XIValuatorClass {
+                    let axis = unsafe { &*(class_ptr as *const ffi::XIValuatorClassInfo) };
+                    let label = connection
+                        .xcb_connection()
+                        .get_atom_name(axis.label as u32)
+                        .ok()
+                        .and_then(|reply| reply.reply().ok());
+                    if label.is_some_and(|label| label.name == b"Abs Pressure")
+                        && axis.max > axis.min
+                    {
+                        pressure_axis = Some((axis.number, axis.min, axis.max));
+                    }
+                }
                 if ty == ffi::XIScrollClass {
                     let info = unsafe { &*(class_ptr as *const ffi::XIScrollClassInfo) };
                     scroll_axes.push((info.number, ScrollAxis {
@@ -1017,8 +1032,12 @@ impl Device {
             }
         }
 
-        let mut device =
-            Device { _name: name.into_owned(), scroll_axes, attachment: info.attachment };
+        let mut device = Device {
+            _name: name.into_owned(),
+            scroll_axes,
+            pressure_axis,
+            attachment: info.attachment,
+        };
         device.reset_scroll_position(info);
         device
     }

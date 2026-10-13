@@ -182,6 +182,9 @@ pub(super) fn start(studio: &mut Studio, world: Pt) {
     let Some(mut buf) = pixels.to_pixmap() else {
         return;
     };
+    studio.brush_distance = studio.brush.size * studio.brush.spacing;
+    studio.brush_heading = 0.0;
+    studio.brush.seed = crate::document::next_id();
     let source = heal.then(|| buf.clone());
     let offset = studio
         .clone_source
@@ -274,8 +277,11 @@ pub(super) fn start_brush(studio: &mut Studio, world: Pt) {
         return;
     };
     let point = studio.mask_point(layer, world);
+    studio.brush_distance = studio.brush.size * studio.brush.spacing;
+    studio.brush_heading = 0.0;
+    studio.brush.seed = crate::document::next_id();
     if let Some(tip) = studio.brushes.tip() {
-        let brush=paint::Brush { opacity:1.0,..studio.brush };
+        let brush = paint::Brush { opacity: 1.0, ..studio.brush };
         crate::brushes::stamp(&mut buf, point, &brush, tip, false);
     } else {
         paint::stamp(&mut buf, point, &studio.brush, false);
@@ -466,13 +472,29 @@ pub(super) fn drag(studio: &mut Studio, world: Pt) {
         studio.brush
     };
     if (point - from).length_sq() > 0.0001 {
+        studio.brush_heading = (point - from).y.atan2((point - from).x);
         if let Some(source) = &source {
             paint::heal_stroke(&mut buf, source, from, point, offset, &brush);
         } else {
             if let Some(tip) = studio.brushes.tip() {
-                crate::brushes::stroke(&mut buf, from, point, &brush, tip, erase && !mask);
+                crate::brushes::stroke_spaced(
+                    &mut buf,
+                    from,
+                    point,
+                    &brush,
+                    tip,
+                    erase && !mask,
+                    &mut studio.brush_distance,
+                );
             } else {
-                paint::stroke_to(&mut buf, from, point, &brush, erase && !mask);
+                paint::stroke_spaced(
+                    &mut buf,
+                    from,
+                    point,
+                    &brush,
+                    erase && !mask,
+                    &mut studio.brush_distance,
+                );
             }
         }
         let selection_changed = selection_generation != studio.pixel_sel_gen;
@@ -595,15 +617,33 @@ pub(super) fn brush_drag(studio: &mut Studio, world: Pt) {
         |p| studio.mask_point(layer, p),
     );
     let to = studio.mask_point(layer, world);
+    if (to - from).length() > 0.001 {
+        studio.brush_heading = (to - from).y.atan2((to - from).x);
+    }
     if let Some(tip) = studio.brushes.tip() {
-        let brush=paint::Brush { opacity:1.0,..studio.brush };
+        let brush = paint::Brush { opacity: 1.0, ..studio.brush };
         if last.is_some() {
-            crate::brushes::stroke(&mut buf, from, to, &brush, tip, erase);
+            crate::brushes::stroke_spaced(
+                &mut buf,
+                from,
+                to,
+                &brush,
+                tip,
+                erase,
+                &mut studio.brush_distance,
+            );
         } else {
             crate::brushes::stamp(&mut buf, to, &brush, tip, erase);
         }
     } else if last.is_some() {
-        paint::stroke_to(&mut buf, from, to, &studio.brush, erase);
+        paint::stroke_spaced(
+            &mut buf,
+            from,
+            to,
+            &studio.brush,
+            erase,
+            &mut studio.brush_distance,
+        );
     } else {
         paint::stamp(&mut buf, to, &studio.brush, erase);
     }

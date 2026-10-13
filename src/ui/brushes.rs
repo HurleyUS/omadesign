@@ -203,6 +203,12 @@ pub(super) fn window(ctx: &egui::Context, studio: &mut Studio) {
                             flow: studio.brush.flow,
                             opacity: studio.brush.opacity,
                             tip: source.tip,
+                            angle: studio.brush.angle,
+                            scatter: studio.brush.scatter,
+                            angle_jitter: studio.brush.angle_jitter,
+                            size_jitter: studio.brush.size_jitter,
+                            opacity_jitter: studio.brush.opacity_jitter,
+                            follow_direction: studio.brush.follow_direction,
                         });
                         match studio.brushes.install(pack) {
                             Ok(p) => studio.select_brush(p, 0),
