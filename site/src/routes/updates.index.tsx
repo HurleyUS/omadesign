@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import brushesFollow from "../../../docs/blog/nightly-brushes-follow-your-hand.md?raw";
 import workspace from "../../../docs/blog/0.6.3-a-workspace-that-moves.md?raw";
 import reviewCompose from "../../../docs/blog/0.6.2-review-compose-keep-moving.md?raw";
 import moreControl from "../../../docs/blog/0.6.1-more-control-less-waiting.md?raw";
@@ -16,6 +17,7 @@ import { CURL } from "../site";
 import { latestUpdate, updates } from "../updates";
 
 const bodies: Record<string, { markdown: string; path: string }> = {
+  "0.6.3-nightly.20261013.0001": { markdown: brushesFollow, path: "docs/blog/nightly-brushes-follow-your-hand.md" },
   "0.6.3": { markdown: workspace, path: "docs/blog/0.6.3-a-workspace-that-moves.md" },
   "0.6.2": {
     markdown: reviewCompose,
@@ -40,7 +42,7 @@ export const Route = createFileRoute("/updates/")({
       {
         name: "description",
         content:
-          "Studio notes from omadesign. 0.6.3 makes Welcome a workspace for organizing and opening your documents.",
+          "Studio notes from omadesign. 0.6.3-nightly.20261013.0001 adds brush dynamics and pen pressure, fixes canvas input, and refreshes the product media.",
       },
     ],
   }),

@@ -31,6 +31,12 @@ Binaries are built **on this machine** and uploaded to GitHub Releases. There is
 no GitHub Actions bill. They are linked against **glibc 2.35** so they run on
 Asahi Omarchy, current Arch ARM, and anything newer.
 
+## Latest release
+
+**0.6.3-nightly.20261013.0001** adds brush scatter, rotation, jitter, Square tips, and Wayland/X11 pen pressure. Rotated selections scale correctly, canvas movement leaves the sidebar alone, and file/rendering fixes from Fred Nix are included.
+
+[What changed](docs/releases/0.6.3-nightly.20261013.0001.md) · [Brush packs](https://omadesign.app/brushes)
+
 ## Install
 
 ```sh

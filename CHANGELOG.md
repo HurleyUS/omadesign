@@ -1,11 +1,13 @@
 # Changelog
 
-## Unreleased
+## 2026-10-13 · 0.6.3-nightly.20261013.0001 — Brushes that follow your hand
 
 - Fix scaling after rotating a multi-object selection, preserve editable primitives during uniform scaling, and prevent canvas movement from resizing the sidebar.
-- Add Square brushes, tip-shaped cursors, spacing to 10,000%, rotation, direction, scatter, jitter, and independent pen pressure controls on Wayland and X11.
+- Add Square brushes, tip-shaped cursors, spacing to 10,000%, rotation, direction, scatter, jitter, and independent pen pressure controls on Wayland and X11. Keep very light strokes continuous and release held stylus buttons when the pen leaves.
 - Integrate Fred Nix’s file/PDF, geometry/effects/SVG, cloud token, and photo preset fixes from #202–#204. Correct legacy artboard ID allocation after import.
 - Replace active legacy marks, screenshots, mocks, and films with the canonical logo, current native captures, and editable Fieldwork sources. Preserve historical QA evidence.
+
+- Publish this nightly as the latest GitHub release, default website download, and curl installation. The previous nightly remains available.
 
 ## 2026-10-11 · 0.6.3-nightly.20261011.0001 — Brush packs
 

@@ -1,13 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
-vi.mock("./release", () => ({ NIGHTLY_VERSION: "0.6.3-nightly.20261011.0002" }));
+import { describe, expect, it } from "vitest";
 import { latestUpdate, updateBySlug } from "./updates";
-import { NIGHTLY_VERSION } from "./release";
+import { NIGHTLY_VERSION, RELEASE_VERSION } from "./release";
 
 describe("Release notes", () => {
-  it("serves the app's dated nightly link and keeps the stable update current", () => {
-    expect(updateBySlug(NIGHTLY_VERSION)?.title).toBe("Brush packs");
-    expect(updateBySlug(NIGHTLY_VERSION)?.version).toBe(NIGHTLY_VERSION);
+  it("features the published release and preserves earlier notes", () => {
+    expect(latestUpdate.version).toBe(RELEASE_VERSION);
+    expect(updateBySlug(NIGHTLY_VERSION)?.title).toBe("Brushes that follow your hand");
     expect(updateBySlug("0.6.3-nightly.20261011.0001")?.title).toBe("Brush packs");
-    expect(latestUpdate.version).toBe("0.6.3");
+    expect(updateBySlug("0.6.3")?.title).toBe("A workspace that moves with you");
+  });
+  it("does not invent notes for an unpublished nightly", () => {
+    expect(updateBySlug("0.6.3-nightly.20990101.0001")).toBeUndefined();
   });
 });

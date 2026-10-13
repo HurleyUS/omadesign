@@ -98,7 +98,7 @@ package() {
   install -Dm644 assets/omadesign.svg "$stage/omadesign.svg"
   install -Dm644 omadesign-mime.xml "$stage/omadesign-mime.xml"
   # The archive has no source checkout; make its documentation links usable.
-  sed "s|](docs/|](https://github.com/michaelmonetized/omadesign/blob/v${VERSION}/docs/|g; s|](examples/|](https://github.com/michaelmonetized/omadesign/tree/v${VERSION}/examples/|g" \
+  sed "s|srcset=\"docs/|srcset=\"https://raw.githubusercontent.com/michaelmonetized/omadesign/v${VERSION}/docs/|g; s|src=\"docs/|src=\"https://raw.githubusercontent.com/michaelmonetized/omadesign/v${VERSION}/docs/|g; s|](docs/media/|](https://raw.githubusercontent.com/michaelmonetized/omadesign/v${VERSION}/docs/media/|g; s|](docs/|](https://github.com/michaelmonetized/omadesign/blob/v${VERSION}/docs/|g; s|](examples/|](https://github.com/michaelmonetized/omadesign/tree/v${VERSION}/examples/|g" \
     README.md > "$stage/README.md"
   chmod 644 "$stage/README.md"
   install -Dm644 LICENSE "$stage/LICENSE"

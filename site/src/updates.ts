@@ -1,5 +1,3 @@
-import { NIGHTLY_VERSION } from "./release";
-
 export type UpdatePost = {
   slug: string;
   version: string;
@@ -9,6 +7,13 @@ export type UpdatePost = {
 };
 
 export const updates: UpdatePost[] = [
+  {
+    slug: "0.6.3-nightly.20261013.0001",
+    version: "0.6.3-nightly.20261013.0001",
+    date: "2026-10-13",
+    title: "Brushes that follow your hand",
+    dek: "Square tips, shape previews, scatter, rotation, jitter and pen pressure. Rotated scaling, sidebar resizing, file and rendering fixes, and fresh native product media.",
+  },
   {
     slug: "0.6.3",
     version: "0.6.3",
@@ -105,12 +110,5 @@ export const updates: UpdatePost[] = [
 export const latestUpdate = updates[0];
 
 export function updateBySlug(slug: string) {
-  if (slug === NIGHTLY_VERSION) return {
-    slug,
-    version: NIGHTLY_VERSION,
-    date: NIGHTLY_VERSION.replace(/^.*-nightly\.(\d{4})(\d{2})(\d{2}).*$/, "$1-$2-$3"),
-    title: "Brush packs",
-    dek: "12 original tips, Photoshop and Illustrator imports, and packs you can save and share.",
-  };
   return updates.find((post) => post.slug === slug);
 }
