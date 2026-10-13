@@ -67,7 +67,7 @@ fn fit_contour_points(points: &[Pt], closed: bool, epsilon: f32) -> Vec<Anchor> 
     if points.len() < 2 {
         return points.into_iter().map(Anchor::corner).collect();
     }
-    if let Some(circle) = full_circle(&points) {
+    if closed && let Some(circle) = full_circle(&points) {
         return circle;
     }
     let mut corners = corner_indices(&points, closed);
@@ -387,6 +387,22 @@ mod tests {
                 Pt::new(radius * angle.cos(), radius * angle.sin())
             })
             .collect()
+    }
+
+    #[test]
+    fn simplifying_an_open_circle_preserves_its_endpoints() {
+        let points = circle_points(100.0, 64);
+        let mut geom = Geom::Path {
+            anchors: points.iter().copied().map(Anchor::corner).collect(),
+            closed: false,
+        };
+        apply(&mut geom, 1.25);
+        let Geom::Path { anchors, closed } = geom else {
+            panic!("open path stays one path");
+        };
+        assert!(!closed);
+        assert_eq!(anchors.last().unwrap().pt, *points.last().unwrap());
+        assert_eq!(anchors.first().unwrap().pt, points[0]);
     }
 
     #[test]

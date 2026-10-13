@@ -872,11 +872,25 @@ fn write_animated_shape(
             let id = format!("oma-stroke-reveal-{}", shape.id);
             let mask_bounds = bounds.inflate(stroke.width * 2.0 + 2.0);
             defs.push_str(&format!("<mask id=\"{id}\" maskUnits=\"userSpaceOnUse\" maskContentUnits=\"userSpaceOnUse\" mask-type=\"alpha\" x=\"{:.4}\" y=\"{:.4}\" width=\"{:.4}\" height=\"{:.4}\">\n",mask_bounds.min.x,mask_bounds.min.y,mask_bounds.width(),mask_bounds.height()));
-            let closed = shape.geom.is_closed();
             let contours = shape.world_contours(128);
+            // `is_closed` is true when any compound contour is closed. The
+            // reveal mask has to follow each contour, matching path_data.
+            let closed_at = |index: usize| {
+                if let Geom::Paths { paths, .. } = &shape.geom {
+                    paths
+                        .iter()
+                        .filter(|path| path.anchors.len() >= 2)
+                        .nth(index)
+                        .is_some_and(|path| path.closed)
+                } else {
+                    shape.geom.is_closed()
+                }
+            };
             let lengths: Vec<f32> = contours
                 .iter()
-                .map(|points| {
+                .enumerate()
+                .map(|(index, points)| {
+                    let closed = closed_at(index);
                     points
                         .windows(2)
                         .map(|pair| (pair[1] - pair[0]).length())
@@ -892,7 +906,8 @@ fn write_animated_shape(
             let mut passed = 0.0;
             // Add a near-zero sample so a round start cap is absent at zero,
             // but appears as soon as this contour begins drawing.
-            for (points, length) in contours.iter().zip(lengths) {
+            for (index, (points, length)) in contours.iter().zip(lengths).enumerate() {
+                let closed = closed_at(index);
                 if length <= 1e-5 {
                     continue;
                 }
@@ -1762,6 +1777,76 @@ mod tests {
                 .all(|warning| !warning.contains("Gradient")),
             "{:?}",
             report.warnings
+        );
+    }
+
+    #[test]
+    fn animated_stroke_reveal_keeps_open_compound_contours_open() {
+        let shape = Shape::new(
+            Geom::Paths {
+                paths: vec![
+                    crate::geom::PathContour {
+                        anchors: vec![
+                            crate::geom::Anchor::corner(Pt::new(10., 10.)),
+                            crate::geom::Anchor::corner(Pt::new(40., 10.)),
+                            crate::geom::Anchor::corner(Pt::new(40., 40.)),
+                        ],
+                        closed: true,
+                    },
+                    crate::geom::PathContour {
+                        anchors: vec![
+                            crate::geom::Anchor::corner(Pt::new(80., 20.)),
+                            crate::geom::Anchor::corner(Pt::new(140., 20.)),
+                            crate::geom::Anchor::corner(Pt::new(140., 50.)),
+                        ],
+                        closed: false,
+                    },
+                ],
+                winding: true,
+            },
+            Style {
+                fill: Fill::None,
+                stroke: Some(crate::document::Stroke::default()),
+            },
+        );
+        let id = shape.id;
+        let mut doc = Document::new("Reveal", 200., 120., 72.);
+        doc.layers[1].kind.shapes_mut().unwrap().push(shape);
+        doc.motion.duration = 1.0;
+        doc.motion.set_key(
+            id,
+            crate::motion::Prop::StrokeReveal,
+            0.0,
+            0.0,
+            crate::motion::Ease::Linear,
+        );
+        doc.motion.set_key(
+            id,
+            crate::motion::Prop::StrokeReveal,
+            1.0,
+            1.0,
+            crate::motion::Ease::Linear,
+        );
+        let svg = animated_export(&doc).unwrap().svg;
+        let mask = svg
+            .split(&format!("<mask id=\"oma-stroke-reveal-{id}\""))
+            .nth(1)
+            .unwrap_or_else(|| panic!("missing stroke reveal mask: {svg}"))
+            .split("</mask>")
+            .next()
+            .unwrap();
+        let open = mask
+            .split("d=\"M 80.000 20.000")
+            .nth(1)
+            .unwrap_or_else(|| panic!("missing open contour in reveal mask: {mask}"));
+        let d = open.split('"').next().unwrap();
+        assert!(
+            !d.contains('Z'),
+            "open contour was closed in the reveal mask: {d}"
+        );
+        assert!(
+            mask.contains("stroke-dasharray=\"90.00000 90.00000\""),
+            "open contour length included the closing segment: {mask}"
         );
     }
 }

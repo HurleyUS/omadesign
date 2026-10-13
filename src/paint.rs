@@ -395,7 +395,7 @@ pub fn clone_stamp(pm: &mut Pixmap, pos: Pt, source: Pt, brush: &Brush) {
                     mix(dst[0], src[0]),
                     mix(dst[1], src[1]),
                     mix(dst[2], src[2]),
-                    mix(dst[3], src[3]).max(src[3]),
+                    mix(dst[3], src[3]),
                 ],
             );
         }
@@ -972,6 +972,25 @@ pub fn shear_mask(src: &[u8], w: u32, h: u32, kx: f32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clone_opacity_blends_premultiplied_alpha() {
+        for opacity in [0.25, 0.5, 1.0] {
+            let mut image = Pixmap::new(12, 4).unwrap();
+            set_px(&mut image, 2, 2, [255, 0, 0, 255]);
+            let brush = Brush {
+                size: 2.0,
+                flow: 1.0,
+                opacity,
+                ..Default::default()
+            };
+            clone_stamp(&mut image, Pt::new(8.0, 2.0), Pt::new(2.0, 2.0), &brush);
+            let expected = (255.0 * opacity).round() as u8;
+            assert_eq!(sample(&image, 8, 2), [expected, 0, 0, expected]);
+            assert_eq!(sample(&image, 2, 2), [255, 0, 0, 255]);
+            assert_eq!(sample(&image, 9, 2), [0; 4]);
+        }
+    }
 
     #[test]
     fn healing_keeps_source_texture_but_matches_the_destination_colour() {
