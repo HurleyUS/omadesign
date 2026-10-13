@@ -96,7 +96,7 @@ pub(crate) fn normalize_decoded_document(mut doc: Document, version: u32) -> Res
         }
     }
     crate::text_geometry::reflow(&mut doc);
-    doc.ensure_ids();
+    doc.ensure_ids()?;
     doc.validate_hierarchy()?;
     Ok(doc)
 }
@@ -150,8 +150,12 @@ fn compress_pixels(px: &Pixels) -> Result<Pixels, String> {
 }
 
 fn decompress_pixels(px: &Pixels) -> Result<Pixels, String> {
-    // Already raw?
-    if px.data.len() == px.w as usize * px.h as usize * 4 {
+    // Already raw? Overflow is not a match: it panics in debug and wraps in release.
+    if let Some(expected) = (px.w as usize)
+        .checked_mul(px.h as usize)
+        .and_then(|count| count.checked_mul(4))
+        && px.data.len() == expected
+    {
         return Ok(px.clone());
     }
     let b64 = std::str::from_utf8(&px.data).map_err(|e| e.to_string())?;
@@ -566,7 +570,7 @@ pub fn load_swap(path: &Path) -> Result<SwapMeta, String> {
             }
         }
     }
-    meta.doc.ensure_ids();
+    meta.doc.ensure_ids()?;
     Ok(meta)
 }
 
@@ -1060,5 +1064,66 @@ mod tests {
         assert_eq!(fs::read(&full_doc).unwrap(), previous);
         assert_eq!(fs::read_dir(&full_fonts).unwrap().count(), 4);
         assert!(!full.join(&relative_font).exists());
+    }
+
+    #[test]
+    fn overflowing_raster_dimensions_do_not_panic_on_load() {
+        // Packed rasters are base64 PNGs. A buffer is raw only when its length
+        // is exactly w*h*4. Dimensions whose product does not fit in usize must
+        // take that same fallback, not abort the multiply.
+        let doc = Document::new("overflow", 1.0, 1.0, 72.0);
+        let encoded = encode(&doc).unwrap();
+        let restored = decode(&encoded).unwrap();
+        assert_eq!(
+            restored.layers[0].kind.pixels().unwrap().data,
+            doc.layers[0].kind.pixels().unwrap().data
+        );
+
+        let mut file: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        file["doc"]["layers"][0]["kind"]["Raster"]["pixels"]["data"] =
+            serde_json::json!([9, 8, 7, 6]);
+        let raw = decode(&file.to_string()).unwrap();
+        assert_eq!(raw.layers[0].kind.pixels().unwrap().data, [9, 8, 7, 6]);
+
+        file["doc"]["layers"][0]["kind"]["Raster"]["pixels"]["w"] =
+            serde_json::json!(2_147_483_648u64);
+        file["doc"]["layers"][0]["kind"]["Raster"]["pixels"]["h"] =
+            serde_json::json!(2_147_483_648u64);
+        file["doc"]["layers"][0]["kind"]["Raster"]["pixels"]["data"] = serde_json::json!([255]);
+        assert!(
+            decode(&file.to_string()).is_err(),
+            "w*h*4 past usize must not be treated as a raw buffer"
+        );
+    }
+
+    #[test]
+    fn decode_rejects_extreme_object_ids_instead_of_overflowing_the_allocator() {
+        let mut doc = Document::new("Extreme ids", 64., 64., 72.);
+        let mut shape = Shape::new(
+            Geom::Rect {
+                origin: Pt::new(0., 0.),
+                size: Pt::new(10., 10.),
+                radius: 0.,
+            },
+            Style::default(),
+        );
+        shape.id = u64::MAX;
+        doc.layers[1].kind.shapes_mut().unwrap().push(shape);
+        let encoded = encode(&doc).unwrap();
+        assert!(decode(&encoded).is_err());
+        // A swapped recovery document takes the same validation path.
+        let root = std::env::temp_dir().join(new_swap_id());
+        std::fs::create_dir_all(&root).unwrap();
+        let swap = root.join("extreme.oma.swp");
+        let meta = SwapMeta {
+            id: "extreme".into(),
+            original: None,
+            name: "Extreme ids".into(),
+            saved_at: 0,
+            doc,
+        };
+        std::fs::write(&swap, serde_json::to_string(&meta).unwrap()).unwrap();
+        assert!(load_swap(&swap).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

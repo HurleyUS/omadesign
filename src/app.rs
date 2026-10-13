@@ -3872,7 +3872,9 @@ impl Studio {
     }
 
     pub(crate) fn open_document(&mut self, mut doc: crate::document::Document, path: Option<PathBuf>) {
-        doc.ensure_ids();
+        // Disk and recovery entries validate ids in project::decode/load_swap;
+        // an already-opened document can only lose the id bump here, never panic.
+        let _ = doc.ensure_ids();
         let imported = path
             .as_ref()
             .is_some_and(|p| crate::import::classify(p) != "oma");
