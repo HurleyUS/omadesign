@@ -13,8 +13,8 @@ type StudioCarouselProps = {
 const works: { name: StudioName; image: string; alt: string }[] = [
   {
     name: "Design",
-    image: "design-tools.webp",
-    alt: "Native Design workspace with editable gradient fills and strokes.",
+    image: "design.webp",
+    alt: "Native Design workspace with the editable Fieldwork poster.",
   },
   {
     name: "Layout",
@@ -23,8 +23,8 @@ const works: { name: StudioName; image: string; alt: string }[] = [
   },
   {
     name: "Pixel",
-    image: "pixel-effects.webp",
-    alt: "Native Pixel workspace showing chroma key and raster treatments.",
+    image: "pixel.webp",
+    alt: "Native Pixel workspace with thirteen brush studies and shape-aware brush controls.",
   },
   {
     name: "Photo",
@@ -34,7 +34,7 @@ const works: { name: StudioName; image: string; alt: string }[] = [
   {
     name: "Motion",
     image: "motion-presets.webp",
-    alt: "Native Motion workspace with editable animation presets.",
+    alt: "Native Motion workspace with editable pulse animation keys.",
   },
 ];
 export const studioNames = works.map((work) => work.name);

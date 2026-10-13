@@ -100,7 +100,7 @@ For the latest published release, use:
 curl -fsSL https://omadesign.app/install | sh -s -- --launch -- document.oma
 ```
 
-Launch mode checks the latest stable release, installs it when needed, and forwards
+Launch mode checks the latest published release, installs it when needed, and forwards
 the app arguments. It keeps a newer installed build. If the release check fails,
 an existing complete installation still opens. `OMADESIGN_INSTALL_PREFIX` selects
 an isolated destination; a relative path is resolved from the caller's directory.
@@ -142,13 +142,12 @@ Refuse to ship if `objdump -T` shows GLIBC newer than 2.35.
 
 Nightlies use `BASE-nightly.YYYYMMDD.NNNN`, with a four-digit daily counter starting
 at `0001`, and a `v` prefix on the Git tag. Dates use America/New_York. Fetch tags
-before choosing the next counter. Publish nightlies as prereleases and keep the
-stable download and default installer pointed at the stable release.
+before choosing the next counter. Publish routine nightlies as prereleases. A nightly selected as the latest release must use `--prerelease=false --latest`, and the website release constant, featured update, README and manual must point to that exact version. The current latest is `0.6.3-nightly.20261013.0001`.
 
 ```sh
 git fetch origin --tags
 node scripts/version.mjs nightly                 # today's next unused counter
-node scripts/version.mjs nightly 20261011 0001   # choose an explicit date and counter
+node scripts/version.mjs nightly 20261013 0001   # choose an explicit date and counter
 VERSION="$(node scripts/version.mjs get)"
 ./scripts/release.sh
 gh release create "v$VERSION" --prerelease --latest=false --target HEAD \

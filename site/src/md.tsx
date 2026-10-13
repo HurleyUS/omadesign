@@ -16,6 +16,7 @@ const DOC_ROUTES: Record<string, string> = {
   "/docs/roadmap": "docs/roadmap/",
   "/docs/roadmap.md": "docs/roadmap/",
   "/updates": "updates/",
+  "/brushes": "brushes/",
   "/docs/plugins": "docs/plugins/",
   "/docs/plugins.md": "docs/plugins/",
   "/updates/0.6.1": "updates/0.6.1/",

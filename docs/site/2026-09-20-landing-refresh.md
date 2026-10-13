@@ -1,5 +1,7 @@
 # Landing page refresh — 2026-09-20
 
+Historical implementation receipt. Current assets, editable sources, and regeneration steps are documented in [the product media guide](../../site/media-sources.md). Superseded public assets remain in Git history.
+
 The homepage includes native workspace screenshots, an interactive
 Design / Pixel / Layout feature overview, six freshly captured native recordings,
 and an external-agent workflow section. The original 3D carousel is retained with refreshed native screenshots. The

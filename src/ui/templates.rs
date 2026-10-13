@@ -677,6 +677,17 @@ fn card(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn visible_templates_do_not_wait_for_the_hidden_welcome_catalog() {
+        let ctx = eframe::egui::Context::default();
+        let size = super::Browser::default().size();
+        ctx.data_mut(|data| data.insert_temp(eframe::egui::Id::new("template-preview-cache"), super::PreviewCache { size: Some(size), ..Default::default() }));
+        let mut studio = crate::app::Studio::new();
+        studio.show_welcome = true;
+        studio.show_templates = true;
+        assert!(crate::ui::scene_ready(&ctx, &studio));
+    }
+
     use super::*;
 
     #[test]

@@ -186,19 +186,7 @@ fn about(ui: &mut egui::Ui, studio: &mut Studio) {
             ui.image((texture.id(), texture.size_vec2() * 0.5));
         }
         let version = env!("OMADESIGN_VERSION");
-        let base = version.split('-').next().unwrap_or(version);
-        ui.label(
-            RichText::new(format!(
-                "omadesign-alpha{}-{base}",
-                if version.contains("nightly") {
-                    "-nightly"
-                } else {
-                    ""
-                }
-            ))
-            .strong(),
-        );
-        ui.small(format!("Semantic version: {version}"));
+        ui.label(RichText::new(format!("omadesign {version}")).strong());
         ui.add_space(8.);
         ui.label("Native Linux studio for design, layout, pixels, photography and motion.");
         ui.hyperlink_to(

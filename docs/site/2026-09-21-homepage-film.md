@@ -1,5 +1,7 @@
 # Homepage film: your work in motion
 
+Historical implementation receipt. Current assets, editable sources, and regeneration steps are documented in [the product media guide](../../site/media-sources.md). Superseded public assets remain in Git history.
+
 The product film near the end of the homepage is a new 32-second silent cut.
 It leads with the welcome browser and creation workflows, then moves through
 editing, project brand assets, Layout and Motion. The existing opening Cloud

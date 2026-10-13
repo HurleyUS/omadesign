@@ -20,6 +20,8 @@ shows or hides the strip; **F1** opens the complete shortcut list.
 
 ## Install
 
+The current release is **0.6.3-nightly.20261013.0001**. The installer below installs this nightly as the latest release. [Release notes](releases/0.6.3-nightly.20261013.0001.md).
+
 ```sh
 curl -fsSL https://omadesign.app/install | sh
 ```
@@ -252,7 +254,8 @@ Idle for a second writes `~/.local/share/omadesign/<id>.oma.swp`. Save deletes i
 
 Paint lives on a **pixel layer**. Add one from the Layers studio if the document is vector-only.
 
-- Brush `B` — size `[` `]`, hardness `Shift+[` `]`.
+- Brush `B` — size `[` `]`, hardness `Shift+[` `]`. Essentials includes a Square tip. The canvas cursor traces the selected tip, including its angle. Spacing runs from 1% to 10,000% and carries between pointer samples. Angle turns the tip; Follow stroke direction turns it along the stroke. Scatter offsets dabs by a percentage of brush size. Angle, size, and opacity jitter vary each dab; a new stroke gets a new random pattern. Save current settings as a brush retains these settings in `.omabrush` packs.
+- Drawing tablets — Wayland uses the native tablet protocol for pen hover, contact, release, and pressure. X11 reads the tablet’s Abs Pressure axis. Pen pressure can control Size and Flow independently in the Brush inspector. Spacing follows the pressure-scaled tip so light strokes remain continuous. Tablets without pressure keep the full brush size. Tablet pad buttons, tilt, and tool rotation are not brush controls in this version.
 - Eraser `E`, Fill `K`, Clone `J` (Alt-click sets source), Smudge `M`.
 - Healing brush `Shift+J` — Alt-click clean texture on the active image, then paint over a blemish. It blends sampled texture with the destination's local color and preserves transparency. The source stays fixed for the stroke; Undo restores the whole stroke.
 - Marquee, elliptical marquee, lasso, wand. Drag to select; the marching ants stay until Esc. Shift adds. Delete clears selected pixels. Paint, fill, clone, heal and smudge stay inside the selection. Wand tolerance is in Brush. Eyedropper `I` shows the sampled color in the sidebar.

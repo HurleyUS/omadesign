@@ -10,6 +10,7 @@ export function syncAgentDocs() {
   const files = [
     ["docs/MANUAL.md", "docs/markdown/manual.md"],
     ["docs/layout.md", "docs/markdown/layout.md"],
+    ["docs/brushes.md", "docs/markdown/brushes.md"],
     ["docs/format-support.md", "docs/markdown/formats.md"],
     ["docs/plugins.md", "docs/markdown/plugins.md"],
     ["docs/cloud.md", "docs/markdown/cloud.md"],

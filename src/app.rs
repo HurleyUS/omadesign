@@ -164,6 +164,7 @@ pub enum Op {
         orig: Vec<ObjSnap>,
         handle: usize,
         start_box: Bounds,
+        angle: f32,
     },
     Rotate {
         orig: Vec<ObjSnap>,
@@ -337,6 +338,9 @@ pub struct Studio {
     pub style: Style,
     pub gradient: (Rgba, Rgba),
     pub brush: Brush,
+    pub brush_distance: f32,
+    pub brush_heading: f32,
+    pub paint_contact: Option<(eframe::egui::TouchDeviceId, eframe::egui::TouchId)>,
     pub brushes: crate::brushes::Library,
     pub brush_import_job: Option<crate::brushes::ImportJob>,
     pub fill_tolerance: f32,
@@ -585,6 +589,9 @@ impl Studio {
             style: Style::default(),
             gradient: (Rgba::from_hex(0xFFD166), Rgba::from_hex(0xE5484D)),
             brush: Brush::default(),
+            brush_distance: 0.0,
+            brush_heading: 0.0,
+            paint_contact: None,
             brushes: crate::brushes::Library::load(crate::project::data_dir().join("brushes")),
             brush_import_job: None,
             fill_tolerance: 32.0,
@@ -896,6 +903,7 @@ impl Studio {
                 flow: 0.8,
                 spacing: 0.2,
                 color: orange,
+                ..Default::default()
             };
             paint::stroke_to(
                 &mut pm,
@@ -3866,7 +3874,9 @@ impl Studio {
     }
 
     pub(crate) fn open_document(&mut self, mut doc: crate::document::Document, path: Option<PathBuf>) {
-        doc.ensure_ids();
+        // Disk and recovery entries validate ids in project::decode/load_swap;
+        // an already-opened document can only lose the id bump here, never panic.
+        let _ = doc.ensure_ids();
         let imported = path
             .as_ref()
             .is_some_and(|p| crate::import::classify(p) != "oma");

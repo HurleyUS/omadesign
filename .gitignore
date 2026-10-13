@@ -35,3 +35,4 @@ site/.env*
 /.qa-runs/
 /.vite/
 /.tmp-brush/
+/.t/

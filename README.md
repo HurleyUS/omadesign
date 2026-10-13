@@ -1,15 +1,24 @@
-# omadesign
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/omadesign-logo.svg" />
+    <img src="docs/media/omadesign-logo-light.svg" alt="Omadesign" width="520" />
+  </picture>
+</p>
 
 [![downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fomadesign.app%2Fapi%2Fstats%3Fbadge%3Ddownloads&style=flat)](https://github.com/michaelmonetized/omadesign/releases)
 [![Users](https://img.shields.io/endpoint?url=https%3A%2F%2Fomadesign.app%2Fapi%2Fstats%3Fbadge%3Dusers&style=flat)](https://www.producthunt.com/products/omadesign)
 [![upvotes](https://img.shields.io/endpoint?url=https%3A%2F%2Fomadesign.app%2Fapi%2Fstats%3Fbadge%3Dupvotes&style=flat)](https://www.producthunt.com/products/omadesign)
 [![stars](https://img.shields.io/endpoint?url=https%3A%2F%2Fomadesign.app%2Fapi%2Fstats%3Fbadge%3Dstars&style=flat)](https://github.com/michaelmonetized/omadesign/stargazers)
 
-[Download v0.6.1](https://github.com/michaelmonetized/omadesign/releases/tag/v0.6.1) · [Explore the studio](https://omadesign.app/) · [Updates](https://omadesign.app/updates) · [User manual](https://omadesign.app/docs/manual/) · [Showcase](https://omadesign.app/showcase) · [Discord](https://discord.gg/ejkZS2RBx) · [Build from source](docs/CONTRIBUTING.md)
+[Download the latest release](https://github.com/michaelmonetized/omadesign/releases/latest) · [Explore the studio](https://omadesign.app/) · [Updates](https://omadesign.app/updates) · [User manual](https://omadesign.app/docs/manual/) · [Showcase](https://omadesign.app/showcase) · [Discord](https://discord.gg/ejkZS2RBx) · [Build from source](docs/CONTRIBUTING.md)
 
 A native Linux studio for **design, layout, paint, photograph, and motion**. One
 document, one layer stack. Built so a designer coming from macOS can sit down
 and start working.
+
+![The current native Omadesign editor with an editable Fieldwork poster.](docs/media/studio.png)
+
+[Editable source](examples/product-media/design.oma) · [Product media and provenance](site/media-sources.md)
 
 Native Rust UI and editing, with bundled LibRaw for camera decoding. No GTK app,
 no Electron. `cargo` is the toolchain.
@@ -21,6 +30,12 @@ orange.
 Binaries are built **on this machine** and uploaded to GitHub Releases. There is
 no GitHub Actions bill. They are linked against **glibc 2.35** so they run on
 Asahi Omarchy, current Arch ARM, and anything newer.
+
+## Latest release
+
+**0.6.3-nightly.20261013.0001** adds brush scatter, rotation, jitter, Square tips, and Wayland/X11 pen pressure. Rotated selections scale correctly, canvas movement leaves the sidebar alone, and file/rendering fixes from Fred Nix are included.
+
+[What changed](docs/releases/0.6.3-nightly.20261013.0001.md) · [Brush packs](https://omadesign.app/brushes)
 
 ## Install
 
@@ -114,6 +129,8 @@ masks. Raster studio has **17 filters and 13 effects**, including chroma key wit
 sampling, similarity, falloff, hardness, spill cleanup and Flow. Compare the
 preview, Apply at full resolution and Undo as one edit. Raster treatments are
 applied pixel edits; live raster stacks and vector-object masks are not included.
+Brush packs include 13 original tips, including Square. The cursor follows the tip’s shape and angle. Set spacing up to 10,000%, rotate the tip, follow the stroke direction, and vary scatter, angle, size, and opacity. Save those settings in a portable brush pack. Wayland and X11 pen pressure can control Size and Flow independently. See the [brush guide](docs/brushes.md).
+
 Photo: develop sliders, histogram, crop, Place in Design.
 
 Open camera RAW files including DNG, CR2/CR3, NEF, ARW and RAF with the built-in

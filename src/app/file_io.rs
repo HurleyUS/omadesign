@@ -272,7 +272,7 @@ impl Studio {
                                 self.show_welcome = false;
                                 self.need_fit = true;
                             } else if matches!(job.mode, ImportMode::OpenBackground) {
-                                doc.ensure_ids();
+                                let _ = doc.ensure_ids();
                                 self.ensure_tabs();
                                 self.tabs.push(TabState::new(doc, Some(job.path.clone())));
                                 self.remember_path(&job.path);

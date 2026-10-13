@@ -47,6 +47,18 @@ pub struct Preset {
     pub flow: f32,
     pub opacity: f32,
     pub tip: Arc<Tip>,
+    #[serde(default)]
+    pub angle: f32,
+    #[serde(default)]
+    pub scatter: f32,
+    #[serde(default)]
+    pub angle_jitter: f32,
+    #[serde(default)]
+    pub size_jitter: f32,
+    #[serde(default)]
+    pub opacity_jitter: f32,
+    #[serde(default)]
+    pub follow_direction: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -102,13 +114,22 @@ impl Pack {
                 return Err(format!("{} has an empty or invalid brush tip", p.name));
             }
             total += t.alpha.len();
-            if total > MAX_FILE
+            if !p.angle.is_finite()
+                || p.angle.abs() > std::f32::consts::TAU
+                || !p.scatter.is_finite()
+                || !(0.0..=10.0).contains(&p.scatter)
+                || !p.angle_jitter.is_finite()
+                || !(0.0..=std::f32::consts::PI).contains(&p.angle_jitter)
+                || [p.size_jitter, p.opacity_jitter]
+                    .iter()
+                    .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+                || total > MAX_FILE
                 || p.name.trim().is_empty()
                 || p.name.len() > 512
                 || !p.size.is_finite()
                 || !(1.0..=2048.0).contains(&p.size)
                 || !p.spacing.is_finite()
-                || !(0.01..=4.0).contains(&p.spacing)
+                || !(0.01..=100.0).contains(&p.spacing)
                 || [p.hardness, p.flow, p.opacity]
                     .iter()
                     .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
@@ -134,11 +155,17 @@ impl Preset {
         Self {
             name,
             size: tip.width.max(tip.height).min(256).max(1) as f32,
-            spacing: spacing.clamp(0.01, 4.0),
+            spacing: spacing.clamp(0.01, 100.0),
             hardness: 1.0,
             flow: 1.0,
             opacity: 1.0,
             tip: Arc::new(tip),
+            angle: 0.0,
+            scatter: 0.0,
+            angle_jitter: 0.0,
+            size_jitter: 0.0,
+            opacity_jitter: 0.0,
+            follow_direction: false,
         }
     }
     pub fn apply(&self, brush: &mut Brush) {
@@ -147,10 +174,21 @@ impl Preset {
         brush.hardness = self.hardness;
         brush.flow = self.flow;
         brush.opacity = self.opacity;
+        brush.angle = self.angle;
+        brush.scatter = self.scatter;
+        brush.angle_jitter = self.angle_jitter;
+        brush.size_jitter = self.size_jitter;
+        brush.opacity_jitter = self.opacity_jitter;
+        brush.follow_direction = self.follow_direction;
     }
 }
 
 pub type ImportJob = Arc<std::sync::Mutex<Option<Result<(Pack, String), String>>>>;
+
+struct CursorOutline {
+    tip: Arc<Tip>,
+    edges: Arc<Vec<(Pt, Pt)>>,
+}
 
 pub struct Library {
     pub packs: Vec<Pack>,
@@ -158,6 +196,7 @@ pub struct Library {
     pub errors: Vec<String>,
     pub(crate) directory: PathBuf,
     fingerprints: Vec<String>,
+    outline_cache: std::cell::RefCell<Option<CursorOutline>>,
 }
 
 impl Library {
@@ -168,6 +207,7 @@ impl Library {
             errors: vec![],
             directory,
             fingerprints: vec![],
+            outline_cache: Default::default(),
         };
         for bytes in [
             include_bytes!("../assets/brushes/essentials.omabrush").as_slice(),
@@ -201,6 +241,22 @@ impl Library {
     pub fn tip(&self) -> Option<&Tip> {
         let (pack, brush) = self.selected?;
         Some(&self.packs.get(pack)?.brushes.get(brush)?.tip)
+    }
+
+    /// Reuse the selected tip's cursor boundary between canvas frames.
+    /// Takes this library and returns its outline, or none for a round brush.
+    pub fn tip_outline(&self) -> Option<Arc<Vec<(Pt, Pt)>>> {
+        let (pack, brush) = self.selected?;
+        let tip = &self.packs.get(pack)?.brushes.get(brush)?.tip;
+        let mut cached = self.outline_cache.borrow_mut();
+        if let Some(outline) = &*cached
+            && Arc::ptr_eq(&outline.tip, tip)
+        {
+            return Some(outline.edges.clone());
+        }
+        let outline = Arc::new(outline(tip));
+        *cached = Some(CursorOutline { tip: tip.clone(), edges: outline.clone() });
+        Some(outline)
     }
 
     /// Install a validated pack without replacing another user's file.
@@ -369,19 +425,25 @@ fn crop(tip: Tip) -> Result<Tip, String> {
 /// Paint a sampled tip in the current foreground color.
 /// Arguments are the target, center, brush settings, tip, and erase flag; pixels are blended in place.
 pub fn stamp(pm: &mut tiny_skia::Pixmap, pos: Pt, brush: &Brush, tip: &Tip, erase: bool) {
+    let (pos, brush) = brush.dab(pos);
+    let brush = &brush;
     let scale = brush.size.max(1.0) / tip.width.max(tip.height) as f32;
     let (w, h) = (tip.width as f32 * scale, tip.height as f32 * scale);
-    let (left, top) = (pos.x - w / 2.0, pos.y - h / 2.0);
-    let (x0, y0) = (left.floor().max(0.0) as u32, top.floor().max(0.0) as u32);
+    let radius = (w * w + h * h).sqrt() * 0.5;
+    let (x0, y0) = (
+        (pos.x - radius).clamp(0.0, pm.width() as f32) as u32,
+        (pos.y - radius).clamp(0.0, pm.height() as f32) as u32,
+    );
     let (x1, y1) = (
-        (left + w).ceil().clamp(0.0, pm.width() as f32) as u32,
-        (top + h).ceil().clamp(0.0, pm.height() as f32) as u32,
+        (pos.x + radius).ceil().clamp(0.0, pm.width() as f32) as u32,
+        (pos.y + radius).ceil().clamp(0.0, pm.height() as f32) as u32,
     );
     let width = pm.width();
     for y in y0..y1 {
         for x in x0..x1 {
-            let sx = (x as f32 + 0.5 - left) / scale - 0.5;
-            let sy = (y as f32 + 0.5 - top) / scale - 0.5;
+            let local = (Pt::new(x as f32 + 0.5, y as f32 + 0.5) - pos).rotate(-brush.angle);
+            let sx = (local.x + w * 0.5) / scale - 0.5;
+            let sy = (local.y + h * 0.5) / scale - 0.5;
             let sample = |ix: i32, iy: i32| {
                 if ix < 0 || iy < 0 || ix >= tip.width as i32 || iy >= tip.height as i32 {
                     0.0
@@ -426,8 +488,13 @@ pub fn stamp(pm: &mut tiny_skia::Pixmap, pos: Pt, brush: &Brush, tip: &Tip, eras
 }
 
 pub fn stroke(pm: &mut tiny_skia::Pixmap, from: Pt, to: Pt, brush: &Brush, tip: &Tip, erase: bool) {
+    let mut brush = *brush;
+    if brush.follow_direction && (to - from).length() > 0.001 {
+        brush.angle += (to - from).y.atan2((to - from).x);
+    }
+    let brush = &brush;
     let distance = (to - from).length();
-    let spacing = (brush.size * brush.spacing).max(0.5);
+    let spacing = brush.spacing_distance();
     let count = (distance / spacing).ceil().max(1.0) as u32;
     for i in 1..=count {
         stamp(
@@ -438,6 +505,65 @@ pub fn stroke(pm: &mut tiny_skia::Pixmap, from: Pt, to: Pt, brush: &Brush, tip: 
             erase,
         );
     }
+}
+
+/// Stamp a segment while carrying spacing across pointer events.
+/// Takes the target, segment, brush, tip, erase flag and remaining distance; updates pixels and distance.
+pub fn stroke_spaced(
+    pm: &mut tiny_skia::Pixmap,
+    from: Pt,
+    to: Pt,
+    brush: &Brush,
+    tip: &Tip,
+    erase: bool,
+    remaining: &mut f32,
+) {
+    crate::paint::spaced_dabs(from, to, brush, remaining, |at, brush| {
+        stamp(pm, at, brush, tip, erase)
+    });
+}
+
+/// Trace a sampled tip's visible edge with bounded cursor work.
+/// Takes a tip and returns boundary segments in coordinates centered on its longest side.
+pub fn outline(tip: &Tip) -> Vec<(Pt, Pt)> {
+    let step = tip.width.max(tip.height).div_ceil(128).max(1);
+    let w = tip.width.div_ceil(step);
+    let h = tip.height.div_ceil(step);
+    let mut mask = vec![false; (w * h) as usize];
+    for y in 0..h { for x in 0..w {
+        mask[(y * w + x) as usize] = (y * step..((y + 1) * step).min(tip.height)).any(|sy| {
+            let start = (sy * tip.width + x * step) as usize;
+            let end = (sy * tip.width + ((x + 1) * step).min(tip.width)) as usize;
+            tip.alpha[start..end].iter().any(|&alpha| alpha >= 32)
+        });
+    }}
+    let filled = |x: i32, y: i32| x >= 0 && y >= 0 && x < w as i32 && y < h as i32 && mask[(y as u32 * w + x as u32) as usize];
+    let scale = tip.width.max(tip.height) as f32;
+    let point = |x: u32, y: u32| {
+        Pt::new(
+            (x * step).min(tip.width) as f32 - tip.width as f32 * 0.5,
+            (y * step).min(tip.height) as f32 - tip.height as f32 * 0.5,
+        ) / scale
+    };
+    let mut edges = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            if !filled(x as i32, y as i32) {
+                continue;
+            }
+            for (dx, dy, a, b) in [
+                (0, -1, (x, y), (x + 1, y)),
+                (1, 0, (x + 1, y), (x + 1, y + 1)),
+                (0, 1, (x + 1, y + 1), (x, y + 1)),
+                (-1, 0, (x, y + 1), (x, y)),
+            ] {
+                if !filled(x as i32 + dx, y as i32 + dy) {
+                    edges.push((point(a.0, a.1), point(b.0, b.1)));
+                }
+            }
+        }
+    }
+    edges
 }
 
 pub fn cli(args: &[String]) -> Option<Result<(), String>> {
@@ -461,6 +587,18 @@ pub fn cli(args: &[String]) -> Option<Result<(), String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cursor_outline_retains_thin_tips_and_reuses_the_selected_boundary() {
+        let mut alpha = vec![0; 256 * 256];
+        for y in 0..256 { alpha[y * 256] = 255; }
+        assert!(!outline(&Tip { width: 256, height: 256, alpha }).is_empty());
+        let mut library = Library::load(root());
+        library.selected = Some((0, 0));
+        let first = library.tip_outline().unwrap();
+        assert!(Arc::ptr_eq(&first, &library.tip_outline().unwrap()));
+        library.selected = Some((0, 6));
+        assert!(!Arc::ptr_eq(&first, &library.tip_outline().unwrap()));
+    }
     fn root() -> PathBuf {
         let root = std::env::current_dir()
             .unwrap()
@@ -473,6 +611,117 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         root
     }
+    #[test]
+    fn square_outline_rotation_pressure_and_spacing_match_stamped_pixels() {
+        let tip = Tip {
+            width: 8,
+            height: 2,
+            alpha: vec![255; 16],
+        };
+        let brush = Brush {
+            size: 16.,
+            angle: std::f32::consts::FRAC_PI_2,
+            flow: 1.,
+            ..Default::default()
+        };
+        let mut pm = tiny_skia::Pixmap::new(64, 64).unwrap();
+        stamp(&mut pm, Pt::new(32., 32.), &brush, &tip, false);
+        assert!(pm.pixel(32, 38).unwrap().alpha() > 0);
+        assert_eq!(pm.pixel(38, 32).unwrap().alpha(), 0);
+        let outline = outline(&Tip {
+            width: 4,
+            height: 4,
+            alpha: vec![255; 16],
+        });
+        assert_eq!(outline.len(), 16);
+        assert!(
+            outline
+                .iter()
+                .all(|(a, b)| a.x.abs() == 0.5 && b.x.abs() == 0.5
+                    || a.y.abs() == 0.5 && b.y.abs() == 0.5)
+        );
+        let (position, small) = Brush {
+            pressure: 0.25,
+            pressure_size: true,
+            pressure_flow: true,
+            ..brush
+        }
+        .dab(Pt::new(32., 32.));
+        assert_eq!(position, Pt::new(32., 32.));
+        assert_eq!(small.size, 4.);
+        assert_eq!(small.flow, 0.25);
+        let tip = Tip {
+            width: 2,
+            height: 2,
+            alpha: vec![255; 4],
+        };
+        let brush = Brush {
+            size: 2.,
+            spacing: 10.,
+            flow: 1.,
+            ..Default::default()
+        };
+        let mut pm = tiny_skia::Pixmap::new(64, 16).unwrap();
+        let mut remaining = 20.;
+        for x in 1..=40 {
+            stroke_spaced(
+                &mut pm,
+                Pt::new(x as f32 - 1., 8.),
+                Pt::new(x as f32, 8.),
+                &brush,
+                &tip,
+                false,
+                &mut remaining,
+            );
+        }
+        assert!(pm.pixel(20, 8).unwrap().alpha() > 0);
+        assert_eq!(pm.pixel(10, 8).unwrap().alpha(), 0);
+        assert!(pm.pixel(40, 8).unwrap().alpha() > 0);
+    }
+
+    #[test]
+    fn dynamics_roundtrip_and_scatter_stay_inside_affected_region() {
+        let mut pack = decode(include_bytes!("../assets/brushes/essentials.omabrush")).unwrap();
+        let square = pack.brushes.len() - 1;
+        let preset = &mut pack.brushes[square];
+        assert_eq!(preset.name, "Square");
+        preset.spacing = 10.;
+        preset.angle = 1.;
+        preset.scatter = 3.;
+        preset.angle_jitter = 2.;
+        preset.size_jitter = 0.7;
+        preset.opacity_jitter = 0.8;
+        preset.follow_direction = true;
+        let decoded = decode(&pack.bytes().unwrap()).unwrap();
+        let mut brush = Brush::default();
+        decoded.brushes[square].apply(&mut brush);
+        assert_eq!(brush.spacing, 10.);
+        assert_eq!(brush.angle, 1.);
+        assert!(brush.follow_direction);
+        let center = Pt::new(128., 128.);
+        let region = crate::paint::PixelRegion::stroke(256, 256, center, center, &brush);
+        for x in 100..150 {
+            let (p, dab) = brush.dab(Pt::new(x as f32, 128.));
+            assert!((p - Pt::new(x as f32, 128.)).length() <= brush.size * brush.scatter);
+            assert!(dab.size >= brush.size * 0.3 && dab.size <= brush.size);
+            assert!(dab.flow >= brush.flow * 0.2 && dab.flow <= brush.flow);
+        }
+        let mut pm = tiny_skia::Pixmap::new(256, 256).unwrap();
+        stamp(&mut pm, center, &brush, &decoded.brushes[square].tip, false);
+        for y in 0..256 {
+            for x in 0..256 {
+                if pm.pixel(x, y).unwrap().alpha() > 0 {
+                    assert!(
+                        x as usize >= region.x0
+                            && (x as usize) < region.x1
+                            && y as usize >= region.y0
+                            && (y as usize) < region.y1
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn imported_pack_survives_reload_and_duplicate_imports_preserve_files() {
         let directory = root();

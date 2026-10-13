@@ -27,16 +27,26 @@ pub fn right_panel(ui: &mut Ui, studio: &mut Studio) {
     {
         studio.paint_mask = false;
     }
-    Panel::right("studios")
-        .resizable(true)
-        .default_size(288.0)
-        .size_range(256.0..=420.0)
+    let width_id = eframe::egui::Id::new("studios-width");
+    let saved = eframe::egui::containers::panel::PanelState::load(
+        ui.ctx(),
+        eframe::egui::Id::new("studios"),
+    )
+    .map_or(288.0, |state| state.outer_rect.width())
+    .clamp(256.0, 420.0);
+    let width = ui
+        .ctx()
+        .data_mut(|data| *data.get_persisted_mut_or_insert_with(width_id, || saved));
+    let panel = Panel::right("studios")
+        .resizable(false)
+        .exact_size(width)
         .frame(
             Frame::new()
                 .fill(bg_panel())
                 .inner_margin(Margin::symmetric(14, 14)),
         )
         .show(ui, |ui| {
+            ui.set_max_width(ui.available_width());
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
             if studio.libraries.sidebar != crate::app::libraries::Sidebar::Inspector {
                 super::library::show(ui, studio);
@@ -132,6 +142,18 @@ pub fn right_panel(ui: &mut Ui, studio: &mut Studio) {
                 .auto_shrink([false, false])
                 .show(ui, |ui| layers_studio(ui, studio));
         });
+    let edge = eframe::egui::Rect::from_min_max(
+        panel.response.rect.left_top() - vec2(3.0, 0.0),
+        panel.response.rect.left_bottom() + vec2(3.0, 0.0),
+    );
+    let resize = ui
+        .interact(edge, width_id.with("drag"), eframe::egui::Sense::drag())
+        .on_hover_cursor(eframe::egui::CursorIcon::ResizeHorizontal);
+    if resize.dragged() {
+        let width = (width - resize.drag_delta().x).clamp(256.0, 420.0);
+        ui.ctx()
+            .data_mut(|data| data.insert_persisted(width_id, width));
+    }
 }
 
 fn section_gap(ui: &mut Ui) {
@@ -2096,8 +2118,36 @@ fn brush_studio(ui: &mut Ui, studio: &mut Studio) {
     number_field(ui, "Flow", &mut flow, 5.0..=100.0, "%");
     studio.brush.flow = flow / 100.0;
     let mut spacing = studio.brush.spacing * 100.0;
-    number_field(ui, "Spacing", &mut spacing, 1.0..=400.0, "%");
+    number_field(ui, "Spacing", &mut spacing, 1.0..=10000.0, "%");
     studio.brush.spacing = spacing / 100.0;
+    if matches!(studio.tool, Tool::Brush | Tool::Eraser) {
+        let mut angle = studio.brush.angle.to_degrees();
+        number_field(ui, "Angle", &mut angle, -180.0..=180.0, "°");
+        studio.brush.angle = angle.to_radians();
+        ui.checkbox(
+            &mut studio.brush.follow_direction,
+            "Follow stroke direction",
+        );
+        ui.horizontal(|ui| {
+            ui.label("Pen pressure");
+            ui.checkbox(&mut studio.brush.pressure_size, "Size");
+            ui.checkbox(&mut studio.brush.pressure_flow, "Flow");
+        });
+        eframe::egui::CollapsingHeader::new("Scatter and randomness").show(ui, |ui| {
+            let mut scatter = studio.brush.scatter * 100.0;
+            number_field(ui, "Scatter", &mut scatter, 0.0..=1000.0, "%");
+            studio.brush.scatter = scatter / 100.0;
+            let mut jitter = studio.brush.angle_jitter.to_degrees();
+            number_field(ui, "Angle jitter", &mut jitter, 0.0..=180.0, "°");
+            studio.brush.angle_jitter = jitter.to_radians();
+            let mut size = studio.brush.size_jitter * 100.0;
+            number_field(ui, "Size jitter", &mut size, 0.0..=99.0, "%");
+            studio.brush.size_jitter = size / 100.0;
+            let mut opacity = studio.brush.opacity_jitter * 100.0;
+            number_field(ui, "Opacity jitter", &mut opacity, 0.0..=100.0, "%");
+            studio.brush.opacity_jitter = opacity / 100.0;
+        });
+    }
     if studio.tool == Tool::Clone {
         ui.checkbox(&mut studio.clone_aligned, "Aligned")
             .on_hover_text("Keep the source offset. Off repeats the same source point.");
@@ -3172,5 +3222,95 @@ fn area_text_inspector_keeps_compact_width_while_typing() {
             let mut width=0.;let mut output=ctx.run_ui(eframe::egui::RawInput{screen_rect:Some(eframe::egui::Rect::from_min_size(eframe::egui::Pos2::ZERO,vec2(960.,640.))),..Default::default()},|ui|{right_panel(ui,&mut studio);width=960.-ui.available_width();});
             output.textures_delta.clear();assert!(width<=304.,"area inspector grew to {width}px while editing={editing}");
         }
+    }
+}
+
+#[cfg(test)]
+mod sidebar_resize_tests {
+    use super::*;
+    use eframe::egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Rect};
+
+    #[test]
+    fn canvas_hover_and_vertical_motion_cannot_resize_the_sidebar() {
+        let ctx = eframe::egui::Context::default();
+        crate::ui::theme::apply(&ctx);
+        let mut studio = Studio::new();
+        studio.persona = Persona::Pixel;
+        studio.tool = Tool::Brush;
+        let id = eframe::egui::Id::new("studios-width");
+        let frame = |events, studio: &mut Studio| {
+            let mut output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000., 800.))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| right_panel(ui, studio),
+            );
+            output.textures_delta.clear();
+            ctx.data_mut(|data| data.get_persisted::<f32>(id).unwrap())
+        };
+        assert_eq!(frame(vec![], &mut studio), 288.);
+        for y in (20..780).step_by(20) {
+            assert_eq!(
+                frame(
+                    vec![Event::PointerMoved(Pos2::new(350., y as f32))],
+                    &mut studio
+                ),
+                288.
+            );
+        }
+        frame(
+            vec![Event::PointerMoved(Pos2::new(712., 400.))],
+            &mut studio,
+        );
+        frame(
+            vec![Event::PointerButton {
+                pos: Pos2::new(712., 400.),
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+            &mut studio,
+        );
+        let width = frame(
+            vec![Event::PointerMoved(Pos2::new(672., 400.))],
+            &mut studio,
+        );
+        assert!((width - 328.).abs() < 1.);
+        frame(
+            vec![Event::PointerButton {
+                pos: Pos2::new(672., 400.),
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+            &mut studio,
+        );
+        assert_eq!(
+            frame(
+                vec![Event::PointerMoved(Pos2::new(350., 700.))],
+                &mut studio
+            ),
+            width
+        );
+    }
+}
+
+#[cfg(test)]
+mod brush_spacing_review_tests {
+    use super::*;
+
+    #[test]
+    fn inspector_retains_spacing_above_four_brush_sizes() {
+        let ctx = eframe::egui::Context::default();
+        crate::ui::theme::apply(&ctx);
+        let mut studio = Studio::new();
+        studio.persona = Persona::Pixel;
+        studio.tool = Tool::Brush;
+        studio.brush.spacing = 80.0;
+        let mut output = ctx.run_ui(eframe::egui::RawInput { screen_rect: Some(eframe::egui::Rect::from_min_size(eframe::egui::Pos2::ZERO, vec2(600., 1200.))), ..Default::default() }, |ui| brush_studio(ui, &mut studio));
+        output.textures_delta.clear();
+        assert_eq!(studio.brush.spacing, 80.0);
     }
 }

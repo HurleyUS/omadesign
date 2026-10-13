@@ -669,11 +669,12 @@ pub(super) fn register(lua: &Lua, state: Shared) -> LuaResult<()> {
                 hardness: num(&t, "hardness", 0.75)?.clamp(0., 1.),
                 opacity: num(&t, "opacity", 1.)?.clamp(0., 1.),
                 flow: num(&t, "flow", 0.85)?.clamp(0., 1.),
-                spacing: num(&t, "spacing", 0.18)?.clamp(0.05, 4.),
+                spacing: num(&t, "spacing", 0.18)?.clamp(0.01, 100.),
                 color: color(
                     &t.get::<Option<String>>("color")?
                         .unwrap_or_else(|| "#BAC2DE".into()),
                 )?,
+                ..Default::default()
             });
             Ok(())
         })?,

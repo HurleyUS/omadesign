@@ -99,6 +99,52 @@ fn schedule(scene: &str) -> Vec<Action> {
     use ActionKind::*;
     use Target::*;
     match scene {
+        "media-brush-controls" => vec![
+            event(0.5, ScrollAt(At(1480., 570.), -360.)),
+            event(1., Click(Field("Spacing"))),
+            event(1.2, Key(egui::Key::A, ctrl())),
+            event(1.4, Type("10000")),
+            event(1.7, Key(egui::Key::Enter, Modifiers::NONE)),
+            event(2.2, Click(Text("Follow stroke direction"))),
+            event(3., Click(Text("Scatter and randomness"))),
+            event(3.3, ScrollAt(At(1480., 570.), -180.)),
+            event(4., Click(Field("Scatter"))),
+            event(4.2, Key(egui::Key::A, ctrl())),
+            event(4.4, Type("150")),
+            event(4.7, Key(egui::Key::Enter, Modifiers::NONE)),
+            event(5., Click(Field("Angle jitter"))),
+            event(5.2, Key(egui::Key::A, ctrl())),
+            event(5.4, Type("45")),
+            event(5.7, Key(egui::Key::Enter, Modifiers::NONE)),
+            event(6., Click(Field("Size jitter"))),
+            event(6.2, Key(egui::Key::A, ctrl())),
+            event(6.4, Type("35")),
+            event(6.7, Key(egui::Key::Enter, Modifiers::NONE)),
+            event(7., Click(Field("Opacity jitter"))),
+            event(7.2, Key(egui::Key::A, ctrl())),
+            event(7.4, Type("25")),
+            event(7.7, Key(egui::Key::Enter, Modifiers::NONE)),
+        ],
+        "media-design" => vec![
+            event(1., Click(World(734., 170.))),
+            drag(2., 2., Drag(World(734., 170.), World(690., 210.))),
+            event(5., Key(egui::Key::Z, ctrl())),
+            event(7., Key(egui::Key::Z, Modifiers { shift: true, ..ctrl() })),
+            event(9., Key(egui::Key::Z, ctrl())),
+        ],
+        "media-pixel" => vec![
+            drag(1., 2., Drag(World(1100., 928.), World(1470., 940.))),
+            event(5., Key(egui::Key::Z, ctrl())),
+            event(7., Key(egui::Key::Z, Modifiers { shift: true, ..ctrl() })),
+        ],
+        "media-motion" => vec![
+            event(1., Key(egui::Key::Space, Modifiers::NONE)),
+            event(8., Key(egui::Key::Space, Modifiers::NONE)),
+        ],
+        "media-agent" => vec![
+            event(1., Click(Any("Describe a design · paste images, files or text…"))),
+            drag(2., 4., Type("Create a second Fieldwork poster. Keep the original, use the same palette, and save an editable project.")),
+        ],
         "agent-recovery" => vec![
             event(0.5, Click(Any("Describe a design · paste images, files or text…"))),
             event(1., Clipboard("short")),
@@ -773,7 +819,7 @@ Typography stays readable with deliberate hyphenation, useful overflow controls,
             event(5.0, Click(Text("Warm accents"))),
             event(6.4, Click(Swatch("#F5C2E7"))),
             event(8.4, Click(Text("Studio colors"))),
-            event(10., Click(Text("Brand"))),
+            event(10., Click(At(1573., 21.))),
             event(10.8, Click(Text("Typography"))),
             event(11.7, Click(Text("SVG"))),
             drag(13., 2.0, Drag(Asset("landscape"), World(360., 800.))),
@@ -781,12 +827,14 @@ Typography stays readable with deliberate hyphenation, useful overflow controls,
             event(16.4, Click(Text("All"))),
             event(17.0, Hover(Asset("rings"))),
             event(19.6, Click(World(240., 270.))),
-            event(20., Click(Text("Typography"))),
+            event(20., Click(At(1501., 21.))),
+            event(20.5, Click(Text("Project typography"))),
+            event(20.8, ScrollAt(At(1480., 560.), -600.)),
             event(21.2, Click(RoleApply("Heading · NimbusSans-Bold"))),
             event(23.0, Click(RoleApply("Body · NimbusRoman-Regular"))),
             event(25.0, Click(RoleApply("Heading · NimbusSans-Bold"))),
-            event(26.0, Click(Text("Typography"))),
-            event(27., Click(Text("Inspect"))),
+            event(26.0, Click(At(1501., 21.))),
+            event(27., Click(At(1465., 21.))),
         ],
         _ => panic!("unknown scene"),
     }
@@ -1030,6 +1078,24 @@ fn seed(scene: &str) -> Studio {
     s.recents.clear();
     s.path = None;
     match scene {
+        "media-design" | "media-pixel" | "media-brush-controls" | "media-motion" | "media-agent" => {
+            let file = match scene { "media-pixel" | "media-brush-controls" => "pixel", "media-motion" => "motion", _ => "design" };
+            s.doc = omadesign::project::load_from(&Path::new("examples/product-media").join(format!("{file}.oma"))).unwrap();
+            s.active_layer = s.doc.layers.len().checked_sub(1);
+            s.persona = s.doc.workspace.unwrap_or(Persona::Design);
+            s.tool = if matches!(scene, "media-pixel" | "media-brush-controls") { Tool::Brush } else { Tool::Select };
+            if matches!(scene, "media-pixel" | "media-brush-controls") {
+                s.brushes.selected = Some((0, 6));
+                s.brushes.packs[0].brushes[6].apply(&mut s.brush);
+                s.brush.size = 28.;
+                s.brush.angle = 0.4;
+                s.brush.color = Rgba::from_hex(0x153d34);
+            }
+            if scene == "media-agent" {
+                s.agent.load();
+                s.agent.visible = true;
+            }
+        }
         "independent-effects" => {
             use omadesign::{
                 color::Blend,
@@ -1180,17 +1246,20 @@ fn seed(scene: &str) -> Studio {
         "graphics" => {
             omadesign::shots::apply(&mut s, "design-tools").unwrap();
         }
+        "brand-kit" => {
+            s.doc = omadesign::project::load_from(Path::new("examples/product-media/design.oma")).unwrap();
+            s.persona = Persona::Design;
+            s.tool = Tool::Select;
+            s.active_layer = s.doc.layers.len().checked_sub(1);
+        }
         "photo" => {
-            s.doc = Document::new("Coast / photo study", 1586., 992., 72.);
+            s.doc = Document::new("Field notes / photo study", 1600., 1067., 72.);
             s.persona = Persona::Photo;
             s.tool = Tool::Hand;
-            for (name, file) in [
-                ("Coast at golden hour.png", "photo"),
-                ("Iris study.png", "pixel"),
-            ] {
+            for (name, file) in [("Field notes.jpg", "examples/product-media/photo.jpg")] {
                 s.photo.import_bytes(
                     name.into(),
-                    &fs::read(format!("examples/site-showcase/{file}-original.png")).unwrap(),
+                    &fs::read(file).unwrap(),
                 );
             }
             s.photo.select_image(0);
@@ -1386,6 +1455,8 @@ impl Capture {
         }
         let initial_document = omadesign::project::encode(&studio.doc).unwrap();
         let seconds = match scene.as_str() {
+            "media-design" | "media-pixel" | "media-motion" | "media-agent" => 12,
+            "media-brush-controls" => 10,
             "paragraphs" => 30,
             "opentype" => 20,
             "spacing" => 48,
@@ -2103,6 +2174,22 @@ impl eframe::App for Capture {
                 .unwrap();
             }
             if self.frame >= self.total {
+                if self.scene == "media-brush-controls" {
+                    assert_eq!(self.studio.brush.spacing, 100.);
+                    assert_eq!(self.studio.brush.scatter, 1.5);
+                    assert!((self.studio.brush.angle_jitter.to_degrees() - 45.).abs() < 0.01);
+                    assert_eq!(self.studio.brush.size_jitter, 0.35);
+                    assert_eq!(self.studio.brush.opacity_jitter, 0.25);
+                    assert!(self.studio.brush.follow_direction);
+                }
+                if self.scene == "media-agent" {
+                    assert_eq!(self.studio.agent.request, "Create a second Fieldwork poster. Keep the original, use the same palette, and save an editable project.");
+                    assert_eq!(omadesign::project::encode(&self.studio.doc).unwrap(), self.initial_document);
+                }
+                if self.scene == "media-pixel" {
+                    assert_eq!(self.studio.history.len(), 1);
+                    assert_ne!(omadesign::project::encode(&self.studio.doc).unwrap(), self.initial_document);
+                }
                 if matches!(self.scene.as_str(), "graphics" | "chroma") {
                     omadesign::project::save_to(
                         &self.studio.doc,

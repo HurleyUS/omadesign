@@ -683,6 +683,7 @@ mod tests {
             orig: vec![],
             handle: 0,
             start_box: Bounds::from_pt(Pt::ZERO),
+            angle: 0.0,
         });
         let resize = hints(&studio, Modifiers::SHIFT | Modifiers::ALT);
         assert!(

@@ -290,7 +290,7 @@ fn apply_descriptors(
                 .map_or(default, |n| n as f32)
         };
         let size = num("Dmtr", 48.0).clamp(1.0, 2048.0);
-        let spacing = (num("Spcn", 15.0) / 100.0).clamp(0.01, 4.0);
+        let spacing = (num("Spcn", 15.0) / 100.0).clamp(0.01, 100.0);
         let tip = match settings.get("$class").and_then(|v| v.as_str()) {
             Some("sampledBrush") => settings
                 .get("sampledData")
@@ -334,6 +334,12 @@ fn apply_descriptors(
                 flow: 1.0,
                 opacity: 1.0,
                 tip,
+                angle: 0.0,
+                scatter: 0.0,
+                angle_jitter: 0.0,
+                size_jitter: 0.0,
+                opacity_jitter: 0.0,
+                follow_direction: false,
             });
         }
     }
