@@ -22,7 +22,7 @@ Base: master `f969a0b2`. Work is isolated from the owner's feature checkout and 
 
 ## Qualification boundary
 
-This is software and input-routing qualification. The candidate has not been installed over the running application or driven on the owner's desktop. Physical pen pressure, tablet hover/side buttons, and device hotplug are not verified. Tablet pad controls, tilt, and physical tool rotation are not implemented brush controls. The existing 0.5.0 human acceptance evidence and build remain preserved.
+This is software and input-routing qualification. The candidate has not been installed over the running application or driven on the owner's desktop. Physical pen pressure, tablet hover/side buttons, and device hotplug are not verified. Tablet pad controls, tilt, physical tool rotation, and automatic reverse-side eraser switching are not implemented brush controls. The existing 0.5.0 human acceptance evidence and build remain preserved.
 
 ## Contributor review
 

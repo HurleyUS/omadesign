@@ -17,7 +17,7 @@ or export the selected pack to share it.
 
 Spacing ranges from 1% to 10,000% of the tip size and carries between input samples. Angle rotates the tip; **Follow stroke direction** turns it along the stroke. **Scatter and randomness** contains scatter distance and angle, size, and opacity jitter. Each stroke starts a fresh random pattern. Saved presets retain these controls.
 
-Wayland tablet tools and X11 tablets supply contact, release, position, and pressure. In the Brush inspector, enable pressure for Size and Flow independently. Dab spacing follows the pressure-scaled size, including very light strokes. Hover previews retain the chosen tip shape. Tablet pad buttons, tilt, and physical tool rotation are not brush controls yet. Third-party licenses still apply.
+Wayland tablet tools and X11 tablets supply contact, release, position, and pressure. In the Brush inspector, enable pressure for Size and Flow independently. Dab spacing follows the pressure-scaled size, including very light strokes. Hover previews retain the chosen tip shape. Tablet pad buttons, tilt, physical tool rotation, and automatic reverse-side eraser switching are not brush controls yet. Third-party licenses still apply.
 
 Photoshop ABR versions 1, 2, 6, 7, and 10 support sampled 8/16-bit tips with raw
 or PackBits compression. Names and spacing come from descriptors when available. Modern computed round and elliptical tips also import. Photoshop-specific tool settings, pressure,
