@@ -1,24 +1,649 @@
 {
-  "id": "agent-panel",
-  "source": "/home/michael/Videos/omadesign/promo-2026-09-29/pickups/marquee-agent-061.mp4",
-  "excerpt": {
-    "start": 55,
-    "duration": 32
-  },
-  "width": 1600,
-  "height": 900,
-  "fps": 30,
-  "mp4": {
-    "bytes": 684481,
-    "sha256": "14c30da7ae70e848632d675d5816ec64ddcf8465aa238839f73e681acbd0d873"
-  },
-  "webm": {
-    "bytes": 990765,
-    "sha256": "e73c1e4c79f01ad8dea3d7d3b79e2ffd6b3427c7fca8b4be27ce7076970be4a1"
-  },
-  "poster": {
-    "bytes": 92144,
-    "sha256": "93389a7f05b6355b1e8cf17c14344277afb5a0903b21bd9108fb9713e65fa3c9"
-  },
-  "note": "Native Agent panel recording from 0.6.1 promo pickups; excerpt covers live tool activity on canvas. No simulated UI."
+  "date": "2026-10-13",
+  "build": "2a4019222f14db2ebb7df9fed801f11e30b86aa30c6dc54bdcd8d947bdf81a10",
+  "renderer": "native WGPU on isolated Wayland display",
+  "sources": [
+    {
+      "file": "examples/product-media/design.oma",
+      "sha256": "ca6c283316e5981cf16833de447ac4e519f9eb81be741ff8a1989b6f567e13fc"
+    },
+    {
+      "file": "examples/product-media/design.svg",
+      "sha256": "cae2aabdc1adbed91a3c781fb3222ee735404d8526994639d94e47feefd8e281"
+    },
+    {
+      "file": "examples/product-media/motion.oma",
+      "sha256": "eb3001c5d9cf56ed9ead33d7cdf10338d58bbb83efd243c40c56ca0fcd91a048"
+    },
+    {
+      "file": "examples/product-media/motion.svg",
+      "sha256": "894d0923509e2fdefa115babde3324efca7927628366f2447bd7cfc214862f1e"
+    },
+    {
+      "file": "examples/product-media/photo.jpg",
+      "sha256": "1ee9636f1a49ece6934b5e275cff978e0450ad83f353100eafd97ba9b6fc8984"
+    },
+    {
+      "file": "examples/product-media/pixel.oma",
+      "sha256": "4c71406298bff95ae9f158d063fe85a1997b619f59daaecf3962e870fd3f85cd"
+    },
+    {
+      "file": "examples/product-media/pixel.svg",
+      "sha256": "d42e0e7cd159cb212f3dbfa9d24fbfc329adf0dcfefa19754207307be7bbeaf9"
+    },
+    {
+      "file": "examples/product-media/type.oma",
+      "sha256": "cfddcf82602367a8343fc4d9158b9bbe46fa1482cf96b1a92f6dff465a37e1d3"
+    },
+    {
+      "file": "examples/product-media/type.svg",
+      "sha256": "6b3d90497277b3100b3445b86557f950e0a1ac92e1d5ab3d8ccfaa3f0ab8c169"
+    }
+  ],
+  "clips": [
+    {
+      "id": "design",
+      "scene": "media-design",
+      "duration": 12,
+      "description": "Select and move the editable arrow; undo and redo.",
+      "sha256": "4d09724eb7009b77e69d3c119e90e863addac511c17f7a395b7cbda1f191f265",
+      "unresolved_input_targets": []
+    },
+    {
+      "id": "pixel",
+      "scene": "media-pixel",
+      "duration": 12,
+      "description": "Paint with the angled Square brush; undo and redo.",
+      "sha256": "129f085f52b955edd324137ffdc7e5edf727c56be00e17122abd82380b6f2bef",
+      "unresolved_input_targets": []
+    },
+    {
+      "id": "motion",
+      "scene": "media-motion",
+      "duration": 12,
+      "description": "Play and pause the editable pulse animation.",
+      "sha256": "e7b125d176f8aee8af104d68a0066e847a01d55a3a4b927ce576bd879d548510",
+      "unresolved_input_targets": []
+    },
+    {
+      "id": "agent-panel",
+      "scene": "media-agent",
+      "duration": 12,
+      "description": "Compose a brief in the native Agent panel. No provider response is staged.",
+      "sha256": "c2c69fc34337f62142f0c2e0375b86dcc48525fc5454fd58b9378df69ede4e54",
+      "unresolved_input_targets": []
+    },
+    {
+      "id": "graphics",
+      "scene": "graphics",
+      "duration": 17,
+      "description": "Edit gradient placement and direction; group and undo.",
+      "sha256": "2e9a17203bd248545a536479851edb9462ef77d0a21bbab34d5a68fed2310c73",
+      "unresolved_input_targets": []
+    },
+    {
+      "id": "layout",
+      "scene": "layout",
+      "duration": 15,
+      "description": "Present the responsive layout; draw a frame and undo.",
+      "sha256": "7076615740af5c19559eda0dd3593fbc50d2ba8c97ba9151c59786a80fc76205",
+      "unresolved_input_targets": []
+    },
+    {
+      "id": "chroma",
+      "scene": "chroma",
+      "duration": 15,
+      "description": "Compare, sample, apply and undo chroma key.",
+      "sha256": "dd0688a7d791a90d63faf4592385cf29838a025f7e8850e1f1559298164a8557",
+      "unresolved_input_targets": []
+    },
+    {
+      "id": "photo",
+      "scene": "photo",
+      "duration": 24,
+      "description": "Develop the CC0 camera photograph: light, color, detail and comparison.",
+      "sha256": "238de52ec613a181e0c07de33c05fe341870de333f9e2851658c941f31b9eb9a",
+      "unresolved_input_targets": []
+    },
+    {
+      "id": "brand-kit",
+      "scene": "brand-kit",
+      "duration": 30,
+      "description": "Browse portable palette, asset and typography libraries.",
+      "sha256": "dfaa50414e936970adbc426fc32c3ba915a787a92e132fc8acbba632d4849496",
+      "unresolved_input_targets": []
+    },
+    {
+      "id": "brush-controls",
+      "scene": "media-brush-controls",
+      "duration": 10,
+      "fps": 15,
+      "description": "Spacing, direction, scatter and jitter edited through the native UI.",
+      "sha256": "363030e2fca0bbdeda7117b3494a5d2eb40609881945b80d2e241d5a3be0389a",
+      "unresolved_input_targets": []
+    }
+  ],
+  "outputs": [
+    {
+      "file": "site/public/media/refresh/design.webp",
+      "sha256": "e48e9e33c3f15c3626ce1e3ebdf2fa600631b4093b6da72fbc7b26e096c2c65b",
+      "source": "artifacts/media-refresh/design-native.png"
+    },
+    {
+      "file": "media/shots/design.png",
+      "sha256": "b613e48783d229cf22c91f5e3f77668fbab1209df9c7a73b1058f384effc295d",
+      "source": "artifacts/media-refresh/design-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/pixel.webp",
+      "sha256": "5c45d1ac4cc1c258cbcd8c65004ed03cdfd95113c773d687a1d961ea8c9418b3",
+      "source": "artifacts/media-refresh/pixel-native.png"
+    },
+    {
+      "file": "media/shots/pixel.png",
+      "sha256": "3271ead370c386b97661d20ac11e1c57c0a70ce1d7669ca302a0468b1419c11a",
+      "source": "artifacts/media-refresh/pixel-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/type.webp",
+      "sha256": "c9b732dcb8c3d870fc05d9c3c72b26aa8941c54d1008c2d38574942c47189f8e",
+      "source": "artifacts/media-refresh/type-native.png"
+    },
+    {
+      "file": "media/shots/type.png",
+      "sha256": "9ca4e099e9dded99f2a018f9b1638b91ffa4e0db174a80123f6c514d749b597e",
+      "source": "artifacts/media-refresh/type-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/motion.webp",
+      "sha256": "a7b38dd7dfc38f63750af873fe72de3cfa1faaad9243a6d410813636674aa36b",
+      "source": "artifacts/media-refresh/motion-native.png"
+    },
+    {
+      "file": "media/shots/motion.png",
+      "sha256": "122d0b48ca433b553d24c47b89b6f87795e5f0a23b800d9ed177b03b6fa7f066",
+      "source": "artifacts/media-refresh/motion-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/design-tools.webp",
+      "sha256": "0c0b2c9743fecb0aa937af363f2a0998b72275cacc4783c18ba85b3792efcff5",
+      "source": "artifacts/media-refresh/design-tools-native.png"
+    },
+    {
+      "file": "media/shots/design-tools.png",
+      "sha256": "0c180b2ddbea0716c342e16e76307a46263e838d7f2c4818486815ed3e714386",
+      "source": "artifacts/media-refresh/design-tools-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/layout.webp",
+      "sha256": "c413127b05531773266eca153915451906d892eefea84415e0761d67a26ac51e",
+      "source": "artifacts/media-refresh/layout-native.png"
+    },
+    {
+      "file": "media/shots/layout.png",
+      "sha256": "c17319762f77cfcfc83b96135fc146a64742d0d85d1eaf2f42624585a3c63185",
+      "source": "artifacts/media-refresh/layout-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/layout-phone.webp",
+      "sha256": "b89c5077fb72043578f49e4230d631c4a35672ce093ec1c33bed6c977f11d563",
+      "source": "artifacts/media-refresh/layout-phone-native.png"
+    },
+    {
+      "file": "media/shots/layout-phone.png",
+      "sha256": "db8672a3d5a9b2e922b123bea9563acc75f82fc9b73f9f0cf3663d36605753df",
+      "source": "artifacts/media-refresh/layout-phone-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/hud-pen.webp",
+      "sha256": "c8012fe8867d3316deac043131627309b013c20644fc6aad7a4818ab7064a5c8",
+      "source": "artifacts/media-refresh/hud-pen-native.png"
+    },
+    {
+      "file": "media/shots/hud-pen.png",
+      "sha256": "f6451110c63fc30378f23f92caee5c703275d501a544cb39b0d6c8547ede1c2d",
+      "source": "artifacts/media-refresh/hud-pen-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/templates.webp",
+      "sha256": "b59318b435c767dbf6e3657db582f8c80f646de50704bae1969fd4baa6f8e6bf",
+      "source": "artifacts/media-refresh/templates-native.png"
+    },
+    {
+      "file": "media/shots/templates.png",
+      "sha256": "ce99b314a76abc075da521e885235b2d17e71e252dc94e03c27b952e9f843c60",
+      "source": "artifacts/media-refresh/templates-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/welcome.webp",
+      "sha256": "997db425408b84fdf03411a5000c3cc52ea396781d7958f59365ca82e74bbc77",
+      "source": "artifacts/media-refresh/welcome-native.png"
+    },
+    {
+      "file": "media/shots/welcome.png",
+      "sha256": "c9c1e1f27b2169be3e44a14f74b97fbc1bfd55d4c7c709d9749703b4fc56cc85",
+      "source": "artifacts/media-refresh/welcome-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/pixel-effects.webp",
+      "sha256": "04353c115a3927e7cb46f922053cc0c8464839aca8fd27ef3e844d9c4009aa2b",
+      "source": "artifacts/media-refresh/pixel-effects-native.png"
+    },
+    {
+      "file": "media/shots/pixel-effects.png",
+      "sha256": "aa94b5d6ccdd48934bd1489f39ddea97c91e6216070ffb648ada6d2646c708cd",
+      "source": "artifacts/media-refresh/pixel-effects-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/photo.webp",
+      "sha256": "ea8d3a1c9ddc1043f6a82aabe279818461f17c668907715d4cb3d5d8ea94583d",
+      "source": "artifacts/media-refresh/takes/photo/photo-0000.png"
+    },
+    {
+      "file": "media/shots/photo.png",
+      "sha256": "b4a805fe105a2ce6bbefc8bfb7896089a93799cf328608b3b217fcf3e0c14148",
+      "source": "artifacts/media-refresh/takes/photo/photo-0000.png"
+    },
+    {
+      "file": "site/public/media/refresh/brand-library.webp",
+      "sha256": "fb136859237ff52eccbe09867f45774aa7d6a65bc74b20e7573b39f4d0ba611c",
+      "source": "artifacts/media-refresh/takes/brand-kit/brand-kit-0000.png"
+    },
+    {
+      "file": "media/shots/brand-library.png",
+      "sha256": "dc6a503f4fdcbf657448b0a3fb88cacca11c26ac54a6721c7d6a84d70a8c691d",
+      "source": "artifacts/media-refresh/takes/brand-kit/brand-kit-0000.png"
+    },
+    {
+      "file": "docs/media/studio.png",
+      "sha256": "b613e48783d229cf22c91f5e3f77668fbab1209df9c7a73b1058f384effc295d",
+      "source": "artifacts/media-refresh/design-native.png"
+    },
+    {
+      "file": "media/welcome.png",
+      "sha256": "c9c1e1f27b2169be3e44a14f74b97fbc1bfd55d4c7c709d9749703b4fc56cc85",
+      "source": "artifacts/media-refresh/welcome-native.png"
+    },
+    {
+      "file": "site/public/media/refresh/motion-presets.webp",
+      "sha256": "a7b38dd7dfc38f63750af873fe72de3cfa1faaad9243a6d410813636674aa36b",
+      "source": "artifacts/media-refresh/motion-native.png"
+    },
+    {
+      "file": "media/design.jpg",
+      "sha256": "159e625faa3f9aab149507389403a7353051d8f3bcfec92899ccc556484da715",
+      "source": "artifacts/media-refresh/design-native.png"
+    },
+    {
+      "file": "remotion/public/media/design.jpg",
+      "sha256": "159e625faa3f9aab149507389403a7353051d8f3bcfec92899ccc556484da715",
+      "source": "artifacts/media-refresh/design-native.png"
+    },
+    {
+      "file": "docs/media/design.jpg",
+      "sha256": "159e625faa3f9aab149507389403a7353051d8f3bcfec92899ccc556484da715",
+      "source": "artifacts/media-refresh/design-native.png"
+    },
+    {
+      "file": "media/paint.jpg",
+      "sha256": "a61e85eba38090e60fa51278fce9220210a28875de4bac85af2d069295f2b004",
+      "source": "artifacts/media-refresh/pixel-native.png"
+    },
+    {
+      "file": "remotion/public/media/paint.jpg",
+      "sha256": "a61e85eba38090e60fa51278fce9220210a28875de4bac85af2d069295f2b004",
+      "source": "artifacts/media-refresh/pixel-native.png"
+    },
+    {
+      "file": "docs/media/paint.jpg",
+      "sha256": "a61e85eba38090e60fa51278fce9220210a28875de4bac85af2d069295f2b004",
+      "source": "artifacts/media-refresh/pixel-native.png"
+    },
+    {
+      "file": "media/photo.jpg",
+      "sha256": "bffb38d52b3aa923d08246556360ffcff8815f0c5545f01f3804d5c3c5e007bd",
+      "source": "artifacts/media-refresh/takes/photo/photo-0000.png"
+    },
+    {
+      "file": "remotion/public/media/photo.jpg",
+      "sha256": "bffb38d52b3aa923d08246556360ffcff8815f0c5545f01f3804d5c3c5e007bd",
+      "source": "artifacts/media-refresh/takes/photo/photo-0000.png"
+    },
+    {
+      "file": "docs/media/photo.jpg",
+      "sha256": "bffb38d52b3aa923d08246556360ffcff8815f0c5545f01f3804d5c3c5e007bd",
+      "source": "artifacts/media-refresh/takes/photo/photo-0000.png"
+    },
+    {
+      "file": "media/type.jpg",
+      "sha256": "f7e0ef390998efa3879553e9b6adab6cc97158fcf1bf0d0bc878f7bf0431cda7",
+      "source": "artifacts/media-refresh/type-native.png"
+    },
+    {
+      "file": "remotion/public/media/type.jpg",
+      "sha256": "f7e0ef390998efa3879553e9b6adab6cc97158fcf1bf0d0bc878f7bf0431cda7",
+      "source": "artifacts/media-refresh/type-native.png"
+    },
+    {
+      "file": "docs/media/type.jpg",
+      "sha256": "f7e0ef390998efa3879553e9b6adab6cc97158fcf1bf0d0bc878f7bf0431cda7",
+      "source": "artifacts/media-refresh/type-native.png"
+    },
+    {
+      "file": "media/assets.jpg",
+      "sha256": "3b4dea4efa83e5f33fbb8663773e7aab809d5ed9cf6e59bb2f8c620fcc00aa65",
+      "source": "artifacts/media-refresh/takes/brand-kit/brand-kit-0000.png"
+    },
+    {
+      "file": "remotion/public/media/assets.jpg",
+      "sha256": "3b4dea4efa83e5f33fbb8663773e7aab809d5ed9cf6e59bb2f8c620fcc00aa65",
+      "source": "artifacts/media-refresh/takes/brand-kit/brand-kit-0000.png"
+    },
+    {
+      "file": "site/public/media/recordings/design.mp4",
+      "sha256": "4d09724eb7009b77e69d3c119e90e863addac511c17f7a395b7cbda1f191f265",
+      "source": "native take media-design"
+    },
+    {
+      "file": "site/public/media/recordings/design.webp",
+      "sha256": "15473cf4195948b708587001a63166dd3256b0e90710e167073c478f1da5f292",
+      "source": "native take media-design"
+    },
+    {
+      "file": "site/public/media/recordings/pixel.mp4",
+      "sha256": "129f085f52b955edd324137ffdc7e5edf727c56be00e17122abd82380b6f2bef",
+      "source": "native take media-pixel"
+    },
+    {
+      "file": "site/public/media/recordings/pixel.webp",
+      "sha256": "18fa6449945302f0d458b432e99d6b284037d033a4334cb79edc192b5a7e5047",
+      "source": "native take media-pixel"
+    },
+    {
+      "file": "site/public/media/recordings/motion.mp4",
+      "sha256": "e7b125d176f8aee8af104d68a0066e847a01d55a3a4b927ce576bd879d548510",
+      "source": "native take media-motion"
+    },
+    {
+      "file": "site/public/media/recordings/motion.webp",
+      "sha256": "6a88211883e9c4e9b1977b09dd0736ee2cb04b06635516cbf87db369260fd029",
+      "source": "native take media-motion"
+    },
+    {
+      "file": "site/public/media/ai/agent-panel.mp4",
+      "sha256": "c2c69fc34337f62142f0c2e0375b86dcc48525fc5454fd58b9378df69ede4e54",
+      "source": "native take media-agent"
+    },
+    {
+      "file": "site/public/media/ai/agent-panel.webp",
+      "sha256": "69fa00795337028271f9dd14588bcbee1247044594618c75bd3a16824cfe2160",
+      "source": "native take media-agent"
+    },
+    {
+      "file": "site/public/media/recordings/graphics.mp4",
+      "sha256": "2e9a17203bd248545a536479851edb9462ef77d0a21bbab34d5a68fed2310c73",
+      "source": "native take graphics"
+    },
+    {
+      "file": "site/public/media/recordings/graphics.webp",
+      "sha256": "25bd54427e7913fe67eac7a5f9b89946cee823669f2bca2048e1bee4bceee605",
+      "source": "native take graphics"
+    },
+    {
+      "file": "site/public/media/recordings/layout.mp4",
+      "sha256": "7076615740af5c19559eda0dd3593fbc50d2ba8c97ba9151c59786a80fc76205",
+      "source": "native take layout"
+    },
+    {
+      "file": "site/public/media/recordings/layout.webp",
+      "sha256": "381d12920e28d53b92b71efd8cb79ddd413eb30ca5fb5a41e8c2d034d0add322",
+      "source": "native take layout"
+    },
+    {
+      "file": "site/public/media/recordings/chroma.mp4",
+      "sha256": "dd0688a7d791a90d63faf4592385cf29838a025f7e8850e1f1559298164a8557",
+      "source": "native take chroma"
+    },
+    {
+      "file": "site/public/media/recordings/chroma.webp",
+      "sha256": "1fd280329776e20f9be2dff15449d44fa7b260bff39a680962a22897404e1dfd",
+      "source": "native take chroma"
+    },
+    {
+      "file": "site/public/media/recordings/photo.mp4",
+      "sha256": "238de52ec613a181e0c07de33c05fe341870de333f9e2851658c941f31b9eb9a",
+      "source": "native take photo"
+    },
+    {
+      "file": "site/public/media/recordings/photo.webp",
+      "sha256": "7e8196c11a8d79f8e507c86a67c4cbc050a5b6c5062d9bf065d3c9677d9781b8",
+      "source": "native take photo"
+    },
+    {
+      "file": "site/public/media/recordings/brand-kit.mp4",
+      "sha256": "dfaa50414e936970adbc426fc32c3ba915a787a92e132fc8acbba632d4849496",
+      "source": "native take brand-kit"
+    },
+    {
+      "file": "site/public/media/recordings/brand-kit.webp",
+      "sha256": "012022acdff35b6c0652315a1baf525cff51c8697c14a522939c4595bb18f863",
+      "source": "native take brand-kit"
+    },
+    {
+      "file": "site/public/media/studio/film-current.webp",
+      "sha256": "e48e9e33c3f15c3626ce1e3ebdf2fa600631b4093b6da72fbc7b26e096c2c65b",
+      "source": "fresh native replay edit"
+    },
+    {
+      "file": "media/hero.mp4",
+      "sha256": "a1abebafce1867cc064b7f6e768e8102e7fa43eb9058ec617e20be3709e70471",
+      "source": "site/public/media/studio/film-current.mp4"
+    },
+    {
+      "file": "docs/media/hero.mp4",
+      "sha256": "a1abebafce1867cc064b7f6e768e8102e7fa43eb9058ec617e20be3709e70471",
+      "source": "site/public/media/studio/film-current.mp4"
+    },
+    {
+      "file": "remotion/public/media/hero.mp4",
+      "sha256": "a1abebafce1867cc064b7f6e768e8102e7fa43eb9058ec617e20be3709e70471",
+      "source": "site/public/media/studio/film-current.mp4"
+    },
+    {
+      "file": "site/public/media/showcase/design.webp",
+      "sha256": "6193e613f5d1ebef7623f16862472d78a6e7bcd842d2cacd19da52ec97fbb55d",
+      "source": "artifacts/media-refresh/design-artwork.png"
+    },
+    {
+      "file": "site/public/media/showcase/pixel.webp",
+      "sha256": "9257ceeec3d6e2a1c5e6be315a1fe39a7a6bf5479e3ecac4c853738c9adbab05",
+      "source": "artifacts/media-refresh/pixel-artwork.png"
+    },
+    {
+      "file": "site/public/media/showcase/motion.webp",
+      "sha256": "5356606e236f0617f6b2859a531c5284079a245267113bd826df50e7341060d1",
+      "source": "artifacts/media-refresh/motion-artwork.png"
+    },
+    {
+      "file": "site/public/media/showcase/type.webp",
+      "sha256": "d2b7743cb87fb0c239d620b6b87925a686e8eec5340800f2640d6e0335aa919f",
+      "source": "artifacts/media-refresh/type-artwork.png"
+    },
+    {
+      "file": "site/public/media/showcase/photo.webp",
+      "sha256": "ea8d3a1c9ddc1043f6a82aabe279818461f17c668907715d4cb3d5d8ea94583d",
+      "source": "artifacts/media-refresh/takes/photo/photo-0000.png"
+    },
+    {
+      "file": "site/public/media/studio/raw-preview.webp",
+      "sha256": "ea8d3a1c9ddc1043f6a82aabe279818461f17c668907715d4cb3d5d8ea94583d",
+      "source": "artifacts/media-refresh/takes/photo/photo-0000.png"
+    },
+    {
+      "file": "site/public/media/studio/templates.webp",
+      "sha256": "b59318b435c767dbf6e3657db582f8c80f646de50704bae1969fd4baa6f8e6bf",
+      "source": "artifacts/media-refresh/templates-native.png"
+    },
+    {
+      "file": "site/public/media/recordings/design.webm",
+      "sha256": "d18ccd49013edaefa66eb7047af126fff213480fa980ec326c5b0e4dfed2270a",
+      "source": "native take media-design"
+    },
+    {
+      "file": "site/public/media/recordings/design.vtt",
+      "sha256": "963e09c823b3f273e0096810f93248349236593d54689b3475afd5f171a2bd92",
+      "source": "native take media-design"
+    },
+    {
+      "file": "site/public/media/recordings/pixel.webm",
+      "sha256": "015f7e6cd1ad380974bd04a9725b27c4432e4df4921facec884bb24954a1a5b1",
+      "source": "native take media-pixel"
+    },
+    {
+      "file": "site/public/media/recordings/pixel.vtt",
+      "sha256": "a47b8892870ec762e3419b6fd0748b07a1d3e7a4b208a63212680537bd3df8ad",
+      "source": "native take media-pixel"
+    },
+    {
+      "file": "site/public/media/recordings/motion.webm",
+      "sha256": "cff4c6b09a8095a31844453fdeb46bff0b71288af00e24f452767bba8ed64448",
+      "source": "native take media-motion"
+    },
+    {
+      "file": "site/public/media/recordings/motion.vtt",
+      "sha256": "bc678f67a69791a576d7b80ea10bf05d5c27888c34e70809f99542244df5fdbc",
+      "source": "native take media-motion"
+    },
+    {
+      "file": "site/public/media/ai/agent-panel.webm",
+      "sha256": "50050d1e265f358317109f0ab2c70e716676c367e67630b19a843059feac1748",
+      "source": "native take media-agent"
+    },
+    {
+      "file": "site/public/media/ai/agent-panel.vtt",
+      "sha256": "1d2a59baeeedd66d69846656428e167916762229dddc45ed7d543c5d7b705c47",
+      "source": "native take media-agent"
+    },
+    {
+      "file": "site/public/media/recordings/graphics.webm",
+      "sha256": "bd1e518fd36e2b86107f1c8d99c588e175ae49c9fbdb6a2488a4300c60eba7f1",
+      "source": "native take graphics"
+    },
+    {
+      "file": "site/public/media/recordings/graphics.vtt",
+      "sha256": "22228b0d6becdac320a7582f9320eaf3cafd23701e83fbc2a928dfafe7097cbd",
+      "source": "native take graphics"
+    },
+    {
+      "file": "site/public/media/recordings/layout.webm",
+      "sha256": "44d37d5ae7e92337114e0d98eff342ae78228b9539d058b27ec3013d735e6338",
+      "source": "native take layout"
+    },
+    {
+      "file": "site/public/media/recordings/layout.vtt",
+      "sha256": "5a8495cb531ec9261862ff0ae30fae800c1e321ea9f007d509dfa3e4e3b8cf66",
+      "source": "native take layout"
+    },
+    {
+      "file": "site/public/media/recordings/chroma.webm",
+      "sha256": "86b94d5d3e07e547ceb8d2cca10e463598244b096115a15734e06ca8c2f35882",
+      "source": "native take chroma"
+    },
+    {
+      "file": "site/public/media/recordings/chroma.vtt",
+      "sha256": "c865dc35feada361f38279003c2cccc22ed7e070c1550fd9fbe4788a4fea9c20",
+      "source": "native take chroma"
+    },
+    {
+      "file": "site/public/media/recordings/photo.webm",
+      "sha256": "c076aafc2ac96e7bd08cc46d09c5116dc82f04f858e52da3ebb78c2b488ab1a2",
+      "source": "native take photo"
+    },
+    {
+      "file": "site/public/media/recordings/photo.vtt",
+      "sha256": "ac133ada1f119885e0e1ba8be2c54b532bb58d62b37257e8bd3d495c0efe2c0f",
+      "source": "native take photo"
+    },
+    {
+      "file": "site/public/media/recordings/brand-kit.webm",
+      "sha256": "b016963b257e193bc922173f5b49b9b074058dc4255e7230ddbcc5ecf449a542",
+      "source": "native take brand-kit"
+    },
+    {
+      "file": "site/public/media/recordings/brand-kit.vtt",
+      "sha256": "4ae406706382c058def1ba3f2d7ec9a9b0598a8fece1e6c0f057927f89d47d72",
+      "source": "native take brand-kit"
+    },
+    {
+      "file": "site/public/media/studio/film-current.mp4",
+      "sha256": "a1abebafce1867cc064b7f6e768e8102e7fa43eb9058ec617e20be3709e70471",
+      "source": "fresh native replay edit"
+    },
+    {
+      "file": "site/public/media/studio/film-current.webm",
+      "sha256": "b570c939c69191060b721bbb698800714b1199aa5f9775f107a4f1dfa1656147",
+      "source": "fresh native replay edit"
+    },
+    {
+      "file": "site/public/media/studio/film-current.vtt",
+      "sha256": "b63ef0b23d35b84197645c643dd922ac8e3fe1be13a46752b84464fd063daa12",
+      "source": "fresh native replay edit"
+    },
+    {
+      "file": "docs/media/brush-controls.png",
+      "sha256": "33e4ffe72eed5c7b149b7c85d795913750d6e43b80aaa7ff12c5d3f41e80a44a",
+      "source": "native brush controls / native editable studies"
+    },
+    {
+      "file": "site/public/media/refresh/brush-controls.webp",
+      "sha256": "1c530a165523f9162f8ed87188039fd3dbce47f57eff46434123efdadc9c860e",
+      "source": "native brush controls / native editable studies"
+    },
+    {
+      "file": "site/public/brushes/studies.oma",
+      "sha256": "4c71406298bff95ae9f158d063fe85a1997b619f59daaecf3962e870fd3f85cd",
+      "source": "native brush controls / native editable studies"
+    },
+    {
+      "file": "site/public/media/brand/og-studio.png",
+      "sha256": "0e6385f210e18d7903ae1eae3fa10e3605d6c95a2a237b91e1ed395edfaba63a",
+      "source": "canonical geometry and native app capture"
+    },
+    {
+      "file": "site/public/media/brand/logo.svg",
+      "sha256": "1f3a882982657f981fd876c5f3426e242a600d077d44b2e99283e4f90c6979bc",
+      "source": "canonical geometry and native app capture"
+    },
+    {
+      "file": "site/public/media/brand/logo-light.svg",
+      "sha256": "a6afd364145e8b63d4cbad76ef85f051d72a81300324bbfe86cd071252300f94",
+      "source": "canonical geometry and native app capture"
+    }
+  ],
+  "extra_native_checks": [
+    {
+      "scene": "media-brush-controls",
+      "frames": 150,
+      "fps": 15,
+      "unresolved_input_targets": [],
+      "assertions": [
+        "spacing 10000 percent",
+        "follow direction",
+        "scatter 150 percent",
+        "angle jitter 45 degrees",
+        "size jitter 35 percent",
+        "opacity jitter 25 percent"
+      ]
+    }
+  ],
+  "film": {
+    "duration": 40,
+    "fps": 30,
+    "frames": 1200,
+    "width": 1600,
+    "height": 900,
+    "audio": false,
+    "shots": 20,
+    "edit": "Two-second context and detail cuts from real UI replays; canonical logo ending."
+  }
 }

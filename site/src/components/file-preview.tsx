@@ -63,12 +63,12 @@ export function FilePreview() {
             height="900"
             loading="lazy"
             decoding="async"
-            alt="Native Omadesign Photo workspace showing a generated landscape and development controls."
+            alt="Native Omadesign Photo workspace showing the CC0 Fujifilm field photograph and development controls."
           />
         </a>
         <figcaption>
           <span>Fresh native app capture · Photo development</span>
-          <span>Generated example landscape</span>
+          <span>CC0 camera photograph · Reduced JPEG preview</span>
         </figcaption>
       </figure>
       <div className="file-preview-footer">

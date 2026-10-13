@@ -6,7 +6,7 @@ PRs #202, #203, and #204 apply together to master `f969a0b2`. Their combined lib
 
 ## #202 — file loading and PDF export
 
-**Needs one correction before merging.** `Document::ensure_ids` now calls `migrate_artboards` before advancing the ID allocator past the IDs loaded from disk. Migrating an old artboard with ID zero can reuse a loaded object's ID.
+**Integrated with the correction in #207.** `Document::ensure_ids` now calls `migrate_artboards` before advancing the ID allocator past the IDs loaded from disk. Migrating an old artboard with ID zero can reuse a loaded object's ID.
 
 A fresh-process regression produced an artboard ID and shape ID both equal to `6`. The test failed on the submitted changes. Moving migration after validation and `bump_id(max)` passes the collision regression and the contributor's extreme-ID rejection regression.
 
@@ -22,8 +22,8 @@ No blocking finding. Failed identity writes remove only the temporary file creat
 
 ## #205 — README banner
 
-Hold for editorial correction. The image changes the official wordmark, introduces “The creative studio Linux never had,” and uses older Design/Pixel/Photo/Type screenshots. Use the official mark, established site copy, and current screenshots before adding it to the README.
+Superseded by the current media refresh in #207. The image changes the official wordmark, introduces “The creative studio Linux never had,” and uses older Design/Pixel/Photo/Type screenshots. Use the official mark, established site copy, and current screenshots before adding it to the README.
 
 ## Hosted checks
 
-All four PRs report a Vercel authorization failure for the contributor. That is not a native test result. CodeRabbit reports success. No contributor PR was merged or given a submitted review by this task.
+All four PRs report a Vercel authorization failure for the contributor. That is not a native test result. CodeRabbit reports success. The three code histories are integrated into #207 with original authorship. #205 is superseded by current canonical branding and native media.

@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 import { sitePath } from "../site";
 import "./studio-refresh.css";
 
@@ -61,20 +61,11 @@ export function StudioRefresh() {
           <p className="refresh-eyebrow">{feature.tag}</p>
           <h3>{feature.title}</h3>
           <p>{feature.text}</p>
-          <div
-            className={`feature-schematic schematic-${feature.id}`}
-            aria-label={`${feature.tag} feature illustration`}
-          >
-            {feature.chips.map((chip, i) => (
-              <div key={chip}>
-                <i style={{ "--i": i } as CSSProperties} />
-                <span>{chip}</span>
-              </div>
-            ))}
-          </div>
-          <small>Feature illustration · native workspace shown alongside</small>
-          <a className="text-link" href={sitePath("updates/0.5.4")}>
-            Explore the release ↗
+          <ul className="feature-controls" aria-label={`${feature.tag} controls`}>
+            {feature.chips.map(chip => <li key={chip}>{chip}</li>)}
+          </ul>
+          <a className="text-link" href={sitePath("docs/manual")}>
+            Explore the controls ↗
           </a>
         </div>
         <figure>
@@ -240,8 +231,8 @@ export function AiWorkflow() {
           </div>
           <figure className="ai-output">
             <div className="ai-output-label">
-              <span>AGENT PANEL · 0.6.1</span>
-              <span>Native screen recording · 0:32</span>
+              <span>AGENT PANEL</span>
+              <span>Native screen recording · 0:12</span>
             </div>
             <div className="ai-demo">
               <video
@@ -271,10 +262,9 @@ export function AiWorkflow() {
               </video>
             </div>
             <figcaption>
-              Built-in Agent harness with Create / Learn, History threads, and
-              live canvas tools.
+              A brief composed beside an editable design in the built-in Agent panel.
               <br />
-              Native app capture from Omadesign 0.6.1.
+              Current native app capture. The brief is ready to send; no provider response is staged.
             </figcaption>
             <div className="ai-downloads">
               <a href={sitePath("media/ai/agent-panel.mp4")} download>
@@ -296,7 +286,7 @@ export function AiWorkflow() {
         </div>
         <div className="ai-footnotes">
           <p>
-            <strong>Built-in Agent harness.</strong> 0.6.1 ships an in-app Agent
+            <strong>Built-in Agent harness.</strong> Use the in-app Agent
             panel with thread history, attachments, and native design tools over
             ACP. Bring your own authenticated agent process; Omadesign hosts the
             conversation beside the canvas.

@@ -1,6 +1,6 @@
 # Welcome screen agreement
 
-Reference: `media/welcome-mock.jpg`. Decisions recorded with Michael on
+Current native capture: [Welcome](../media/welcome.png). The earlier mock is preserved in Git history. Decisions recorded with Michael on
 2026-09-21. This specifies the replacement welcome screen; it is not a record
 of completed implementation or human QA.
 

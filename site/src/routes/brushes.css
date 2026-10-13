@@ -17,3 +17,6 @@
 .brush-formats { margin-top: 50px; border-top: 1px solid var(--border,#56566c); padding-top: 25px; line-height: 1.7; }
 .brush-formats summary { cursor: pointer; font-weight: 600; }
 @media(max-width: 680px) { .brush-page { padding-block: 50px 70px; } .brush-packs,.brush-guide { grid-template-columns: 1fr; gap: 24px; } .brush-pack { padding: 20px; } .brush-guide { margin-top: 35px; } }
+.brush-page > figure { margin: 32px 0 48px; }
+.brush-page > figure img { display: block; width: 100%; height: auto; border-radius: 12px; }
+.brush-page > figure figcaption { margin-top: 10px; font-size: 12px; color: var(--muted); }

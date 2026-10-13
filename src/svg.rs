@@ -1525,11 +1525,8 @@ mod tests {
 
     #[test]
     fn logo_oma_roundtrip_structure() {
-        let path = std::path::Path::new("media/logo.oma");
-        if !path.exists() {
-            return;
-        }
-        let doc = crate::project::load_from(path).expect("logo.oma");
+        let path = std::path::Path::new("tests/fixtures/legacy-media/logo.oma");
+        let doc = crate::project::load_from(path).expect("legacy logo fixture");
         let s = export(&doc).unwrap();
         assert!(s.contains("<svg"));
         assert!(s.contains("viewBox"));

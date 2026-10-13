@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Fix scaling after rotating a multi-object selection, preserve editable primitives during uniform scaling, and prevent canvas movement from resizing the sidebar.
+- Add Square brushes, tip-shaped cursors, spacing to 10,000%, rotation, direction, scatter, jitter, and independent pen pressure controls on Wayland and X11.
+- Integrate Fred Nix’s file/PDF, geometry/effects/SVG, cloud token, and photo preset fixes from #202–#204. Correct legacy artboard ID allocation after import.
+- Replace active legacy marks, screenshots, mocks, and films with the canonical logo, current native captures, and editable Fieldwork sources. Preserve historical QA evidence.
+
 ## 2026-10-11 · 0.6.3-nightly.20261011.0001 — Brush packs
 
 - Paint with 12 original CC0 tips, import Photoshop ABR and Illustrator libraries, and make tips from your own images or SVG artwork.
@@ -908,8 +915,8 @@ chapters stay in the film, with a newly extended original soundtrack.
 
 The [finished film](https://github.com/user-attachments/assets/fc19dbe5-5313-4872-b8dc-d433f500b7f1)
 is 97 seconds at 1080p / 30 fps. The new scene runs from 0:13 to 0:43, with the
-logo ending at 1:32. Editable [artwork](media/logo-4-refined.oma),
-[SVG](media/logo-4-refined.svg) and [PNG](media/logo-4-refined.png) are included.
+logo ending at 1:32. Editable [artwork](https://github.com/michaelmonetized/omadesign/blob/f969a0b20cf7b9d817deeb8fa277288f7c709226/media/logo-4-refined.oma),
+[SVG](https://github.com/michaelmonetized/omadesign/blob/f969a0b20cf7b9d817deeb8fa277288f7c709226/media/logo-4-refined.svg) and [PNG](https://github.com/michaelmonetized/omadesign/blob/f969a0b20cf7b9d817deeb8fa277288f7c709226/media/logo-4-refined.png) are included.
 
 Pass 7 verification: **271 tests passed**, including the shortcut suite, real
 Pen modifier events, fresh-process font moves and recovery, failed-write rollback,

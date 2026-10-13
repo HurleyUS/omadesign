@@ -79,47 +79,15 @@
   font-size: 10px;
   margin-bottom: 24px;
 }
-.feature-schematic {
+.feature-controls {
   display: flex;
-  gap: 12px;
-  margin: 28px 0 12px;
-}
-.feature-schematic > div {
-  flex: 1;
-  min-width: 0;
-}
-.feature-schematic i {
-  display: block;
-  height: 52px;
-  border-radius: 8px;
-  background: linear-gradient(45deg, #b4a2ef, #f3b69b);
-}
-.schematic-design-tools > div:nth-child(2) i {
-  background: radial-gradient(circle, #f3b69b, #7160c9);
-}
-.schematic-design-tools > div:nth-child(3) i {
-  background: radial-gradient(ellipse, #7160c9 20%, #f3b69b 50%, #7160c9);
-}
-.schematic-design-tools > div:nth-child(4) i {
-  background: conic-gradient(#b4a2ef, #f3b69b, #7160c9, #b4a2ef);
-}
-.feature-schematic span {
-  font: 10px var(--font-mono);
-  display: block;
-  margin-top: 8px;
-}
-.schematic-pixel-effects i {
-  background: repeating-conic-gradient(#d9d7e0 0% 25%, #fff 0% 50%) 0 0/12px
-    12px;
-  border: 8px solid #a6e3a1;
-  border-width: calc(8px - var(--i) * 2px);
-}
-.schematic-layout i {
-  width: calc(100% - var(--i) * 10%);
-  border: 2px solid var(--accent);
-  background:
-    linear-gradient(var(--panel) 25%, transparent 25%),
-    linear-gradient(90deg, var(--accent) 30%, var(--panel) 30%);
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 0;
+  margin: 24px 0;
+  list-style: none;
+  font: 11px var(--font-mono);
+  color: var(--muted);
 }
 .refresh-mini-grid {
   display: grid;
@@ -290,7 +258,7 @@
   .refresh-copy {
     max-width: 650px;
   }
-  .feature-schematic {
+  .feature-controls {
     max-width: 360px;
   }
 }

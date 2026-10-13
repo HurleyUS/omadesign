@@ -40,7 +40,7 @@ export const Route = createRootRoute({
       { property: "og:url", content: SITE_ORIGIN },
       {
         property: "og:image",
-        content: `${SITE_ORIGIN}/media/branding/og-welcome-0.6.0.png`,
+        content: `${SITE_ORIGIN}/media/brand/og-studio.png`,
       },
       { property: "og:image:width", content: "1200" },
       { property: "og:image:height", content: "630" },
@@ -51,7 +51,7 @@ export const Route = createRootRoute({
       { name: "twitter:card", content: "summary_large_image" },
       {
         name: "twitter:image",
-        content: `${SITE_ORIGIN}/media/branding/og-welcome-0.6.0.png`,
+        content: `${SITE_ORIGIN}/media/brand/og-studio.png`,
       },
     ],
     links: [
@@ -59,7 +59,7 @@ export const Route = createRootRoute({
       {
         rel: "icon",
         type: "image/svg+xml",
-        href: sitePath("media/branding/logo-0.5.8.svg"),
+        href: sitePath("media/brand/icon.svg"),
       },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       {
@@ -111,10 +111,10 @@ function Document() {
               aria-label="omadesign home"
             >
               <img
-                src={sitePath("media/branding/logo-0.5.8.svg")}
+                src={sitePath(theme === "latte" ? "media/brand/logo-light.svg" : "media/brand/logo.svg")}
                 alt="omadesign"
-                width="160"
-                height="90"
+                width="248"
+                height="40"
               />
             </a>
             <nav className="header-links" aria-label="Main navigation">
@@ -150,10 +150,10 @@ function Document() {
           <div className="shell footer-top">
             <a className="wordmark" href={sitePath()}>
               <img
-                src={sitePath("media/branding/logo-0.5.8.svg")}
+                src={sitePath(theme === "latte" ? "media/brand/logo-light.svg" : "media/brand/logo.svg")}
                 alt="omadesign"
-                width="160"
-                height="90"
+                width="248"
+                height="40"
               />
             </a>
             <a href="#top">Back to top ↑</a>

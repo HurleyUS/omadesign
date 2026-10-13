@@ -267,7 +267,7 @@ p {
 .wordmark img {
   display: block;
   width: auto;
-  height: 78px;
+  height: 40px;
   object-fit: contain;
 }
 .header-links {
@@ -1314,7 +1314,7 @@ details[open] > summary .disclosure-plus {
     inset: 8px 0;
   }
   .header-inner .wordmark img {
-    height: 64px;
+    height: 32px;
   }
   .header-links {
     order: 3;
