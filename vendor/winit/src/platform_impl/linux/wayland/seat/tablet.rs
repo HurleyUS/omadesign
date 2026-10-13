@@ -58,6 +58,36 @@ struct ToolInput {
     phase: Option<TouchPhase>,
     leaving: bool,
     buttons: Vec<(ElementState, MouseButton)>,
+    held_buttons: Vec<MouseButton>,
+}
+
+impl ToolInput {
+    /// Keep side-button releases paired with their presses.
+    /// Takes a button and state; queues an event only when its held state changes.
+    fn button(&mut self, button: MouseButton, state: ElementState) {
+        match (
+            state,
+            self.held_buttons.iter().position(|held| *held == button),
+        ) {
+            (ElementState::Pressed, None) => {
+                self.held_buttons.push(button);
+                self.buttons.push((state, button));
+            }
+            (ElementState::Released, Some(index)) => {
+                self.held_buttons.remove(index);
+                self.buttons.push((state, button));
+            }
+            _ => {}
+        }
+    }
+
+    /// Release held side buttons when a tool leaves proximity.
+    /// Takes this tool state and queues the missing releases without duplicates.
+    fn release_buttons(&mut self) {
+        for button in std::mem::take(&mut self.held_buttons) {
+            self.buttons.push((ElementState::Released, button));
+        }
+    }
 }
 
 impl Dispatch<ZwpTabletManagerV2, GlobalData> for WinitState {
@@ -120,6 +150,7 @@ impl Dispatch<ZwpTabletToolV2, ToolData> for WinitState {
                     input.phase = Some(TouchPhase::Cancelled);
                     input.down = false;
                 }
+                input.release_buttons();
                 input.leaving = true;
             }
             zwp_tablet_tool_v2::Event::Button { button, state, .. } => {
@@ -136,7 +167,7 @@ impl Dispatch<ZwpTabletToolV2, ToolData> for WinitState {
                 } else {
                     ElementState::Released
                 };
-                input.buttons.push((state, button));
+                input.button(button, state);
             }
             zwp_tablet_tool_v2::Event::Removed => tool.destroy(),
             zwp_tablet_tool_v2::Event::Frame { .. } => {
@@ -149,21 +180,23 @@ impl Dispatch<ZwpTabletToolV2, ToolData> for WinitState {
                 let scale = window.lock().unwrap().scale_factor();
                 let device_id =
                     crate::event::DeviceId(crate::platform_impl::DeviceId::Wayland(DeviceId));
-                if let Some(phase) = input
+                let mut touch = input
                     .phase
                     .take()
                     .or(input.down.then_some(TouchPhase::Moved))
-                {
-                    state.events_sink.push_window_event(
+                    .map(|phase| {
                         WindowEvent::Touch(Touch {
                             device_id,
                             phase,
                             location: input.location.to_physical(scale),
                             force: input.pressure.map(Force::Normalized),
                             id: (tool.id().protocol_id() as u64) | (1 << 63),
-                        }),
-                        window_id,
-                    );
+                        })
+                    });
+                if !input.leaving {
+                    if let Some(event) = touch.take() {
+                        state.events_sink.push_window_event(event, window_id);
+                    }
                 }
                 if !input.down && !input.leaving {
                     state.events_sink.push_window_event(
@@ -183,6 +216,9 @@ impl Dispatch<ZwpTabletToolV2, ToolData> for WinitState {
                         },
                         window_id,
                     );
+                }
+                if let Some(event) = touch {
+                    state.events_sink.push_window_event(event, window_id);
                 }
                 if input.leaving {
                     state
@@ -283,4 +319,24 @@ impl Dispatch<ZwpTabletPadGroupV2, GroupData> for WinitState {
         }
     }
     event_created_child!(WinitState, ZwpTabletPadGroupV2, [1 => (ZwpTabletPadRingV2, ()), 2 => (ZwpTabletPadStripV2, ())]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn leaving_proximity_releases_side_buttons_without_a_late_duplicate() {
+        let mut input = ToolInput::default();
+        input.button(MouseButton::Middle, ElementState::Pressed);
+        input.release_buttons();
+        input.button(MouseButton::Middle, ElementState::Released);
+        assert!(input.held_buttons.is_empty());
+        assert_eq!(
+            input.buttons,
+            vec![
+                (ElementState::Pressed, MouseButton::Middle),
+                (ElementState::Released, MouseButton::Middle)
+            ]
+        );
+    }
 }

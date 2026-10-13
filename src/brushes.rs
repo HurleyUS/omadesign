@@ -494,7 +494,7 @@ pub fn stroke(pm: &mut tiny_skia::Pixmap, from: Pt, to: Pt, brush: &Brush, tip: 
     }
     let brush = &brush;
     let distance = (to - from).length();
-    let spacing = (brush.size * brush.spacing).max(0.5);
+    let spacing = brush.spacing_distance();
     let count = (distance / spacing).ceil().max(1.0) as u32;
     for i in 1..=count {
         stamp(

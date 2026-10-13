@@ -51,6 +51,13 @@ impl Default for Brush {
 }
 
 impl Brush {
+    /// Keep dab spacing proportional to the pressure-scaled tip.
+    /// Takes this brush and returns the distance between dabs, at least half a pixel.
+    pub fn spacing_distance(&self) -> f32 {
+        let pressure = if self.pressure_size { self.pressure.clamp(0.01, 1.0) } else { 1.0 };
+        (self.size * pressure * self.spacing).max(0.5)
+    }
+
     /// Vary a dab using its position and the configured dynamics.
     /// Takes a center and returns the scattered center and varied brush settings.
     pub fn dab(&self, pos: Pt) -> (Pt, Self) {
@@ -127,7 +134,7 @@ fn stamp_path(cx: f32, cy: f32, r: f32) -> Option<tiny_skia::Path> {
 pub fn stamp(pm: &mut Pixmap, pos: Pt, brush: &Brush, erase: bool) {
     let (pos, brush) = brush.dab(pos);
     let brush = &brush;
-    let r = (brush.size * 0.5).max(0.5);
+    let r = (brush.size * 0.5).max(0.75);
     let Some(path) = stamp_path(pos.x, pos.y, r) else {
         return;
     };
@@ -182,7 +189,7 @@ pub fn stamp(pm: &mut Pixmap, pos: Pt, brush: &Brush, erase: bool) {
 
 pub fn stroke_to(pm: &mut Pixmap, from: Pt, to: Pt, brush: &Brush, erase: bool) {
     let dist = (to - from).length();
-    let spacing = (brush.size * brush.spacing.max(0.05)).max(0.5);
+    let spacing = brush.spacing_distance();
     let steps = (dist / spacing).ceil() as usize;
     for i in 0..=steps {
         let t = if steps == 0 {
@@ -208,7 +215,7 @@ pub fn spaced_dabs(
     if distance < 0.001 {
         return;
     }
-    let spacing = (brush.size * brush.spacing).max(0.5);
+    let spacing = brush.spacing_distance();
     let mut brush = *brush;
     if brush.follow_direction {
         brush.angle += delta.y.atan2(delta.x);
@@ -971,6 +978,19 @@ pub fn shear_mask(src: &[u8], w: u32, h: u32, kx: f32) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn light_pressure_keeps_a_continuous_stroke() {
+        for pressure in [0.05, 0.005] {
+        let brush = super::Brush { size: 64., pressure, hardness: 1., flow: 1., ..Default::default() };
+        let mut pixels = tiny_skia::Pixmap::new(80, 16).unwrap();
+        super::stamp(&mut pixels, crate::geom::Pt::new(4., 8.), &brush, false);
+        let mut remaining = brush.spacing_distance();
+        for x in 5..64 {
+            super::stroke_spaced(&mut pixels, crate::geom::Pt::new(x as f32 - 1., 8.), crate::geom::Pt::new(x as f32, 8.), &brush, false, &mut remaining);
+        }
+        assert!((6..62).all(|x| pixels.pixel(x, 8).unwrap().alpha() > 0));
+        }
+    }
     use super::*;
 
     #[test]

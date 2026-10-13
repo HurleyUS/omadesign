@@ -236,6 +236,9 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
 
 /// Screenshot scenes wait for their actual template previews, not a fixed sleep.
 pub fn scene_ready(ctx: &eframe::egui::Context, studio: &Studio) -> bool {
+    if studio.show_templates {
+        return templates::previews_ready(ctx);
+    }
     if studio.pixel_edit.as_ref().is_some_and(|e|e.pending()||e.job.is_some()) {return false;}
     !studio.cloud_busy()
         && (!studio.show_welcome || welcome::ready(ctx))

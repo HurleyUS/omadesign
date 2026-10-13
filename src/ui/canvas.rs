@@ -840,10 +840,12 @@ fn handle_pixel_pointer_samples(
                     studio.paint_contact = None;
                     studio.brush.pressure = 1.0;
                 } else if phase != eframe::egui::TouchPhase::End {
+                    let spacing = studio.brush.spacing_distance();
                     studio.brush.pressure = force
                         .filter(|p| p.is_finite())
                         .unwrap_or(1.0)
                         .clamp(0.0, 1.0);
+                    studio.brush_distance *= studio.brush.spacing_distance() / spacing;
                 }
             }
             Event::PointerButton {

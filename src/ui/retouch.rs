@@ -182,7 +182,7 @@ pub(super) fn start(studio: &mut Studio, world: Pt) {
     let Some(mut buf) = pixels.to_pixmap() else {
         return;
     };
-    studio.brush_distance = studio.brush.size * studio.brush.spacing;
+    studio.brush_distance = studio.brush.spacing_distance();
     studio.brush_heading = 0.0;
     studio.brush.seed = crate::document::next_id();
     let source = heal.then(|| buf.clone());
@@ -277,7 +277,7 @@ pub(super) fn start_brush(studio: &mut Studio, world: Pt) {
         return;
     };
     let point = studio.mask_point(layer, world);
-    studio.brush_distance = studio.brush.size * studio.brush.spacing;
+    studio.brush_distance = studio.brush.spacing_distance();
     studio.brush_heading = 0.0;
     studio.brush.seed = crate::document::next_id();
     if let Some(tip) = studio.brushes.tip() {
