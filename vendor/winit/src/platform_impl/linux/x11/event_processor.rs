@@ -22,7 +22,7 @@ use xkbcommon_dl::xkb_mod_mask_t;
 use crate::dpi::{PhysicalPosition, PhysicalSize};
 use crate::event::{
     DeviceEvent, ElementState, Event, Ime, InnerSizeWriter, MouseButton, MouseScrollDelta,
-    RawKeyEvent, Touch, TouchPhase, WindowEvent,
+    Force, RawKeyEvent, Touch, TouchPhase, WindowEvent,
 };
 use crate::event_loop::ActiveEventLoop as RootAEL;
 use crate::keyboard::ModifiersState;
@@ -1067,6 +1067,26 @@ impl EventProcessor {
             return;
         }
 
+        if event.detail as u32 == xlib::Button1 {
+            let pen_event = self.devices.borrow_mut().get_mut(&DeviceId(event.sourceid as xinput::DeviceId)).and_then(|device| {
+                update_pen_pressure(device, event);
+                device.pressure_axis.map(|pressure| {
+                    device.pen_down = state == ElementState::Pressed;
+                    WindowEvent::Touch(Touch {
+                        device_id: mkdid(event.sourceid as xinput::DeviceId),
+                        phase: if device.pen_down { TouchPhase::Started } else { TouchPhase::Ended },
+                        location: PhysicalPosition::new(event.event_x, event.event_y),
+                        force: Some(Force::Normalized(pressure.normalized())),
+                        id: event.sourceid as u64,
+                    })
+                })
+            });
+            if let Some(event) = pen_event {
+                callback(&self.target, Event::WindowEvent { window_id, event });
+                return;
+            }
+        }
+
         let event = match event.detail as u32 {
             xlib::Button1 => {
                 WindowEvent::MouseInput { device_id, state, button: MouseButton::Left }
@@ -1141,6 +1161,7 @@ impl EventProcessor {
             },
         };
 
+        update_pen_pressure(physical_device, event);
         let mut events = Vec::new();
         let mut value = event.valuators.values;
         for i in 0..event.valuators.mask_len * 8 {
@@ -1150,16 +1171,7 @@ impl EventProcessor {
 
             let x = unsafe { *value };
 
-            let event = if let Some((_, min, max)) = physical_device
-                .pressure_axis
-                .filter(|(axis, _, _)| *axis == i)
-            {
-                WindowEvent::TouchpadPressure {
-                    device_id,
-                    pressure: ((x - min) / (max - min)).clamp(0.0, 1.0) as f32,
-                    stage: 0,
-                }
-            } else if let Some(&mut (_, ref mut info)) = physical_device
+            let event = if let Some(&mut (_, ref mut info)) = physical_device
                 .scroll_axes
                 .iter_mut()
                 .find(|&&mut (axis, _)| axis == i as _)
@@ -1184,7 +1196,15 @@ impl EventProcessor {
             value = unsafe { value.offset(1) };
         }
 
-        if cursor_moved == Some(true) {
+        if let Some(pressure) = physical_device.pressure_axis.filter(|_| physical_device.pen_down) {
+            events.push(Event::WindowEvent { window_id, event: WindowEvent::Touch(Touch {
+                device_id: mkdid(event.sourceid as xinput::DeviceId),
+                phase: TouchPhase::Moved,
+                location: PhysicalPosition::new(event.event_x, event.event_y),
+                force: Some(Force::Normalized(pressure.normalized())),
+                id: event.sourceid as u64,
+            }) });
+        } else if cursor_moved == Some(true) {
             events.push(Event::WindowEvent {
                 window_id,
                 event: WindowEvent::CursorMoved {
@@ -1899,4 +1919,47 @@ fn is_first_touch(first: &mut Option<u64>, num: &mut u32, id: u64, phase: TouchP
     }
 
     *first == Some(id)
+}
+
+/// Read pressure from XInput's compact valuator array.
+/// Takes a device and native event; retains the previous force when this event omits its axis.
+fn update_pen_pressure(device: &mut Device, event: &XIDeviceEvent) {
+    let Some(axis) = &mut device.pressure_axis else { return; };
+    if event.valuators.mask_len <= 0 { return; }
+    let mask = unsafe { slice::from_raw_parts(event.valuators.mask, event.valuators.mask_len as usize) };
+    let mut value = event.valuators.values;
+    for number in 0..event.valuators.mask_len * 8 {
+        if !xinput2::XIMaskIsSet(mask, number) { continue; }
+        if number == axis.number {
+            let pressure = unsafe { *value };
+            if pressure.is_finite() { axis.value = pressure; }
+            return;
+        }
+        value = unsafe { value.add(1) };
+    }
+}
+
+#[cfg(test)]
+mod pen_pressure_tests {
+    use super::*;
+    use crate::platform_impl::x11::PressureAxis;
+
+    #[test]
+    fn compact_valuators_keep_force_aligned_and_retain_it_without_an_axis_update() {
+        let mut device = Device { _name: "Pen".into(), scroll_axes: vec![], pressure_axis: Some(PressureAxis { number: 2, min: 0., max: 1024., value: 0. }), pen_down: true, attachment: 0 };
+        let mut mask = [0b00100110_u8];
+        let mut values = [40., 512., 900.];
+        let mut event: XIDeviceEvent = unsafe { std::mem::zeroed() };
+        event.valuators.mask_len = 1;
+        event.valuators.mask = mask.as_mut_ptr();
+        event.valuators.values = values.as_mut_ptr();
+        update_pen_pressure(&mut device, &event);
+        assert_eq!(device.pressure_axis.unwrap().normalized(), 0.5);
+        let mut motion_mask = [0b00000010];
+        let mut motion_values = [75.];
+        event.valuators.mask = motion_mask.as_mut_ptr();
+        event.valuators.values = motion_values.as_mut_ptr();
+        update_pen_pressure(&mut device, &event);
+        assert_eq!(device.pressure_axis.unwrap().normalized(), 0.5);
+    }
 }

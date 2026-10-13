@@ -117,7 +117,7 @@ pub struct State {
     /// Is Some(…) when a touch is being translated to a pointer.
     ///
     /// Only one touch will be interpreted as pointer at any time.
-    pointer_touch_id: Option<u64>,
+    pointer_touch_id: Option<(winit::event::DeviceId, u64)>,
 
     #[cfg(feature = "accesskit")]
     pub accesskit: Option<accesskit_winit::Adapter>,
@@ -366,25 +366,6 @@ impl State {
                     consumed: false,
                 }
             }
-            WindowEvent::TouchpadPressure {
-                device_id,
-                pressure,
-                ..
-            } => {
-                if let Some(pos) = self.pointer_pos_in_points {
-                    self.egui_input.events.push(egui::Event::Touch {
-                        device_id: egui::TouchDeviceId(egui::epaint::util::hash(device_id)),
-                        id: egui::TouchId(u64::MAX),
-                        phase: egui::TouchPhase::Move,
-                        pos,
-                        force: Some(*pressure),
-                    });
-                }
-                EventResponse {
-                    repaint: true,
-                    consumed: self.egui_ctx.egui_is_using_pointer(),
-                }
-            }
             WindowEvent::Touch(touch) => {
                 self.on_touch(window, touch);
                 let consumed = match touch.phase {
@@ -523,6 +504,7 @@ impl State {
             | WindowEvent::Occluded(_)
             | WindowEvent::Resized(_)
             | WindowEvent::Moved(_)
+            | WindowEvent::TouchpadPressure { .. }
             | WindowEvent::CloseRequested => EventResponse {
                 repaint: true,
                 consumed: false,
@@ -919,12 +901,12 @@ impl State {
         });
         // If we're not yet translating a touch or we're translating this very
         // touch …
-        if self.pointer_touch_id.is_none() || self.pointer_touch_id.unwrap_or_default() == touch.id
+        if touch_owns_pointer(self.pointer_touch_id, (touch.device_id, touch.id), touch.phase)
         {
             // … emit PointerButton resp. PointerMoved events to emulate mouse
             match touch.phase {
                 winit::event::TouchPhase::Started => {
-                    self.pointer_touch_id = Some(touch.id);
+                    self.pointer_touch_id = Some((touch.device_id, touch.id));
                     // First move the pointer to the right location
                     self.on_cursor_moved(window, touch.location);
                     self.on_mouse_button_input(
@@ -1309,6 +1291,16 @@ impl State {
             window.set_cursor_visible(false);
         }
     }
+}
+
+/// Route touch samples without releasing a pointer owned by another input.
+/// Takes the current contact, incoming contact and phase; returns whether to emulate the pointer.
+fn touch_owns_pointer(
+    owner: Option<(winit::event::DeviceId, u64)>,
+    contact: (winit::event::DeviceId, u64),
+    phase: winit::event::TouchPhase,
+) -> bool {
+    owner.map_or(matches!(phase, winit::event::TouchPhase::Started | winit::event::TouchPhase::Moved), |owner| owner == contact)
 }
 
 fn to_egui_touch_phase(phase: winit::event::TouchPhase) -> egui::TouchPhase {
@@ -2696,5 +2688,22 @@ mod clipboard_chord_tests {
         let control = super::native_modifiers(winit::keyboard::ModifiersState::CONTROL);
         assert!(control.ctrl);
         assert!(!control.mac_cmd);
+    }
+}
+
+#[cfg(test)]
+mod touch_ownership_tests {
+    use super::touch_owns_pointer;
+    use winit::event::{DeviceId, TouchPhase};
+
+    #[test]
+    fn an_unowned_cancel_or_release_cannot_end_a_mouse_drag() {
+        let contact = (DeviceId::dummy(), 1);
+        for phase in [TouchPhase::Ended, TouchPhase::Cancelled] {
+            assert!(!touch_owns_pointer(None, contact, phase));
+            assert!(!touch_owns_pointer(Some((contact.0, 2)), contact, phase));
+            assert!(touch_owns_pointer(Some(contact), contact, phase));
+        }
+        assert!(touch_owns_pointer(None, contact, TouchPhase::Started));
     }
 }

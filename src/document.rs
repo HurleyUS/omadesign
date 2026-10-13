@@ -1623,13 +1623,13 @@ impl Document {
         for token in &self.layout_tokens {
             max = max.max(token.id);
         }
-        self.migrate_artboards();
         // Brand asset import rejects the same range: ids at the top of u64
         // would overflow or wrap the id allocator, colliding with new objects.
         if max >= u64::MAX - 200_000 {
             return Err("The document contains invalid object IDs".into());
         }
         bump_id(max);
+        self.migrate_artboards();
         Ok(())
     }
 }
@@ -3121,5 +3121,21 @@ mod tests {
         assert_eq!(doc.artboard_hit(Pt::new(100.0, 0.0), 8.0), Some(1));
         // Only B's margin.
         assert_eq!(doc.artboard_hit(Pt::new(2500.0, 500.0), 8.0), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod id_migration_regression {
+    use super::*;
+    #[test]
+    fn legacy_artboards_allocate_ids_after_loaded_shapes() {
+        let mut doc = Document::new("Legacy IDs", 64., 64., 72.);
+        let mut shape = Shape::new(Geom::Rect { origin: Pt::ZERO, size: Pt::splat(10.), radius: 0. }, Style::default());
+        doc.artboards[0].id = 0;
+        let loaded_id = next_id() + 1;
+        shape.id = loaded_id;
+        doc.layers[1].kind.shapes_mut().unwrap().push(shape);
+        doc.ensure_ids().unwrap();
+        assert_ne!(doc.artboards[0].id, loaded_id);
     }
 }

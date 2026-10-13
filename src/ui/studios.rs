@@ -1915,7 +1915,7 @@ fn fx_stack_editor(ui: &mut Ui, stack: &mut crate::filter::FilterStack, salt: &s
                 crate::filter::Fx::AppleGlass(glass) => {
                     inspector_slider(ui, "Refraction", &mut glass.ior, 1.0..=2.5, "");
                     inspector_slider(ui, "Color fringing", &mut glass.chromatic, 0.0..=0.2, "");
-                    inspector_slider(ui, "Edge", &mut glass.edge_width, 1.0..=10000.0, "");
+                    inspector_slider(ui, "Edge", &mut glass.edge_width, 1.0..=400.0, "");
                     inspector_slider(ui, "Highlight", &mut glass.spec_power, 1.0..=128.0, "");
                     inspector_slider(
                         ui,
@@ -2118,7 +2118,7 @@ fn brush_studio(ui: &mut Ui, studio: &mut Studio) {
     number_field(ui, "Flow", &mut flow, 5.0..=100.0, "%");
     studio.brush.flow = flow / 100.0;
     let mut spacing = studio.brush.spacing * 100.0;
-    number_field(ui, "Spacing", &mut spacing, 1.0..=400.0, "%");
+    number_field(ui, "Spacing", &mut spacing, 1.0..=10000.0, "%");
     studio.brush.spacing = spacing / 100.0;
     if matches!(studio.tool, Tool::Brush | Tool::Eraser) {
         let mut angle = studio.brush.angle.to_degrees();
@@ -3294,5 +3294,23 @@ mod sidebar_resize_tests {
             ),
             width
         );
+    }
+}
+
+#[cfg(test)]
+mod brush_spacing_review_tests {
+    use super::*;
+
+    #[test]
+    fn inspector_retains_spacing_above_four_brush_sizes() {
+        let ctx = eframe::egui::Context::default();
+        crate::ui::theme::apply(&ctx);
+        let mut studio = Studio::new();
+        studio.persona = Persona::Pixel;
+        studio.tool = Tool::Brush;
+        studio.brush.spacing = 80.0;
+        let mut output = ctx.run_ui(eframe::egui::RawInput { screen_rect: Some(eframe::egui::Rect::from_min_size(eframe::egui::Pos2::ZERO, vec2(600., 1200.))), ..Default::default() }, |ui| brush_studio(ui, &mut studio));
+        output.textures_delta.clear();
+        assert_eq!(studio.brush.spacing, 80.0);
     }
 }

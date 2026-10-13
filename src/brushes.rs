@@ -185,12 +185,18 @@ impl Preset {
 
 pub type ImportJob = Arc<std::sync::Mutex<Option<Result<(Pack, String), String>>>>;
 
+struct CursorOutline {
+    tip: Arc<Tip>,
+    edges: Arc<Vec<(Pt, Pt)>>,
+}
+
 pub struct Library {
     pub packs: Vec<Pack>,
     pub selected: Option<(usize, usize)>,
     pub errors: Vec<String>,
     pub(crate) directory: PathBuf,
     fingerprints: Vec<String>,
+    outline_cache: std::cell::RefCell<Option<CursorOutline>>,
 }
 
 impl Library {
@@ -201,6 +207,7 @@ impl Library {
             errors: vec![],
             directory,
             fingerprints: vec![],
+            outline_cache: Default::default(),
         };
         for bytes in [
             include_bytes!("../assets/brushes/essentials.omabrush").as_slice(),
@@ -234,6 +241,22 @@ impl Library {
     pub fn tip(&self) -> Option<&Tip> {
         let (pack, brush) = self.selected?;
         Some(&self.packs.get(pack)?.brushes.get(brush)?.tip)
+    }
+
+    /// Reuse the selected tip's cursor boundary between canvas frames.
+    /// Takes this library and returns its outline, or none for a round brush.
+    pub fn tip_outline(&self) -> Option<Arc<Vec<(Pt, Pt)>>> {
+        let (pack, brush) = self.selected?;
+        let tip = &self.packs.get(pack)?.brushes.get(brush)?.tip;
+        let mut cached = self.outline_cache.borrow_mut();
+        if let Some(outline) = &*cached
+            && Arc::ptr_eq(&outline.tip, tip)
+        {
+            return Some(outline.edges.clone());
+        }
+        let outline = Arc::new(outline(tip));
+        *cached = Some(CursorOutline { tip: tip.clone(), edges: outline.clone() });
+        Some(outline)
     }
 
     /// Install a validated pack without replacing another user's file.
@@ -506,14 +529,15 @@ pub fn outline(tip: &Tip) -> Vec<(Pt, Pt)> {
     let step = tip.width.max(tip.height).div_ceil(128).max(1);
     let w = tip.width.div_ceil(step);
     let h = tip.height.div_ceil(step);
-    let filled = |x: i32, y: i32| {
-        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
-            return false;
-        }
-        let sx = (x as u32 * step + step / 2).min(tip.width - 1);
-        let sy = (y as u32 * step + step / 2).min(tip.height - 1);
-        tip.alpha[(sy * tip.width + sx) as usize] >= 32
-    };
+    let mut mask = vec![false; (w * h) as usize];
+    for y in 0..h { for x in 0..w {
+        mask[(y * w + x) as usize] = (y * step..((y + 1) * step).min(tip.height)).any(|sy| {
+            let start = (sy * tip.width + x * step) as usize;
+            let end = (sy * tip.width + ((x + 1) * step).min(tip.width)) as usize;
+            tip.alpha[start..end].iter().any(|&alpha| alpha >= 32)
+        });
+    }}
+    let filled = |x: i32, y: i32| x >= 0 && y >= 0 && x < w as i32 && y < h as i32 && mask[(y as u32 * w + x as u32) as usize];
     let scale = tip.width.max(tip.height) as f32;
     let point = |x: u32, y: u32| {
         Pt::new(
@@ -563,6 +587,18 @@ pub fn cli(args: &[String]) -> Option<Result<(), String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cursor_outline_retains_thin_tips_and_reuses_the_selected_boundary() {
+        let mut alpha = vec![0; 256 * 256];
+        for y in 0..256 { alpha[y * 256] = 255; }
+        assert!(!outline(&Tip { width: 256, height: 256, alpha }).is_empty());
+        let mut library = Library::load(root());
+        library.selected = Some((0, 0));
+        let first = library.tip_outline().unwrap();
+        assert!(Arc::ptr_eq(&first, &library.tip_outline().unwrap()));
+        library.selected = Some((0, 6));
+        assert!(!Arc::ptr_eq(&first, &library.tip_outline().unwrap()));
+    }
     fn root() -> PathBuf {
         let root = std::env::current_dir()
             .unwrap()

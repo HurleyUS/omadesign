@@ -823,9 +823,21 @@ fn handle_pixel_pointer_samples(
     let (events, modifiers) = resp.ctx.input(|input| (input.events.clone(), input.modifiers));
     for event in events {
         match event {
-            Event::Touch { force, phase, .. } => {
+            Event::Touch { device_id, id, pos, force, phase } => {
+                let contact = (device_id, id);
+                if phase == eframe::egui::TouchPhase::Start
+                    && studio.op.is_none()
+                    && canvas.contains(pos)
+                    && resp.ctx.layer_id_at(pos) == Some(resp.layer_id)
+                {
+                    studio.paint_contact = Some(contact);
+                }
+                if studio.paint_contact != Some(contact) {
+                    continue;
+                }
                 if phase == eframe::egui::TouchPhase::Cancel {
                     studio.end_pixel_stroke(true);
+                    studio.paint_contact = None;
                     studio.brush.pressure = 1.0;
                 } else if phase != eframe::egui::TouchPhase::End {
                     studio.brush.pressure = force
@@ -2122,7 +2134,14 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                     ) {
                         s.geom = geom;
                         let center = s.geom.bbox().center();
-                        if (snap.rot - *angle).sin().abs() < 1e-4 && (snap.rot - *angle).cos() > 0.0 {
+                        let sx = dst.width() / start_box.width().max(1.0);
+                        let sy = dst.height() / start_box.height().max(1.0);
+                        if (sx - sy).abs() <= 1e-4 * sx.abs().max(sy.abs()).max(1.0) {
+                            s.geom.map_into(*start_box, dst);
+                            let mapped = start_box.map_pt(center.rotate(-*angle), dst).rotate(*angle);
+                            s.geom.translate(mapped - s.geom.bbox().center());
+                            s.rotation = snap.rot;
+                        } else if (snap.rot - *angle).sin().abs() < 1e-4 && (snap.rot - *angle).cos() > 0.0 {
                             s.geom.translate(center.rotate(-*angle) - center);
                             s.geom.map_into(*start_box, dst);
                             let center = s.geom.bbox().center();
@@ -3126,7 +3145,7 @@ fn paint_brush_ring(p: &eframe::egui::Painter, rect: Rect, studio: &Studio) {
         return;
     }
     if matches!(studio.tool, Tool::Brush | Tool::Eraser)
-        && let Some(tip) = studio.brushes.tip()
+        && let Some(outline) = studio.brushes.tip_outline()
     {
         let angle = studio.brush.angle
             + if studio.brush.follow_direction {
@@ -3134,11 +3153,12 @@ fn paint_brush_ring(p: &eframe::egui::Painter, rect: Rect, studio: &Studio) {
             } else {
                 0.0
             };
-        for (a, b) in crate::brushes::outline(tip) {
+        let size = studio.brush.size * if studio.brush.pressure_size { studio.brush.pressure.clamp(0.01, 1.0) } else { 1.0 };
+        for &(a, b) in outline.iter() {
             let map = |point: Pt| {
                 center
                     + eframe::egui::vec2(point.rotate(angle).x, point.rotate(angle).y)
-                        * studio.brush.size
+                    * size
                         * studio.view.scale
             };
             let edge = [map(a), map(b)];
@@ -3147,7 +3167,8 @@ fn paint_brush_ring(p: &eframe::egui::Painter, rect: Rect, studio: &Studio) {
         }
         return;
     }
-    let radius = (studio.brush.size * studio.view.scale * 0.5).max(1.0);
+    let size = studio.brush.size * if studio.brush.pressure_size { studio.brush.pressure.clamp(0.01, 1.0) } else { 1.0 };
+    let radius = (size * studio.view.scale * 0.5).max(1.0);
     p.circle_stroke(center, radius + 1.0, Stroke::new(1.0, Color32::BLACK));
     p.circle_stroke(center, radius, Stroke::new(1.0, Color32::WHITE));
 }
@@ -4891,6 +4912,50 @@ mod tests {
                 .iter()
                 .all(|b| *b == 0)
         );
+    }
+
+    #[test]
+    fn uniform_mixed_rotation_resize_preserves_rectangles_and_undo() {
+        let mut s = Studio::new();
+        s.snap.enabled = false;
+        s.finish_create(CreateKind::Rect, Pt::new(40., 40.), Pt::new(140., 100.));
+        let first = s.primary().unwrap();
+        s.finish_create(CreateKind::Rect, Pt::new(180., 40.), Pt::new(280., 100.));
+        let second = s.primary().unwrap();
+        s.doc.find_shape_mut(first.0, first.1).unwrap().rotation = 0.7;
+        s.selection = vec![first, second];
+        let original = s.doc.find_shape(first.0, first.1).unwrap().geom.clone();
+        let bounds = posed_bounds(&s).unwrap();
+        let dst = Bounds::from_min_size(bounds.min, Pt::new(bounds.width(), bounds.height()) * 2.);
+        s.op = Some(Op::Resize { orig: snapshot_with_children(&s), handle: 2, start_box: bounds, angle: 0. });
+        continue_drag(&mut s, dst.max, false, false);
+        end_drag(&mut s, dst.max, false, false, false);
+        let shape = s.doc.find_shape(first.0, first.1).unwrap();
+        assert!(matches!(shape.geom, Geom::Rect { .. }));
+        assert!((shape.rotation - 0.7).abs() < 1e-5);
+        assert!((shape.geom.bbox().width() - original.bbox().width() * 2.).abs() < 0.01);
+        assert!((shape.geom.bbox().center() - bounds.map_pt(original.bbox().center(), dst)).length() < 0.01);
+        s.undo();
+        assert_eq!(s.doc.find_shape(first.0, first.1).unwrap().geom, original);
+    }
+
+    #[test]
+    fn unrelated_touch_does_not_cancel_or_change_a_mouse_brush_stroke() {
+        use eframe::egui::{Event, Modifiers, TouchDeviceId, TouchId, TouchPhase};
+        let (ctx, mut s) = pen_input_studio();
+        s.tool = Tool::Brush;
+        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300)];
+        s.active_layer = Some(0);
+        s.view.offset = Pt::ZERO;
+        canvas_frame(&ctx, &mut s, vec![]);
+        let pos = Pos2::new(80., 80.);
+        canvas_frame(&ctx, &mut s, vec![Event::PointerMoved(pos), Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        assert!(pixel_stroke_active(&s));
+        canvas_frame(&ctx, &mut s, vec![Event::Touch { device_id: TouchDeviceId(42), id: TouchId(42), phase: TouchPhase::Cancel, pos, force: Some(0.1) }]);
+        assert!(pixel_stroke_active(&s));
+        assert_eq!(s.brush.pressure, 1.);
+        canvas_frame(&ctx, &mut s, vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        assert!(s.op.is_none());
     }
 
     #[test]

@@ -102,6 +102,8 @@ impl Studio {
                 return false;
             }
         };
+        self.paint_contact = None;
+        self.brush.pressure = 1.0;
         let buffer = if cancel {
             // Undo/Escape discards the overlay; preparing its selection preview
             // can scan millions of pixels that will never be displayed.

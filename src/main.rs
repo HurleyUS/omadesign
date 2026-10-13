@@ -163,6 +163,12 @@ fn main() -> eframe::Result {
                             }
                         };
                         studio.active_layer = studio.doc.layers.len().checked_sub(1);
+                        studio.persona = studio.doc.workspace.unwrap_or(omadesign::tools::Persona::Design);
+                        studio.tool = if studio.persona == omadesign::tools::Persona::Pixel {
+                            omadesign::tools::Tool::Brush
+                        } else {
+                            omadesign::tools::Tool::Select
+                        };
                         studio.layer_expanded.extend(
                             studio
                                 .doc

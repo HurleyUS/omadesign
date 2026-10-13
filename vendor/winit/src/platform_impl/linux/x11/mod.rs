@@ -975,10 +975,27 @@ fn mkdid(w: xinput::DeviceId) -> crate::event::DeviceId {
 pub struct Device {
     _name: String,
     scroll_axes: Vec<(i32, ScrollAxis)>,
-    pressure_axis: Option<(i32, f64, f64)>,
+    pressure_axis: Option<PressureAxis>,
+    pen_down: bool,
     // For master devices, this is the paired device (pointer <-> keyboard).
     // For slave devices, this is the master.
     attachment: c_int,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct PressureAxis {
+    number: i32,
+    min: f64,
+    max: f64,
+    value: f64,
+}
+
+impl PressureAxis {
+    /// Normalize the current tablet force using its advertised range.
+    /// Takes this axis and returns a pressure between zero and one.
+    fn normalized(self) -> f64 {
+        ((self.value - self.min) / (self.max - self.min)).clamp(0.0, 1.0)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1014,7 +1031,7 @@ impl Device {
                     if label.is_some_and(|label| label.name == b"Abs Pressure")
                         && axis.max > axis.min
                     {
-                        pressure_axis = Some((axis.number, axis.min, axis.max));
+                        pressure_axis = Some(PressureAxis { number: axis.number, min: axis.min, max: axis.max, value: axis.value });
                     }
                 }
                 if ty == ffi::XIScrollClass {
@@ -1036,6 +1053,7 @@ impl Device {
             _name: name.into_owned(),
             scroll_axes,
             pressure_axis,
+            pen_down: false,
             attachment: info.attachment,
         };
         device.reset_scroll_position(info);
