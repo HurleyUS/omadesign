@@ -346,6 +346,40 @@ mod tests {
     }
 
     #[test]
+    fn svg_graph_reduced_operations_survive_svg_export_and_reimport() {
+        let source = SOURCE.replace("<feMerge>", "<feUnsupportedThing/><feMerge>");
+        let (doc, notes) = crate::formats::svg::read(&source, "Retained source").unwrap();
+        assert!(notes.iter().any(|n| n.contains("feUnsupportedThing")));
+        let exported = crate::svg::export(&doc).unwrap();
+        assert!(exported.contains("feUnsupportedThing"));
+        assert!(!exported.contains("<image"));
+        let restored = crate::formats::svg::read(&exported, "Reimported source")
+            .unwrap()
+            .0;
+        assert!(
+            restored
+                .layers
+                .iter()
+                .filter_map(|l| l.svg_filter.as_ref())
+                .any(|g| g.original_definitions.contains("feUnsupportedThing"))
+        );
+    }
+
+    #[test]
+    fn svg_graph_shared_filters_and_shape_filters_keep_distinct_object_regions() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="140"><defs><filter id="fx"><feGaussianBlur stdDeviation="2"/><feOffset dx="3"/></filter></defs><g filter="url(#fx)"><rect x="10" y="10" width="50" height="45" fill="#c52"/></g><g filter="url(#fx)"><rect x="90" y="65" width="70" height="60" fill="#28a"/></g><path filter="url(#fx)" d="M80 10H150V45H80Z" fill="#4a6"/></svg>"##;
+        let (doc, notes) = crate::formats::svg::read(source, "Shared filters").unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+        let tree = usvg::Tree::from_str(source, &crate::svg_source::options()).unwrap();
+        let mut expected = Pixmap::new(180, 140).unwrap();
+        resvg::render(&tree, Transform::identity(), &mut expected.as_mut());
+        let actual = crate::compositor::render_export_at(&doc, 1., 0., true).unwrap();
+        let (maximum, mean) = difference(&actual, &expected);
+        assert!(maximum <= 3 && mean < 0.1, "max={maximum} mean={mean}");
+    }
+
+    #[test]
     #[ignore = "requires independent rsvg-convert; writes and removes only its own home-project scratch"]
     fn svg_graph_independent_librsvg_and_disk_reopen() {
         let (doc, _) = crate::formats::svg::read(SOURCE, "Independent graph").unwrap();
