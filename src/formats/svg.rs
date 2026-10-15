@@ -615,7 +615,8 @@ impl Reader<'_> {
             None
         };
         let stroke_first = path.paint_order() == usvg::PaintOrder::StrokeAndFill;
-        let separate = !fill.is_none() && stroke.is_some()
+        let separate = !fill.is_none()
+            && stroke.is_some()
             && (stroke_first || geom.path_contours().iter().any(|(_, closed)| !closed));
         let border = separate.then(|| {
             Shape::new(
@@ -779,6 +780,9 @@ impl Reader<'_> {
             return Ok(false);
         }
         let span = &chunk.spans()[0];
+        if span.font_size().get() * t.sy < 1. || !(0.01..=10.).contains(&(t.sx / t.sy)) {
+            return Ok(false);
+        }
         if chunk.spans().iter().any(|span| {
             span.small_caps()
                 || !span.font().variations().is_empty()
