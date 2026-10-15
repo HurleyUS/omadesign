@@ -35,6 +35,17 @@ pub(super) fn render(
             }
         }
     }
+    for _ in 0..64 {
+        let before = ids.len();
+        for layer in &doc.layers {
+            if layer.parent.is_some_and(|id| ids.contains(&id)) {
+                ids.insert(layer.id);
+            }
+        }
+        if ids.len() == before {
+            break;
+        }
+    }
     let mut isolated = doc.clone();
     isolated.layers.retain(|l| ids.contains(&l.id));
     isolated.transparent = true;
@@ -134,7 +145,7 @@ mod tests {
         let original = crate::compositor::export_png(&doc, 1).unwrap();
         let before = doc.layers[group].svg_filter.clone();
         let mut after = before.clone().unwrap();
-        after.definitions = after.definitions.replace("dx=\"5\"", "dx=\"12\"");
+        after.definitions = after.definitions.replace("dx=\"5\"", "dx=\"12\"").into();
         let command = crate::document::Cmd::SetSvgFilter {
             index: group,
             before,

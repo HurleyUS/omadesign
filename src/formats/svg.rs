@@ -14,6 +14,7 @@ struct Metadata {
     name: String,
     hidden: bool,
     locked: bool,
+    filter_ids: Vec<String>,
 }
 
 fn editable_element(tag: &str) -> bool {
@@ -277,6 +278,14 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
     let mut edits = Vec::new();
     let mut warnings = crate::svg_source::reductions(svg);
     let visibility = preserve_hidden_artwork(&xml, svg, &mut edits);
+    let mut sheet = simplecss::StyleSheet::new();
+    for text in xml
+        .descendants()
+        .filter(|n| n.has_tag_name("style"))
+        .filter_map(|n| n.text())
+    {
+        sheet.parse_more(text);
+    }
     // Keep hidden artwork editable: usvg deliberately discards display:none nodes.
     for (index, node) in xml.descendants().filter(|n| n.is_element()).enumerate() {
         if index >= MAX_ELEMENTS {
@@ -303,6 +312,7 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
         }
         let state = visibility.get(&node.id()).copied().unwrap_or_default();
         let meta = Metadata {
+            filter_ids: filter_ids(node, &sheet),
             name: node
                 .attribute(("http://www.inkscape.org/namespaces/inkscape", "label"))
                 .or_else(|| {
@@ -363,12 +373,15 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
         warnings,
         metadata,
         tree: &tree,
-        definitions: normalized_definitions(&tree),
+        definitions: normalized_definitions(&tree).into(),
+        raw_definitions: raw_definitions(&xml, &sheet).into(),
+        definition_cache: HashMap::new(),
         original_definitions: xml
             .descendants()
             .filter(|n| n.has_tag_name("filter"))
             .map(|n| &svg[n.range()])
-            .collect(),
+            .collect::<String>()
+            .into(),
         pixel_bytes: 0,
         mask_sources: HashMap::new(),
     };
@@ -385,14 +398,16 @@ struct Reader<'a> {
     warnings: Vec<String>,
     metadata: HashMap<String, Metadata>,
     tree: &'a usvg::Tree,
-    definitions: String,
-    original_definitions: String,
+    definitions: std::sync::Arc<str>,
+    raw_definitions: std::sync::Arc<str>,
+    original_definitions: std::sync::Arc<str>,
+    definition_cache: HashMap<String, std::sync::Arc<str>>,
     pixel_bytes: u64,
     mask_sources: HashMap<usize, MaskSource>,
 }
 impl Reader<'_> {
     fn paint(
-        &self,
+        &mut self,
         p: &usvg::Paint,
         alpha: f32,
         t: Transform,
@@ -405,13 +420,30 @@ impl Reader<'_> {
                     .pre_concat(t)
                     .pre_concat(pattern.transform());
             return Some(Fill::Pattern(crate::svg_source::SvgPattern {
-                definitions: self.definitions.clone(),
+                definitions: self.resources(&[pattern.id().to_string()], false),
                 id: pattern.id().to_string(),
                 transform: matrix(placement),
                 opacity: alpha,
             }));
         }
         paint(p, alpha, t, b)
+    }
+    fn resources(&mut self, ids: &[String], raw: bool) -> std::sync::Arc<str> {
+        let key = format!("{raw}:{}", ids.join(" "));
+        self.definition_cache
+            .entry(key)
+            .or_insert_with(|| {
+                crate::svg_source::subset(
+                    if raw {
+                        &self.raw_definitions
+                    } else {
+                        &self.definitions
+                    },
+                    ids,
+                )
+                .into()
+            })
+            .clone()
     }
     fn reserve(&mut self, w: u32, h: u32) -> Result<(), String> {
         self.pixel_bytes = self
@@ -464,10 +496,27 @@ impl Reader<'_> {
                         && g.blend_mode() == usvg::BlendMode::Normal;
                     self.meta(&mut layer, g.id());
                     if !g.filters().is_empty() {
+                        let raw = self
+                            .metadata
+                            .get(g.id())
+                            .map(|m| m.filter_ids.clone())
+                            .unwrap_or_default();
+                        let filters: Vec<String> = if raw.len() == g.filters().len() {
+                            raw
+                        } else {
+                            Vec::new()
+                        };
+                        let raw = !filters.is_empty();
+                        let filters = if raw {
+                            filters
+                        } else {
+                            g.filters().iter().map(|f| f.id().to_string()).collect()
+                        };
+                        let definitions = self.resources(&filters, raw);
                         layer.svg_filter = Some(crate::svg_source::SvgFilterGraph {
-                            definitions: self.definitions.clone(),
+                            definitions,
                             original_definitions: self.original_definitions.clone(),
-                            filters: g.filters().iter().map(|f| f.id().to_string()).collect(),
+                            filters,
                             transform: matrix(g.abs_transform()),
                             reductions: crate::svg_source::reductions(&format!(
                                 "<svg>{}</svg>",
@@ -1366,7 +1415,7 @@ mod tests {
             })
             .unwrap();
         pattern.transform[4] += 0.1;
-        pattern.definitions = pattern.definitions.replace("#2288aa", "#ff0000");
+        pattern.definitions = pattern.definitions.replace("#2288aa", "#ff0000").into();
         assert_ne!(original, crate::compositor::export_png(&doc, 1).unwrap());
     }
 
@@ -1830,4 +1879,100 @@ mod tests {
             1
         );
     }
+}
+
+/// Resolve a source element's filter URLs using the same static cascade as import.
+/// Args: element and parsed stylesheet. Returns source IDs in filter-list order.
+fn filter_ids(node: roxmltree::Node<'_, '_>, sheet: &simplecss::StyleSheet<'_>) -> Vec<String> {
+    let mut value = node.attribute("filter").map(|v| (v.to_string(), false));
+    for declaration in sheet
+        .rules
+        .iter()
+        .filter(|r| r.selector.matches(&CssElement(node)))
+        .flat_map(|r| &r.declarations)
+        .chain(
+            simplecss::DeclarationTokenizer::from(node.attribute("style").unwrap_or_default())
+                .collect::<Vec<_>>()
+                .iter(),
+        )
+    {
+        if declaration.name == "filter"
+            && !value
+                .as_ref()
+                .is_some_and(|(_, old)| *old && !declaration.important)
+        {
+            value = Some((declaration.value.to_string(), declaration.important));
+        }
+    }
+    let Some((value, _)) = value else {
+        return Vec::new();
+    };
+    value
+        .split("url(")
+        .skip(1)
+        .filter_map(|v| {
+            v.split(')')
+                .next()?
+                .trim()
+                .trim_matches(['\'', '"'])
+                .strip_prefix('#')
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// Preserve source filter units and inline their stylesheet properties.
+/// Args: original SVG XML and its stylesheet. Returns inert vector definitions.
+fn raw_definitions(xml: &roxmltree::Document<'_>, sheet: &simplecss::StyleSheet<'_>) -> String {
+    let mut source = String::new();
+    for node in xml
+        .descendants()
+        .filter(|n| n.parent_element().is_some_and(|p| p.has_tag_name("defs")))
+    {
+        let mut resource = crate::svg_source::xml_node(node);
+        let mut edits = Vec::new();
+        let wrapper = format!("<svg>{resource}</svg>");
+        if let Ok(parsed) = roxmltree::Document::parse(&wrapper) {
+            for (original, target) in node
+                .descendants()
+                .filter(|n| n.is_element())
+                .zip(parsed.descendants().filter(|n| n.is_element()).skip(1))
+            {
+                let mut style = String::new();
+                for rule in sheet
+                    .rules
+                    .iter()
+                    .filter(|r| r.selector.matches(&CssElement(original)))
+                {
+                    for declaration in &rule.declarations {
+                        style.push_str(&format!(
+                            "{}:{}{};",
+                            declaration.name,
+                            declaration.value,
+                            if declaration.important {
+                                " !important"
+                            } else {
+                                ""
+                            }
+                        ));
+                    }
+                }
+                style.push_str(original.attribute("style").unwrap_or_default());
+                if style.is_empty() {
+                    continue;
+                }
+                if let Some(attr) = target.attributes().find(|a| a.name() == "style") {
+                    edits.push((attr.range().start - 5..attr.range().end - 5, String::new()));
+                }
+                let start = target.range().start - 5 + 1 + target.tag_name().name().len();
+                edits.push((start..start, format!(" style=\"{}\"", xml_text(&style))));
+            }
+        }
+        edits.sort_by_key(|(r, _)| std::cmp::Reverse(r.start));
+        for (range, value) in edits {
+            resource.replace_range(range, &value);
+        }
+        source.push_str(&resource);
+    }
+    source
 }

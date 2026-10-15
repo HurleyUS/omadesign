@@ -365,9 +365,7 @@ fn write_shape(
         ),
         Fill::Pattern(pattern) => {
             *grad_id += 1;
-            let (definition, reference) =
-                pattern.definition(&format!("oma-pattern-{grad_id}-"), shape.geom.bbox());
-            defs.push_str(&definition);
+            let reference = pattern.append_definition(defs, &format!("oma-pattern-{grad_id}-"), shape.geom.bbox());
             format!("fill=\"{reference}\" fill-opacity=\"{}\"", pattern.opacity)
         }
         Fill::None => "fill=\"none\"".to_string(),
