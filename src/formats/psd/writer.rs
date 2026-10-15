@@ -77,6 +77,7 @@ fn zip_channel(data: &[u8]) -> Result<Vec<u8>, String> {
 /// Export a standards-compliant RGB/8 PSD or PSB, with a compatibility composite.
 /// Vectors and native filters are rendered per layer; groups and pixel masks stay separate.
 pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
+    doc.validate_sources()?;
     if doc.layers.iter().any(|l| {
         l.kind.shapes().is_some_and(|ss| {
             ss.len() > 1
