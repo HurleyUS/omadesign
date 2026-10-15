@@ -31,7 +31,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut crate::app::Studio) {
                     if let Ok(tree) = usvg::Tree::from_str(&candidate, &crate::svg_source::options()) {
                         if graph.filters.iter().all(|id| tree.filters().iter().any(|f| f.id() == id)) {
                             graph.reductions = crate::svg_source::reductions(&candidate);
-                            graph.definitions = source;
+                            graph.definitions = crate::formats::svg::normalized_definitions(&tree);
                             ui.data_mut(|d| d.remove::<String>(id.with("error")));
                             changed = true;
                         }

@@ -612,17 +612,19 @@ fn color_studio(ui: &mut Ui, studio: &mut Studio) {
             .color(fg_weak()),
         );
         let current = gradient.as_ref().map(|g| g.kind);
+        let pattern = matches!(style.fill, Fill::Pattern(_));
+        let mut replace_pattern = false;
         let mut chosen = current;
         ComboBox::from_id_salt("paint-type")
-            .selected_text(current.map(|k| k.name()).unwrap_or("Solid"))
+            .selected_text(if pattern { "Pattern" } else { current.map(|k| k.name()).unwrap_or("Solid") })
             .width(108.)
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut chosen, None, "Solid");
+                replace_pattern = ui.selectable_value(&mut chosen, None, "Solid").clicked() && pattern;
                 for kind in crate::gradient::GradientKind::ALL {
                     ui.selectable_value(&mut chosen, Some(kind), kind.name());
                 }
             });
-        if chosen != current {
+        if chosen != current || replace_pattern {
             gradient = chosen.map(|kind| {
                 let mut g = gradient.clone().unwrap_or_else(|| {
                     crate::gradient::Gradient::new(

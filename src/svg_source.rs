@@ -172,7 +172,14 @@ impl SvgFilterGraph {
 /// Identify SVG operations the current renderer cannot execute.
 /// Args: filter XML. Returns one explicit reduction per unsupported primitive or external input.
 pub fn reductions(source: &str) -> Vec<String> {
-    let Ok(xml) = roxmltree::Document::parse(source) else {
+    let Ok(xml) = roxmltree::Document::parse_with_options(
+        source,
+        roxmltree::ParsingOptions {
+            allow_dtd: true,
+            nodes_limit: 400_000,
+            entity_resolver: None,
+        },
+    ) else {
         return vec!["Invalid SVG effect source".into()];
     };
     let mut notes = Vec::new();
@@ -239,4 +246,30 @@ pub fn options() -> usvg::Options<'static> {
     let mut options = usvg::Options::default();
     options.image_href_resolver.resolve_string = Box::new(|_, _| None);
     options
+}
+
+/// Protect advanced paint from older readers that ignore new fields.
+/// Args: document to save. Returns whether the SVG paint project format is required.
+pub fn requires_advanced_paint(doc: &crate::document::Document) -> bool {
+    let gradient = |g: &crate::gradient::Gradient| {
+        g.radial_axis.is_some()
+            || g.focal != [0., 0.]
+            || g.inner_radius != 0.
+            || g.spread != crate::gradient::Spread::Pad
+    };
+    doc.layers.iter().any(|layer| {
+        layer.svg_filter.is_some()
+            || layer.kind.shapes().is_some_and(|shapes| {
+                shapes.iter().any(|shape| {
+                    matches!(&shape.style.fill, crate::document::Fill::Pattern(_))
+                        || shape.style.fill.gradient().as_ref().is_some_and(gradient)
+                        || shape
+                            .style
+                            .stroke
+                            .as_ref()
+                            .and_then(|s| s.gradient.as_ref())
+                            .is_some_and(gradient)
+                })
+            })
+    })
 }

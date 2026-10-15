@@ -1039,7 +1039,7 @@ impl Reader<'_> {
         Ok(())
     }
 }
-fn normalized_definitions(tree: &usvg::Tree) -> String {
+pub(crate) fn normalized_definitions(tree: &usvg::Tree) -> String {
     let source = tree.to_string(&usvg::WriteOptions::default());
     let xml = roxmltree::Document::parse(&source).expect("normalized SVG");
     let mut defs = xml
