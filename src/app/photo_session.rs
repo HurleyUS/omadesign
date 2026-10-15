@@ -1679,7 +1679,7 @@ impl PhotoSession {
                 {
                     return Err("Invalid original camera pixels in restart snapshot".into());
                 }
-                PhotoImage::from_raw(p.name, raw)
+                PhotoImage::from_raw(p.name, raw)?
             } else {
                 PhotoImage::from_full(
                     p.name,

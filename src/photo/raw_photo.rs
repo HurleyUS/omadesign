@@ -39,7 +39,8 @@ impl LinearImage {
 }
 
 impl PhotoImage {
-    pub fn from_raw(name: String, raw: crate::formats::raw::RawImage) -> Self {
+    pub fn from_raw(name: String, mut raw: crate::formats::raw::RawImage) -> Result<Self, String> {
+        raw.admit_memory(&crate::formats::raw::Cancellation::default())?;
         let linear = LinearImage::preview(raw.width, raw.height, &raw.pixels, 1600);
         let baseline = DevelopParams {
             exposure: raw.metadata.baseline_exposure,
@@ -51,7 +52,7 @@ impl PhotoImage {
         );
         let preview = Arc::new(RgbaImage { w, h, data });
         let thumb = Arc::new(preview.downscaled(192));
-        Self {
+        Ok(Self {
             name,
             full: preview.clone(),
             preview,
@@ -63,7 +64,7 @@ impl PhotoImage {
             source: None,
             source_identity: None,
             settings_path: None,
-        }
+        })
     }
 
     /// Decode on a worker, then restore settings associated with this exact source.
@@ -100,10 +101,18 @@ impl PhotoImage {
             .map(|settings| edits::load_file(settings, &identity))
             .transpose()?;
         let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-        if file.metadata().map_err(|e| e.to_string())?.len() > 512 * 1024 * 1024 {
+        let is_raw = crate::formats::raw::is_extension(
+            path.extension().and_then(|s| s.to_str()).unwrap_or(""),
+        );
+        if !is_raw && file.metadata().map_err(|e| e.to_string())?.len() > 512 * 1024 * 1024 {
             return Err("Choose a photo smaller than 512 MiB".into());
         }
+        let input_memory =
+            crate::formats::raw::resources::global().reserve(identity.size_bytes, cancel)?;
         let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(identity.size_bytes as usize)
+            .map_err(|_| "Not enough memory to read the photo")?;
         let mut block = [0u8; 256 * 1024];
         loop {
             cancel.check()?;
@@ -111,13 +120,13 @@ impl PhotoImage {
             if count == 0 {
                 break;
             }
-            if bytes.len() + count > 512 * 1024 * 1024 {
-                return Err("Photo exceeds 512 MiB".into());
+            if bytes.len() as u64 + count as u64 > identity.size_bytes {
+                return Err("The photo changed while it was opening. Open it again.".into());
             }
             bytes.extend_from_slice(&block[..count]);
         }
-        if bytes.len() > 512 * 1024 * 1024 {
-            return Err("Photo exceeds 512 MiB".into());
+        if bytes.len() as u64 != identity.size_bytes {
+            return Err("The photo changed while it was opening. Open it again.".into());
         }
         let name = path
             .file_name()
@@ -128,8 +137,8 @@ impl PhotoImage {
         let mut photo = if crate::formats::raw::is_extension(extension) {
             Self::from_raw(
                 name,
-                crate::formats::raw::decode_cancellable(&bytes, cancel)?,
-            )
+                crate::formats::raw::decode_reserved(&bytes, cancel, &input_memory)?,
+            )?
         } else {
             let pixels = crate::formats::decode_image(&bytes)?;
             Self::from_full(
