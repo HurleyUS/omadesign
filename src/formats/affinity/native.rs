@@ -467,3 +467,139 @@ fn blend(b: af::Blend) -> &'static str {
         _ => "normal",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn native_affinity_real_files_preserve_editable_artwork_and_original_bytes() {
+        let Ok(root) = std::env::var("OMADESIGN_AFFINITY_FIXTURES") else {
+            return;
+        };
+        let root = std::path::Path::new(&root);
+        let manifest: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(root.join("manifest.json")).unwrap())
+                .unwrap();
+        assert!(
+            manifest.len() >= 15,
+            "required real V1/V2/V3 fixture set is incomplete"
+        );
+        let mut versions = std::collections::BTreeSet::new();
+        let mut total_shapes = 0;
+        let mut reports = Vec::new();
+        for fixture in manifest {
+            let name = fixture["name"].as_str().unwrap();
+            let bytes = std::fs::read(root.join(name)).unwrap();
+            assert_eq!(
+                format!("{:x}", Sha256::digest(&bytes)),
+                fixture["sha256"].as_str().unwrap(),
+                "fixture changed: {name}"
+            );
+            versions.insert(u16::from_le_bytes([bytes[4], bytes[5]]));
+            let (mut doc, notes) = read(&bytes, name).unwrap_or_else(|e| panic!("{name}: {e}"));
+            doc.import_notes = notes;
+            let shapes = doc
+                .layers
+                .iter()
+                .filter_map(|l| l.kind.shapes())
+                .map(|s| s.len())
+                .sum::<usize>();
+            let text = doc
+                .layers
+                .iter()
+                .filter_map(|l| l.kind.shapes())
+                .flatten()
+                .filter(|s| matches!(s.geom, crate::geom::Geom::Text(_)))
+                .count();
+            assert!(!doc.artboards.is_empty(), "{name} artboards disappeared");
+            if name.contains("text") {
+                assert!(text > 0, "{name} did not preserve editable text");
+            }
+            let saved = crate::project::encode(&doc).unwrap();
+            let reopened = crate::project::decode(&saved).unwrap();
+            assert_eq!(reopened.sources[0].bytes(), bytes);
+            assert_eq!(
+                crate::project::encode(&reopened).unwrap(),
+                saved,
+                "{name} changed on native reopen"
+            );
+            let svg = crate::svg::export(&reopened).unwrap();
+            let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).unwrap();
+            assert_eq!(tree.size().width(), reopened.width);
+            let (interchanged, _) = crate::formats::svg::read(&svg, name).unwrap();
+            assert!(
+                interchanged
+                    .layers
+                    .iter()
+                    .filter_map(|l| l.kind.shapes())
+                    .map(|s| s.len())
+                    .sum::<usize>()
+                    > 0
+                    || reopened.layers.iter().any(|l| l.kind.pixels().is_some())
+            );
+            total_shapes += shapes;
+            reports.push(serde_json::json!({"file":name,"sha256":fixture["sha256"],"layers":doc.layers.len(),"shapes":shapes,"text":text,"artboards":doc.artboards.len(),"warnings":doc.import_notes}));
+            if name.contains("fx") {
+                let mut archive = omadesign_affinity::Archive::open(
+                    &bytes,
+                    omadesign_affinity::Limits::default(),
+                )
+                .unwrap();
+                let stream =
+                    omadesign_affinity::stream::parse(&archive.read("doc.dat").unwrap()).unwrap();
+                let effects = stream
+                    .objects
+                    .iter()
+                    .filter(|o| {
+                        o.fields
+                            .iter()
+                            .any(|(t, _)| *t == omadesign_affinity::stream::Tag::of(b"FiEf"))
+                    })
+                    .collect::<Vec<_>>();
+                let effect_ids = effects
+                    .iter()
+                    .flat_map(|o| o.fields.iter())
+                    .filter(|(t, _)| *t == omadesign_affinity::stream::Tag::of(b"FiEf"))
+                    .flat_map(|(_, v)| {
+                        if let omadesign_affinity::stream::Value::Array(v) = v {
+                            v.clone()
+                        } else {
+                            vec![v.clone()]
+                        }
+                    })
+                    .filter_map(|v| {
+                        if let omadesign_affinity::stream::Value::Obj(Some(id)) = v {
+                            Some(id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let mut dump = String::new();
+                for id in effect_ids {
+                    dump.push_str(&format!("{:#?}\n", stream.objects[id]));
+                    for (_, value) in &stream.objects[id].fields {
+                        if let omadesign_affinity::stream::Value::Obj(Some(id)) = value {
+                            dump.push_str(&format!("  {:#?}\n", stream.objects[*id]));
+                        }
+                    }
+                }
+                std::fs::write(root.join(format!("{name}.effects.txt")), dump).unwrap();
+            }
+        }
+        assert!(versions.contains(&9) && versions.contains(&11) && versions.contains(&12));
+        assert!(total_shapes > 50);
+        std::fs::write(
+            root.join("qualification.json"),
+            serde_json::to_string_pretty(&reports).unwrap(),
+        )
+        .unwrap();
+        eprintln!(
+            "Qualified {} real Affinity documents: V1/V2/V3 container versions {:?}, {total_shapes} editable shapes",
+            reports.len(),
+            versions
+        );
+    }
+}
