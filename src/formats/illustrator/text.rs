@@ -231,6 +231,178 @@ pub(super) struct Texts {
 }
 
 impl Texts {
+    /// Forward native story styles to the shared SVG type importer.
+    /// Args: story/frame indices, canvas centre, artboard origin and unique element id.
+    /// Returns standard SVG text with its source affine map and styled character runs.
+    pub(super) fn svg_story(
+        &self,
+        index: usize,
+        frame: usize,
+        template: (f32, f32),
+        first: [f32; 4],
+        id: &str,
+    ) -> Option<String> {
+        use std::fmt::Write as _;
+        let main = self.doc.get("1")?;
+        let story = main.get("1")?.list().get(index)?;
+        let chars = story.get("0")?;
+        let content = chars
+            .get("0")?
+            .str()?
+            .trim_end_matches('\r')
+            .replace(['\r', '\x03'], "\n");
+        if content.len() > MAX_STORY {
+            return None;
+        }
+        let view = story.get("1")?;
+        let frame_index = view.get("0")?.list().get(frame)?.get("0")?.num()? as usize;
+        let data = self
+            .doc
+            .get("0")?
+            .get("8")?
+            .get("0")?
+            .list()
+            .get(frame_index)?
+            .get("0")?;
+        let carries = data.get("2")?;
+        let kind = carries.get("0").and_then(Val::num).unwrap_or(0.) as i32;
+        let defaults = main.get("2")?;
+        let runs = chars
+            .get("6")
+            .and_then(|v| v.get("0"))
+            .map(Val::list)
+            .unwrap_or_default();
+        let props = runs
+            .first()
+            .and_then(|v| v.get("0"))
+            .and_then(|v| v.get("0"))
+            .and_then(|v| v.get("6"));
+        let pick = |key: &str| props.and_then(|v| v.get(key)).or_else(|| defaults.get(key));
+        let px = pick("1")
+            .and_then(Val::num)
+            .filter(|n| *n > 0. && *n < 1e5)
+            .unwrap_or(12.);
+        let escape = |s: &str| {
+            s.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+                .replace('\'', "&apos;")
+        };
+        let mut definitions = String::new();
+        let mut transform = String::new();
+        let mut flow = String::new();
+        let to_doc = |x: f64, y: f64| {
+            (
+                (x - CANVAS_CENTRE) as f32 + template.0 - first[0],
+                first[3] - ((CANVAS_CENTRE - y) as f32 + template.1),
+            )
+        };
+        if kind == 0 {
+            if frame > 0 || content.contains('\n') {
+                return None;
+            }
+            let matrix = carries.get("2")?.nums()?;
+            let [a, b, c, d, e, f] = matrix.as_slice() else {
+                return None;
+            };
+            if !matrix.iter().all(|n| n.is_finite()) {
+                return None;
+            }
+            let anchor = find_node(view.get("2"), "F")?.get("0")?.get("0")?.nums()?;
+            let x = anchor.first().copied().unwrap_or(0.);
+            let y = anchor.get(1).copied().unwrap_or(0.);
+            let (x, y) = to_doc(a * x + c * y + e, b * x + d * y + f);
+            transform = format!(" transform=\"matrix({a} {b} {c} {d} {x} {y})\"");
+        } else if kind == 1 {
+            let points = data.get("1")?.get("0")?.nums()?;
+            if points.len() < 8 || points.len() % 8 != 0 {
+                return None;
+            }
+            let points = points
+                .chunks_exact(2)
+                .map(|p| to_doc(p[0], p[1]))
+                .collect::<Vec<_>>();
+            let x = points.iter().map(|p| p.0).fold(f32::INFINITY, f32::min);
+            let y = points.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
+            let w = points.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max) - x;
+            let h = points.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max) - y;
+            write!(
+                definitions,
+                "<rect id=\"{id}-frame\" x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\"/>"
+            )
+            .ok()?;
+            let leading = if matches!(pick("4"), Some(Val::Bool(false))) {
+                pick("5").and_then(Val::num).unwrap_or(px * 1.2)
+            } else {
+                px * 1.2
+            };
+            flow = format!("shape-inside:url(#{id}-frame);line-height:{leading}px;");
+        } else {
+            return None;
+        }
+        let mut out = format!(
+            "<defs>{definitions}</defs><text id=\"{id}\" font-size=\"{px}\"{transform} style=\"{flow}\" xml:space=\"preserve\">"
+        );
+        let fonts = self.doc.get("0")?.get("1")?.get("0")?.list();
+        let characters = content.chars().collect::<Vec<_>>();
+        let mut from = 0usize;
+        let mut spans = runs
+            .iter()
+            .map(|r| {
+                (
+                    r.get("1").and_then(Val::num).unwrap_or(0.).max(0.) as usize,
+                    r.get("0").and_then(|v| v.get("0")).and_then(|v| v.get("6")),
+                )
+            })
+            .collect::<Vec<_>>();
+        if spans.is_empty() {
+            spans.push((characters.len(), None));
+        }
+        for (count, props) in spans {
+            let end = from.saturating_add(count).min(characters.len());
+            let text = characters[from..end].iter().collect::<String>();
+            from = end;
+            if text.is_empty() {
+                continue;
+            }
+            let pick = |key: &str| props.and_then(|v| v.get(key)).or_else(|| defaults.get(key));
+            let size = pick("1")
+                .and_then(Val::num)
+                .filter(|n| *n > 0. && *n < 1e5)
+                .unwrap_or(px);
+            let font = pick("0")
+                .and_then(Val::num)
+                .and_then(|n| fonts.get(n as usize))
+                .and_then(|v| v.get("0"))
+                .and_then(|v| v.get("0"))
+                .and_then(|v| v.get("0"))
+                .and_then(Val::str)
+                .unwrap_or("sans-serif");
+            let fill = if matches!(pick("56"), Some(Val::Bool(false))) {
+                "none".to_string()
+            } else {
+                pick("53").and_then(paint).unwrap_or(Rgba::BLACK).css()
+            };
+            let tracking = pick("8")
+                .and_then(Val::num)
+                .filter(|n| n.abs() < 1e5)
+                .unwrap_or(0.)
+                * size
+                / 1000.;
+            let shift = pick("9")
+                .and_then(Val::num)
+                .filter(|n| n.abs() < 1e5)
+                .unwrap_or(0.);
+            write!(out,"<tspan font-family=\"{}\" font-size=\"{size}\" fill=\"{fill}\" letter-spacing=\"{tracking}\" baseline-shift=\"{shift}\">{}</tspan>",escape(font),escape(&text)).ok()?;
+        }
+        if from < characters.len() {
+            out.push_str(&escape(&characters[from..].iter().collect::<String>()));
+        }
+        out.push_str("</text>");
+        Some(out)
+    }
+
     /// Decode the Illustrator text document.
     /// `data` contains AI editing operators. Returns bounded ATE dictionaries,
     /// or `None` when no text engine data can be read.
@@ -409,7 +581,7 @@ impl Texts {
             run.px *= scale;
             run.leading *= scale;
             run.tracking *= scale;
-            rotation = b.atan2(*a) as f32;
+            rotation = -b.atan2(*a) as f32;
             let hscale = a.hypot(*b) as f32 / scale;
             let vscale = c.hypot(*d) as f32 / scale;
             if (hscale - 1.).abs() > 1e-4 || (vscale - 1.).abs() > 1e-4 {
@@ -453,7 +625,7 @@ impl Texts {
                 .skip(1)
                 .any(|v| v.get("0").and_then(|v| v.get("0")).and_then(|v| v.get("6")) != first)
             {
-                notes.push("Illustrator mixed font/paint runs use the first run's appearance; all characters remain editable.".into());
+                notes.push("Illustrator mixed font/paint runs require the shared rich type importer; compare the result with the retained original.".into());
             }
         }
         let fill = if matches!(pick("56"), Some(Val::Bool(false))) {

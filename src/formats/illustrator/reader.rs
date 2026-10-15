@@ -1375,6 +1375,59 @@ impl Reader<'_> {
                 board
             })
             .collect();
+        if let Some(texts) = &self.texts {
+            let mut body = String::new();
+            let mut targets = HashMap::new();
+            let template = self
+                .template
+                .map(|t| ((t[0] + t[2]) / 2., (t[1] + t[3]) / 2.))
+                .unwrap_or((0., 0.));
+            for (layer, story, frame, _) in &self.text_slots {
+                if !doc.layers.iter().any(|l| l.id == *layer) {
+                    continue;
+                }
+                let id = format!("ai-type-{layer}");
+                if let Some(svg) = texts.svg_story(*story, *frame, template, first, &id) {
+                    body.push_str(&svg);
+                    targets.insert(id, *layer);
+                }
+            }
+            if !body.is_empty() {
+                let svg = format!(
+                    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\">{body}</svg>",
+                    doc.width, doc.height
+                );
+                match crate::formats::svg::read(&svg, "Illustrator type") {
+                    Ok((typed, notes)) => {
+                        for shape in typed
+                            .layers
+                            .iter()
+                            .filter_map(|l| l.kind.shapes())
+                            .flatten()
+                        {
+                            if !matches!(&shape.geom, Geom::Text(_)) {
+                                continue;
+                            }
+                            if let Some(layer) = targets
+                                .get(&shape.name)
+                                .and_then(|id| doc.layers.iter_mut().find(|l| l.id == *id))
+                                && let Some(original) =
+                                    layer.kind.shapes_mut().and_then(|s| s.first_mut())
+                            {
+                                original.geom = shape.geom.clone();
+                                original.style = shape.style.clone();
+                                original.rotation = shape.rotation;
+                            }
+                        }
+                        self.notes
+                            .extend(notes.into_iter().map(|n| format!("Illustrator type: {n}")));
+                    }
+                    Err(error) => {
+                        self.note(format!("Illustrator styled type could not use the shared SVG importer: {error}. Editable source characters remain available."));
+                    }
+                }
+            }
+        }
         Ok((doc, self.notes.into_iter().collect()))
     }
 }
