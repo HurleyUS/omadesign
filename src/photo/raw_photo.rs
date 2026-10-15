@@ -68,6 +68,11 @@ impl std::ops::Deref for EncodedPhoto {
     }
 }
 impl EncodedPhoto {
+    /// Transfer encoded output into the shared immutable owner without copying or reserving again.
+    /// Args: self. Returns the same byte allocation with its exclusive live lease.
+    pub(crate) fn into_allocation(self) -> Result<Arc<resources::Allocation<u8>>, String> {
+        resources::global().adopt(self.bytes, self._memory)
+    }
     pub(crate) fn into_vec(self) -> Vec<u8> {
         self.bytes
     }
