@@ -461,7 +461,8 @@ mod tests {
                 .code,
             ErrorCode::Cancelled
         );
-        let mut budget = Evaluation::new(&m, 0., &mut || true);
+        let mut keep = || true;
+        let mut budget = Evaluation::new(&m, 0., &mut keep);
         budget.remaining = 1;
         assert_eq!(
             budget.value(1, Prop::X).unwrap_err().code,
