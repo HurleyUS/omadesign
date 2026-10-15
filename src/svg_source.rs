@@ -453,7 +453,34 @@ mod independent_tests {
             .map(|(a, b)| u64::from(a.abs_diff(*b)))
             .sum();
         let mean = sum as f64 / actual.data().len() as f64;
-        std::fs::remove_dir_all(&dir).unwrap();
+        if mean < 1.5 {
+            std::fs::remove_dir_all(&dir).unwrap();
+        } else {
+            actual.save_png(dir.join("native.png")).unwrap();
+            std::fs::write(dir.join("source.svg"), source).unwrap();
+            for (label, (x, y, w, h)) in [
+                ("radial", (8, 8, 74, 87)),
+                ("reflect", (94, 8, 78, 57)),
+                ("pattern", (8, 103, 164, 29)),
+            ] {
+                let sum: u64 = (y..y + h)
+                    .flat_map(|y| (x..x + w).map(move |x| (x, y)))
+                    .map(|(x, y)| {
+                        let at = ((y * actual.width() + x) * 4) as usize;
+                        actual.data()[at..at + 4]
+                            .iter()
+                            .zip(&expected.data()[at..at + 4])
+                            .map(|(a, b)| u64::from(a.abs_diff(*b)))
+                            .sum::<u64>()
+                    })
+                    .sum();
+                println!(
+                    "{label} independent mean={}",
+                    sum as f64 / (w * h * 4) as f64
+                );
+            }
+            println!("Independent failure artifacts: {}", dir.display());
+        }
         println!("independent librsvg SVG paint mean channel error={mean}");
         assert!(
             mean < 1.5,

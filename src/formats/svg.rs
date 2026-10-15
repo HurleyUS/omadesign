@@ -1716,11 +1716,12 @@ mod tests {
     }
 
     #[test]
-    fn fallback_paths_and_images_keep_ancestor_transforms() {
+    fn svg_vector_patterns_and_images_keep_ancestor_transforms() {
         let pattern = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><defs><pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="4" fill="red"/></pattern></defs><g transform="translate(13 7) scale(2)"><rect x="1" y="2" width="12" height="10" fill="url(#p)"/></g></svg>"##;
         let (doc, _, max, _) = compare_render(pattern);
         assert_eq!(max, 0);
-        assert!(doc.layers.iter().any(|l| l.kind.pixels().is_some()));
+        assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+        assert!(doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(s.style.fill, Fill::Pattern(_))));
         let image = crate::photo::RgbaImage::new(
             2,
             2,
