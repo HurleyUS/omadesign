@@ -13,6 +13,8 @@ use std::path::{Component, Path, PathBuf};
 mod tests;
 #[path = "qualification/workflow.rs"]
 mod workflow;
+#[path = "qualification/reference.rs"]
+mod reference;
 
 const MANIFEST: &str = include_str!("../../../docs/qa/raw-camera-manifest.json");
 const SOURCE_BUDGET: u64 = 512 * 1024 * 1024;
