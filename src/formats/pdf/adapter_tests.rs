@@ -1,7 +1,7 @@
 //! Real output checks for the PDF adapters on the common SVG source model.
 use super::*;
 use crate::artwork_mask::{ArtworkMask, MaskSource};
-use crate::geom::{CharSpan, TypeRun};
+use crate::geom::{Bounds, CharSpan, TypeRun};
 use crate::gradient::{Gradient, GradientKind, GradientStop, Spread};
 
 fn rect(origin: Pt, size: Pt, fill: Fill) -> Shape {
