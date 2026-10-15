@@ -497,6 +497,58 @@ mod tests {
     use crate::{document::Fill, formats::svg::read};
 
     #[test]
+    fn svg_project_guard_covers_each_advanced_gradient_field_on_fill_and_stroke() {
+        use crate::gradient::{Gradient, GradientKind, Spread};
+        let (plain, _) = read(r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="#fff" stroke="#000"/></svg>"##, "Guard").unwrap();
+        let version = |doc: &crate::document::Document| {
+            serde_json::from_str::<serde_json::Value>(&crate::project::encode(doc).unwrap())
+                .unwrap()["version"]
+                .as_u64()
+                .unwrap()
+        };
+        assert_eq!(version(&plain), 5);
+        let legacy = Gradient::new(
+            GradientKind::Radial,
+            crate::color::Rgba::BLACK,
+            crate::color::Rgba::WHITE,
+        );
+        for field in 0..6 {
+            let mut gradient = legacy.clone();
+            match field {
+                0 => {}
+                1 => gradient.radial_axis = Some([0.2, 0.4]),
+                2 => gradient.focal = [0.1, -0.2],
+                3 => gradient.inner_radius = 0.15,
+                4 => gradient.spread = Spread::Repeat,
+                _ => gradient.spread = Spread::Reflect,
+            }
+            for stroke in [false, true] {
+                let mut doc = plain.clone();
+                let shape = doc
+                    .layers
+                    .iter_mut()
+                    .filter_map(|l| l.kind.shapes_mut())
+                    .flatten()
+                    .next()
+                    .unwrap();
+                if stroke {
+                    shape.style.stroke.as_mut().unwrap().gradient = Some(gradient.clone());
+                } else {
+                    shape.style.fill = Fill::Gradient(gradient.clone());
+                }
+                assert_eq!(
+                    version(&doc),
+                    if field == 0 { 5 } else { 14 },
+                    "field={field} stroke={stroke}"
+                );
+                let reopened =
+                    crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+                assert_eq!(requires_advanced_paint(&reopened), field != 0);
+            }
+        }
+    }
+
+    #[test]
     fn svg_sources_share_prune_pack_and_reopen_without_pattern_id_collisions() {
         let shapes = (0..120)
             .map(|i| {
