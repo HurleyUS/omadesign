@@ -51,3 +51,66 @@ mod tests {
         }
     }
 }
+
+#[test]
+fn shared_field_drag_reports_preview_then_final_commit() {
+    let ctx = egui::Context::default();
+    let mut value = 10.0;
+    let mut time = 0.0;
+    let mut frame = |events| {
+        time += 0.02;
+        let mut rect = egui::Rect::NOTHING;
+        let mut flags = [false; 3];
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                time: Some(time),
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let result = number(
+                    ui,
+                    "drag-contract",
+                    "Position",
+                    &mut value,
+                    -100.0..=100.0,
+                    " px",
+                    None,
+                    Default::default(),
+                );
+                rect = result.response.rect;
+                flags[0] |= result.changed;
+                flags[1] |= result.committed;
+                flags[2] |= result.cancelled;
+            },
+        );
+        (rect, flags)
+    };
+    let (rect, _) = frame(vec![]);
+    let start = rect.center();
+    frame(vec![
+        egui::Event::PointerMoved(start),
+        egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        },
+    ]);
+    let end = start + egui::vec2(30.0, 0.0);
+    let (_, flags) = frame(vec![egui::Event::PointerMoved(end)]);
+    assert!(flags[0], "drag must preview a changed value");
+    assert!(!flags[1], "preview cannot commit every frame");
+    let (_, flags) = frame(vec![egui::Event::PointerButton {
+        pos: end,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    }]);
+    assert!(flags[1], "release must commit the gesture");
+    assert!(!flags[2]);
+}
