@@ -982,10 +982,35 @@ impl Reader<'_> {
             px: font_size * if simple { a } else { 1. },
             tracking: state.char_space * if simple { a } else { 1. },
             kern: false,
-            liga: false,
+            liga: font.is_some_and(|f| {
+                f.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Type0")
+            }) && bytes.len() == 2
+                && content.chars().count() > 1,
             ..TypeRun::default()
         };
         run.contours = crate::text::shape(&run);
+        let mapped_glyph = font.and_then(|font| self.cid_glyph(font, bytes));
+        let mapped_outline = mapped_glyph.is_some_and(|id| {
+            let lines = crate::text::compose(&run);
+            let glyphs = lines.iter().flat_map(|l| &l.glyphs).collect::<Vec<_>>();
+            glyphs.len() != 1 || glyphs[0].id != id
+        });
+        if mapped_outline {
+            run.contours = crate::text::glyph_contours(
+                &run,
+                &crate::text::LayoutGlyph {
+                    id: mapped_glyph.unwrap(),
+                    cluster: 0,
+                    x: 0.,
+                    y: 0.,
+                    advance: 0.,
+                    is_space: false,
+                    hscale: 1.,
+                    vscale: 1.,
+                },
+            );
+            self.warn("A PDF CID glyph cannot be reproduced from its Unicode mapping; its exact embedded glyph is retained as editable outlines.");
+        }
         let advance = if let Some(font) = font {
             if let Some(width) = self.text_width(font, bytes) {
                 width * font_size / 1000.
@@ -1009,13 +1034,19 @@ impl Reader<'_> {
         if matches!(state.text_mode, 3 | 7) || content.is_empty() {
             return Ok(());
         }
-        let geom = if simple {
+        let geom = if simple && !mapped_outline {
             Geom::Text(run)
         } else {
-            self.warn("Rotated, reflected, or sheared PDF text is retained as editable outlines.");
+            if !simple {
+                self.warn(
+                    "Rotated, reflected, or sheared PDF text is retained as editable outlines.",
+                );
+            }
             for contour in &mut run.contours {
                 for point in contour {
-                    *point = transform.map(*point);
+                    if !simple {
+                        *point = transform.map(*point);
+                    }
                 }
             }
             Geom::Poly {
@@ -1026,6 +1057,36 @@ impl Reader<'_> {
         let mut shape = Shape::new(geom, text_style(state));
         shape.name = content.chars().take(80).collect();
         self.add_shapes(vec![shape], state, marked)
+    }
+
+    /// Resolve one horizontal CID to the embedded TrueType glyph.
+    /// Args: font and encoded CID. Returns the explicit glyph index when a map is available.
+    fn cid_glyph(&self, font: &Dictionary, bytes: &[u8]) -> Option<u16> {
+        if bytes.len() != 2
+            || font.get(b"Subtype").and_then(Object::as_name).ok() != Some(b"Type0")
+            || font.get(b"Encoding").and_then(Object::as_name).ok() != Some(b"Identity-H")
+        {
+            return None;
+        }
+        let cid = u16::from_be_bytes([bytes[0], bytes[1]]);
+        let descendant = font
+            .get(b"DescendantFonts")
+            .ok()
+            .and_then(|o| resolve(self.pdf, o))?
+            .as_array()
+            .ok()?
+            .first()
+            .and_then(|o| dictionary(self.pdf, o))?;
+        let map = descendant
+            .get(b"CIDToGIDMap")
+            .ok()
+            .and_then(|o| resolve(self.pdf, o))?;
+        if map.as_name().ok() == Some(b"Identity") {
+            return Some(cid);
+        }
+        let bytes = decoded(map.as_stream().ok()?, 128 * 1024).ok()?;
+        let at = usize::from(cid) * 2;
+        Some(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]))
     }
 
     /// Read horizontal advances from simple and Identity-H CID font dictionaries.

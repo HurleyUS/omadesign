@@ -335,9 +335,21 @@ impl Writer {
     /// Paint fill and stroke independently before object opacity is applied.
     /// Args: object, page bounds and output. Returns an error for invalid gradient data.
     fn shape(&mut self, shape: &Shape, bounds: Bounds, out: &mut Scene) -> Result<(), String> {
-        if matches!(shape.geom, Geom::Text(_)) {
-            match text::write(&mut self.pdf, &mut self.fonts, shape, out) {
-                Ok(()) => return Ok(()),
+        if !shape.rotation.is_finite()
+            || !shape.opacity.is_finite()
+            || !shape.fill_opacity.is_finite()
+        {
+            return Err("PDF object opacity and rotation must be finite".into());
+        }
+        if let Geom::Text(run) = &shape.geom {
+            text::validate(run)?;
+            let mut scene = Scene::default();
+            match text::write(&mut self.pdf, &mut self.fonts, shape, &mut scene) {
+                Ok(()) => {
+                    out.ops.extend(scene.ops);
+                    merge_resources(&mut out.resources, scene.resources);
+                    return Ok(());
+                }
                 Err(reason) => {
                     self.warnings
                         .insert(format!("PDF text uses vector outlines because {reason}."));

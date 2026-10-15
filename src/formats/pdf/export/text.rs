@@ -1,5 +1,6 @@
 //! Embedded text uses the same cached face and positioned glyphs as the canvas.
 use super::*;
+use crate::geom::TypeRun;
 use rustybuzz::ttf_parser::{Face, GlyphId, Permissions};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -16,6 +17,35 @@ struct Embedded {
     mapping: ObjectId,
     codes: BTreeMap<(u16, String), u16>,
     glyphs: Vec<(u16, String)>,
+}
+
+/// Validate text numbers before writing PDF operators.
+/// Args: source run. Returns an error for nonfinite size, placement or composed glyphs.
+pub(super) fn validate(run: &TypeRun) -> Result<(), String> {
+    if [
+        run.px,
+        run.origin.x,
+        run.origin.y,
+        run.tracking,
+        run.leading,
+    ]
+    .iter()
+    .any(|n| !n.is_finite())
+    {
+        return Err("PDF text geometry must be finite".into());
+    }
+    if crate::text::compose(run)
+        .iter()
+        .flat_map(|l| &l.glyphs)
+        .any(|g| {
+            [g.x, g.y, g.hscale, g.vscale]
+                .iter()
+                .any(|n| !n.is_finite())
+        })
+    {
+        return Err("PDF composed glyph geometry must be finite".into());
+    }
+    Ok(())
 }
 
 /// Write positioned, editable glyphs with their permitted full TrueType face.
@@ -90,7 +120,7 @@ pub(super) fn write(
             ],
         );
     }
-    if let Some(stroke) = &shape.style.stroke {
+    if let Some(stroke) = shape.style.stroke.as_ref().filter(|s| s.width > 0.) {
         let c = stroke.color;
         op(
             &mut out.ops,
@@ -101,13 +131,28 @@ pub(super) fn write(
     }
     let state=pdf.add_object(dictionary!{"Type"=>"ExtGState","ca"=>color.map_or(1.,|c|c.a as f32/255.)*shape.fill_opacity,"CA"=>shape.style.stroke.as_ref().map_or(1.,|s|s.color.a as f32/255.)*shape.fill_opacity});
     out.invoke("gs", "ExtGState", state);
-    let mode = match (color.is_some(), shape.style.stroke.is_some()) {
+    let mode = match (
+        color.is_some(),
+        shape.style.stroke.as_ref().is_some_and(|s| s.width > 0.),
+    ) {
         (true, true) => 2,
         (true, false) => 0,
         (false, true) => 1,
         _ => 3,
     };
     for line in lines.iter() {
+        let mut clusters = line
+            .glyphs
+            .iter()
+            .map(|g| g.cluster)
+            .chain(std::iter::once(line.end))
+            .collect::<Vec<_>>();
+        clusters.sort_unstable();
+        clusters.dedup();
+        let ends = clusters
+            .windows(2)
+            .map(|p| (p[0], p[1]))
+            .collect::<HashMap<_, _>>();
         let actual = run
             .content
             .chars()
@@ -132,13 +177,7 @@ pub(super) fn write(
         ));
         op(&mut out.ops, "Tr", &[mode as f32]);
         for glyph in &line.glyphs {
-            let end = line
-                .glyphs
-                .iter()
-                .map(|g| g.cluster)
-                .filter(|&c| c > glyph.cluster)
-                .min()
-                .unwrap_or(line.end);
+            let end = ends.get(&glyph.cluster).copied().unwrap_or(line.end);
             let unicode = run
                 .content
                 .chars()

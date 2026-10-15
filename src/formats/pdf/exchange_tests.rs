@@ -638,7 +638,7 @@ fn pdf_exchange_text_has_embedded_font_unicode_and_positioned_glyphs() {
 #[ignore = "independent text/font interoperability: requires Poppler utilities"]
 fn pdf_exchange_text_poppler_and_fresh_process_native_reopen() {
     if let Some(path) = std::env::var_os("OMA_PDF_PORTABLE_REOPEN") {
-        let doc = crate::project::load_from(std::path::Path::new(&path)).unwrap();
+        let mut doc = crate::project::load_from(std::path::Path::new(&path)).unwrap();
         let runs = doc
             .layers
             .iter()
@@ -656,6 +656,32 @@ fn pdf_exchange_text_poppler_and_fresh_process_native_reopen() {
             assert!(run.font.starts_with("omatype:"));
             assert!(crate::text::font_bytes_for(run).is_some());
         }
+        let run = doc
+            .layers
+            .iter_mut()
+            .flat_map(|l| l.kind.shapes_mut().unwrap_or(&mut []))
+            .find_map(|s| {
+                if let Geom::Text(run) = &mut s.geom {
+                    Some(run)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let bytes = crate::text::font_bytes_for(run).unwrap();
+        assert!(
+            rustybuzz::ttf_parser::Face::parse(&bytes, 0)
+                .unwrap()
+                .glyph_index('Ω')
+                .is_some()
+        );
+        let before = crate::text::shape(run).len();
+        run.content.push('Ω');
+        run.contours = crate::text::shape(run);
+        assert!(
+            run.contours.len() > before,
+            "new character did not produce portable editable glyph contours"
+        );
         let (bytes, notes) = write(&doc).unwrap();
         assert!(notes.iter().all(|n| !n.contains("font")), "{notes:?}");
         assert!(!bytes.is_empty());
@@ -767,4 +793,87 @@ fn pdf_exchange_text_poppler_and_fresh_process_native_reopen() {
         folder.display()
     );
     std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
+fn pdf_exchange_rejects_nonfinite_text_and_skips_zero_width_strokes() {
+    for field in 0..3 {
+        let mut doc = text_document();
+        let Geom::Text(run) = &mut doc.layers[0].kind.shapes_mut().unwrap()[0].geom else {
+            unreachable!()
+        };
+        match field {
+            0 => run.px = f32::INFINITY,
+            1 => run.origin.x = f32::NAN,
+            _ => run.tracking = f32::INFINITY,
+        };
+        assert!(write(&doc).unwrap_err().contains("finite"));
+    }
+    let mut doc = text_document();
+    let shapes = doc.layers[0].kind.shapes_mut().unwrap();
+    shapes.truncate(1);
+    shapes[0].style.fill = Fill::None;
+    shapes[0].style.stroke = Some(Stroke {
+        width: 0.,
+        ..Default::default()
+    });
+    let (bytes, notes) = write(&doc).unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let pdf = Pdf::load_mem(&bytes).unwrap();
+    let modes = pdf
+        .objects
+        .values()
+        .filter_map(|o| o.as_stream().ok())
+        .filter(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Form"))
+        .flat_map(|s| {
+            Content::decode(&decoded(s, STREAM_LIMIT).unwrap())
+                .unwrap()
+                .operations
+        })
+        .filter(|o| o.operator == "Tr")
+        .map(|o| number_value(&o.operands[0]).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(modes, vec![3.], "zero width stroke became a PDF hairline");
+}
+
+#[test]
+fn pdf_exchange_ligatures_preserve_embedded_glyphs_on_import() {
+    let mut doc = text_document();
+    let shapes = doc.layers[0].kind.shapes_mut().unwrap();
+    shapes.truncate(1);
+    let Geom::Text(run) = &mut shapes[0].geom else {
+        unreachable!()
+    };
+    run.font = "/usr/share/fonts/noto/NotoSans-Regular.ttf".into();
+    run.content = "office".into();
+    run.liga = true;
+    run.contours = crate::text::shape(run);
+    assert!(
+        crate::text::glyph_count(run) < run.content.chars().count(),
+        "fixture must shape an ffi ligature"
+    );
+    let expected = crate::compositor::render_export(&doc, 1).unwrap();
+    let (bytes, notes) = write(&doc).unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let (imported, notes) = read(&bytes, "ligatures.pdf").unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let text = imported
+        .layers
+        .iter()
+        .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+        .filter_map(|s| {
+            if let Geom::Text(run) = &s.geom {
+                Some(run.content.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<String>();
+    assert_eq!(text, "office");
+    let actual = crate::compositor::render_export(&imported, 1).unwrap();
+    assert_eq!(
+        expected.data(),
+        actual.data(),
+        "ligature glyph appearance changed during import"
+    );
 }
