@@ -60,6 +60,8 @@ from this repository:
   Its text engine contains 107 stories. The root README names ISC while the
   subdirectory's license is MIT; this fixture is used only for local, read-only
   QA without assuming redistribution rights.
+  Its editing data has five artboards (`xs`, `sm`, `md`, `lg`, `xl`); the single
+  PDF page previews `xl`. The test checks all five names and placements.
 
 The test removes every PDF page's `Contents`, confirms identical editing data,
 and compares the resulting native geometry, paint and artboards with the
