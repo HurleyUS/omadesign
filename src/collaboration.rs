@@ -180,24 +180,17 @@ fn inflate(path: &str, cells: &Snapshot) -> Option<Value> {
                 .collect();
             let mut order = Vec::new();
             let mut visited = BTreeSet::new();
-            fn visit(
-                id: &str,
-                positions: &BTreeMap<String, Option<String>>,
-                visited: &mut BTreeSet<String>,
-                order: &mut Vec<String>,
-            ) {
-                if !visited.insert(id.into()) {
-                    return;
-                }
-                if let Some(Some(parent)) = positions.get(id) {
-                    visit(parent, positions, visited, order);
-                }
-                if positions.contains_key(id) {
-                    order.push(id.into());
-                }
-            }
             for id in positions.keys() {
-                visit(id, &positions, &mut visited, &mut order);
+                let mut chain = Vec::new();
+                let mut current = Some(id.as_str());
+                while let Some(id) = current {
+                    if !positions.contains_key(id) || !visited.insert(id.to_owned()) {
+                        break;
+                    }
+                    chain.push(id.to_owned());
+                    current = positions.get(id).and_then(|after| after.as_deref());
+                }
+                order.extend(chain.into_iter().rev());
             }
             Some(Value::Array(
                 order
