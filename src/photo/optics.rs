@@ -296,3 +296,112 @@ mod tests {
         assert!(!settings.valid());
     }
 }
+
+#[cfg(test)]
+mod resized_camera_tests {
+    use crate::photo::{PhotoImage, RgbaImage};
+
+    /// Generate a smooth Bayer calibration frame without borrowing camera assets.
+    /// Args: sensor width/height. Returns an uncompressed DNG using the MIT fixture's camera tags.
+    fn calibration_dng(w: u32, h: u32) -> Vec<u8> {
+        let mut bytes = include_bytes!("../formats/raw/synthetic.dng").to_vec();
+        let raw_offset = bytes.len() as u32;
+        let count = u16::from_le_bytes(bytes[8..10].try_into().unwrap()) as usize;
+        for i in 0..count {
+            let at = 10 + i * 12;
+            let value = match u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) {
+                256 => Some(w),
+                257 | 278 => Some(h),
+                273 => Some(raw_offset),
+                279 => Some(w * h * 2),
+                _ => None,
+            };
+            if let Some(value) = value {
+                bytes[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        for y in 0..h {
+            for x in 0..w {
+                let level = 5000. + 18000. * x as f32 / w as f32 + 8000. * y as f32 / h as f32;
+                let gain = match (y % 2, x % 2) {
+                    (0, 0) => 0.85,
+                    (1, 1) => 0.7,
+                    _ => 1.,
+                };
+                bytes.extend_from_slice(&((level * gain) as u16).to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    fn mean_error(a: &RgbaImage, b: &RgbaImage) -> f64 {
+        a.data
+            .chunks_exact(4)
+            .zip(b.data.chunks_exact(4))
+            .map(|(a, b)| {
+                a[..3]
+                    .iter()
+                    .zip(&b[..3])
+                    .map(|(&a, &b)| a.abs_diff(b) as u64)
+                    .sum::<u64>()
+            })
+            .sum::<u64>() as f64
+            / (a.w * a.h * 3) as f64
+    }
+
+    #[test]
+    fn reduced_camera_preview_detail_and_exports_agree_after_optical_reopen() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(".artifacts")
+            .join(format!(
+                "photo-optics-resized-{}-{}",
+                std::process::id(),
+                crate::document::next_id()
+            ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("synthetic-50mm.dng");
+        let original = calibration_dng(1800, 1200);
+        std::fs::write(&path, &original).unwrap();
+        let mut photo = PhotoImage::load(&path).unwrap();
+        assert_eq!(photo.dimensions(), (1800, 1200));
+        assert_eq!((photo.preview.w, photo.preview.h), (1600, 1067));
+        photo.develop.optics.profile.camera = "Omadesign Synthetic Bayer".into();
+        photo.develop.optics.profile.lens = "Synthetic 50mm calibration".into();
+        photo.develop.optics.profile.focal_length = 50.;
+        photo.develop.optics.profile.distortion = [-0.08, 0.015, 0.];
+        photo.develop.optics.profile.chromatic_aberration = [0.012, -0.009];
+        photo.develop.optics.profile.vignette = [0.2, 0.05];
+        photo.develop.optics.perspective = [0.04, -0.03];
+        photo.develop.optics.straighten = 1.5;
+        photo.develop.optics.scale = 1.2;
+        let settings = crate::photo::edits::save(
+            &path,
+            photo.source_identity.as_ref().unwrap(),
+            &photo.develop,
+        )
+        .unwrap();
+        let photo = PhotoImage::load(&settings).unwrap();
+        let full = photo.render_full();
+        let reduced = photo.render_preview();
+        assert_ne!((reduced.w, reduced.h), (full.w, full.h));
+        assert!(mean_error(&reduced, &full.resized(reduced.w, reduced.h)) < 2.);
+        for edge in [400, 800, 1600] {
+            let preview = photo.render_thumbnail(edge);
+            let error = mean_error(&preview, &full.resized(preview.w, preview.h));
+            assert!(
+                error < 2.,
+                "{edge}px optical geometry/CA mean error {error}"
+            );
+        }
+        for extension in ["png", "tiff"] {
+            let export = image::load_from_memory(&photo.export_bytes(extension).unwrap()).unwrap();
+            assert_eq!((export.width(), export.height()), (1800, 1200));
+            assert_eq!(export.color(), image::ColorType::Rgba16);
+            for (&a, &b) in export.to_rgba16().as_raw().iter().zip(&full.data) {
+                assert!(((u32::from(a) + 128) / 257).abs_diff(u32::from(b)) <= 1);
+            }
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
