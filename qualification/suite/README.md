@@ -213,8 +213,49 @@ Pass `--producer-roots` to `gate` to attach the same inspection. A failed eviden
 import also fails that gate; a valid partial import cannot satisfy or replace any
 required owner acceptance check. All 80 RAW cases remain required (79 unavailable
 after the reviewed M50 pin), along with UI appearance/common fixture/font/theme,
-caption native burn-in/master QC, current scopes/multicam/viewer runtime, stereo
+complete current caption delivery, scopes/multicam/viewer acceptance, stereo
 full-cohort/surround and stricter product gates remain required and unavailable.
 The eleven baseline fixtures/52 checks remain historical at Omadesign123dd7c5,
 Omatainer23d0b3ee and EditBay29238c2. Future execution still requires actual binary
 SHA verification immediately before launch under the global lock.
+
+The bounded video reader consumes e7 scope-worker and 7f native-delivery records:
+
+```
+node scripts/qualify-suite.mjs video-evidence --producer-roots PRIVATE_ROOTS.json
+```
+
+It uses only `evidence`, `video` and `editbay` roots from the map above. It reads
+pinned JSON, logs, helper source, Git objects and retained fixture/font/master
+data, bounded to 8 MiB per asset with before/after file checks. It never opens
+product/decoder/tool executables or replays tests. Node version and current
+inspection host/source are recorded; its executable hash is deliberately null.
+Missing source/helper/input/reference/artifact, changed executed arguments and
+zero or changed test counts make required routes unavailable and exit nonzero.
+
+Numeric scopes14 and native viewer1 remain separate generators at e7. The viewer
+records eleven scope reports, four offscreen completions, paused/prepared refresh,
+stale serial/owner rejection and worker join. Multicam core12 and app10 (one
+ignored scope test) at 7f serve two routes through one group. One separate native
+delivery test produced four masters, each with ten frames and 20,000 mono samples;
+caption pixels, retained VTT, program scopes and preservation assertions belong to
+that same execution. Four masters do not become four executed tests. Original
+editorial9a and caption2d observations retain their sources; stale route prose
+does not supersede the qualified caption packet.
+
+Compiler receipts do not embed runtime packets. Original source assertions,
+actual execution logs, separately pinned producer/coordinator packets and current
+data hashes form the retained join. Producer CLI hashes join separate CLI build
+records; app-test identity joins the original compiler/log. Native project and
+numeric reference hashes absent from producer fields remain coordinator
+observations. Original output-time observations are preserved in those packets,
+not refreshed execution. The separate ffprobe inspection records its executable
+hash but lacks version/full invocation. It shares FFmpeg and cannot establish
+independent codec conformance. Numeric decoder oracles remain original results;
+this reader only checks retained bytes and report arithmetic. No window, sound
+clock, HDR display, device, physical or human acceptance follows.
+
+Every imported route still has `current_candidate_status: unavailable` and
+`public_candidate: false`. VIDEO08 d709 and phase2 audio761b remain unavailable.
+The 055 M50 pins/one-camera qualification and 79 unavailable camera cases, frozen
+60e audio evidence and historical eleven baseline fixtures/52 checks are unchanged.

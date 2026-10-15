@@ -29,7 +29,7 @@ if (rawProducerBinding) {
   roots['raw-evidence'] ??= path.resolve(path.dirname(rawProducerBinding.public_packet),'../..');
 }
 const cameraBindings = () => options['raw-bindings'] ? read(options['raw-bindings']) : rawProducerBinding?.case_bindings ? read(rawProducerBinding.case_bindings) : {};
-const inspectProducers = () => ({...producerEvidence(read(path.join(root,'qualification/suite/owner-sources.json')), {...roots,...(options['producer-roots'] ? read(options['producer-roots']) : {})}),inspection_source:source(root)});
+const inspectProducers = (videoOnly = false) => ({...producerEvidence(read(path.join(root,'qualification/suite/owner-sources.json')), {...roots,...(options['producer-roots'] ? read(options['producer-roots']) : {})},{videoOnly}),inspection_source:source(root)});
 const lane = options.lane ?? 'candidate';
 let changed = [];
 if (lane === 'affected') {
@@ -63,8 +63,8 @@ if (command === 'raw-evidence') {
   const raw = await rawEvidence(index.cohorts.find(c=>c.id==='raw-camera'),{roots,bindings:cameraBindings(),producerBinding:rawProducerBinding});
   console.log(JSON.stringify({...raw,inspection_source:source(root)},null,2));
   process.exitCode = raw.passed ? 0 : 1;
-} else if (command === 'evidence') {
-  const evidence = inspectProducers();
+} else if (command === 'evidence' || command === 'video-evidence') {
+  const evidence = inspectProducers(command === 'video-evidence');
   console.log(JSON.stringify(evidence,null,2));
   process.exitCode = evidence.integrity_passed ? 0 : 1;
 } else if (command==='run' && fixtures.length===0 && cohorts.length===0) {
@@ -210,4 +210,4 @@ if (command === 'raw-evidence') {
     console.log(JSON.stringify({ lane, selection, ...result, issues, producer_evidence }, null, 2));
     process.exitCode = result.passed && issues.length === 0 ? 0 : 1;
   }
-} else throw Error('Use raw-evidence --raw-producer-bindings PRIVATE.json, evidence --producer-roots PRIVATE.json or plan|verify|run|gate --lane affected|candidate [--base COMMIT] [--roots LOCAL.json] [--builds LOCAL.json] [--out DIR] [--config BUILD-CONFIG]');
+} else throw Error('Use raw-evidence --raw-producer-bindings PRIVATE.json, evidence|video-evidence --producer-roots PRIVATE.json or plan|verify|run|gate --lane affected|candidate [--base COMMIT] [--roots LOCAL.json] [--builds LOCAL.json] [--out DIR] [--config BUILD-CONFIG]');

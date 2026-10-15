@@ -12,21 +12,33 @@ const git = (root, ...args) => execFileSync('git', ['-C', root, ...args], {maxBu
 /** Read reviewed owner records without executing producers or opening shared product binaries.
  * Args: tracked owner pins and private roots. Returns source-bound observations and unavailable gates.
  */
-export function producerEvidence(index, roots = {}) {
+export function producerEvidence(index, roots = {}, {videoOnly = false} = {}) {
   const errors = [], runs = {}, cases = [], routes = [];
   const cache = new Map();
+  let retainedBytes = 0;
   const read = (id, json = true) => {
     const pin = index.assets?.[id];
     requireThat(pin && sha.test(pin.sha256) && Number.isSafeInteger(pin.bytes) && pin.bytes > 0 && pin.bytes <= 8388608, `${id}: invalid pin`);
+    requireThat(!videoOnly || (!id.startsWith('tool.') && pin.root !== 'system'), `${id}: executable dependency reads forbidden in video-only inspection`);
     requireThat(!pin.path.split('/').includes('target'), `${id}: shared product target is not an evidence input`);
     if (!cache.has(id)) {
+      requireThat(retainedBytes + pin.bytes <= 33554432, `${id}: evidence inspection exceeds 32 MiB`);
       let file;
       try { file = contained(roots[pin.root], pin.path); }
       catch { throw Error(`${id}: required bytes unavailable`); }
-      requireThat(fs.statSync(file).size === pin.bytes, `${id}: byte count changed`);
-      const bytes = fs.readFileSync(file);
-      requireThat(hash(bytes) === pin.sha256, `${id}: hash changed`);
-      cache.set(id, bytes);
+      const fd = fs.openSync(file,'r');
+      try {
+        const before = fs.fstatSync(fd), bytes = Buffer.alloc(pin.bytes + 1);
+        requireThat(before.isFile() && before.size === pin.bytes, `${id}: byte count changed`);
+        let n = 0, got;
+        while (n < bytes.length && (got = fs.readSync(fd,bytes,n,bytes.length-n,null)) > 0) n += got;
+        const after = fs.fstatSync(fd);
+        requireThat(n === pin.bytes && after.size === before.size && after.mtimeMs === before.mtimeMs && after.ctimeMs === before.ctimeMs, `${id}: bytes changed during inspection`);
+        const actual = bytes.subarray(0,n);
+        requireThat(hash(actual) === pin.sha256, `${id}: hash changed`);
+        cache.set(id, actual);
+        retainedBytes += n;
+      } finally { fs.closeSync(fd); }
     }
     return json ? JSON.parse(cache.get(id)) : cache.get(id).toString('utf8');
   };
@@ -47,22 +59,26 @@ export function producerEvidence(index, roots = {}) {
       requireThat(r[field] === index.assets[asset].sha256, `${id}: actual compiler helper/config bytes changed`);
     }
     const args = r.cargo_args;
-    requireThat(Array.isArray(args) && args.every(a => typeof a === 'string') && ['test','clippy'].includes(args[0]) && args.slice(0,args.indexOf('--') < 0 ? undefined : args.indexOf('--')).includes('--locked') && !args.includes('--no-run'), `${id}: execution arguments unavailable`);
+    requireThat(Array.isArray(args) && args.every(a => typeof a === 'string') && ['test','clippy','build'].includes(args[0]) && args.slice(0,args.indexOf('--') < 0 ? undefined : args.indexOf('--')).includes('--locked') && !args.includes('--no-run'), `${id}: execution arguments unavailable`);
     const executed = args[0] === 'clippy' ? args : [args[0],'--message-format=json-render-diagnostics',...args.slice(1)];
     requireThat(canonical(r.executed_cargo_args) === canonical(executed), `${id}: executed arguments changed`);
     requireThat(git(roots[product], 'rev-parse', `${revision}^{tree}`).toString().trim() === tree, `${id}: committed Git tree unavailable/changed`);
     return r;
   };
   requireThat(index.version === 1 && Object.keys(index.runs ?? {}).length > 0, 'invalid owner evidence index');
-  requireThat(index.routes?.length === 28 && new Set(index.routes.map(r=>r.id)).size === 28 && index.groups?.delivery_cases?.length === 8 && index.groups?.routing_cases?.length === 12, 'owner evidence cohort incomplete');
+  const routeCount = index.video_followon ? 29 : 28;
+  requireThat(index.routes?.length === routeCount && new Set(index.routes.map(r=>r.id)).size === routeCount && index.groups?.delivery_cases?.length === 8 && index.groups?.routing_cases?.length === 12, 'owner evidence cohort incomplete');
+  requireThat(!videoOnly || (index.video_followon?.version === 1 && index.video_followon.runs.length === 5 && new Set(index.video_followon.runs).size === 5 && index.routes.filter(r=>r.family==='video.followon').length === 5), 'video follow-on contract unavailable');
   const current_sources = {};
-  for (const product of ['omatainer','editbay']) attempt(`checkout.${product}`, () => {
+  for (const product of videoOnly ? ['editbay'] : ['omatainer','editbay']) attempt(`checkout.${product}`, () => {
     current_sources[product] = {revision:git(roots[product],'rev-parse','HEAD').toString().trim(),tree:git(roots[product],'rev-parse','HEAD^{tree}').toString().trim(),dirty:git(roots[product],'status','--porcelain=v1','--untracked-files=normal').length > 0};
   });
   for (const [id, pin] of Object.entries(index.runs)) {
+    if (videoOnly && !index.video_followon.runs.includes(id)) continue;
     const observed = attempt(id, () => {
       const r = compiler(pin.compiler, pin.product, pin.revision, pin.tree);
       requireThat(r.cargo_args[0] === 'test' && r.exit_code === pin.exit_code && [0,101].includes(r.exit_code), `${id}: test exit changed`);
+      if (pin.cargo_args) requireThat(canonical(r.cargo_args) === canonical(pin.cargo_args), `${id}: selected test command changed`);
       const executables = r.executables.map(e => ({sha256:e.sha256,bytes:e.size,target:typeof e.target === 'string' ? e.target : e.target?.name}));
       requireThat(executables.length > 0 && executables.every(e => sha.test(e.sha256) && e.bytes > 0) && canonical(executables) === canonical(pin.executables), `${id}: recorded executable identity changed`);
       const log = read(pin.log, false);
@@ -77,7 +93,7 @@ export function producerEvidence(index, roots = {}) {
       for (const [file,digest] of Object.entries(pin.sources)) {
         requireThat(sha.test(digest) && hash(git(roots[pin.product], 'show', `${pin.revision}:${file}`)) === digest, `${id}: committed generator/input changed`);
       }
-      return {id, product:pin.product, revision:r.revision, tree:r.source_tree, status:counts.failed ? 'failed' : 'passed_at_source', counts, compiler_sha256:index.assets[pin.compiler].sha256, log_sha256:index.assets[pin.log].sha256, executables, tools:{helper_sha256:r.helper_sha256,receipt_helper_sha256:r.receipt_helper_sha256,queue_helper_sha256:r.queue_helper_sha256 ?? null,config_sha256:r.config_sha256}, source_files:pin.sources, current_candidate_status:'unavailable', reason:'Original exact-source test execution; no current executable replay or complete owner acceptance', tier:'headless', host_binding:'not recorded by compiler receipt'};
+      return {id, product:pin.product, revision:r.revision, tree:r.source_tree, status:counts.failed ? 'failed' : 'passed_at_source', counts, execution_key:hash(canonical({revision:r.revision,args:r.cargo_args})), compiler_sha256:index.assets[pin.compiler].sha256, log_sha256:index.assets[pin.log].sha256, executables, tools:{helper_sha256:r.helper_sha256,receipt_helper_sha256:r.receipt_helper_sha256,queue_helper_sha256:r.queue_helper_sha256 ?? null,config_sha256:r.config_sha256}, source_files:pin.sources, current_candidate_status:'unavailable', reason:'Original exact-source test execution; no current executable replay or complete owner acceptance', tier:'headless', host_binding:'not recorded by compiler receipt'};
     });
     runs[id] = observed ?? {id, revision:pin.revision, status:'unavailable', current_candidate_status:'unavailable'};
   }
@@ -96,7 +112,7 @@ export function producerEvidence(index, roots = {}) {
     requireThat(!c.source_revision || c.source_revision === runs[run].revision, `${id}: case source changed`);
     return {id, c, row:{id, case:c.case, run, revision:runs[run].revision, artifact_sha256:index.assets[id].sha256, recorded_status:c[statusKey], status:c[statusKey] === 'characterized' ? 'characterized' : 'passed_at_source', current_candidate_status:'unavailable'}};
   });
-  attempt('delivery', () => {
+  if (!videoOnly) attempt('delivery', () => {
     const packet = read('delivery'), run = runs.delivery;
     requireThat(run.counts && packet.qualified_revision === run.revision, 'delivery: packet source changed');
     joined('delivery.compiler',packet.helper_receipt); joined('delivery.log',packet.raw);
@@ -130,7 +146,7 @@ export function producerEvidence(index, roots = {}) {
       cases.push(row);
     }
   });
-  attempt('routing', () => {
+  if (!videoOnly) attempt('routing', () => {
     const packet = read('routing'), matrix = read('matrix');
     requireThat(matrix.qualified_runs.some(r => r.source === runs['routing.ui'].revision && r.receipt.endsWith(`${runs['routing.ui'].compiler_sha256}.json`)), 'routing: qualified UI source missing');
     for (const id of ['routing.failed7cf','routing.failedd72','routing.ui']) {
@@ -150,7 +166,7 @@ export function producerEvidence(index, roots = {}) {
       cases.push({...row,whole_run_status:'failed',scope:'Only this contribution/fixed-send case; no full current stereo or surround acceptance'});
     }
   });
-  attempt('video', () => {
+  if (!videoOnly) attempt('video', () => {
     const packet = read('video'), captions = read('captions');
     requireThat(packet.schema === 'editbay.producer-routes.v1' && packet.required_routes.length === 8, 'video: required routes changed');
     requireThat(packet.current_first_layer_result.revision === runs.editorial.revision && packet.current_caption_result.revision === runs['captions.ui'].revision && runs['captions.formats'].revision === runs['captions.ui'].revision, 'video: group source changed');
@@ -198,25 +214,109 @@ export function producerEvidence(index, roots = {}) {
       requireThat(text.includes('00:00:00.003 --> 00:00:02.000') || text.includes('00:00:00,003 --> 00:00:02,000'), 'video: actual caption timing changed');
       requireThat(text.includes('Café 世界') && text.includes('Before'), 'video: actual caption Unicode changed');
     }
-    for (const r of packet.required_routes) {
+    for (const r of packet.required_routes.filter(r=>!index.video_followon || !index.routes.some(e=>e.id===r.id && e.family==='video.followon'))) {
       const group = r.generator_id;
       const runId = group === 'editbay.editorial.group.v1' ? 'editorial' : group === 'editbay.captions.group.v1' ? 'captions.ui' : null;
       if (runId) requireThat(r.commit === runs[runId].revision, 'video: route/group source mismatch');
       routes.push({id:r.id,generator_id:group ?? r.id,required:true,revision:r.commit,status:runId ? 'passed_at_source' : 'unavailable',current_candidate_status:'unavailable',expected_losses:r.expected_losses ?? [],reason:runId ? 'Exact grouped software proof; complete product delivery gate remains unavailable' : 'Current scopes/multicam/native-viewer runtime or required build dependency unrun'});
     }
   });
-  for (const expected of index.routes) {
+  const video_observations = index.video_followon ? attempt('video.followon', () => {
+    const f = index.video_followon, hub = read('video.followon.hub'), a = read('video.followon.e7'), b = read('video.followon.7f');
+    const ref = (key, observed, json = true) => {
+      const id = f.refs[key], value = read(id,json), pin = index.assets[id];
+      joined(id,observed.path);
+      requireThat(pin.sha256 === observed.sha256 && pin.bytes === observed.bytes, `${id}: original observation mismatch`);
+      return value;
+    };
+    for (const [record,runId] of [[a,'scopes.viewer'],[b,'multicam.native']]) requireThat(record.schema === 1 && record.revision === runs[runId]?.revision && record.source_tree === runs[runId]?.tree, 'video.followon: coordinator source mismatch');
+    for (const id of f.runs) requireThat(runs[id]?.status === 'passed_at_source', `${id}: original successful execution required`);
+    requireThat(hub.current_scope_result.revision === a.revision && hub.prepared_viewer_scopes_route.commit === a.revision && hub.current_multicam_result.revision === b.revision, 'video.followon: owner source mismatch');
+    for (const [id,pin] of Object.entries(f.support)) {
+      const c = compiler(pin.asset,'editbay',pin.revision,pin.tree);
+      const executables = c.executables.map(e=>({sha256:e.sha256,bytes:e.size,target:e.target.name}));
+      requireThat(c.exit_code === 0 && canonical(c.cargo_args) === canonical(pin.cargo_args) && canonical(executables) === canonical(pin.executables) && (id.endsWith('.cli') ? c.cargo_args[0] === 'build' && executables.length === 1 : c.cargo_args[0] === 'clippy' && executables.length === 0), `${id}: build/analysis binding changed`);
+    }
+    const bind = (packet,prefix,runId) => {
+      const support = f.support[prefix+'.cli'];
+      joined(support.asset,packet.cli.build_receipt);
+      requireThat(packet.cli.source_revision === runs[runId].revision && support.revision === runs[runId].revision && packet.cli.fingerprint.sha256 === support.executables[0].sha256 && packet.cli.fingerprint.bytes === support.executables[0].bytes, 'video.followon: separate CLI build binding changed');
+    };
+    const viewer = ref('viewer.packet',a.runtime_packet);
+    requireThat(viewer.schema === 'editbay.native-viewer-scopes.v1' && viewer.status === 'passed', 'video.followon: viewer packet invalid');
+    bind(viewer,'scopes','scopes.viewer');
+    joined(f.refs['viewer.input'],viewer.native_project); ref('viewer.input',a.runtime_packet.native_project,false);
+    joined(index.runs['scopes.viewer'].compiler,a.compiler_receipts.viewer.path);
+    joined(index.runs['scopes.numeric'].compiler,a.compiler_receipts.numeric.path);
+    joined(index.runs['scopes.viewer'].log,a.raw_logs.viewer.path);
+    joined(index.runs['multicam.native'].compiler,b.compiler.file.path);
+    joined(index.runs['multicam.native'].log,b.raw_test.log.path);
+    const reports = [viewer.paused_before,viewer.paused_same_frame_new_settings,viewer.first_picture_enabled_after_unscoped_preparation.accepted_report,...viewer.prepared_frames.flatMap(p=>[p.queued_report,p.accepted_refreshed_report])];
+    requireThat(reports.length === 11 && viewer.first_picture_enabled_after_unscoped_preparation.old_report === null && canonical(viewer.prepared_frames.map(p=>p.frame)) === canonical([0,1,2,3]), 'video.followon: prepared/paused reports missing');
+    for (const [i,r] of reports.entries()) {
+      const frame = i < 3 ? 0 : Math.floor((i-3)/2), rgb = [frame/4,.75-frame/4,.125], white = i === 0 ? 100 : i === 1 ? 200 : i === 2 ? 203 : (i-3)%2 === 0 ? 200 : 203;
+      const nits = (.2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2])*white;
+      requireThat(r.identity.frame === frame && r.identity.composition === viewer.composition && canonical(r.identity.version) === canonical(viewer.owner.version) && r.settings.reference_white_nits === white && r.sampled_pixels === 256 && r.valid_pixels === 256, 'video.followon: scope identity/count/settings changed');
+      for (const [channel,range] of r.statistics.linear_rgb.entries()) requireThat(Math.abs(range.minimum-rgb[channel]) < 2e-8 && Math.abs(range.maximum-rgb[channel]) < 2e-8, 'video.followon: scope RGB equation failed');
+      requireThat(r.statistics.linear_rgb.length === 3 && ['minimum','maximum'].every(k=>Math.abs(r.statistics.luminance_nits[k]-nits)<2e-8), 'video.followon: scope luminance equation failed');
+    }
+    requireThat(viewer.worker_joined === true && viewer.stale_owner.cancelled === true && viewer.stale_owner.discarded === true && viewer.stale_serial_rejections === 1 && viewer.prepared_queue.prepared === 4 && viewer.prepared_queue.queued === 4 && viewer.prepared_queue.discarded === 0 && canonical(viewer.display_completions.events.map(e=>e.frame)) === canonical([0,1,2,3]) && viewer.display_completions.summary.unique_completed === 4 && viewer.display_completions.summary.observed_sound_end_us === null, 'video.followon: viewer lifecycle/offscreen counts changed');
+    const numeric = ref('scopes.independent',a.exact_scope_evidence.independent_packet);
+    requireThat(numeric.status === 'passed' && numeric.cases.length === 2 && a.exact_scope_evidence.independent_reports.length === 2, 'video.followon: numeric references missing');
+    for (const [i,c] of numeric.cases.entries()) {
+      const report = ref('scopes.report.'+i,a.exact_scope_evidence.independent_reports[i]);
+      joined(f.refs['scopes.report.'+i],c.file);
+      requireThat(['ranges','clipping','all_five_density_grids'].every(k=>c[k] === 'passed') && report.report.sampled_pixels === 12 && report.report.valid_pixels === 10, 'video.followon: numeric reference counts changed');
+    }
+    const delivery = ref('delivery.packet',b.raw_test.native_packet), wrapper = ref('delivery.wrapper',b.raw_test.wrapper);
+    requireThat(delivery.schema === 1 && delivery.status === 'passed' && wrapper.exit_code === 0 && wrapper.signal === null && wrapper.revision === b.revision && canonical(wrapper.args) === canonical(index.runs['multicam.native'].cargo_args) && delivery.policy_deliveries.length === 3 && b.masters.length === 4 && delivery.input_assets.length === 3 && b.inputs.length === 3, 'video.followon: native delivery cohort/command changed');
+    joined(index.runs['multicam.native'].log,wrapper.log);
+    bind(delivery,'multicam','multicam.native');
+    for (const [i,c] of delivery.input_assets.entries()) {
+      ref('delivery.input.'+i,b.inputs[i],false); joined(f.refs['delivery.input.'+i],c.path);
+      requireThat(c.sha256 === b.inputs[i].sha256 && c.bytes === b.inputs[i].bytes, 'video.followon: native input identity changed');
+    }
+    const independent = ref('delivery.independent',b.independent_inspection.file);
+    requireThat(independent.status === 'passed' && independent.revision === b.revision && independent.cases.length === 4 && sha.test(independent.tool.sha256), 'video.followon: stored ffprobe inspection missing');
+    const masters = b.masters.map((m,i) => {
+      const prefix = 'delivery.'+m.name, r = ref(prefix+'.receipt',m.receipt), p = r.receipt, oracle = i === 3 ? delivery.captioned_numeric_oracle : delivery.policy_deliveries[i].numeric_oracle;
+      ref(prefix+'.master',m.master,false);ref(prefix+'.native_project',m.native_project,false);
+      const check = independent.cases.find(c=>path.resolve(roots.editbay,c.path) === path.resolve(m.master.path)); joined(f.refs[prefix+'.master'],path.resolve(roots.editbay,check.path));
+      if(i < 3) {joined(f.refs[prefix+'.master'],delivery.policy_deliveries[i].master);joined(f.refs[prefix+'.native_project'],delivery.policy_deliveries[i].native);}
+      requireThat(canonical(oracle) === canonical(r.numeric_oracle) && canonical(oracle) === canonical(m.numeric_oracle) && oracle.pictures === 10 && oracle.mono_samples === 20000 && oracle.maximum_color_error_bytes === 0 && oracle.maximum_pcm_error === 0 && oracle.changed_caption_pixels === (i === 3 ? 30 : 0), 'video.followon: frame/sample/caption oracle changed');
+      requireThat(p.file_sha256 === m.master.sha256 && p.file_bytes === m.master.bytes && check.sha256 === p.file_sha256 && check.bytes === p.file_bytes && sha.test(p.pixel_sha256) && p.pixel_sha256 === p.decoded_pixel_sha256 && sha.test(p.pcm_sha256) && p.pcm_sha256 === p.decoded_pcm_sha256, 'video.followon: master/decoded digest mismatch');
+      requireThat(p.profile.width === 16 && p.profile.height === 16 && p.profile.frames === 10 && p.profile.sample_rate === 48000 && canonical(p.profile.channels) === canonical(['FC']) && check.video.codec_name === 'png' && check.video.nb_read_frames === '10' && check.audio.codec_name === 'pcm_f32le' && check.audio.duration_ts === 20000, 'video.followon: stored media profile mismatch');
+      return {name:m.name,sha256:m.master.sha256,bytes:m.master.bytes,original_oracle:oracle};
+    });
+    requireThat(Object.keys(delivery.preservation).length === 7 && Object.values(delivery.preservation).every(v=>v===true) && canonical(delivery.program_scopes.map(s=>s.frame)) === canonical([0,9]), 'video.followon: preservation assertions/program scopes missing');
+    for (const [i,s] of delivery.program_scopes.entries()) {
+      const rgb = i === 0 ? [1,0,0] : [0,1,0], nits = i === 0 ? 21.26 : 71.52;
+      for (const [j,r] of s.linear.statistics.linear_rgb.entries()) requireThat(Math.abs(r.minimum-rgb[j])<1e-4 && Math.abs(r.maximum-rgb[j])<1e-4, 'video.followon: program scope RGB changed');
+      requireThat(s.linear.identity.frame === s.frame && s.same_frame_nits.identity.frame === s.frame && ['minimum','maximum'].every(k=>Math.abs(s.linear.statistics.luminance_nits[k]-nits)<.02 && Math.abs(s.same_frame_nits.statistics.luminance_nits[k]-2*nits)<.04), 'video.followon: program scope nits/identity changed');
+    }
+    for (const [i,c] of b.preservation.current_sentinels.entries()) ref('delivery.sentinel.'+i,c,false);
+    const vtt = ref('delivery.vtt',b.vtt,false);
+    requireThat(vtt === 'WEBVTT\n\n00:00:00.125 --> 00:00:00.250\nI\n\n', 'video.followon: retained caption text/timing changed');
+    for (const expected of index.routes.filter(r=>r.family==='video.followon')) {
+      const actual = expected.id === 'editbay.multicam.caption-delivery.cpu.v1' ? hub.prepared_runtime_route : hub.required_routes.find(r=>r.id === expected.id);
+      requireThat(actual?.commit === expected.revision, 'video.followon: required route source mismatch');
+      routes.push({...expected,status:'passed_at_source',current_candidate_status:'unavailable',reason:'Original exact-source bounded software route; complete current owner/product gates unavailable'});
+    }
+    return {viewer:{revision:a.revision,original_reports:11,offscreen_frames:4,worker_joined:true,packet_sha256:index.assets[f.refs['viewer.packet']].sha256},delivery:{revision:b.revision,execution_runs:['multicam.native'],original_tests:1,masters,preservation:delivery.preservation,packet_sha256:index.assets[f.refs['delivery.packet']].sha256},bindings:{compiler_packet_embedding:'unavailable: packets not embedded; source assertions, actual logs and separately pinned packets joined',cli:'separate compiler record joined to producer digest; executables not opened',native_input_reference_hashes:'current data-byte inspection; coordinator observations where producer has no digest field',ffprobe:{sha256:independent.tool.sha256,version:'unavailable',full_invocation:'unavailable',current_executable_integrity:'not inspected'},host:'original execution host not bound; current inspection host separate'},limits:[...a.limits,...b.limitations,...f.unavailable]};
+  }) : undefined;
+  for (const expected of index.routes.filter(r=>!videoOnly || r.family==='video.followon')) {
     const row = routes.find(r=>r.id === expected.id);
     if (row && !errors.some(e=>e.id === expected.family)) requireThat(row.revision === expected.revision && row.generator_id === expected.generator_id && row.required === expected.required, 'reviewed owner route changed');
     if (!row) routes.push({...expected,status:'unavailable',current_candidate_status:'unavailable',reason:'Required owner packet, artifact, source or reference unavailable/invalid'});
     else if (errors.some(e=>e.id === expected.family)) row.status = 'unavailable';
   }
-  for (const [family,ids,run] of [['delivery',index.groups.delivery_cases,'delivery'],['routing',index.groups.routing_cases,'routing.failed7cf']]) for (const id of ids) {
+  requireThat(routes.length === (videoOnly ? 5 : index.routes.length) && new Set(routes.map(r=>r.id)).size === routes.length, 'unexpected or duplicate owner routes');
+  for (const [family,ids,run] of videoOnly ? [] : [['delivery',index.groups.delivery_cases,'delivery'],['routing',index.groups.routing_cases,'routing.failed7cf']]) for (const id of ids) {
     const row = cases.find(c=>c.id === id);
     if (!row) cases.push({id,run,revision:index.runs[run].revision,status:'unavailable',current_candidate_status:'unavailable'});
     else if (errors.some(e=>e.id === family)) row.status = 'unavailable';
   }
-  const generators = [...new Set(routes.map(r=>r.generator_id))].map(id=>({id,routes:routes.filter(r=>r.generator_id===id).map(r=>r.id),execution_runs:id === 'editbay.editorial.group.v1' ? ['editorial'] : id === 'editbay.captions.group.v1' ? ['captions.ui','captions.formats'] : index.runs[id] ? [id] : []}));
+  const generators = [...new Set(routes.map(r=>r.generator_id))].map(id=>({id,routes:routes.filter(r=>r.generator_id===id).map(r=>r.id),execution_runs:index.video_followon?.generators[id] ?? (id === 'editbay.editorial.group.v1' ? ['editorial'] : id === 'editbay.captions.group.v1' ? ['captions.ui','captions.formats'] : index.runs[id] ? [id] : [])}));
   const verified_artifacts = [...cache.keys()].map(id=>({id,sha256:index.assets[id].sha256,bytes:index.assets[id].bytes}));
-  return {version:1,tier:'node-only evidence inspection; no product executable launched',host_sha256:hash(os.hostname().trim()),node_sha256:fingerprint(process.execPath).sha256,index_sha256:hash(canonical(index)),current_sources,integrity_passed:errors.length === 0,public_candidate:false,certified_true_peak_ceiling:false,runs:Object.values(runs),cases,routes,generators,verified_artifacts,errors,unavailable:['Complete current owner acceptance and stricter product gates','RAW80: reviewed final inspector pin and real exact-source workflow proof','Common UI fixture/font/theme/appearance references','Caption native burn-in/master QC','Current stereo full cohort and surround','Original execution host binding where absent; no native-window/device/physical/human proof','Editorial inspection and ffprobe original executable hashes absent from their records: retained bytes and numerical/text oracles do not establish codec conformance'],policy:'Pinned old passes and failures remain at their source. Missing inputs/references and characterization cannot pass candidate gates. Future execution must verify actual binary SHA before launch under the global lock.'};
+  return {version:1,tier:'node-only evidence inspection; no product executable launched',host_sha256:hash(os.hostname().trim()),node_version:process.version,node_sha256:videoOnly ? null : fingerprint(process.execPath).sha256,index_sha256:hash(canonical(index)),current_sources,integrity_passed:errors.length === 0,public_candidate:false,certified_true_peak_ceiling:false,runs:Object.values(runs),cases,routes,generators,video_observations,verified_artifacts,errors,unavailable:videoOnly ? index.video_followon.unavailable : ['Complete current owner acceptance and stricter product gates','RAW: separate pinned M50 inspection required; 79 cameras unavailable','Common UI fixture/font/theme/appearance references','Current stereo full cohort and surround','Original execution host binding where absent; no native-window/device/physical/human proof','Shared FFmpeg metadata inspection is not independent codec conformance'],policy:'Pinned old passes and failures remain at their source. Missing inputs/references and characterization cannot pass candidate gates. Future execution must verify actual binary SHA before launch under the global lock.'};
 }
