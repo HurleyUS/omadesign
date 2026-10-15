@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
-import { asset, canonical, contained, gate, hash, select, source, validate } from './suite/contract.mjs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { asset, canonical, contained, fingerprint, gate, hash, select, source, validate } from './suite/contract.mjs';
 import { runProcess } from './suite/process.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,7 +25,7 @@ if (lane === 'affected') {
   const raw = execFileSync('git', ['-C', root, 'diff', '--no-renames', '--name-only', '-z', `${options.base}...HEAD`]);
   changed = raw.toString().split('\0').filter(Boolean);
 }
-const selection = select(index, lane, changed);
+const selection = lane === 'product' ? { ids:index.fixtures.filter(f=>f.product === options.product).map(f=>f.id), reason:'product headless lane; does not qualify a full candidate' } : select(index, lane, changed);
 const fixtures = index.fixtures.filter(f => selection.ids.includes(f.id));
 if (command === 'plan') {
   console.log(JSON.stringify({ lane, ...selection }, null, 2));
@@ -52,26 +52,28 @@ if (command === 'plan') {
         const actualSource = source(productRoot);
         if (actualSource.dirty) throw Error('product source has dirty tracked or untracked files');
         if (f.input.bytes > f.limits.max_input_bytes) throw Error('input exceeds fixture budget');
-        const inputs = { input: asset(f.input, roots), ...(f.reference ? { reference: asset(f.reference, roots) } : {}) };
+        const inputs = { input: asset(f.input, roots), ...(f.reference ? { reference: asset(f.reference, roots) } : {}), dependencies:(f.dependencies ?? []).map(a=>asset(a,roots)) };
         const adapterRoot = roots[f.adapter.root ?? f.product];
         const adapter = contained(adapterRoot, f.adapter.path);
         const adapterSource = source(adapterRoot);
         if (adapterSource.dirty) throw Error('adapter source has dirty tracked or untracked files');
-        const build = builds[f.product];
+        const build = builds[f.id] ?? builds[f.product];
         let binary = null;
         if (f.adapter.kind !== 'node') {
           if (!build?.binary || build.revision !== actualSource.revision || build.tree !== actualSource.tree) throw Error('current source-bound build unavailable');
-          const bytes = fs.readFileSync(build.binary);
-          binary = { sha256: hash(bytes), bytes: bytes.length, driver: build.driver };
+          binary = { ...fingerprint(build.binary), driver: build.driver };
           if (binary.sha256 !== build.sha256) throw Error('build executable hash changed');
         }
         const tools = [];
         for (const name of f.tools ?? []) {
           const tool = build?.tools?.[name];
-          if (!tool?.path || !tool.version) throw Error(`required tool ${name} unavailable`);
-          const bytes = fs.readFileSync(tool.path);
-          if (hash(bytes) !== tool.sha256) throw Error(`required tool ${name} hash changed`);
-          tools.push({ id: name, sha256: hash(bytes), bytes: bytes.length, version: tool.version });
+          if (!tool?.path) throw Error(`required tool ${name} unavailable`);
+          const actual = fingerprint(tool.path);
+          if (actual.sha256 !== tool.sha256) throw Error(`required tool ${name} hash changed`);
+          const probe = spawnSync(tool.path, tool.version_args ?? ['--version'], {encoding:'utf8',timeout:2000,maxBuffer:32768});
+          const version = `${probe.stdout ?? ''}${probe.stderr ?? ''}`.trim();
+          if (probe.status !== 0 || probe.error || !version) throw Error(`required tool ${name} version probe failed`);
+          tools.push({ id: name, ...actual, version_sha256:hash(version) });
         }
         binding = { source: actualSource, adapter_source: adapterSource, adapter_sha256: hash(fs.readFileSync(adapter)), binary, inputs, tools, runner_sha256: hash(fs.readFileSync(fileURLToPath(import.meta.url))), contract_sha256: hash(fs.readFileSync(new URL('./suite/contract.mjs', import.meta.url))), node_sha256: hash(fs.readFileSync(process.execPath)), host: { id: hash(os.hostname()), platform: os.platform(), arch: os.arch(), release: os.release() } };
         current[f.id] = binding;
@@ -84,8 +86,9 @@ if (command === 'plan') {
           if (canonical(source(productRoot)) !== canonical(actualSource) || canonical(source(adapterRoot)) !== canonical(adapterSource)) throw Error('product or adapter source changed during run');
           asset(f.input, roots);
           if (f.reference) asset(f.reference, roots);
-          if (binary && hash(fs.readFileSync(build.binary)) !== binary.sha256) throw Error('build executable changed during run');
-          for (const tool of tools) if (hash(fs.readFileSync(build.tools[tool.id].path)) !== tool.sha256) throw Error('required tool changed during run');
+          for (const dependency of f.dependencies ?? []) asset(dependency,roots);
+          if (binary && fingerprint(build.binary).sha256 !== binary.sha256) throw Error('build executable changed during run');
+          for (const tool of tools) if (fingerprint(build.tools[tool.id].path).sha256 !== tool.sha256) throw Error('required tool changed during run');
           fs.writeFileSync(path.join(scratch,'process.log'), result.output);
           const reportFile = path.join(scratch,'result.json');
           const report = fs.existsSync(reportFile) && fs.statSync(reportFile).size <= 1048576 ? read(reportFile) : {};
@@ -101,7 +104,7 @@ if (command === 'plan') {
             checks[key] = { status: check?.status === 'passed' && artifacts.length ? 'passed' : 'failed', artifacts };
           }
           const passed = result.code === 0 && !result.reason && f.required.every(k => checks[k].status === 'passed');
-          receipt = { version: 1, fixture: f.id, contract: hash(canonical(f)), tier: 'headless', binding, started_at, duration_ms: Math.round(performance.now()-started), status: passed ? 'passed' : 'failed', reason: passed ? 'required headless checks passed' : result.reason ?? 'adapter exit or required evidence failed', checks, losses: f.losses, evidence: binary ? 'product executable' : 'Node-only; no product binary', memory: report.memory ?? { parent_rss_kib: null, worker_rss_kib: null, reason: 'not measured; no memory acceptance claimed' } };
+          receipt = { version: 1, fixture: f.id, contract: hash(canonical(f)), tier: 'headless', binding, started_at, duration_ms: Math.round(performance.now()-started), status: passed ? 'passed' : 'failed', reason: passed ? 'required headless checks passed' : result.reason ?? 'adapter exit or required evidence failed', checks, losses: f.losses, evidence: binary ? binary.driver === 'libtest' ? 'headless library/test executable; installed CLI unproven' : 'product CLI executable; installed app unproven' : 'Node-only; no product binary', memory: report.memory ?? { parent_rss_kib: null, worker_rss_kib: null, reason: 'not measured; no memory acceptance claimed' } };
           fs.rmSync(path.join(scratch,'request.json'));
         }
       } catch (error) {
