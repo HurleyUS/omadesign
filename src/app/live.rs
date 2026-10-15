@@ -171,7 +171,6 @@ impl Studio {
         let result = replica.document(&self.doc);
         self.live_runtime.conflicts = replica.conflicts().len();
         let Ok(mut doc) = result else {
-            self.doc.collaboration = Some(replica);
             return result.map(|_| ());
         };
         let selection: Vec<_> = self
@@ -223,7 +222,7 @@ impl Studio {
             self.status = error;
             return true;
         }
-        let mut replica = self.doc.collaboration.take().unwrap();
+        let mut replica = self.doc.collaboration.as_ref().unwrap().clone();
         if if redo { replica.redo() } else { replica.undo() } {
             if let Err(error) = self.apply_live(replica) {
                 self.status = error;
@@ -341,7 +340,7 @@ impl Studio {
             self.live_runtime.job = None;
             match result {
                 Ok(reply) => {
-                    let mut state = self.doc.collaboration.take().unwrap();
+                    let mut state = self.doc.collaboration.as_ref().unwrap().clone();
                     let before = state.changes.len();
                     let old_cursor = state.cursor;
                     let old_pending = state.pending.len();
@@ -516,6 +515,26 @@ mod tests {
         assert_eq!(count(&a), 1);
         assert_eq!(a.doc.layers[1].kind.shapes().unwrap()[0].name, "Alice");
         assert!(a.doc.collaboration.is_some());
+    }
+
+    #[test]
+    fn live_collaboration_failed_native_materialization_preserves_artwork_and_history() {
+        let mut studio = Studio::new();
+        studio.doc = crate::collaboration::native_tests::fixture();
+        let seed = collaboration::snapshot(&studio.doc).unwrap();
+        studio.doc.collaboration = Some(Replica::new("native".into(), "a".repeat(64), seed));
+        let before = serde_json::to_vec(&studio.doc).unwrap();
+        let mut candidate = studio.doc.collaboration.as_ref().unwrap().clone();
+        let path = format!("/@entities/{}/kind/Raster/pixels", studio.doc.layers[2].id);
+        if let Some(collaboration::Cell::Pixels {
+            native: Some(native),
+            ..
+        }) = candidate.base.get_mut(&path)
+        {
+            native["intent"] = json!(4);
+        }
+        assert!(studio.apply_live(candidate).unwrap_err().contains("intent"));
+        assert_eq!(before, serde_json::to_vec(&studio.doc).unwrap());
     }
 
     #[test]
