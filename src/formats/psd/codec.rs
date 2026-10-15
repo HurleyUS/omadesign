@@ -99,6 +99,7 @@ pub(super) struct Record {
     pub real_mask: Option<Mask>,
     pub type_data: Option<Vec<u8>>,
     pub smart_data: Option<([u8; 4], Vec<u8>)>,
+    pub smart_blocks: Vec<([u8; 4], Vec<u8>)>,
     pub filters: crate::filter::FilterStack,
 }
 
@@ -407,6 +408,7 @@ fn parse_layers(
         let mut section = 0;
         let mut type_data = None;
         let mut smart_data = None;
+        let mut smart_blocks = Vec::new();
         let mut record_blend = blend;
         let mut filters = crate::filter::FilterStack::default();
         while extra.remaining() >= 12 {
@@ -450,6 +452,11 @@ fn parse_layers(
                         smart_data = Some((key, data.to_vec()));
                     }
                 }
+                b"FEid" | b"FXid" | b"FMsk" => {
+                    if data.len() > 16 * 1024 * 1024 { return Err("Excessive Photoshop smart-filter mask data".into()); }
+                    budget(allocation, data.len())?;
+                    smart_blocks.push((key, data.to_vec()));
+                }
                 b"vmsk" | b"vsms" => warn(
                     warnings,
                     "Photoshop vector masks are not converted to editable paths; saved pixel masks are used when present.",
@@ -489,6 +496,7 @@ fn parse_layers(
             real_mask,
             type_data,
             smart_data,
+            smart_blocks,
             filters,
         });
     }
