@@ -9,7 +9,11 @@ pub mod svg;
 pub mod xcf;
 
 pub fn decode_image(bytes: &[u8]) -> Result<crate::document::Pixels, String> {
+    use image::ImageDecoder;
     use std::io::Cursor;
+    if let Some(pixels) = crate::deep_color::tiff::decode(bytes)? {
+        return Ok(pixels);
+    }
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|e| e.to_string())?;
@@ -18,8 +22,12 @@ pub fn decode_image(bytes: &[u8]) -> Result<crate::document::Pixels, String> {
     limits.max_image_height = Some(32768);
     limits.max_alloc = Some(256 * 1024 * 1024);
     reader.limits(limits);
-    let decoded = reader
-        .decode()
+    let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
+    let profile = decoder
+        .icc_profile()
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let decoded = image::DynamicImage::from_decoder(decoder)
         .map_err(|e| format!("Could not decode embedded image: {e}"))?;
     if matches!(
         decoded.color(),
@@ -39,19 +47,28 @@ pub fn decode_image(bytes: &[u8]) -> Result<crate::document::Pixels, String> {
             crate::deep_color::Depth::U16
         };
         let rgba = decoded.to_rgba32f();
-        return crate::document::Pixels::from_samples(
+        let mut pixels = crate::document::Pixels::from_samples(
             rgba.width(),
             rgba.height(),
             depth,
             rgba.into_raw(),
-        );
+        )?;
+        if !profile.is_empty() {
+            pixels.assign_rgb_profile(profile, 1)?;
+        }
+        return Ok(pixels);
     }
     let rgba = decoded.to_rgba8();
     if u64::from(rgba.width()) * u64::from(rgba.height()) > 64 * 1024 * 1024 {
         return Err("Embedded image exceeds 64 megapixels".into());
     }
-    crate::document::Pixels::from_rgba(rgba.width(), rgba.height(), rgba.into_raw())
-        .ok_or("Invalid embedded pixels".into())
+    let mut pixels =
+        crate::document::Pixels::from_rgba(rgba.width(), rgba.height(), rgba.into_raw())
+            .ok_or("Invalid embedded pixels")?;
+    if !profile.is_empty() {
+        pixels.assign_rgb_profile(profile, 1)?;
+    }
+    Ok(pixels)
 }
 
 pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {

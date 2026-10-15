@@ -1200,6 +1200,8 @@ fn deserialize_artboards<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Artboard
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Document {
     #[serde(default)]
+    pub color: crate::deep_color::cms::DocumentColor,
+    #[serde(default)]
     pub text_wrap_above_only: bool,
     pub name: String,
     /// Last editing workspace, used by the file browser and when reopening.
@@ -1252,6 +1254,7 @@ impl Document {
         mut clone_shape: impl FnMut(&Shape) -> Shape,
     ) -> Self {
         let mut copy = Self::new(&self.name, 1.0, 1.0, self.dpi);
+        copy.color = self.color.clone();
         copy.width = self.width;
         copy.height = self.height;
         copy.artboards = self.artboards.clone();
@@ -1372,6 +1375,7 @@ impl Document {
         let w = total_w.round().max(1.0) as u32;
         let h = page_h.round().max(1.0) as u32;
         let mut doc = Self {
+            color: Default::default(),
             text_wrap_above_only: false,
             name: name.into(),
             workspace: None,
@@ -1702,6 +1706,7 @@ impl RasterState {
 
 #[derive(Clone, Debug)]
 pub enum Cmd {
+    SetDocumentColor {before:crate::deep_color::cms::DocumentColor,after:crate::deep_color::cms::DocumentColor},
     SetCanvas { before: CanvasSettings, after: CanvasSettings },
     SetFillOpacity {
         layer: usize,
@@ -2167,6 +2172,7 @@ fn coalesce(prev: &mut Cmd, next: &Cmd) -> bool {
 
 pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
     match cmd {
+        Cmd::SetDocumentColor {before,after}=>Cmd::SetDocumentColor {before:after,after:before},
         Cmd::SetCanvas { before, after } => Cmd::SetCanvas { before: after, after: before },
         Cmd::SetFillOpacity {
             layer,
@@ -2498,6 +2504,7 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
 
 pub fn apply(doc: &mut Document, cmd: &Cmd) {
     match cmd {
+        Cmd::SetDocumentColor{after,..}=>doc.color=after.clone(),
         Cmd::SetCanvas { after, .. } => {
             doc.name = after.name.clone();
             doc.width = after.width;
