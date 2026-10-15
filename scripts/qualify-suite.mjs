@@ -8,12 +8,13 @@ import { asset, canonical, contained, fingerprint, gate, hash, libraries, select
 import { runProcess } from './suite/process.mjs';
 import { rawEvidence } from './suite/raw-evidence.mjs';
 import { ownerEvidence } from './suite/owner-evidence.mjs';
+import { producerEvidence } from './suite/producer-evidence.mjs';
 import { verifyCompilerReceipt } from './suite/build.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [command, ...args] = process.argv.slice(2);
 const options = {};
-const allowedOptions=new Set(['index','roots','lane','base','builds','out','config','inside','diff-product','product','raw-bindings','raw-receipts','raw-corpus','owner-receipts']);
+const allowedOptions=new Set(['index','roots','lane','base','builds','out','config','inside','diff-product','product','raw-bindings','raw-receipts','raw-corpus','owner-receipts','producer-roots']);
 for (let i = 0; i < args.length; i += 2) {
   if (!args[i].startsWith('--') || !allowedOptions.has(args[i].slice(2)) || args[i+1] === undefined || options[args[i].slice(2)] !== undefined) throw Error('Use known named --option VALUE pairs');
   options[args[i].slice(2)] = args[i+1];
@@ -22,6 +23,7 @@ const read = f => JSON.parse(fs.readFileSync(f, 'utf8'));
 const indexPath = options.index ?? path.join(root, 'qualification/suite/index.json');
 const index = validate(read(indexPath));
 const roots = { omadesign: root, ...(options.roots ? read(options.roots) : {}) };
+const inspectProducers = () => ({...producerEvidence(read(path.join(root,'qualification/suite/owner-sources.json')), {...roots,...(options['producer-roots'] ? read(options['producer-roots']) : {})}),inspection_source:source(root)});
 const lane = options.lane ?? 'candidate';
 let changed = [];
 if (lane === 'affected') {
@@ -51,7 +53,11 @@ function assertBuildLock(configPath) {
   const config=read(configPath);
   if (!config.lock?.startsWith('/home/') || !ancestors.some(a=>path.basename(a[0])==='flock' && a[1]===config.lock)) throw Error('Global serialized lock ancestry unavailable');
 }
-if (command==='run' && fixtures.length===0 && cohorts.length===0) {
+if (command === 'evidence') {
+  const evidence = inspectProducers();
+  console.log(JSON.stringify(evidence,null,2));
+  process.exitCode = evidence.integrity_passed ? 0 : 1;
+} else if (command==='run' && fixtures.length===0 && cohorts.length===0) {
   console.log(JSON.stringify({lane,selection,passed:false,status:'not_run',reason:'zero selected fixtures; no qualification performed'},null,2));
   process.exitCode=1;
 } else if (command === 'plan') {
@@ -189,7 +195,9 @@ if (command==='run' && fixtures.length===0 && cohorts.length===0) {
       result.rows ??= [];
       result.rows.push(...owners);
     }
-    console.log(JSON.stringify({ lane, selection, ...result, issues }, null, 2));
+    const producer_evidence = options['producer-roots'] ? inspectProducers() : undefined;
+    if (producer_evidence && !producer_evidence.integrity_passed) result.passed = false;
+    console.log(JSON.stringify({ lane, selection, ...result, issues, producer_evidence }, null, 2));
     process.exitCode = result.passed && issues.length === 0 ? 0 : 1;
   }
-} else throw Error('Use plan|verify|run|gate --lane affected|candidate [--base COMMIT] [--roots LOCAL.json] [--builds LOCAL.json] [--out DIR] [--config BUILD-CONFIG]');
+} else throw Error('Use evidence --producer-roots PRIVATE.json or plan|verify|run|gate --lane affected|candidate [--base COMMIT] [--roots LOCAL.json] [--builds LOCAL.json] [--out DIR] [--config BUILD-CONFIG]');
