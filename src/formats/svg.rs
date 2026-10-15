@@ -790,7 +790,8 @@ impl Reader<'_> {
         let t=text.abs_transform();
         let mut run=TypeRun{content,font,px,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
         run.contours=crate::text::shape(&run);
-        let mut shape=Shape::new(Geom::Text(run),Style::default());shape.name=self.name(text.id(),"Text");
+        let fill=text.chunks().iter().flat_map(|c|c.spans()).next().and_then(|s|s.fill()).and_then(|f|if let usvg::Paint::Color(c)=f.paint(){Some(Fill::Solid(color(*c,f.opacity().get())))}else{None}).unwrap_or(Fill::None);
+        let mut shape=Shape::new(Geom::Text(run),Style{fill,stroke:None});shape.name=self.name(text.id(),"Text");
         let mut layer=Layer::vector(shape.name.clone());layer.parent=parent;self.meta(&mut layer,text.id());layer.kind.shapes_mut().unwrap().push(shape);self.doc.layers.push(layer);Ok(true)
     }
     fn text(&mut self, text: &usvg::Text, parent: Option<u64>) -> Result<bool, String> {

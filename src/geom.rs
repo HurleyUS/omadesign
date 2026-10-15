@@ -919,6 +919,7 @@ impl Geom {
 
     pub fn bbox(&self) -> Bounds {
         match self {
+            Geom::Text(run) if run.svg_text.is_some()=>if let Some(layout)=crate::text::svg_type::layout(run){return layout.bounds;},
             Geom::Text(run) if run.frame.is_some() => return crate::text_geometry::frame_bounds(run).unwrap(),
             Geom::Text(run) if run.transform.is_none() && run.on_path.is_none() && run.wrap_width.is_some() => {
                 let (width, height) = crate::text::measure(run);

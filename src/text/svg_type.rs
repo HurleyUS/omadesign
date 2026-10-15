@@ -52,6 +52,41 @@ pub(crate) struct Layout {
     pub contours: Vec<Vec<Pt>>,
     pub carets: Vec<(usize, Pt, Pt, Pt)>,
     pub styles: Vec<(usize, crate::geom::CharSpan)>,
+    pub bounds: crate::geom::Bounds,
+    pub stroke_width: f32,
+}
+
+pub(crate) fn paint_tree(run: &TypeRun, fill: bool) -> Option<Arc<usvg::Tree>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<usvg::Tree>>>> = OnceLock::new();
+    let mut source = source(run)?;
+    let xml = roxmltree::Document::parse(&source).ok()?;
+    let mut edits = Vec::new();
+    let property = if fill { "stroke" } else { "fill" };
+    for node in xml
+        .descendants()
+        .filter(|n| n.is_element() && matches!(n.tag_name().name(), "text" | "tspan" | "textPath"))
+    {
+        if let Some(attr) = node.attributes().find(|a| a.name() == property) {
+            edits.push((attr.range_value(), "none".to_owned()));
+        } else if let Some(end) = source[node.range()].find('>') {
+            let at = node.range().start + end;
+            edits.push((at..at, format!(" {property}=\"none\"")));
+        }
+    }
+    for (range, value) in edits.into_iter().rev() {
+        source.replace_range(range, &value);
+    }
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(tree) = cache.lock().unwrap().get(&source).cloned() {
+        return Some(tree);
+    }
+    let tree = Arc::new(usvg::Tree::from_str(&renderer_source(&source), &options_for(run)).ok()?);
+    let mut cache = cache.lock().unwrap();
+    if cache.len() >= 64 {
+        cache.clear();
+    }
+    cache.insert(source, tree.clone());
+    Some(tree)
 }
 
 pub(crate) fn escape(s: &str) -> String {
@@ -987,6 +1022,8 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
     let mut carets = Vec::new();
     let mut styles = Vec::new();
     let mut used = vec![false; run.content.chars().count()];
+    let mut bounds: Option<crate::geom::Bounds> = None;
+    let mut stroke_width = 0_f32;
     fn paths(group: &usvg::Group, contours: &mut Vec<Vec<Pt>>) {
         for node in group.children() {
             match node {
@@ -1003,8 +1040,18 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
         }
     }
     for text in &text_nodes {
+        let b = text.abs_stroke_bounding_box();
+        let b = crate::geom::Bounds::from_min_size(
+            Pt::new(b.x(), b.y()),
+            Pt::new(b.width(), b.height()),
+        );
+        bounds = Some(bounds.map_or(b, |old| old.union(b)));
         paths(text.flattened(), &mut contours);
         for span in text.layouted() {
+            if let Some(stroke) = &span.stroke {
+                let scale = text.abs_transform().get_scale();
+                stroke_width = stroke_width.max(stroke.width().get() * scale.0.max(scale.1));
+            }
             for glyph in &span.positioned_glyphs {
                 let chars: Vec<_> = glyph.text.chars().filter(|c| !bidi_control(*c)).collect();
                 if chars.is_empty() {
@@ -1115,6 +1162,8 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
         contours,
         carets,
         styles,
+        bounds: bounds.unwrap_or_else(|| crate::geom::Bounds::from_pt(run.map_point(run.origin))),
+        stroke_width,
     });
     let mut cache = cache.lock().unwrap();
     if cache.len() >= 64 {
