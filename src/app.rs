@@ -1547,7 +1547,7 @@ impl Studio {
             Cmd::Batch(changes)
         };
         if let Some(field) = field {
-            self.history.push_field(command, field);
+            self.history.push_field(command, field, &self.doc);
         } else {
             self.history.push(command);
         }

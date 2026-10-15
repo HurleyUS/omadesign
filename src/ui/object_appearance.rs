@@ -270,6 +270,62 @@ mod tests {
         studio.redo(); studio.redo();
         assert_eq!(studio.doc.layers[0].opacity, values[2]);
     }
+
+    #[test]
+    fn field_input_opacity_redo_keeps_final_value_after_first_frame_layout_reconciliation() {
+        let ctx = egui::Context::default();
+        crate::ui::theme::apply(&ctx);
+        let mut studio = fixture();
+        let mut frame = crate::document::Shape::new(
+            Geom::Rect {
+                origin: crate::geom::Pt::splat(100.),
+                size: crate::geom::Pt::splat(250.),
+                radius: 0.,
+            },
+            Default::default(),
+        );
+        frame.layout.frame = true;
+        frame.layout.stack = Some(Default::default());
+        let frame_id = frame.id;
+        for shape in studio.doc.layers[0].kind.shapes_mut().unwrap() {
+            shape.layout.parent = Some(frame_id);
+        }
+        studio.doc.layers[0].kind.shapes_mut().unwrap().push(frame);
+        let initial = crate::project::encode(&studio.doc).unwrap();
+        let first = studio.selection[0];
+        let original_bounds = studio.doc.find_shape(first.0, first.1).unwrap().geom.bbox();
+        let at = value_at(&labels(&ctx, &mut studio, vec![]), "Object opacity");
+        labels(&ctx, &mut studio, pointer(at, true));
+        let mut first_frame_value = None;
+        for dx in [10., 20., 30., 40.] {
+            labels(
+                &ctx,
+                &mut studio,
+                vec![Event::PointerMoved(at + egui::vec2(dx, 0.))],
+            );
+            first_frame_value
+                .get_or_insert(studio.doc.find_shape(first.0, first.1).unwrap().opacity);
+        }
+        labels(&ctx, &mut studio, pointer(at + egui::vec2(40., 0.), false));
+        let final_value = studio.doc.find_shape(first.0, first.1).unwrap().opacity;
+        assert_ne!(Some(final_value), first_frame_value);
+        assert_ne!(
+            studio.doc.find_shape(first.0, first.1).unwrap().geom.bbox(),
+            original_bounds,
+            "real layout reconciliation moved the child"
+        );
+        assert_eq!(studio.history.len(), 1);
+        let final_document = crate::project::encode(&studio.doc).unwrap();
+        studio.undo();
+        assert_eq!(crate::project::encode(&studio.doc).unwrap(), initial);
+        studio.redo();
+        assert_eq!(
+            studio.doc.find_shape(first.0, first.1).unwrap().opacity,
+            final_value
+        );
+        assert_eq!(crate::project::encode(&studio.doc).unwrap(), final_document);
+    }
+
     #[test]
     fn object_appearance_visible_short_text_motion_and_mixed_edits_are_one_undo_step() {
         let ctx = egui::Context::default();
