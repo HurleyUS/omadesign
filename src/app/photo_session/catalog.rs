@@ -24,6 +24,7 @@ pub struct CatalogState {
     job: Option<mpsc::Receiver<Outcome>>,
     sync_failed: bool,
     bound: BTreeSet<PathBuf>,
+    synced_revision: Option<u64>,
 }
 
 struct Outcome {
@@ -176,11 +177,15 @@ impl PhotoSession {
 
     pub fn retry_catalog_save(&mut self) {
         self.catalog.sync_failed = false;
+        self.catalog.synced_revision = None;
         self.sync_catalog_edits();
     }
 
     fn sync_catalog_edits(&mut self) -> bool {
         if self.catalog.busy() || self.catalog.sync_failed || self.coalescing.is_some() {
+            return false;
+        }
+        if self.catalog.synced_revision == Some(self.edit_revision) {
             return false;
         }
         let Some(catalog) = &self.catalog.catalog else {
@@ -202,6 +207,7 @@ impl PhotoSession {
                 (entry.develop != image.develop).then(|| (entry.id.clone(), image.develop.clone()))
             })
             .collect::<Vec<_>>();
+        self.catalog.synced_revision = Some(self.edit_revision);
         if edits.is_empty() {
             return false;
         }
@@ -260,6 +266,7 @@ impl PhotoSession {
                         self.catalog.catalog = Some(catalog);
                     }
                     if let Some(photo) = outcome.photo {
+                        self.catalog.synced_revision = None;
                         if let Some(source) = &photo.source {
                             self.catalog.bound.insert(source.clone());
                         }
