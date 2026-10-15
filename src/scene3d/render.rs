@@ -17,8 +17,18 @@ impl LinearFrame {
     /// Composite a linear scene over an existing sRGB surface.
     /// Args: same-size destination. Returns an error when dimensions differ.
     pub fn composite(&self, dst: &mut tiny_skia::Pixmap) -> Result<(), String> {
-        if dst.width() != self.width || dst.height() != self.height {
+        if dst.width() != self.width
+            || dst.height() != self.height
+            || self.pixels.len() != (self.width as usize).saturating_mul(self.height as usize)
+        {
             return Err("SceneSurface: size mismatch".into());
+        }
+        if self
+            .pixels
+            .iter()
+            .any(|p| p.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&p[3]))
+        {
+            return Err("SceneColor: invalid linear surface".into());
         }
         for (src, dst) in self.pixels.iter().zip(dst.data_mut().chunks_exact_mut(4)) {
             if src[3] <= 0. {
@@ -1127,6 +1137,22 @@ mod qualification_tests {
         s.objects[0].rotation = [0., 53., 0.];
         let f = render(&s, View::image(64, 64), 0., &mut || true).unwrap();
         assert!(f.pixels.iter().any(|p| p[3] > 0.));
+    }
+    #[test]
+    fn full_export_bounds_scene_allocation_before_creating_a_surface() {
+        let mut doc = crate::document::Document::new("Oversized", 1_000_000., 1_000_000., 96.);
+        doc.motion.scene3d = Some(cube());
+        assert!(
+            crate::anim_export::render_frame(&doc, 0., 1., true)
+                .unwrap_err()
+                .contains("ScenePixels")
+        );
+        let invalid = LinearFrame {
+            width: 1,
+            height: 1,
+            pixels: vec![[f32::INFINITY, 0., 0., 1.]],
+        };
+        assert!(invalid.png().unwrap_err().contains("SceneColor"));
     }
     #[test]
     fn independent_output_receipt_and_native_disk_reopen() {
