@@ -437,7 +437,7 @@ impl Replica {
             })
             .collect();
         for (key, parent) in cells
-            .range("/@parent/".into()..)
+            .range("/@parent/".to_owned()..)
             .take_while(|(key, _)| key.starts_with("/@parent/"))
         {
             let Cell::Value(Value::String(parent)) = parent else {
@@ -617,7 +617,7 @@ impl Replica {
             .unwrap_or_default();
         let cells = self.cells();
         for (key, parent) in cells
-            .range("/@parent/".into()..)
+            .range("/@parent/".to_owned()..)
             .take_while(|(key, _)| key.starts_with("/@parent/"))
         {
             if let Cell::Value(Value::String(parent)) = parent
@@ -1130,7 +1130,7 @@ mod tests {
         b.base = a.base.clone();
         let mut left = doc.clone();
         let mut right = doc.clone();
-        crate::layout_tokens::remove_token(&mut left, tid);
+        crate::layout_tokens::remove_token(&mut left, tid).unwrap();
         crate::layout_tokens::bind(&mut right, 1, &[xid], TokenProperty::Fill, Some(tid)).unwrap();
         left.find_shape_mut(1, xid)
             .unwrap()
