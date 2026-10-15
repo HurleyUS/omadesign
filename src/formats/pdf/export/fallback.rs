@@ -19,6 +19,29 @@ pub(super) fn prepare(
     if affected.is_empty() {
         return Ok((Cow::Borrowed(document), BTreeSet::new()));
     }
+    let sources = document.mask_sources();
+    let interacts_with_masks = document.layers.iter().enumerate().any(|(index, layer)| {
+        let selected = affected.contains(&index)
+            || document
+                .layer_ancestors(index)
+                .iter()
+                .any(|i| affected.contains(i));
+        selected
+            && (!layer.artwork_masks.is_empty()
+                || layer
+                    .kind
+                    .shapes()
+                    .is_some_and(|shapes| shapes.iter().any(|s| !s.artwork_masks.is_empty()))
+                || sources
+                    .iter()
+                    .any(|source| source.resolve(document).is_some_and(|(i, _)| i == index)))
+    });
+    if interacts_with_masks {
+        let rendered = crate::compositor::raster_export_document(document)?;
+        let (prepared, mut warnings) = prepare(&rendered)?;
+        warnings.insert("PDF export renders live masked compositions when unsupported effects or frame/stroke appearances affect their targets or source artwork; ordinary vector masks remain editable without those appearances.".into());
+        return Ok((Cow::Owned(prepared.into_owned()), warnings));
+    }
     let roots = affected
         .iter()
         .copied()
@@ -81,14 +104,7 @@ pub(super) fn prepare(
                 .inflate(group_pad),
         );
         check_budget(bounds, &mut byte_budget)?;
-        let selected_ids = selected.iter().map(|l| l.id).collect::<HashSet<_>>();
-        let mut render_layers = document.layers.clone();
-        for layer in &mut render_layers {
-            if !selected_ids.contains(&layer.id) {
-                layer.visible = false;
-            }
-        }
-        let mut scene = scene(document, bounds, render_layers, true);
+        let mut scene = scene(document, bounds, selected.clone(), true);
         let root = scene
             .layers
             .iter_mut()

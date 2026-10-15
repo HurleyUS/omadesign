@@ -1,5 +1,5 @@
 use super::{blend_name, byte};
-use crate::artwork_mask::{ArtworkMask, MaskMode};
+use crate::artwork_mask::{ArtworkMask, MaskMode, MaskSource};
 use crate::color::{Blend, Rgba};
 use crate::document::{Artboard, Cap, Document, Fill, Join, Layer, LayerKind, Pixels, Shape};
 use crate::geom::{Bounds, Geom, Pt};
@@ -180,13 +180,16 @@ impl Writer {
         if depth > 64 {
             return Err("PDF layer or mask nesting exceeds 64".into());
         }
-        for (index, layer) in doc
+        for (_, layer) in doc
             .layers
             .iter()
             .enumerate()
             .filter(|(_, l)| l.parent == parent)
         {
-            if doc.is_mask_source(index, None) {
+            if doc.mask_sources().contains(&MaskSource {
+                layer: layer.id,
+                shape: None,
+            }) {
                 continue;
             }
             self.layer(doc, layer, bounds, out, depth + 1, mask)?;
@@ -205,6 +208,9 @@ impl Writer {
         if depth > 64 {
             return Err("PDF layer or mask nesting exceeds 64".into());
         }
+        if mask && !layer.visible {
+            return Ok(());
+        }
         let mut scene = Scene::default();
         if !mask {
             scene.resources.set("Properties", self.properties.clone());
@@ -215,15 +221,13 @@ impl Writer {
         } else {
             match &layer.kind {
                 LayerKind::Vector { shapes } => {
-                    let index = doc
-                        .layers
-                        .iter()
-                        .position(|l| l.id == layer.id)
-                        .ok_or("PDF layer missing")?;
                     for shape in shapes {
                         if !shape.visible
                             || shape.guide
-                            || doc.is_mask_source(index, Some(shape.id))
+                            || doc.mask_sources().contains(&MaskSource {
+                                layer: layer.id,
+                                shape: Some(shape.id),
+                            })
                         {
                             continue;
                         }
@@ -553,7 +557,10 @@ impl Writer {
                     .iter()
                     .filter_map(fallback::layer_bounds)
                     .fold(bounds, |a, b| a.union(b));
-                if let Some(shape) = shape.and_then(|id| source.find(id)) {
+                if let Some(shape) = shape
+                    .and_then(|id| source.find(id))
+                    .filter(|s| s.visible && !s.guide)
+                {
                     let mut content = Scene::default();
                     self.shape(shape, source_bounds, &mut content)?;
                     let form = self.form(content, source_bounds, true)?;
