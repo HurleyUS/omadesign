@@ -105,6 +105,10 @@ pub fn dimensions(source: &Source, settings: Settings) -> Result<(u32, u32), Str
     } else {
         upscale::dimensions(w, h, settings.scale as f64)?
     };
+    if matches!(source, Source::Document(doc) if crate::deep_color::has_native(doc)) && settings.ai.is_none() {
+        crate::deep_color::storage::count(w,h,4)?;
+        return Ok((w,h));
+    }
     upscale::dimensions(w, h, settings.ai.map_or(1., |s| s.factor))
 }
 

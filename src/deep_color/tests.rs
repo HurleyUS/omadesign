@@ -360,3 +360,11 @@ fn native_fill_distinguishes_adjacent_samples_sharing_one_display_byte() {
     let region = retouch::flood_region(&pixels,Pt::ZERO,1.,Some(&[128,0,255])).unwrap();
     assert_eq!(region.as_slice(), &[128,0,0]);
 }
+
+#[test]
+fn native_export_dimensions_use_checked_storage_instead_of_ai_canvas_limits() {
+    use crate::export::{self, Source, Settings, Format};
+    let mut doc = Document::new("Wide native export",100_000.,1.,72.);
+    doc.layers=vec![Layer::placed_raster("Source",Pixels::from_samples(1,1,Depth::F32,vec![1.25,0.1234567,-0.125,1.]).unwrap(),Pt::ZERO,Pt::new(100_000.,1.))];
+    assert_eq!(export::dimensions(&Source::Document(doc),Settings {format:Format::Tiff,..Default::default()}).unwrap(),(100_000,1));
+}

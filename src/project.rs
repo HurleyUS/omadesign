@@ -71,11 +71,12 @@ pub fn encode(doc: &Document) -> Result<String, String> {
 
 pub fn decode(s: &str) -> Result<Document, String> {
     let _input_memory = crate::resources::global()
-        .reserve_now((s.len() as u64).saturating_mul(2), &crate::deep_color::storage::check)?;
+        .reserve_now(s.len() as u64, &crate::deep_color::storage::check)?;
     decode_admitted(s)
 }
 
 fn decode_admitted(s: &str) -> Result<Document, String> {
+    let _parser = crate::resources::global().reserve_now(s.len() as u64, &crate::deep_color::storage::check)?;
     let file: File = serde_json::from_str(s).map_err(|e| e.to_string())?;
     if !(1..=VERSION).contains(&file.version) {
         return Err("Unsupported omadesign project version".into());
