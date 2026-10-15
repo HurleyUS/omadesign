@@ -321,7 +321,7 @@ fn native_storage_shares_history_and_adopts_one_allocation_lease() {
 #[test]
 fn byte_history_swaps_prepared_storage_when_admission_is_full() {
     use std::sync::Arc;
-    use crate::document::{Cmd, History, apply_command};
+    use crate::document::{Cmd, History, apply as apply_command};
     let pool = resources::Budget::new(12, false);
     let before = Arc::new(pool.copy_now(&[90u8,90,90,90], &storage::check).unwrap());
     let after = Arc::new(pool.copy_now(&[123u8,45,67,89], &storage::check).unwrap());
@@ -349,4 +349,14 @@ fn paint_surface_retains_transferred_allocation_until_drop() {
     assert_eq!(surface.admitted_bytes(),4);
     assert!(pool.reserve_now(1,&storage::check).is_err());
     drop(surface);assert_eq!(pool.usage().0,0);
+}
+
+#[test]
+fn native_fill_distinguishes_adjacent_samples_sharing_one_display_byte() {
+    let pixels = Pixels::from_samples(3,1,Depth::U16,vec![1000. / 65535.,0.2,0.3,1.,1001. / 65535.,0.2,0.3,1.,1000. / 65535.,0.2,0.3,1.]).unwrap();
+    assert_eq!(&pixels.data[..4], &pixels.data[4..8]);
+    let region = retouch::flood_region(&pixels,Pt::ZERO,0.,None).unwrap();
+    assert_eq!(region.as_slice(), &[255,0,0]);
+    let region = retouch::flood_region(&pixels,Pt::ZERO,1.,Some(&[128,0,255])).unwrap();
+    assert_eq!(region.as_slice(), &[128,0,0]);
 }

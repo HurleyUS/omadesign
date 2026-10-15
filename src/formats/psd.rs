@@ -214,6 +214,7 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
             parsed.mode,
             parsed.depth,
             |id| {
+                if id == -1 && !parsed.merged_alpha {return None;}
                 let idx = if id == -1 { color_count } else { id as usize };
                 let n = parsed.width as usize * parsed.height as usize * (parsed.depth as usize / 8);
                 channels.get(idx * n..(idx + 1) * n)
@@ -709,4 +710,29 @@ mod tests {
 #[cfg(test)]
 pub(crate) fn test_native_clipping(doc: &mut Document) {
     bake_clipping(doc, &[doc.layers[1].id], &mut Vec::new()).unwrap();
+}
+
+#[cfg(test)]
+mod merged_channel_tests {
+    use super::*;
+    #[test]
+    fn merged_auxiliary_channel_is_not_document_transparency() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"8BPS");
+        data.extend_from_slice(&1u16.to_be_bytes());
+        data.extend_from_slice(&[0; 6]);
+        data.extend_from_slice(&4u16.to_be_bytes());
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(&16u16.to_be_bytes());
+        data.extend_from_slice(&3u16.to_be_bytes());
+        for _ in 0..3 {data.extend_from_slice(&0u32.to_be_bytes());}
+        data.extend_from_slice(&0u16.to_be_bytes());
+        for value in [1001u16, 1002, 1003, 0] {data.extend_from_slice(&value.to_be_bytes());}
+        let loaded = decode(&data, "Merged spot channel").unwrap();
+        let pixel = loaded.document.layers[0].kind.pixels().unwrap().sample(0);
+        assert_eq!(pixel[3], 1.);
+        assert_eq!(pixel[0], 1001. / 65535.);
+        assert!(loaded.warnings.iter().any(|w| w.contains("spot")));
+    }
 }

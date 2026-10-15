@@ -645,8 +645,10 @@ pub(crate) fn prepare_swap(
 }
 
 pub fn load_swap(path: &Path) -> Result<SwapMeta, String> {
-    let s = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let mut meta: SwapMeta = serde_json::from_str(&s).map_err(|e| e.to_string())?;
+    let bytes = read_admitted(path)?;
+    let s = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+    let _parser = crate::resources::global().reserve_now(bytes.len() as u64, &crate::deep_color::storage::check)?;
+    let mut meta: SwapMeta = serde_json::from_str(s).map_err(|e| e.to_string())?;
     let archive = swap_font_archive(path);
     if archive.is_dir() {
         crate::typography::register_archive(&archive)?;

@@ -147,7 +147,9 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                     "Stroke is too large for one live operation; split into shorter strokes".into(),
                 );
             }
-            let selection = studio.pixel_sel_mask(li).map(|m| m.into_owned());
+            let mapped = studio.cached_pixel_sel_mask(li);
+            if !mask && studio.pixel_sel.is_some() && mapped.is_none() {return Err("Cannot map the selection under current memory pressure".into());}
+            let selection = mapped.map(|m| crate::deep_color::storage::collect(m.iter().copied())).transpose()?;
             if original.native.is_some() {
                 if !["paint", "erase", "fill"].contains(&operation.as_str()) {
                     return Err("High-depth retouch requires an explicit copy; paint, erase and fill retain native precision".into());
@@ -156,12 +158,12 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                 let mut after = before.clone();
                 let mut overlay = crate::deep_color::surface::Surface::new(w, h)?;
                 if operation == "fill" {
-                    let region = paint::wand_mask_clipped(
-                        &original_pm,
+                    let region = crate::deep_color::retouch::flood_region(
+                        &before,
                         pts[0],
                         number(args, "tolerance", 32.)?.clamp(0., 510.),
-                        selection.as_deref(),
-                    );
+                        selection.as_ref().map(|s| s.as_slice()),
+                    )?;
                     let c = before.paint_color(brush.color)?;
                     let samples = crate::deep_color::storage::collect(
                         (0..w as usize * h as usize).flat_map(|i| {
@@ -223,7 +225,7 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                     pts[0],
                     brush.color,
                     number(args, "tolerance", 32.)?.clamp(0., 510.),
-                    selection.as_deref(),
+                    selection.as_ref().map(|s| s.as_slice()),
                 ),
                 "paint" | "erase" => {
                     paint::stamp(&mut pm, pts[0], &brush, operation == "erase");

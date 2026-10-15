@@ -13,7 +13,7 @@ pub struct SelectionSpace {
 /// cached allocation across all dabs instead of resampling and copying it.
 pub(crate) enum SelectionMask<'a> {
     Borrowed(&'a [u8]),
-    Mapped(std::sync::Arc<[u8]>),
+    Mapped(std::sync::Arc<crate::resources::Allocation<u8>>),
 }
 
 impl std::ops::Deref for SelectionMask<'_> {
@@ -37,7 +37,7 @@ struct SelectionKey {
 
 #[derive(Default)]
 pub(super) struct SelectionCache {
-    entry: std::cell::RefCell<Option<(SelectionKey, std::sync::Arc<[u8]>)>>,
+    entry: std::cell::RefCell<Option<(SelectionKey, std::sync::Arc<crate::resources::Allocation<u8>>)>>,
 }
 
 impl SelectionCache {
@@ -57,28 +57,19 @@ pub(super) fn resample(
     source: SelectionSpace,
     target: SelectionSpace,
 ) -> Option<Vec<u8>> {
-    if values.len() != source.w as usize * source.h as usize {
-        return None;
-    }
-    if source == target {
-        return Some(values.to_vec());
-    }
-    let data = values.iter().flat_map(|v| [255, 255, 255, *v]).collect();
-    let src = Pixels::from_rgba(source.w, source.h, data)?.to_pixmap()?;
-    let mut dest = tiny_skia::Pixmap::new(target.w, target.h)?;
-    let transform = target.transform.invert()?.pre_concat(source.transform);
-    dest.draw_pixmap(
-        0,
-        0,
-        src.as_ref(),
-        &tiny_skia::PixmapPaint {
-            quality: tiny_skia::FilterQuality::Bilinear,
-            ..Default::default()
-        },
-        transform,
-        None,
-    );
-    Some(dest.pixels().iter().map(|p| p.alpha()).collect())
+    resample_admitted(values, source, target).ok().map(|values| values.to_vec())
+}
+
+fn resample_admitted(values: &[u8], source: SelectionSpace, target: SelectionSpace) -> Result<std::sync::Arc<crate::resources::Allocation<u8>>, String> {
+    use crate::{deep_color::{storage, surface::Surface}, resources};
+    if values.len() != storage::count(source.w, source.h, 1)? {return Err("Invalid source selection dimensions".into());}
+    if source == target {return resources::global().copy_now(values, &storage::check).map(std::sync::Arc::new);}
+    let transform = target.transform.invert().ok_or("Selection transform is singular")?.pre_concat(source.transform);
+    let mut src = Surface::new(source.w, source.h)?;
+    for (pixel, &alpha) in src.pixels_mut().iter_mut().zip(values) {*pixel = tiny_skia::ColorU8::from_rgba(255,255,255,alpha).premultiply();}
+    let mut dest = Surface::new(target.w, target.h)?;
+    dest.draw_pixmap(0,0,src.as_ref(), &tiny_skia::PixmapPaint {quality:tiny_skia::FilterQuality::Bilinear,..Default::default()},transform,None);
+    storage::collect(dest.pixels().iter().map(|p| p.alpha()))
 }
 
 impl Studio {
@@ -276,7 +267,7 @@ impl Studio {
             return Some(SelectionMask::Mapped(values.clone()));
         }
         self.pixel_sel_cache.clear();
-        let values: std::sync::Arc<[u8]> = resample(mask, source, target)?.into();
+        let values = resample_admitted(mask, source, target).ok()?;
         // Keep at most one derived mask, never one per open tab or layer. The
         // image size limit is 64M pixels; oversized inputs remain uncached.
         if values.len() <= 64 * 1024 * 1024 {
@@ -554,13 +545,7 @@ impl Studio {
             self.doc.layers.get(layer).map(|l| &l.artwork_masks)
         };
         if let Some(before) = masks.filter(|m| !m.is_empty()).cloned() {
-            let mut after = match before.try_clone_now(&crate::deep_color::storage::check) {
-                Ok(after) => after,
-                Err(error) => {
-                    self.status = error;
-                    return false;
-                }
-            };
+            let mut after = before.clone();
             for mask in &mut after {
                 mask.mode = mode;
             }
@@ -1109,7 +1094,7 @@ mod tests {
         studio
     }
 
-    fn mapped(studio: &Studio) -> std::sync::Arc<[u8]> {
+    fn mapped(studio: &Studio) -> std::sync::Arc<crate::resources::Allocation<u8>> {
         let SelectionMask::Mapped(values) = studio.cached_pixel_sel_mask(0).unwrap() else {
             panic!("transformed mask");
         };

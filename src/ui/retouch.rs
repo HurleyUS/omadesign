@@ -660,12 +660,9 @@ pub(super) fn fill(studio: &mut Studio, world: Pt) {
     };
     if pixels.native.is_some() {
         let before = pixels.clone();
-        let Some(pm) = pixels.to_pixmap() else {
-            return;
-        };
-        let selection = studio.pixel_sel_mask(layer).map(|m| m.into_owned());
-        let region =
-            paint::wand_mask_clipped(&pm, point, studio.fill_tolerance, selection.as_deref());
+        let selection = if mask {None} else {studio.cached_pixel_sel_mask(layer)};
+        if !mask && studio.pixel_sel.is_some() && selection.is_none() {studio.status = "Cannot map the selection under current memory pressure".into();return;}
+        let region = match crate::deep_color::retouch::flood_region(&before, point, studio.fill_tolerance, selection.as_deref()) {Ok(region) => region, Err(error) => {studio.status = error; return;}};
         let c = if mask {
             studio.mask_brush(false).color
         } else {
@@ -691,6 +688,7 @@ pub(super) fn fill(studio: &mut Studio, world: Pt) {
             studio.status = error;
             return;
         }
+        drop(selection);
         studio.commit(Cmd::NativePixels {
             layer,
             mask,
@@ -1365,7 +1363,7 @@ mod tests {
             };
             let mut reference = buf.try_clone().unwrap();
             paint::feather_overlay(&mut reference, &studio.cached_pixel_sel_mask(0).unwrap());
-            assert_eq!(preview, &reference);
+            assert_eq!(preview.data(), reference.data());
         }
         studio.nudge_pixel_sel(-2, 3);
         brush_drag(&mut studio, Pt::new(40.0, 15.0));
@@ -1379,7 +1377,7 @@ mod tests {
         };
         let mut reference = buf.try_clone().unwrap();
         paint::feather_overlay(&mut reference, &studio.cached_pixel_sel_mask(0).unwrap());
-        assert_eq!(preview, &reference);
+        assert_eq!(preview.data(), reference.data());
         studio.set_pixel_sel(None);
         brush_drag(&mut studio, Pt::new(50.0, 15.0));
         assert!(matches!(studio.op, Some(Op::Brush { preview: None, .. })));
@@ -2064,12 +2062,13 @@ pub(super) fn native_drag(studio: &mut Studio, world: Pt) {
         color: crate::color::Rgba::WHITE,
         ..brush
     };
+    let selection = if mask {None} else {studio.cached_pixel_sel_mask(layer)};
+    if !mask && studio.pixel_sel.is_some() && selection.is_none() {
+        drop(selection);
+        studio.op = Some(Op::NativeStroke {layer,mask,erase,before,coverage,memory,last});
+        studio.status = "Cannot map the selection under current memory pressure".into();return;
+    }
     paint::stroke_to(&mut coverage, from, point, &coverage_brush, false);
-    let selection = if mask {
-        None
-    } else {
-        studio.pixel_sel_mask(layer).map(|m| m.into_owned())
-    };
     let samples = crate::deep_color::storage::collect(
         (0..before.w as usize * before.h as usize).flat_map(|i| {
             let p = before.sample(i);
@@ -2093,6 +2092,7 @@ pub(super) fn native_drag(studio: &mut Studio, world: Pt) {
             }
         }),
     );
+    drop(selection);
     let target = if mask {
         studio.doc.layers[layer].mask.as_mut()
     } else {
@@ -2430,7 +2430,9 @@ fn native_retouch_drag_selected(
             tool,
             &studio.brush,
         )?;
-        let after = if let Some(selection) = studio.pixel_sel_mask(layer) {
+        let selection = studio.cached_pixel_sel_mask(layer);
+        if studio.pixel_sel.is_some() && selection.is_none() {return Err("Cannot map the selection under current memory pressure".into());}
+        let after = if let Some(selection) = selection {
             select(&before, &edited, &selection)?
         } else {edited.clone()};
         Ok::<_, String>((edited, after))
@@ -2506,4 +2508,20 @@ mod native_admission_tests {
         studio.end_pixel_stroke(true);
         assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().sample(0), original.sample(0));
     }
+    #[test]
+    fn an_existing_unmappable_selection_cannot_become_unrestricted_native_retouch() {
+        use crate::{deep_color::Depth, document::{Document, Layer}};
+        let original = Pixels::from_samples(4,2,Depth::F32,[1.25,0.1234567,-0.125,0.5].repeat(8)).unwrap();
+        let mut studio = Studio::default();studio.doc = Document::new("Unmappable selection",4.,2.,72.);
+        studio.doc.layers = vec![Layer::placed_raster("Paint",original.clone(),Pt::ZERO,Pt::new(4.,2.))];
+        studio.active_layer=Some(0);studio.persona=crate::tools::Persona::Pixel;
+        studio.set_pixel_sel(Some(vec![128]));
+        let last = Pt::new(1.,1.);
+        studio.op=Some(Op::NativeRetouch {layer:0,before:original.clone(),working:original.clone(),last,offset:Pt::ZERO,tool:Tool::Clone});
+        native_retouch_drag_selected(&mut studio, Pt::new(2.,1.),|_,_,_| panic!("invalid mapping must abort before selection authoring"));
+        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().sample(0),original.sample(0));
+        assert!(matches!(studio.op,Some(Op::NativeRetouch {last:retained,..}) if retained == last));
+        assert!(studio.status.contains("selection"));
+    }
+
 }

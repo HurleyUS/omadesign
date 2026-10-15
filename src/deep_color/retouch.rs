@@ -228,3 +228,50 @@ fn dab(
     }
     working.set_sample_allocation(std::sync::Arc::new(samples))
 }
+
+/// Find a connected fill region from authoritative straight samples.
+/// Args: image, seed, tolerance in the brush's 0–510 scale and optional selection coverage.
+/// Returns admitted coverage, retaining sub-byte color differences and soft selection weights.
+pub fn flood_region(
+    pixels: &Pixels,
+    seed: Pt,
+    tolerance: f32,
+    selection: Option<&[u8]>,
+) -> Result<std::sync::Arc<crate::resources::Allocation<u8>>, String> {
+    use super::storage;
+    use crate::resources;
+    let count = storage::count(pixels.w, pixels.h, 1)?;
+    if !seed.x.is_finite() || !seed.y.is_finite() || !tolerance.is_finite() || !(0. ..=510.).contains(&tolerance)
+        || selection.is_some_and(|s| s.len() != count) {
+        return Err("Invalid native fill seed, tolerance or selection".into());
+    }
+    let mut region = resources::global().allocate_now::<u8,_>(count, &storage::check)?;
+    let (x,y) = (seed.x.round() as i64, seed.y.round() as i64);
+    if x < 0 || y < 0 || x >= pixels.w as i64 || y >= pixels.h as i64 {
+        return Ok(std::sync::Arc::new(region));
+    }
+    let first = y as usize * pixels.w as usize + x as usize;
+    if selection.is_some_and(|s| s[first] == 0) {return Ok(std::sync::Arc::new(region));}
+    let target = pixels.sample(first);
+    let mut queue = resources::global().allocate_now::<usize,_>(count, &storage::check)?;
+    queue.as_mut_slice()[0] = first;region.as_mut_slice()[first] = 1;
+    let (mut read, mut write) = (0,1);
+    while read < write {
+        let i = queue[read];read += 1;
+        let sample = pixels.sample(i);
+        let distance = sample.into_iter().zip(target).map(|(a,b)| ((a-b)*255.).powi(2)).sum::<f32>();
+        if distance > tolerance * tolerance || selection.is_some_and(|s| s[i] == 0) {region.as_mut_slice()[i] = 2;continue;}
+        region.as_mut_slice()[i] = 255;
+        let x = i % pixels.w as usize;
+        for next in [
+            (x > 0).then(|| i-1),
+            (x+1 < pixels.w as usize).then(|| i+1),
+            (i >= pixels.w as usize).then(|| i-pixels.w as usize),
+            (i+(pixels.w as usize) < count).then(|| i+pixels.w as usize),
+        ].into_iter().flatten() {
+            if region[next] == 0 {region.as_mut_slice()[next] = 1;queue.as_mut_slice()[write] = next;write += 1;}
+        }
+    }
+    for (i, v) in region.as_mut_slice().iter_mut().enumerate() {*v = if *v == 255 {selection.map_or(255,|s|s[i])} else {0};}
+    Ok(std::sync::Arc::new(region))
+}

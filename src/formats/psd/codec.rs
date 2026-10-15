@@ -108,6 +108,7 @@ pub(super) struct Parsed {
     pub dpi: f32,
     pub layers: Vec<Record>,
     pub merged: Option<Arc<Allocation<u8>>>,
+    pub merged_alpha: bool,
     pub warnings: Vec<String>,
 }
 
@@ -239,6 +240,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
         dpi,
         layers,
         merged,
+        merged_alpha,
         warnings,
     })
 }
