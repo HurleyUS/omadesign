@@ -605,7 +605,11 @@ impl Writer {
                         source_bounds,
                         depth + 1,
                     )?;
-                    let state = self.state(byte(shape.opacity), byte(shape.opacity), shape.blend);
+                    let state = self.state(
+                        byte(shape.opacity * shape.fill_opacity),
+                        byte(shape.opacity * shape.fill_opacity),
+                        shape.blend,
+                    );
                     scene.invoke("gs", "ExtGState", state);
                     scene.invoke("Do", "XObject", form);
                 } else if mask.source.shape.is_none() {

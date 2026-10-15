@@ -344,6 +344,7 @@ fn pdf_exchange_mask_sources_survive_effect_fallback_and_shape_references() {
 fn pdf_exchange_group_and_luminance_sources_keep_native_visibility() {
     for visible in [true, false] {
         let mut doc = vector_document();
+        doc.layers[1].kind.shapes_mut().unwrap()[0].fill_opacity = 0.5;
         let mut source_group = Layer::group("Mask source group");
         source_group.visible = visible;
         doc.layers[1].parent = Some(source_group.id);
