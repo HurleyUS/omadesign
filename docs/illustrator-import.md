@@ -41,14 +41,15 @@ EPS ASCII85, legacy editable text, group hierarchy, multiple artboards,
 compound paths, unsupported-feature notes, malformed input, linked source
 deduplication and native save/reopen.
 
-The ignored `illustrator_independent_real_fixture_without_pdf_preview_and_oma_reopen`
-test reads a directory given by `OMADESIGN_ILLUSTRATOR_FIXTURE`. It requires the
+The ignored `illustrator_independent_` tests read a directory given by
+`OMADESIGN_ILLUSTRATOR_FIXTURE`. They require the
 following independent, real Illustrator files. They are deliberately absent
 from this repository:
 
 - `Test-Inkscape-LineIssue.ai` and `.svg`, supplied by their author in
   [Ink/Stitch issue 1623](https://github.com/inkstitch/inkstitch/issues/1623).
-  The test compares stroke placement and widths against the author's SVG.
+  The test compares stroke placement and widths against the author's SVG parsed
+  directly by usvg, independently of Omadesign's SVG import conversions.
   The attachment has no explicit redistribution license.
 - `font_template.ai` from
   [fontpixel/font-template at 6b613e2](https://github.com/fontpixel/font-template/blob/6b613e2d73d7189b754db04fb5c62e198594d882/font_template.ai),

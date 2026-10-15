@@ -309,6 +309,22 @@ fn illustrator_linked_picture_retains_original_once_and_reopens() {
 #[test]
 #[ignore = "Requires the independent real AI fixture directory through OMADESIGN_ILLUSTRATOR_FIXTURE"]
 fn illustrator_independent_real_fixture_without_pdf_preview_and_oma_reopen() {
+    independent_fixture("Test-Inkscape-LineIssue.ai", 1, false);
+}
+
+#[test]
+#[ignore = "Requires the independent real AI fixture directory through OMADESIGN_ILLUSTRATOR_FIXTURE"]
+fn illustrator_independent_font_template_without_pdf_preview_and_oma_reopen() {
+    independent_fixture("font_template.ai", 208, true);
+}
+
+#[test]
+#[ignore = "Requires the independent real AI fixture directory through OMADESIGN_ILLUSTRATOR_FIXTURE"]
+fn illustrator_independent_reuters_without_pdf_preview_and_oma_reopen() {
+    independent_fixture("reuters-dynamicText.ai", 1, true);
+}
+
+fn independent_fixture(file: &str, expected_boards: usize, needs_type: bool) {
     let location = std::env::var_os("OMADESIGN_ILLUSTRATOR_FIXTURE").expect(
         "set OMADESIGN_ILLUSTRATOR_FIXTURE to the independent fixture directory or one AI in it",
     );
@@ -318,188 +334,210 @@ fn illustrator_independent_real_fixture_without_pdf_preview_and_oma_reopen() {
     } else {
         location.parent().unwrap()
     };
-    for (file, expected_boards, needs_type) in [
-        ("Test-Inkscape-LineIssue.ai", 1, false),
-        ("font_template.ai", 208, true),
-        ("reuters-dynamicText.ai", 1, true),
-    ] {
-        let path = directory.join(file);
-        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{file}: {e}"));
-        let data = editing_data(&bytes).unwrap();
-        let expected_stories = String::from_utf8_lossy(&data)
-            .matches("/StoryIndex")
-            .count();
-        let (doc, notes) = read_with_path(&bytes, "Independent", Some(&path))
-            .unwrap_or_else(|e| panic!("{file}: {e}"));
-        assert_eq!(
-            doc.artboards.len(),
-            expected_boards,
-            "{file}: real artboard count"
-        );
-        let mut without = lopdf::Document::load_mem(&bytes).unwrap();
-        for id in without.get_pages().values() {
-            without.get_dictionary_mut(*id).unwrap().remove(b"Contents");
-        }
-        let mut stripped = Vec::new();
-        without.save_to(&mut stripped).unwrap();
-        assert_eq!(
-            editing_data(&stripped).unwrap(),
-            data,
-            "{file}: stripping previews must not alter editing data"
-        );
-        let (alone, alone_notes) = read(&stripped, "Independent")
-            .unwrap_or_else(|e| panic!("{file} without preview: {e}"));
-        assert_eq!(
-            doc.artboards
-                .iter()
-                .map(|a| (&a.name, a.origin, a.size))
-                .collect::<Vec<_>>(),
-            alone
-                .artboards
-                .iter()
-                .map(|a| (&a.name, a.origin, a.size))
-                .collect::<Vec<_>>()
-        );
-        fn shapes(doc: &Document) -> Vec<(serde_json::Value, crate::document::Style)> {
-            doc.layers
-                .iter()
-                .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
-                .map(|s| (serde_json::to_value(&s.geom).unwrap(), s.style.clone()))
-                .collect()
-        }
-        assert_eq!(
-            shapes(&doc),
-            shapes(&alone),
-            "{file}: preview-independent native artwork"
-        );
-        assert_eq!(notes, alone_notes);
-        assert!(!shapes(&doc).is_empty(), "{file}: actual native artwork");
-        let text: Vec<_> = doc
-            .layers
+    let path = directory.join(file);
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{file}: {e}"));
+    let data = editing_data(&bytes).unwrap();
+    let expected_stories = String::from_utf8_lossy(&data)
+        .matches("/StoryIndex")
+        .count();
+    let (doc, notes) = read_with_path(&bytes, "Independent", Some(&path))
+        .unwrap_or_else(|e| panic!("{file}: {e}"));
+    assert_eq!(
+        doc.artboards.len(),
+        expected_boards,
+        "{file}: real artboard count"
+    );
+    let mut without = lopdf::Document::load_mem(&bytes).unwrap();
+    for id in without.get_pages().values() {
+        without.get_dictionary_mut(*id).unwrap().remove(b"Contents");
+    }
+    let mut stripped = Vec::new();
+    without.save_to(&mut stripped).unwrap();
+    assert_eq!(
+        editing_data(&stripped).unwrap(),
+        data,
+        "{file}: stripping previews must not alter editing data"
+    );
+    let (alone, alone_notes) =
+        read(&stripped, "Independent").unwrap_or_else(|e| panic!("{file} without preview: {e}"));
+    assert_eq!(
+        doc.artboards
+            .iter()
+            .map(|a| (&a.name, a.origin, a.size))
+            .collect::<Vec<_>>(),
+        alone
+            .artboards
+            .iter()
+            .map(|a| (&a.name, a.origin, a.size))
+            .collect::<Vec<_>>()
+    );
+    fn shapes(doc: &Document) -> Vec<(serde_json::Value, crate::document::Style)> {
+        doc.layers
             .iter()
             .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
-            .filter_map(|s| {
-                if let Geom::Text(t) = &s.geom {
-                    Some(t)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if needs_type {
-            assert!(expected_stories > 0, "{file}: real source has live stories");
-            assert!(
-                !text.is_empty(),
-                "{file}: real editable type must be reconstructed"
-            );
-            assert!(
-                text.iter().any(|t| !t.content.trim().is_empty()),
-                "{file}: text must retain characters"
-            );
-            let reference = path.with_extension("preview-text.html");
-            let output = std::process::Command::new("pdftotext")
-                .arg("-bbox-layout")
-                .arg(&path)
-                .arg(&reference)
-                .output()
-                .expect("independent text check requires Poppler pdftotext");
-            assert!(
-                output.status.success(),
-                "{file}: independent Poppler text extraction failed"
-            );
-            let html = std::fs::read_to_string(&reference).unwrap();
-            let words = html
-                .lines()
-                .filter(|l| l.trim_start().starts_with("<word "))
-                .map(|line| {
-                    roxmltree::Document::parse(line.trim())
-                        .unwrap()
-                        .root_element()
-                        .text()
-                        .unwrap_or("")
-                        .to_string()
-                })
-                .filter(|s| !s.trim().is_empty())
-                .collect::<Vec<_>>();
-            let content = text
-                .iter()
-                .map(|t| t.content.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            let matched = words
-                .iter()
-                .filter(|w| content.contains(w.as_str()))
-                .count();
-            let bounds=doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().filter_map(|s|if let Geom::Text(t)=&s.geom{Some(serde_json::json!({"text":t.content,"origin":t.origin,"bounds":s.world_bbox()}))}else{None}).take(8).collect::<Vec<_>>();
-            std::fs::write(path.with_extension("native-type-qualification.json"),serde_json::to_string_pretty(&serde_json::json!({"file":file,"source_story_slots":expected_stories,"native_text_objects":text.len(),"independent_pdf_words":words.len(),"words_retained_as_editable_characters":matched,"native_examples":bounds,"warnings":notes})).unwrap()).unwrap();
-            assert!(
-                !words.is_empty(),
-                "{file}: independent PDF text oracle is empty"
-            );
-            assert!(
-                matched * 10 >= words.len() * 9,
-                "{file}: only {matched}/{} independent PDF words survived as editable type",
-                words.len()
-            );
-        }
-        let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+            .map(|s| (serde_json::to_value(&s.geom).unwrap(), s.style.clone()))
+            .collect()
+    }
+    assert_eq!(
+        shapes(&doc),
+        shapes(&alone),
+        "{file}: preview-independent native artwork"
+    );
+    assert_eq!(notes, alone_notes);
+    assert!(!shapes(&doc).is_empty(), "{file}: actual native artwork");
+    let text: Vec<_> = doc
+        .layers
+        .iter()
+        .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+        .filter_map(|s| {
+            if let Geom::Text(t) = &s.geom {
+                Some(t)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if needs_type {
+        assert!(expected_stories > 0, "{file}: real source has live stories");
         assert!(
-            reopened
-                .sources
+            !text.is_empty(),
+            "{file}: real editable type must be reconstructed"
+        );
+        assert!(
+            text.iter().any(|t| !t.content.trim().is_empty()),
+            "{file}: text must retain characters"
+        );
+        let reference = path.with_extension("preview-text.html");
+        let output = std::process::Command::new("pdftotext")
+            .arg("-bbox-layout")
+            .arg(&path)
+            .arg(&reference)
+            .output()
+            .expect("independent text check requires Poppler pdftotext");
+        assert!(
+            output.status.success(),
+            "{file}: independent Poppler text extraction failed"
+        );
+        let html = std::fs::read_to_string(&reference).unwrap();
+        let words = html
+            .lines()
+            .filter(|l| l.trim_start().starts_with("<word "))
+            .map(|line| {
+                roxmltree::Document::parse(line.trim())
+                    .unwrap()
+                    .root_element()
+                    .text()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .filter(|s| !s.trim().is_empty())
+            .collect::<Vec<_>>();
+        let content = text
+            .iter()
+            .map(|t| t.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let matched = words
+            .iter()
+            .filter(|w| content.contains(w.as_str()))
+            .count();
+        let bounds=doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().filter_map(|s|if let Geom::Text(t)=&s.geom{Some(serde_json::json!({"text":t.content,"origin":t.origin,"bounds":s.world_bbox()}))}else{None}).take(8).collect::<Vec<_>>();
+        std::fs::write(path.with_extension("native-type-qualification.json"),serde_json::to_string_pretty(&serde_json::json!({"file":file,"source_story_slots":expected_stories,"native_text_objects":text.len(),"independent_pdf_words":words.len(),"words_retained_as_editable_characters":matched,"native_examples":bounds,"warnings":notes})).unwrap()).unwrap();
+        assert!(
+            !words.is_empty(),
+            "{file}: independent PDF text oracle is empty"
+        );
+        assert!(
+            matched * 10 >= words.len() * 9,
+            "{file}: only {matched}/{} independent PDF words survived as editable type",
+            words.len()
+        );
+    }
+    let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+    assert!(
+        reopened
+            .sources
+            .iter()
+            .any(|s| s.format == "illustrator" && s.bytes() == bytes),
+        "{file}: original AI bytes must survive native import and reopen"
+    );
+    assert_eq!(
+        shapes(&doc),
+        shapes(&reopened),
+        "{file}: native save/reopen"
+    );
+    assert_eq!(doc.artboards, reopened.artboards);
+    assert_eq!(doc.import_notes, reopened.import_notes);
+    if !needs_type {
+        let svg = std::fs::read_to_string(directory.join("Test-Inkscape-LineIssue.svg")).unwrap();
+        let reference = usvg::Tree::from_str(&svg, &usvg::Options::default()).unwrap();
+        let marks = |doc: &Document| {
+            let mut marks: Vec<_> = doc
+                .layers
                 .iter()
-                .any(|s| s.format == "illustrator" && s.bytes() == bytes),
-            "{file}: original AI bytes must survive native import and reopen"
-        );
-        assert_eq!(
-            shapes(&doc),
-            shapes(&reopened),
-            "{file}: native save/reopen"
-        );
-        assert_eq!(doc.artboards, reopened.artboards);
-        assert_eq!(doc.import_notes, reopened.import_notes);
-        if !needs_type {
-            let svg =
-                std::fs::read_to_string(directory.join("Test-Inkscape-LineIssue.svg")).unwrap();
-            let (reference, _) = crate::formats::svg::read(&svg, "Independent reference").unwrap();
-            let marks = |doc: &Document| {
-                let mut marks: Vec<_> = doc
-                    .layers
-                    .iter()
-                    .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
-                    .filter(|s| !s.guide && s.style.stroke.is_some())
-                    .map(|s| {
-                        let b = s.geom.bbox();
-                        let stroke = s.style.stroke.as_ref().unwrap();
-                        [b.min.x, b.min.y, b.max.x, b.max.y, stroke.width]
-                    })
-                    .collect();
-                marks.sort_by(|a, b| a[1].total_cmp(&b[1]).then(a[0].total_cmp(&b[0])));
-                marks
-            };
-            let actual = marks(&doc);
-            let expected = marks(&reference);
-            assert_eq!(
-                actual.len(),
-                expected.len(),
-                "author's SVG stroke object count"
-            );
-            for (a, b) in actual.iter().zip(&expected) {
-                for (a, b) in a.iter().zip(b) {
-                    assert!(
-                        (a - b).abs() < 0.025,
-                        "AI vs author's SVG paint/placement: {a} vs {b}"
-                    );
+                .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+                .filter(|s| !s.guide && s.style.stroke.is_some())
+                .map(|s| {
+                    let b = s.geom.bbox();
+                    let stroke = s.style.stroke.as_ref().unwrap();
+                    [b.min.x, b.min.y, b.max.x, b.max.y, stroke.width]
+                })
+                .collect();
+            marks.sort_by(|a, b| a[1].total_cmp(&b[1]).then(a[0].total_cmp(&b[0])));
+            marks
+        };
+        let actual = marks(&doc);
+        fn reference_marks(group: &usvg::Group, marks: &mut Vec<[f32; 5]>) {
+            for node in group.children() {
+                match node {
+                    usvg::Node::Group(group) => reference_marks(group, marks),
+                    usvg::Node::Path(path) => {
+                        if let Some(stroke) = path.stroke() {
+                            let bounds = path.abs_bounding_box();
+                            let (sx, sy) = path.abs_transform().get_scale();
+                            assert!((sx - sy).abs() < 1e-6, "author's reference stroke scale");
+                            marks.push([
+                                bounds.left(),
+                                bounds.top(),
+                                bounds.right(),
+                                bounds.bottom(),
+                                stroke.width().get() * sx,
+                            ]);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
-        eprintln!(
-            "Independent AI {file}: {} bytes, {} artboards, {} layers, {} native objects, {} editable text from {expected_stories} real story slots; {} notes",
-            bytes.len(),
-            doc.artboards.len(),
-            doc.layers.len(),
-            shapes(&doc).len(),
-            text.len(),
-            notes.len()
+        let mut expected = Vec::new();
+        reference_marks(reference.root(), &mut expected);
+        expected.sort_by(|a, b| a[1].total_cmp(&b[1]).then(a[0].total_cmp(&b[0])));
+        assert_eq!(
+            expected.len(),
+            28,
+            "independent author's reference has28 strokes"
         );
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "author's SVG stroke object count"
+        );
+        for (a, b) in actual.iter().zip(&expected) {
+            for (a, b) in a.iter().zip(b) {
+                assert!(
+                    (a - b).abs() < 0.025,
+                    "AI vs author's SVG paint/placement: {a} vs {b}"
+                );
+            }
+        }
     }
+    eprintln!(
+        "Independent AI {file}: {} bytes, {} artboards, {} layers, {} native objects, {} editable text from {expected_stories} real story slots; {} notes",
+        bytes.len(),
+        doc.artboards.len(),
+        doc.layers.len(),
+        shapes(&doc).len(),
+        text.len(),
+        notes.len()
+    );
 }
