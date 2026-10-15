@@ -246,8 +246,8 @@ fn layered_pdf_round_trip_preserves_pages_hidden_groups_and_image_alpha() {
         .find(|layer| matches!(layer.kind, LayerKind::Raster { .. }))
         .unwrap();
     assert_eq!(
-        pixel_layer.kind.pixels().unwrap().data,
-        original.layers[2].kind.pixels().unwrap().data
+        pixel_layer.kind.pixels().unwrap().data.as_slice(),
+        original.layers[2].kind.pixels().unwrap().data.as_slice()
     );
     assert_eq!(
         pixel_layer.kind.raster_xform().unwrap(),
@@ -1004,9 +1004,9 @@ fn rejects_oversized_raster_dimensions_without_overflow() {
         let pixels = small.layers[0].kind.pixels_mut().unwrap();
         pixels.w = 2;
         pixels.h = 2;
-        pixels.data = vec![
+        pixels.replace_bytes(vec![
             255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 0, 0, 255,
-        ];
+        ]).unwrap();
     }
     assert!(write(&small).is_ok());
 

@@ -280,8 +280,8 @@ mod tests {
     #[test]
     fn export_pixel_selection_preserves_feather_and_native_layers() {
         let mut doc = Document::new("Mask", 8., 8., 96.);
-        let mut layer = Layer::raster("Pixels", 8, 8);
-        layer.kind.pixels_mut().unwrap().data = [220, 60, 30, 255].repeat(64);
+        let mut layer = Layer::raster("Pixels", 8, 8).unwrap();
+        layer.kind.pixels_mut().unwrap().replace_bytes([220, 60, 30, 255].repeat(64)).unwrap();
         doc.layers = vec![layer];
         let mut coverage = vec![0; 64];
         coverage[2 * 8 + 3] = 128;

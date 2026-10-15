@@ -1660,7 +1660,7 @@ mod tests {
         let mut expected = tiny_skia::Pixmap::new(40, 30).unwrap();
         resvg::render(&tree, Transform::identity(), &mut expected.as_mut());
         let expected = Pixels::from_pixmap(&expected);
-        assert_eq!(actual.data, expected.data);
+        assert_eq!(actual.data.as_slice(), expected.data.as_slice());
         let exported = crate::svg::export(&doc).unwrap();
         let (roundtrip, _) = read(&exported, "again").unwrap();
         assert_eq!(

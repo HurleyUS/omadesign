@@ -1677,11 +1677,7 @@ impl Studio {
     pub fn add_layer(&mut self, raster: bool) {
         let n = self.doc.layers.len() + 1;
         let mut layer = if raster {
-            Layer::raster(
-                format!("Pixel {n}"),
-                self.doc.width as u32,
-                self.doc.height as u32,
-            )
+            match Layer::raster(format!("Pixel {n}"),self.doc.width as u32,self.doc.height as u32) { Ok(layer)=>layer, Err(error)=>{self.status=error;return;} }
         } else {
             Layer::vector(format!("Layer {n}"))
         };
@@ -4382,8 +4378,7 @@ impl Studio {
     }
 
     fn place_raster(&mut self, name: String, image: RgbaImage, dest: Bounds) {
-        let pixels = crate::document::Pixels::from_rgba(image.w, image.h, image.data)
-            .unwrap_or_else(|| crate::document::Pixels::new(image.w.max(1), image.h.max(1)));
+        let Some(pixels) = crate::document::Pixels::from_rgba(image.w, image.h, image.data) else { self.status="Not enough memory to place this image; existing layers were kept".into(); return; };
         let layer = Layer::placed_raster(
             name.clone(),
             pixels,
@@ -5230,7 +5225,7 @@ mod tests {
                 data[i + 2] = 0;
             }
         }
-        let mut layer = Layer::raster("ink", 32, 32);
+        let mut layer = Layer::raster("ink", 32, 32).unwrap();
         if let LayerKind::Raster { pixels, .. } = &mut layer.kind {
             *pixels = crate::document::Pixels::from_rgba(32, 32, data).unwrap();
         }

@@ -211,7 +211,7 @@ fn duotone_on_vectors_bakes_a_filtered_image() {
         .find(|layer| layer.kind.pixels().is_some())
         .expect("duotone adds a raster");
     assert_eq!(raster.name, "Filtered image");
-    let data = raster.kind.pixels().unwrap().data.clone();
+    let data = raster.kind.pixels().unwrap().data.to_vec();
     assert_eq!(data.len(), before.len());
     assert_ne!(data, before);
     assert_eq!(data[3], before[3]);
@@ -245,7 +245,7 @@ fn plugin_pixel_filter_preserves_alpha_and_is_undoable() {
     let mut history = document::History::default();
     history.push(command);
     document::apply(&mut doc, &history.undo().unwrap());
-    assert_eq!(doc.layers[0].kind.pixels().unwrap().data, before);
+    assert_eq!(doc.layers[0].kind.pixels().unwrap().data.as_slice(), before);
 }
 #[test]
 fn generated_patterns_svg_icons_gradients_and_effects_are_native() {
@@ -390,7 +390,7 @@ fn neighborhood_filter_reads_the_unchanged_source_during_a_pass() {
     let out = exec(&p, "test", doc.clone(), vec![]).unwrap();
     document::apply(&mut doc, &Cmd::Batch(out.commands));
     assert_eq!(
-        doc.layers[0].kind.pixels().unwrap().data,
+        doc.layers[0].kind.pixels().unwrap().data.as_slice(),
         vec![5, 6, 7, 8, 1, 2, 3, 4]
     );
     std::fs::remove_dir_all(root).unwrap();

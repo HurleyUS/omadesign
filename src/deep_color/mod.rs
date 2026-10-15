@@ -1,10 +1,13 @@
 //! Native document samples. RGBA8 is a display cache; authored samples remain authoritative.
 mod composite;
 pub mod retouch;
+pub mod storage;
 pub use composite::{blend_pixel, composite};
 
 use crate::document::Pixels;
+use crate::resources::{self, Allocation, CancellationCheck, Lease};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Depth {
@@ -29,38 +32,87 @@ impl Depth {
 pub struct NativePixels {
     pub depth: Depth,
     #[serde(with = "sample_bytes")]
-    pub samples: Vec<f32>,
+    pub samples: Arc<Allocation<f32>>,
 }
 
 impl Pixels {
     /// Construct authoritative RGBA samples and their display cache.
     /// Args: dimensions, depth and straight RGBA samples. Returns validated pixels or an error.
     pub fn from_samples(w: u32, h: u32, depth: Depth, samples: Vec<f32>) -> Result<Self, String> {
-        let count = (w as usize)
-            .checked_mul(h as usize)
-            .and_then(|n| n.checked_mul(4))
-            .ok_or("Native pixel dimensions overflow")?;
-        if w == 0
-            || h == 0
-            || count > 128 * 1024 * 1024
-            || samples.len() != count
-            || samples.iter().any(|s| !s.is_finite())
-        {
-            return Err("Invalid or excessive native pixel samples".into());
+        Self::from_sample_allocation(w, h, depth, storage::adopt(samples)?)
+    }
+
+    /// Transfer an admitted RAW development without copying or counting samples twice.
+    /// Args: dimensions, depth, owned straight samples, exclusive lease and cancellation owner.
+    /// Returns authoritative pixels and an independently admitted display cache.
+    pub fn from_admitted_samples<C: CancellationCheck + ?Sized>(
+        w: u32,
+        h: u32,
+        depth: Depth,
+        samples: Vec<f32>,
+        memory: Arc<Lease>,
+        cancel: &C,
+    ) -> Result<Self, String> {
+        cancel.check()?;
+        let samples = resources::global().adopt(samples, memory)?;
+        Self::from_sample_allocation_checked(w, h, depth, samples, cancel)
+    }
+
+    pub fn from_sample_allocation(
+        w: u32,
+        h: u32,
+        depth: Depth,
+        samples: Arc<Allocation<f32>>,
+    ) -> Result<Self, String> {
+        Self::from_sample_allocation_checked(w, h, depth, samples, &storage::check)
+    }
+    fn from_sample_allocation_checked<C: CancellationCheck + ?Sized>(
+        w: u32,
+        h: u32,
+        depth: Depth,
+        samples: Arc<Allocation<f32>>,
+        cancel: &C,
+    ) -> Result<Self, String> {
+        let count = storage::count(w, h, 4)?;
+        if samples.len() != count || samples.iter().any(|s| !s.is_finite()) {
+            return Err("Invalid native pixel samples".into());
         }
-        let data = samples.iter().map(|&s| byte(s)).collect();
-        let mut out = Self::from_rgba(w, h, data).ok_or("Invalid native pixel dimensions")?;
+        let mut data = resources::global().allocate::<u8, _>(count, cancel)?;
+        for (dst, src) in data
+            .as_mut_slice()
+            .chunks_mut(65536)
+            .zip(samples.chunks(65536))
+        {
+            cancel.check()?;
+            for (dst, &src) in dst.iter_mut().zip(src) {
+                *dst = byte(src);
+            }
+        }
+        let mut out = Self::from_byte_allocation(w, h, Arc::new(data))?;
         out.native = Some(NativePixels { depth, samples });
         Ok(out)
     }
 
-    /// Read straight samples without quantizing them.
-    /// Args: self. Returns a copy in RGBA order, including out-of-range float color values.
-    pub fn samples(&self) -> Vec<f32> {
-        self.native
-            .as_ref()
-            .map(|n| n.samples.clone())
-            .unwrap_or_else(|| self.data.iter().map(|&s| s as f32 / 255.).collect())
+    /// Share authoritative samples without a history-sized copy.
+    /// Args: self. Returns immutable straight RGBA storage, admitting conversion for a byte image.
+    pub fn samples(&self) -> Result<Arc<Allocation<f32>>, String> {
+        if let Some(native) = &self.native {
+            return Ok(native.samples.clone());
+        }
+        let mut samples =
+            resources::global().allocate::<f32, _>(self.data.len(), &storage::check)?;
+        for (dst, &src) in samples.as_mut_slice().iter_mut().zip(self.data.iter()) {
+            *dst = src as f32 / 255.;
+        }
+        Ok(Arc::new(samples))
+    }
+    /// Admit an independent authoring copy before editing shared samples.
+    /// Args: cancellation owner. Returns mutable owned samples or preserves the existing image on failure.
+    pub fn copy_samples<C: CancellationCheck + ?Sized>(
+        &self,
+        cancel: &C,
+    ) -> Result<Allocation<f32>, String> {
+        self.samples()?.try_clone(cancel)
     }
 
     /// Read one authored pixel.
@@ -89,8 +141,11 @@ impl Pixels {
     /// Replace an edited pixel buffer while retaining its precision.
     /// Args: straight samples. Returns an error for malformed or nonfinite samples.
     pub fn set_samples(&mut self, samples: Vec<f32>) -> Result<(), String> {
+        self.set_sample_allocation(storage::adopt(samples)?)
+    }
+    pub fn set_sample_allocation(&mut self, samples: Arc<Allocation<f32>>) -> Result<(), String> {
         let depth = self.native.as_ref().map_or(Depth::F32, |n| n.depth);
-        let mut out = Self::from_samples(self.w, self.h, depth, samples)?;
+        let mut out = Self::from_sample_allocation(self.w, self.h, depth, samples)?;
         out.version = self.version.wrapping_add(1);
         *self = out;
         Ok(())
@@ -102,16 +157,16 @@ impl Pixels {
         if (self.w, self.h) != (mask.w, mask.h) {
             return Err("Mask dimensions do not match pixels".into());
         }
-        let mut samples = self.samples();
-        for (i, p) in samples.chunks_exact_mut(4).enumerate() {
+        let mut samples = self.copy_samples(&storage::check)?;
+        for (i, p) in samples.as_mut_slice().chunks_exact_mut(4).enumerate() {
             let m = mask.sample(i);
             p[3] *= ((m[0] * 0.2126 + m[1] * 0.7152 + m[2] * 0.0722) * m[3]).clamp(0., 1.);
         }
-        Self::from_samples(
+        Self::from_sample_allocation(
             self.w,
             self.h,
             self.native.as_ref().map_or(Depth::F32, |n| n.depth),
-            samples,
+            Arc::new(samples),
         )
     }
 
@@ -122,20 +177,24 @@ impl Pixels {
         settings: &crate::raster::Settings,
         selection: Option<&[u8]>,
     ) -> Result<Self, String> {
-        let src: Vec<[f32; 4]> = self
-            .samples()
-            .chunks_exact(4)
-            .map(|p| p.try_into().unwrap())
-            .collect();
-        let samples = crate::raster::apply_float(&src, self.w, self.h, settings, selection)?
-            .into_iter()
-            .flatten()
-            .collect();
-        Self::from_samples(
+        let samples = self.samples()?;
+        let source = samples.as_slice().as_chunks::<4>().0;
+        let filtered = crate::raster::apply_float(source, self.w, self.h, settings, selection)?;
+        let mut output = resources::global().allocate::<f32, _>(samples.len(), &storage::check)?;
+        for (dst, src) in output
+            .as_mut_slice()
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(filtered.iter())
+        {
+            *dst = *src;
+        }
+        Self::from_sample_allocation(
             self.w,
             self.h,
             self.native.as_ref().map_or(Depth::F32, |n| n.depth),
-            samples,
+            Arc::new(output),
         )
     }
 }
@@ -145,40 +204,90 @@ pub(crate) fn byte(v: f32) -> u8 {
 }
 
 mod sample_bytes {
+    use super::*;
     use base64::Engine;
     use serde::{Deserialize, Deserializer, Serializer};
-    use std::io::Read;
-    pub fn serialize<S: Serializer>(samples: &[f32], s: S) -> Result<S::Ok, S::Error> {
-        let bytes: Vec<u8> = samples.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let packed =
-            zstd::stream::encode_all(bytes.as_slice(), 3).map_err(serde::ser::Error::custom)?;
-        s.serialize_str(&base64::engine::general_purpose::STANDARD.encode(packed))
+    use std::io::{Read, Write};
+    pub fn serialize<S: Serializer>(
+        samples: &Arc<Allocation<f32>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let writer = storage::Builder::<u8>::new().map_err(serde::ser::Error::custom)?;
+        let mut encoder =
+            zstd::stream::write::Encoder::new(writer, 3).map_err(serde::ser::Error::custom)?;
+        for chunk in samples.chunks(1024) {
+            let mut bytes = [0u8; 4096];
+            for (value, dst) in chunk.iter().zip(bytes.chunks_exact_mut(4)) {
+                dst.copy_from_slice(&value.to_le_bytes());
+            }
+            encoder
+                .write_all(&bytes[..chunk.len() * 4])
+                .map_err(serde::ser::Error::custom)?;
+        }
+        let packed = encoder
+            .finish()
+            .map_err(serde::ser::Error::custom)?
+            .finish()
+            .map_err(serde::ser::Error::custom)?;
+        let length = packed
+            .len()
+            .checked_add(2)
+            .and_then(|n| (n / 3).checked_mul(4))
+            .ok_or_else(|| serde::ser::Error::custom("Encoded samples overflow"))?;
+        let _memory = resources::global()
+            .reserve(length as u64, &storage::check)
+            .map_err(serde::ser::Error::custom)?;
+        serializer
+            .serialize_str(&base64::engine::general_purpose::STANDARD.encode(packed.as_slice()))
     }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<f32>, D::Error> {
-        let text = String::deserialize(d)?;
-        if text.len() > 720 * 1024 * 1024 {
-            return Err(serde::de::Error::custom("Native sample data exceeds limit"));
-        }
-        let packed = base64::engine::general_purpose::STANDARD
-            .decode(text)
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Arc<Allocation<f32>>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        let _encoded = resources::global()
+            .reserve(text.capacity() as u64, &storage::check)
             .map_err(serde::de::Error::custom)?;
-        let mut raw = Vec::new();
-        zstd::stream::read::Decoder::new(packed.as_slice())
-            .map_err(serde::de::Error::custom)?
-            .take(512 * 1024 * 1024 + 1)
-            .read_to_end(&mut raw)
+        let base64 = base64::read::DecoderReader::new(
+            text.as_bytes(),
+            &base64::engine::general_purpose::STANDARD,
+        );
+        let mut decoder =
+            zstd::stream::read::Decoder::new(base64).map_err(serde::de::Error::custom)?;
+        let _window = resources::global()
+            .reserve(128 * 1024 * 1024, &storage::check)
             .map_err(serde::de::Error::custom)?;
-        if raw.len() > 512 * 1024 * 1024 || raw.len() % 4 != 0 {
-            return Err(serde::de::Error::custom("Invalid native sample length"));
+        decoder
+            .window_log_max(27)
+            .map_err(serde::de::Error::custom)?;
+        let mut samples = storage::Builder::new().map_err(serde::de::Error::custom)?;
+        let mut bytes = [0u8; 16384];
+        let mut carried = 0;
+        loop {
+            let read = decoder
+                .read(&mut bytes[carried..])
+                .map_err(serde::de::Error::custom)?;
+            if read == 0 {
+                if carried != 0 {
+                    return Err(serde::de::Error::custom("Truncated native sample"));
+                }
+                break;
+            }
+            let length = carried + read;
+            let complete = length / 4 * 4;
+            let mut values = [0f32; 4096];
+            for (dst, src) in values.iter_mut().zip(bytes[..complete].chunks_exact(4)) {
+                *dst = f32::from_le_bytes(src.try_into().unwrap());
+                if !dst.is_finite() {
+                    return Err(serde::de::Error::custom("Nonfinite native sample"));
+                }
+            }
+            samples
+                .extend(&values[..complete / 4])
+                .map_err(serde::de::Error::custom)?;
+            carried = length - complete;
+            bytes.copy_within(complete..length, 0);
         }
-        let samples: Vec<f32> = raw
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-            .collect();
-        if samples.iter().any(|s| !s.is_finite()) {
-            return Err(serde::de::Error::custom("Nonfinite native sample"));
-        }
-        Ok(samples)
+        samples.finish().map_err(serde::de::Error::custom)
     }
 }
 
@@ -192,9 +301,8 @@ impl Pixels {
         let count = (w as usize)
             .checked_mul(h as usize)
             .and_then(|n| n.checked_mul(4))
-            .filter(|&n| n <= 128 * 1024 * 1024)
             .ok_or("Native reframe exceeds working limit")?;
-        let mut out = vec![0.; count];
+        let mut out = resources::global().allocate::<f32, _>(count, &storage::check)?;
         for y in 0..self.h {
             let ny = y as i64 + dy;
             if ny < 0 || ny >= h as i64 {
@@ -206,15 +314,15 @@ impl Pixels {
                     continue;
                 }
                 let i = (ny as usize * w as usize + nx as usize) * 4;
-                out[i..i + 4]
+                out.as_mut_slice()[i..i + 4]
                     .copy_from_slice(&self.sample(y as usize * self.w as usize + x as usize));
             }
         }
-        Self::from_samples(
+        Self::from_sample_allocation(
             w,
             h,
             self.native.as_ref().map_or(Depth::U8, |n| n.depth),
-            out,
+            Arc::new(out),
         )
     }
 
@@ -224,17 +332,15 @@ impl Pixels {
         if (self.w, self.h) != (overlay.w, overlay.h) {
             return Err("Paint overlay dimensions mismatch".into());
         }
-        let samples = (0..self.w as usize * self.h as usize)
-            .flat_map(|i| {
-                blend_pixel(
-                    self.sample(i),
-                    overlay.sample(i),
-                    crate::color::Blend::Normal,
-                    opacity,
-                )
-            })
-            .collect();
-        self.set_samples(samples)
+        let samples = storage::collect((0..self.w as usize * self.h as usize).flat_map(|i| {
+            blend_pixel(
+                self.sample(i),
+                overlay.sample(i),
+                crate::color::Blend::Normal,
+                opacity,
+            )
+        }))?;
+        self.set_sample_allocation(samples)
     }
 }
 
@@ -247,7 +353,7 @@ impl Pixels {
         };
         let count = (self.w as usize)
             .checked_mul(self.h as usize)
-            .filter(|&n| n > 0 && n <= 32 * 1024 * 1024)
+            .filter(|&n| n > 0)
             .ok_or("Invalid native dimensions")?;
         if native.samples.len() != count * 4 || native.samples.iter().any(|s| !s.is_finite()) {
             return Err("Invalid native sample dimensions or values".into());
@@ -269,18 +375,16 @@ impl Pixels {
     pub fn resized(&self, w: u32, h: u32) -> Result<Self, String> {
         let count = (w as usize)
             .checked_mul(h as usize)
-            .filter(|&n| n > 0 && n <= 32 * 1024 * 1024)
+            .filter(|&n| n > 0)
             .ok_or("Resampled pixels exceed working limit")?;
-        let samples = (0..count)
-            .flat_map(|i| {
-                composite::sample(
-                    self,
-                    ((i % w as usize) as f32 + 0.5) * self.w as f32 / w as f32,
-                    ((i / w as usize) as f32 + 0.5) * self.h as f32 / h as f32,
-                )
-            })
-            .collect();
-        Self::from_samples(
+        let samples = storage::collect((0..count).flat_map(|i| {
+            composite::sample(
+                self,
+                ((i % w as usize) as f32 + 0.5) * self.w as f32 / w as f32,
+                ((i / w as usize) as f32 + 0.5) * self.h as f32 / h as f32,
+            )
+        }))?;
+        Self::from_sample_allocation(
             w,
             h,
             self.native.as_ref().map_or(Depth::U8, |n| n.depth),
@@ -298,8 +402,15 @@ pub fn sample_at(pixels: &Pixels, x: f32, y: f32) -> [f32; 4] {
 /// Visit every authored raster or mask in the document.
 /// Args: document. Returns layer pixels, layer masks and shape masks without copying them.
 pub fn buffers(doc: &crate::document::Document) -> impl Iterator<Item = &Pixels> {
-    doc.layers.iter().flat_map(|l| l.kind.pixels().into_iter().chain(l.mask.iter())
-        .chain(l.kind.shapes().into_iter().flatten().filter_map(|s| s.mask.as_ref())))
+    doc.layers.iter().flat_map(|l| {
+        l.kind.pixels().into_iter().chain(l.mask.iter()).chain(
+            l.kind
+                .shapes()
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s.mask.as_ref()),
+        )
+    })
 }
 
 /// Check whether an export needs the precise rendering route.
@@ -311,5 +422,8 @@ pub fn has_native(doc: &crate::document::Document) -> bool {
 /// Find the greatest authored sample width, including masks.
 /// Args: document. Returns eight, sixteen or floating-point depth.
 pub fn document_depth(doc: &crate::document::Document) -> Depth {
-    buffers(doc).filter_map(|p| p.native.as_ref().map(|n| n.depth)).max_by_key(|d| d.bits()).unwrap_or_default()
+    buffers(doc)
+        .filter_map(|p| p.native.as_ref().map(|n| n.depth))
+        .max_by_key(|d| d.bits())
+        .unwrap_or_default()
 }

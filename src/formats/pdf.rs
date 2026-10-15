@@ -1296,7 +1296,7 @@ impl Reader<'_> {
                 for x in 0..w as usize {
                     let mx = x * mask.w as usize / w as usize;
                     let my = y * mask.h as usize / h as usize;
-                    pixels.data[(y * w as usize + x) * 4 + 3] =
+                    pixels.bytes_mut()?[(y * w as usize + x) * 4 + 3] =
                         mask.data[(my * mask.w as usize + mx) * 4];
                 }
             }

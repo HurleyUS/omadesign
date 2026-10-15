@@ -23,7 +23,17 @@ fn native_samples_survive_project_masks_filters_undo_and_psd() {
         )];
         let saved = crate::project::encode(&doc).unwrap();
         let mut loaded = crate::project::decode(&saved).unwrap();
-        assert_eq!(loaded.layers[0].kind.pixels().unwrap().samples(), values);
+        assert_eq!(
+            loaded.layers[0]
+                .kind
+                .pixels()
+                .unwrap()
+                .samples()
+                .unwrap()
+                .as_slice()
+                .to_vec(),
+            values
+        );
         let mut settings = crate::raster::Settings::new(crate::raster::Kind::Exposure);
         settings.values[0] = 0.5;
         let edited = pixels.filtered(&settings, None).unwrap();
@@ -36,7 +46,17 @@ fn native_samples_survive_project_masks_filters_undo_and_psd() {
         };
         crate::document::apply(&mut loaded, &cmd);
         crate::document::apply(&mut loaded, &crate::document::invert_cmd(cmd));
-        assert_eq!(loaded.layers[0].kind.pixels().unwrap().samples(), values);
+        assert_eq!(
+            loaded.layers[0]
+                .kind
+                .pixels()
+                .unwrap()
+                .samples()
+                .unwrap()
+                .as_slice()
+                .to_vec(),
+            values
+        );
         for large in [false, true] {
             let out = crate::formats::psd::encode(&doc, large).unwrap();
             assert_eq!(
@@ -128,7 +148,7 @@ fn native_mask_resize_and_tiny_alpha_keep_authored_values() {
     assert!(resized.sample(1)[0] > mask.sample(0)[0]);
     assert!(resized.sample(1)[0] < mask.sample(1)[0]);
     let mut invalid = pixels;
-    invalid.native.as_mut().unwrap().samples.clear();
+    invalid.native.as_mut().unwrap().samples = storage::adopt(Vec::new()).unwrap();
     assert!(invalid.validate_native().is_err());
 }
 
@@ -259,4 +279,41 @@ fn native_mask_on_vector_layer_keeps_float_coverage() {
     doc.layers = vec![layer];
     let out = composite(&doc, 1).unwrap();
     assert!((out.sample(0)[3] - 0.50001).abs() < 1e-7);
+}
+
+#[test]
+fn native_storage_shares_history_and_adopts_one_allocation_lease() {
+    use std::sync::Arc;
+    let mut authored = resources::global()
+        .allocate::<f32, _>(8, &storage::check)
+        .unwrap();
+    authored
+        .as_mut_slice()
+        .copy_from_slice(&[1.25, -0.125, 0.1234567, 0.50001, 0.1, 0.2, 0.3, 1.]);
+    let (values, lease) = authored.into_parts();
+    let original =
+        Pixels::from_admitted_samples(2, 1, Depth::F32, values, lease, &storage::check).unwrap();
+    let before = original.clone();
+    assert!(Arc::ptr_eq(&original.data, &before.data));
+    assert!(Arc::ptr_eq(
+        &original.native.as_ref().unwrap().samples,
+        &before.native.as_ref().unwrap().samples
+    ));
+    let admitted = resources::global().usage().0;
+    let history = vec![before.clone(); 32];
+    assert_eq!(resources::global().usage().0, admitted);
+    let mut working = before.copy_samples(&storage::check).unwrap();
+    working.as_mut_slice()[0] = 1.125;
+    let mut after = before.clone();
+    after.set_sample_allocation(Arc::new(working)).unwrap();
+    assert_eq!(original.sample(0)[0], 1.25);
+    assert_eq!(after.sample(0)[0], 1.125);
+    assert!(!Arc::ptr_eq(&after.data, &before.data));
+    assert_eq!(history[0].sample(0), original.sample(0));
+    assert!(after.bytes_mut().is_err());
+    assert_eq!(storage::count(12_000, 9_000, 4).unwrap(), 432_000_000);
+    assert!(storage::count(u32::MAX, u32::MAX, 4).is_err());
+    let cancelled = || Err("cancelled".to_string());
+    assert!(before.copy_samples(&cancelled).is_err());
+    assert_eq!(before.sample(0), original.sample(0));
 }

@@ -369,7 +369,7 @@ fn convert_mask(
         return Err("Photoshop mask size mismatch".into());
     }
     if w == 0 || h == 0 {
-        return Ok(Pixels::new(1, 1));
+        return Ok(Pixels::new(1, 1)?);
     }
     let mut data = vec![0.; dimensions(w, h)? * 4];
     let offset_x = i64::from(mask.rect.left)
@@ -495,8 +495,8 @@ fn bake_clipping(
             continue;
         }
         let mut mask = layer.mask.clone().unwrap_or_else(|| {
-            let mut mask = Pixels::new(w, h);
-            mask.data.fill(255);
+            let mut mask = Pixels::new(w, h)?;
+            mask.bytes_mut()?.fill(255);
             mask
         });
         for y in 0..h {
@@ -518,7 +518,7 @@ fn bake_clipping(
                     });
                 let i = (y as usize * w as usize + x as usize) * 4;
                 let value = (mask.data[i] as u16 * alpha as u16 / 255) as u8;
-                mask.data[i..i + 4].copy_from_slice(&[value, value, value, 255]);
+                mask.bytes_mut()?[i..i + 4].copy_from_slice(&[value, value, value, 255]);
             }
         }
         mask.touch();
@@ -606,12 +606,12 @@ mod tests {
                 assert_eq!(old.blend, new.blend);
                 assert_eq!(old.is_group, new.is_group);
                 assert_eq!(
-                    old.kind.pixels().map(|p| &p.data),
-                    new.kind.pixels().map(|p| &p.data)
+                    old.kind.pixels().map(|p| &p.data.as_slice()),
+                    new.kind.pixels().map(|p| &p.data.as_slice())
                 );
                 assert_eq!(
-                    old.mask.as_ref().map(|p| &p.data),
-                    new.mask.as_ref().map(|p| &p.data)
+                    old.mask.as_ref().map(|p| &p.data.as_slice()),
+                    new.mask.as_ref().map(|p| &p.data.as_slice())
                 );
             }
             assert_eq!(loaded.layers[1].parent, Some(loaded.layers[2].id));
@@ -658,8 +658,8 @@ mod tests {
         let imported = decode(&exported.bytes, "Color overlay").unwrap().document;
         assert_eq!(doc.layers[0].filters, imported.layers[0].filters);
         assert_eq!(
-            doc.layers[0].kind.pixels().unwrap().data,
-            imported.layers[0].kind.pixels().unwrap().data
+            doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+            imported.layers[0].kind.pixels().unwrap().data.as_slice()
         );
         assert_eq!(
             crate::compositor::export_png(&doc, 1).unwrap(),

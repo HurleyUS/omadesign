@@ -4754,7 +4754,7 @@ mod tests {
     fn new_brush_strokes_get_independent_random_patterns() {
         let (_, mut s) = pen_input_studio();
         s.tool = Tool::Brush;
-        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300)];
+        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300).unwrap()];
         s.active_layer = Some(0);
         s.brush.size = 30.;
         s.brush.scatter = 2.;
@@ -4777,7 +4777,7 @@ mod tests {
         use eframe::egui::{Event, Modifiers, TouchDeviceId, TouchId, TouchPhase};
         let (ctx, mut s) = pen_input_studio();
         s.tool = Tool::Brush;
-        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300)];
+        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300).unwrap()];
         s.active_layer = Some(0);
         s.view.offset = Pt::ZERO;
         s.view.scale = 1.;
@@ -4907,7 +4907,7 @@ mod tests {
         use eframe::egui::{Event, Modifiers, TouchDeviceId, TouchId, TouchPhase};
         let (ctx, mut s) = pen_input_studio();
         s.tool = Tool::Brush;
-        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300)];
+        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300).unwrap()];
         s.active_layer = Some(0);
         s.view.offset = Pt::ZERO;
         canvas_frame(&ctx, &mut s, vec![]);

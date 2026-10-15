@@ -165,15 +165,15 @@ impl Studio {
         };
         if let Some(pixels) = pixels {
             if cancel {
-                pixels.data = before;
+                if let Err(error)=pixels.replace_bytes(before) {self.status=error;}
                 pixels.touch();
             } else {
-                if pixels.data != before {
+                if pixels.data.as_slice() != before.as_slice() {
                     self.history.push(Cmd::Pixels {
                         layer,
                         mask,
                         before,
-                        after: pixels.data.clone(),
+                        after: pixels.data.to_vec(),
                     });
                     self.dirty = true;
                 }
@@ -665,7 +665,7 @@ impl Studio {
         if pixels.native.is_some() {
             let before=pixels.clone();let samples=(0..pixels.w as usize*pixels.h as usize).flat_map(|i|if mask[i]>0 {[0.;4]}else {pixels.sample(i)}).collect();let mut after=before.clone();match after.set_samples(samples){Ok(())=>self.commit(Cmd::NativePixels{layer,mask:false,before,after}),Err(error)=>self.status=error};return true;
         }
-        let before = pixels.data.clone();
+        let before = pixels.data.to_vec();
         let mut after = before.clone();
         for (index, &selected) in mask.iter().enumerate() {
             if selected != 0 {
@@ -754,8 +754,8 @@ impl Studio {
             return;
         };
         let value = if reveal { 255 } else { 0 };
-        let mut pixels = Pixels::new(w, h);
-        for pixel in pixels.data.as_chunks_mut::<4>().0 {
+        let mut pixels = match Pixels::new(w,h) { Ok(pixels)=>pixels, Err(error)=>{self.status=error;return;} };
+        for pixel in pixels.bytes_mut().unwrap().as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&[value, value, value, 255]);
         }
         pixels.touch();
@@ -807,7 +807,7 @@ impl Studio {
             self.status = "Mask inverted".into();
             return;
         }
-        for pixel in mask.data.as_chunks_mut::<4>().0 {
+        for pixel in mask.bytes_mut().unwrap().as_chunks_mut::<4>().0 {
             // Include alpha, so an erased/transparent mask pixel inverts to white.
             let amount = mask_amount(pixel);
             let value = 255 - amount;
@@ -878,7 +878,7 @@ impl Studio {
             self.status = "Native-precision mask applied".into();
             return;
         }
-        let before = pixels.data.clone();
+        let before = pixels.data.to_vec();
         let mut after = before.clone();
         for (pixel, mask_pixel) in after
             .as_chunks_mut::<4>()
@@ -963,8 +963,8 @@ mod tests {
         let mut studio = Studio::new();
         studio.doc = Document::new("Mask", 4.0, 1.0, 96.0);
         studio.doc.transparent = true;
-        let mut layer = Layer::raster("Pixels", 4, 1);
-        layer.kind.pixels_mut().unwrap().data = [220, 50, 20, 255].repeat(4);
+        let mut layer = Layer::raster("Pixels", 4, 1).unwrap();
+        layer.kind.pixels_mut().unwrap().replace_bytes([220, 50, 20, 255].repeat(4)).unwrap();
         layer.kind.pixels_mut().unwrap().touch();
         studio.doc.layers = vec![layer];
         studio.active_layer = Some(0);
@@ -988,7 +988,7 @@ mod tests {
         studio.doc.height = 48.0;
         studio.doc.layers[0] = Layer::placed_raster(
             "Placed",
-            Pixels::new(16, 12),
+            Pixels::new(16, 12).unwrap(),
             Pt::new(5.0, 7.0),
             Pt::new(40.0, 30.0),
         );
@@ -1036,7 +1036,7 @@ mod tests {
         assert!(!std::sync::Arc::ptr_eq(&first, &moved));
         assert_ne!(first, moved);
         if let LayerKind::Raster { pixels, .. } = &mut studio.doc.layers[0].kind {
-            *pixels = Pixels::new(24, 8);
+            *pixels = Pixels::new(24, 8).unwrap();
         }
         let resized = mapped(&studio);
         assert_eq!(
@@ -1063,7 +1063,7 @@ mod tests {
     #[test]
     fn cancelling_a_brush_restores_pixels_without_preparing_its_transformed_selection() {
         let mut studio = transformed_selection_studio();
-        let before = studio.doc.layers[0].kind.pixels().unwrap().data.clone();
+        let before = studio.doc.layers[0].kind.pixels().unwrap().data.to_vec();
         let mut buf = tiny_skia::Pixmap::new(16, 12).unwrap();
         buf.fill(tiny_skia::Color::from_rgba8(200, 50, 20, 255));
         studio.op = Some(Op::Brush {
@@ -1080,7 +1080,7 @@ mod tests {
             studio.pixel_sel_cache.entry.borrow().is_none(),
             "discarded paint must not resample a selection"
         );
-        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data, before);
+        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(), before);
         assert!(studio.op.is_none());
         assert_eq!(studio.history.len(), 0);
     }
@@ -1124,7 +1124,7 @@ mod tests {
         studio.undo();
         assert_eq!(alphas(&studio.doc), masked);
 
-        let original = studio.doc.layers[0].kind.pixels().unwrap().data.clone();
+        let original = studio.doc.layers[0].kind.pixels().unwrap().data.to_vec();
         studio.apply_layer_mask(0);
         assert!(studio.doc.layers[0].mask.is_none());
         let applied = alphas(&studio.doc);
@@ -1132,7 +1132,7 @@ mod tests {
             assert!(a.abs_diff(*b) <= 1);
         }
         studio.undo();
-        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data, original);
+        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(), original);
         assert!(studio.doc.layers[0].mask.is_some());
         assert_eq!(alphas(&studio.doc), masked);
         studio.redo();

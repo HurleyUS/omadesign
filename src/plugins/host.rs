@@ -838,7 +838,7 @@ pub(super) fn register(lua: &Lua, state: Shared) -> LuaResult<()> {
                 if p.data.len() > 512 * 1024 * 1024 {
                     return Err(Error::runtime("Raster filter input exceeds 512 MiB"));
                 }
-                (p.w, p.h, p.data.clone())
+                (p.w, p.h, p.data.to_vec())
             };
             let row_fn: Function = lua.load(PIXEL_ROW).eval()?;
             let mut after = before.clone();

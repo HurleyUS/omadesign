@@ -168,10 +168,10 @@ pub fn encode(
         Source::Document(doc) if crate::deep_color::has_native(doc) => {
             if settings.ai.is_some() || settings.format == Format::Jpeg {return Err("This export would reduce native document precision. Export PNG, TIFF or PSD without AI upscaling.".into());}
             let pixels=crate::deep_color::composite(doc,settings.scale)?;
-            let data:Vec<u16> = pixels.samples().into_iter().map(|v|(v.clamp(0.,1.)*65535.).round() as u16).collect();
+            let data:Vec<u16> = pixels.samples()?.iter().copied().map(|v|(v.clamp(0.,1.)*65535.).round() as u16).collect();
             if crate::deep_color::document_depth(doc)==crate::deep_color::Depth::F32 && settings.format != Format::Tiff {return Err("Floating-point export requires TIFF or PSD to retain float samples".into());}
             if settings.format==Format::Tiff && crate::deep_color::document_depth(doc)==crate::deep_color::Depth::F32 {
-                DynamicImage::ImageRgba32F(image::ImageBuffer::from_raw(pixels.w,pixels.h,pixels.samples()).ok_or("Invalid float export")?)
+                DynamicImage::ImageRgba32F(image::ImageBuffer::from_raw(pixels.w,pixels.h,pixels.samples()?.as_slice().to_vec()).ok_or("Invalid float export")?)
             } else {DynamicImage::ImageRgba16(image::ImageBuffer::from_raw(pixels.w,pixels.h,data).ok_or("Invalid native export")?)}
         }
         Source::Document(doc) => {

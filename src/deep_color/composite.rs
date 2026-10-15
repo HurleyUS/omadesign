@@ -118,18 +118,33 @@ fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
 /// Args: document and integer export scale. Returns an authoritative float RGBA buffer.
 pub fn composite(doc: &Document, scale: u32) -> Result<Pixels, String> {
     doc.validate_hierarchy()?;
-    if doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().any(|s|s.mask.as_ref().is_some_and(|m|m.native.is_some())) {
+    if doc
+        .layers
+        .iter()
+        .filter_map(|l| l.kind.shapes())
+        .flatten()
+        .any(|s| s.mask.as_ref().is_some_and(|m| m.native.is_some()))
+    {
         return Err("Native vector-shape masks need a precise coverage renderer; save .oma to preserve their original samples.".into());
     }
     let scale = scale.clamp(1, 8);
     let w = (doc.width * scale as f32).round() as u32;
     let h = (doc.height * scale as f32).round() as u32;
-    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > 32 * 1024 * 1024 {
-        return Err("Native composite exceeds the 32 megapixel working limit".into());
+    let count = super::storage::count(w, h, 4)?;
+    let mut out = crate::resources::global().allocate::<f32, _>(count, &super::storage::check)?;
+    if !doc.transparent {
+        out.as_mut_slice().fill(1.);
     }
-    let mut out = vec![if doc.transparent { [0.; 4] } else { [1.; 4] }; w as usize * h as usize];
-    render(doc, None, &mut out, w, h, scale, 0)?;
-    Pixels::from_samples(w, h, Depth::F32, out.into_iter().flatten().collect())
+    render(
+        doc,
+        None,
+        out.as_mut_slice().as_chunks_mut::<4>().0,
+        w,
+        h,
+        scale,
+        0,
+    )?;
+    Pixels::from_sample_allocation(w, h, Depth::F32, std::sync::Arc::new(out))
 }
 fn render(
     doc: &Document,
@@ -162,12 +177,21 @@ fn render(
             }
             let pass = layer.pass_through;
             let mut temp = if pass {
-                out.to_vec()
+                crate::resources::global().copy(out, &super::storage::check)?
             } else {
-                vec![[0.; 4]; out.len()]
+                crate::resources::global()
+                    .allocate::<[f32; 4], _>(out.len(), &super::storage::check)?
             };
-            render(doc, Some(layer.id), &mut temp, w, h, scale, depth + 1)?;
-            for (i, (dst, src)) in out.iter_mut().zip(temp).enumerate() {
+            render(
+                doc,
+                Some(layer.id),
+                temp.as_mut_slice(),
+                w,
+                h,
+                scale,
+                depth + 1,
+            )?;
+            for (i, (dst, src)) in out.iter_mut().zip(temp.iter().copied()).enumerate() {
                 let p = Pt::new(
                     (i % w as usize) as f32 / scale as f32,
                     (i / w as usize) as f32 / scale as f32,
@@ -223,10 +247,18 @@ fn render(
             vector.blend = Blend::Normal;
             single.layers = vec![vector];
             let pm = crate::compositor::render_export(&single, scale)?;
-            let pixels = Pixels::from_pixmap(&pm);
+            let pixels = Pixels::try_from_pixmap(&pm)?;
             for (i, dst) in out.iter_mut().enumerate() {
-                let p=Pt::new(((i%w as usize) as f32+0.5)/scale as f32,((i/w as usize) as f32+0.5)/scale as f32);
-                *dst = blend_pixel(*dst, pixels.sample(i), layer.blend, layer.opacity*layer.fill_opacity*mask(layer,p,None));
+                let p = Pt::new(
+                    ((i % w as usize) as f32 + 0.5) / scale as f32,
+                    ((i / w as usize) as f32 + 0.5) / scale as f32,
+                );
+                *dst = blend_pixel(
+                    *dst,
+                    pixels.sample(i),
+                    layer.blend,
+                    layer.opacity * layer.fill_opacity * mask(layer, p, None),
+                );
             }
         }
     }

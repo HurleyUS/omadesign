@@ -66,6 +66,7 @@ pub fn encode(doc: &Document) -> Result<String, String> {
 }
 
 pub fn decode(s: &str) -> Result<Document, String> {
+    let _input_memory=crate::resources::global().reserve(s.len() as u64,&crate::deep_color::storage::check)?;
     let file: File = serde_json::from_str(s).map_err(|e| e.to_string())?;
     if !(1..=VERSION).contains(&file.version) {
         return Err("Unsupported omadesign project version".into());
@@ -141,14 +142,16 @@ pub fn decode_clipboard_shapes(text: &str) -> Result<Vec<crate::document::Shape>
 
 fn compress_pixels(px: &Pixels) -> Result<Pixels, String> {
     use image::ImageEncoder;
-    let mut png=Vec::new();
+    let mut png=crate::deep_color::storage::Builder::<u8>::new()?;
     image::codecs::png::PngEncoder::new(&mut png).write_image(&px.data,px.w,px.h,image::ExtendedColorType::Rgba8).map_err(|e|e.to_string())?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+    let png=png.finish()?;
+    let _encoded_memory=crate::resources::global().reserve((png.len() as u64).saturating_mul(4).div_ceil(3),&crate::deep_color::storage::check)?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(png.as_slice());
     Ok(Pixels {
         native: px.native.clone(),
         w: px.w,
         h: px.h,
-        data: b64.into_bytes(),
+        data: crate::deep_color::storage::adopt(b64.into_bytes())?,
         version: px.version,
         cached_pm: std::cell::RefCell::new(None),
         cached_uniform: Default::default(),
@@ -169,9 +172,18 @@ fn decompress_pixels(px: &Pixels) -> Result<Pixels, String> {
     let png = base64::engine::general_purpose::STANDARD
         .decode(b64)
         .map_err(|e| e.to_string())?;
-    let img = image::load_from_memory(&png).map_err(|e| e.to_string())?;
+    let expected=crate::deep_color::storage::count(px.w,px.h,4)?;
+    let decode_memory=crate::resources::global().reserve(expected as u64,&crate::deep_color::storage::check)?;
+    let mut reader=image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().map_err(|e|e.to_string())?;
+    let mut limits=image::Limits::default(); limits.max_alloc=Some(expected as u64);
+    reader.limits(limits);
+    let img=reader.decode().map_err(|e|e.to_string())?;
     let rgba = img.to_rgba8();
-    let mut out = Pixels::from_rgba(rgba.width(), rgba.height(), rgba.into_raw()).ok_or("size")?;
+    if (rgba.width(),rgba.height())!=(px.w,px.h) {return Err("Packed pixel dimensions do not match document".into());}
+    let data=rgba.into_raw();
+    decode_memory.resize(data.capacity() as u64,&crate::deep_color::storage::check)?;
+    let data=crate::resources::global().adopt(data,decode_memory)?;
+    let mut out=Pixels::from_byte_allocation(px.w,px.h,data)?;
     out.native = px.native.clone();
     out.validate_native()?;
     if out.native.as_ref().is_some_and(|n|n.samples.len()!=out.data.len()) {return Err("Native sample dimensions mismatch".into());}
@@ -1086,15 +1098,15 @@ mod tests {
         let encoded = encode(&doc).unwrap();
         let restored = decode(&encoded).unwrap();
         assert_eq!(
-            restored.layers[0].kind.pixels().unwrap().data,
-            doc.layers[0].kind.pixels().unwrap().data
+            restored.layers[0].kind.pixels().unwrap().data.as_slice(),
+            doc.layers[0].kind.pixels().unwrap().data.as_slice()
         );
 
         let mut file: serde_json::Value = serde_json::from_str(&encoded).unwrap();
         file["doc"]["layers"][0]["kind"]["Raster"]["pixels"]["data"] =
             serde_json::json!([9, 8, 7, 6]);
         let raw = decode(&file.to_string()).unwrap();
-        assert_eq!(raw.layers[0].kind.pixels().unwrap().data, [9, 8, 7, 6]);
+        assert_eq!(raw.layers[0].kind.pixels().unwrap().data.as_slice(), [9, 8, 7, 6]);
 
         file["doc"]["layers"][0]["kind"]["Raster"]["pixels"]["w"] =
             serde_json::json!(2_147_483_648u64);

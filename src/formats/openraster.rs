@@ -571,7 +571,7 @@ mod tests {
             Pt::new(-2., 3.)
         );
         assert_eq!(
-            doc.layers[1].kind.pixels().unwrap().data,
+            doc.layers[1].kind.pixels().unwrap().data.as_slice(),
             [250, 20, 10, 128]
         );
         let rendered =
@@ -628,7 +628,7 @@ mod tests {
             Pt::new(-2., 3.)
         );
         assert_eq!(
-            opened.layers[0].kind.pixels().unwrap().data,
+            opened.layers[0].kind.pixels().unwrap().data.as_slice(),
             vec![255, 0, 0, 128]
         );
     }
@@ -663,7 +663,7 @@ mod tests {
         let (opened, _) = read(&bytes, "Mask opened").unwrap();
         assert_eq!(opened.layers.len(), 1);
         let pixels = opened.layers[0].kind.pixels().unwrap();
-        assert_eq!(pixels.data, [0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0]);
+        assert_eq!(pixels.data.as_slice(), [0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0]);
     }
 
     #[test]

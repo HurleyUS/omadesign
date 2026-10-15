@@ -143,7 +143,12 @@ fn dab(
         if right <= left || bottom <= top {
             return Ok(());
         }
-        sums = vec![[0_f64; 4]; width * (bottom - top + 1) as usize];
+        let count = width
+            .checked_mul((bottom - top + 1) as usize)
+            .ok_or("Healing scratch overflows")?;
+        sums.try_reserve_exact(count)
+            .map_err(|_| "Not enough memory for healing scratch")?;
+        sums.resize(count, [0_f64; 4]);
         for y in 1..=(bottom - top) as usize {
             let mut row = [0.; 4];
             for x in 1..width {
@@ -156,7 +161,7 @@ fn dab(
         }
     }
     let input = working.clone();
-    let mut samples = working.samples();
+    let mut samples = working.copy_samples(&super::storage::check)?;
     let delta = pos - from;
     let distance = delta.length();
     let dir = if distance > 1e-6 {
@@ -218,8 +223,8 @@ fn dab(
                 mix(original, source, amount)
             };
             let i = (y as usize * working.w as usize + x as usize) * 4;
-            samples[i..i + 4].copy_from_slice(&value);
+            samples.as_mut_slice()[i..i + 4].copy_from_slice(&value);
         }
     }
-    working.set_samples(samples)
+    working.set_sample_allocation(std::sync::Arc::new(samples))
 }

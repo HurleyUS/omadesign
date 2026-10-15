@@ -439,7 +439,7 @@ fn placed_group_mask(
     } else if mask.native.is_some() {
         mask.resized(w, h)?
     } else {
-        let image = image::RgbaImage::from_raw(mask.w, mask.h, mask.data.clone())
+        let image = image::RgbaImage::from_raw(mask.w, mask.h, mask.data.to_vec())
             .ok_or("Invalid native group mask")?;
         let resized = image::imageops::resize(&image, w, h, image::imageops::FilterType::Triangle);
         Pixels::from_rgba(w, h, resized.into_raw()).ok_or("Invalid resized group mask")?

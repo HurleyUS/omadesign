@@ -106,7 +106,7 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                     "Mask grid differs from image; recreate its selection mask first".into(),
                 );
             }
-            let before = original.data.clone();
+            let before = original.data.to_vec();
             let original_pm = original.to_pixmap().ok_or("Invalid pixel data")?;
             let mut pm = original_pm.clone();
             let pts = points(&args["points"])?;
@@ -301,7 +301,7 @@ fn mask(studio: &mut Studio, li: usize, args: &Value) -> Result<(), String> {
             "remove" => None,
             "invert" => {
                 let mut p = s.mask.clone().ok_or("Object has no mask")?;
-                for v in p.data.chunks_exact_mut(4) {
+                for v in p.bytes_mut().unwrap().chunks_exact_mut(4) {
                     let amount = (v[0] as u32 * v[3] as u32 / 255) as u8;
                     let a = 255 - amount;
                     v.copy_from_slice(&[a, a, a, 255]);
@@ -310,9 +310,9 @@ fn mask(studio: &mut Studio, li: usize, args: &Value) -> Result<(), String> {
                 Some(p)
             }
             "reveal" | "hide" => {
-                let mut p = Pixels::new(1, 1);
+                let mut p = Pixels::new(1, 1).unwrap();
                 let a = if operation == "reveal" { 255 } else { 0 };
-                p.data.copy_from_slice(&[a, a, a, 255]);
+                p.bytes_mut().unwrap().copy_from_slice(&[a, a, a, 255]);
                 p.touch();
                 Some(p)
             }
