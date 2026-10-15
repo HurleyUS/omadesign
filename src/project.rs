@@ -20,7 +20,7 @@ pub fn encode(doc: &Document) -> Result<String, String> {
     serde_json::to_writer(&mut output, &File {
         // Older readers must not silently strip a mask or change stroke placement.
         // Keep plain documents compatible with v5; parent reconciles the provisional v14 gates.
-        version: if doc.color!=crate::deep_color::cms::DocumentColor::default() || doc.layers.iter().any(|l| l.kind.pixels().is_some_and(|p|p.native.is_some()) || l.mask.as_ref().is_some_and(|p|p.native.is_some()) || l.kind.shapes().is_some_and(|ss|ss.iter().any(|s|s.mask.as_ref().is_some_and(|p|p.native.is_some())))) || doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().any(|s|matches!(&s.geom,crate::geom::Geom::Text(t) if t.transform.is_some() || t.svg_text.is_some() || t.spans.iter().any(|s|s.font.is_some() || s.px.is_some() || s.fill.is_some()))) {
+        version: if doc.color!=crate::deep_color::cms::DocumentColor::default() || doc.layers.iter().any(|l| l.kind.pixels().is_some_and(|p|p.native.is_some()) || l.mask.as_ref().is_some_and(|p|p.native.is_some()) || l.kind.shapes().is_some_and(|ss|ss.iter().any(|s|s.mask.as_ref().is_some_and(|p|p.native.is_some())))) || doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().any(|s|matches!(&s.geom,crate::geom::Geom::Text(t) if t.transform.is_some() || t.svg_text.is_some() || t.spans.iter().any(|s|s.font.is_some() || s.px.is_some() || s.fill.is_some()))) || !doc.sources.is_empty() || doc.layers.iter().any(|l| l.source_attachment.is_some()) {
             14
         } else if !doc.mask_sources().is_empty() {
             13
@@ -104,6 +104,19 @@ fn decode_admitted(s: &str) -> Result<Document, String> {
 pub(crate) fn normalize_decoded_document(mut doc: Document, version: u32) -> Result<Document, String> {
     crate::deep_color::cms::validate_profile(&doc.color.icc_profile,doc.color.model)?;
     if doc.color.intent>3{return Err("Invalid document color rendering intent".into());}
+    let mut source_bytes = 0usize;
+    let mut source_ids = std::collections::HashSet::new();
+    for source in &doc.sources {
+        source.validate()?;
+        source_bytes = source_bytes.checked_add(source.bytes().len()).ok_or("Retained sources exceed 512 MiB")?;
+        if source_bytes > 512 * 1024 * 1024 { return Err("Retained sources exceed 512 MiB".into()); }
+        if !source_ids.insert(&source.id) { return Err("Duplicate retained source UUID".into()); }
+    }
+    for layer in &doc.layers {
+        if let Some(id) = &layer.source_attachment && doc.source(id).is_none() {
+            return Err(format!("Layer {} references a missing original source", layer.name));
+        }
+    }
     for layer in &mut doc.layers {
         if version < 7 {
             layer.filters.migrate_legacy(layer.blend);
