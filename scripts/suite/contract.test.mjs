@@ -33,6 +33,10 @@ test('pins reject changed bytes, absent input/reference and escaping symlinks', 
 test('cohort, reference and duplicate contract failures are closed', () => {
   assert.equal(validate(index),index);
   for (const bad of [{...index,candidate:[]},{...index,candidate:['unknown']},{...index,fixtures:[f,f]},{...index,fixtures:[{...f,reference:null}]}]) assert.throws(()=>validate(bad));
+  assert.throws(()=>validate({...index,fixtures:[f,{...f,id:'omitted'}]}),/every required/);
+  const unavailable={root:'references',path:'required.png',sha256:null,bytes:null,unavailable_reason:'Independent UI reference not yet qualified'};
+  assert.equal(validate({...index,fixtures:[{...f,reference:unavailable}]}).fixtures.length,1);
+  assert.throws(()=>asset(unavailable,{}),/required asset unavailable/);
 });
 
 test('affected lane includes rename/deletion old paths, shared changes and unknown mappings', () => {
@@ -42,6 +46,8 @@ test('affected lane includes rename/deletion old paths, shared changes and unkno
   for (const p of ['scripts/suite/process.mjs','src/new_module.rs']) assert.equal(select(i,'affected',[p]).ids.length,2);
   assert.deepEqual(select(i,'affected',[]).ids,[]);
   assert.equal(gate([],[],{}).passed,false);
+  const cross={...other,product:'editbay'};
+  assert.deepEqual(select({...i,fixtures:[f,cross]},'affected',['unmapped.rs'],'editbay').ids,['vector']);
 });
 
 test('one regression fails regardless of another fixture improving; newer failures survive old passes', () => {

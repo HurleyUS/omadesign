@@ -28,6 +28,6 @@ if (code !== 0 || artifacts.length !== 1) throw Error('Exact serialized build fa
 const actual = source(config.repositories[product].worktree);
 if (actual.revision !== revision || actual.dirty) throw Error('Canonical build source changed; build binding unavailable');
 const binary = artifacts[0];
-const record = {revision,tree:actual.tree,binary,sha256:fingerprint(binary).sha256,driver:'libtest',tools:{},build:{route:'scripts/serialized-cargo.mjs',args:cargo,log_sha256:fingerprint(`${output}.build.log`).sha256}};
+const record = {revision,tree:actual.tree,binary,sha256:fingerprint(binary).sha256,runtime_root:config.repositories[product].worktree,driver:'libtest',tools:{},build:{route:'scripts/serialized-cargo.mjs',args:cargo,log_sha256:fingerprint(`${output}.build.log`).sha256}};
 fs.writeFileSync(output,JSON.stringify(record,null,2)+'\n',{flag:'wx'});
 console.log(JSON.stringify({product,revision,binary_sha256:record.sha256}));

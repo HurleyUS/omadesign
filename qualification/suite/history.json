@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "policy": "Historical source-bound observations only. Never included in current candidate pass counts. Missing old executable bytes remain unavailable, not reconstructed.",
+  "observations": [
+    {"id":"native-plugin-expression-before-transport-correction","product":"omatainer","revision":"7ec887487b653b83de8fc28a4b48a7afd30d5d8d","status":"failed","passed":16,"failed":1,"binary_sha256":null,"reason":"Negative sample-position fixture rejected before plugin; retained failure, corrected by later source. No old binary identity invented."},
+    {"id":"native-plugin-core-lv2-expression","product":"omatainer","revision":"d5976feaf46a797126ccc057a7104b691bd9dca5","status":"passed","passed":17,"failed":0,"binary_sha256":"1b3455188cf5457ed910ae81fb7af8a99631f9ef1077c243a4d91fba2f6a049a","tier":"headless","executable":"Cargo test/isolated worker, not installed app","boundary":"Native ABI, state, events and worker recovery only; editor/device/physical/human proof absent. Exact old binary may no longer exist at shared target path."},
+    {"id":"audio-pcm24-publication-safety","product":"omatainer","revision":"78e5b50ac3c8bfdfd1f5834d3d1ad04bc6825db2","status":"passed","passed":8,"failed":0,"binary_sha256":"977eed3be4cbf5507584be8e1c12ea00a7c4b16b400e10ac543dee4f601f36bf","log_sha256":"76833e7ee900cfcde6b6cf687e7cd83f2d8c75b7587a1691f33caaae5e0683db","tier":"headless","boundary":"Odd/even PCM24 padding/recovery and actual rename/directory-sync warning retention/retry; no newer container/meter/batch/native-device qualification."}
+  ]
+}
