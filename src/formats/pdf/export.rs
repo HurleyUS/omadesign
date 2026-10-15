@@ -594,11 +594,31 @@ impl Writer {
         mode: MaskMode,
         bounds: Bounds,
     ) -> Result<ObjectId, String> {
+        let isolated = self
+            .pdf
+            .get_object(id)
+            .ok()
+            .and_then(|o| o.as_stream().ok())
+            .and_then(|s| s.dict.get(b"Group").ok())
+            .and_then(|o| o.as_dict().ok())
+            .and_then(|d| d.get(b"I").ok())
+            .and_then(|o| o.as_bool().ok())
+            .unwrap_or(true);
         let state=self.pdf.add_object(dictionary!{"Type"=>"ExtGState","SMask"=>dictionary!{"S"=>if mode==MaskMode::Alpha{"Alpha"}else{"Luminosity"},"G"=>mask,"BC"=>vec![0.into(),0.into(),0.into()]}});
         let mut scene = Scene::default();
         scene.invoke("gs", "ExtGState", state);
         scene.invoke("Do", "XObject", id);
-        self.form(scene, bounds, true)
+        let wrapper = self.form(scene, bounds, true)?;
+        if !isolated {
+            self.pdf
+                .get_object_mut(wrapper)
+                .map_err(|e| e.to_string())?
+                .as_stream_mut()
+                .map_err(|e| e.to_string())?
+                .dict
+                .remove(b"Group");
+        }
+        Ok(wrapper)
     }
     fn state(&mut self, fill: u8, stroke: u8, blend: Blend) -> ObjectId {
         let key = (fill, stroke, blend_name(blend).to_string());
