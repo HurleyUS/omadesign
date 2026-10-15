@@ -25,7 +25,10 @@ pub(super) fn prepare(
                 layer.name, layer.id
             ));
         }
-        let source = format!("<svg>{}</svg>", graph.definitions);
+        let source = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\">{}</svg>",
+            graph.definitions
+        );
         let xml = roxmltree::Document::parse(&source).map_err(|e| {
             format!(
                 "PDF layer '{}' has invalid retained filter source: {e}",
@@ -202,7 +205,7 @@ pub(super) fn prepare(
                             .iter()
                             .cloned()
                             .chain(crate::svg_source::reductions(&format!(
-                                "<svg>{}</svg>",
+                                "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\">{}</svg>",
                                 graph.definitions
                             )))
                     {
