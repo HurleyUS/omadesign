@@ -589,6 +589,30 @@ fn font_attributes(path: &str) -> String {
     attrs
 }
 
+fn installed_family(path: &str) -> Option<String> {
+    options()
+        .fontdb
+        .faces()
+        .find_map(|face| match &face.source {
+            usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _)
+                if p.to_string_lossy() == path =>
+            {
+                face.families.first().map(|(name, _)| name.clone())
+            }
+            _ => None,
+        })
+}
+
+fn quoted_family(name: &str) -> String {
+    format!("'{}'", name.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+fn overrides_font(run: &TypeRun) -> bool {
+    run.svg_text
+        .as_ref()
+        .is_some_and(|svg| run.font != svg.base_font)
+}
+
 fn paint_id(fill: &crate::document::Fill) -> String {
     format!(
         "oma-range-paint-{:032x}",
@@ -668,6 +692,12 @@ fn write_nodes(
             out.push_str(&format!("<{name}"));
             let mut css = String::new();
             for (key, value) in attributes {
+                if root
+                    && overrides_font(run)
+                    && matches!(key.as_str(), "font-family" | "font-weight" | "font-style")
+                {
+                    continue;
+                }
                 if !(PROPERTIES.contains(&key.as_str())
                     || matches!(
                         key.as_str(),
@@ -702,14 +732,6 @@ fn write_nodes(
                 }
                 let value = if key == "xml:space" {
                     "preserve".into()
-                } else if key == "font-family"
-                    && root
-                    && run
-                        .svg_text
-                        .as_ref()
-                        .is_some_and(|svg| run.font != svg.base_font)
-                {
-                    format!("'{}'", run.font.replace('\\', "\\\\").replace('\'', "\\'"))
                 } else {
                     value.clone()
                 };
@@ -718,6 +740,9 @@ fn write_nodes(
                     continue;
                 }
                 out.push_str(&format!(" {key}=\"{}\"", escape(&value)));
+            }
+            if root && overrides_font(run) {
+                out.push_str(&font_attributes(&run.font));
             }
             if !css.is_empty() {
                 out.push_str(&format!(" style=\"{}\"", escape(&css)));
@@ -731,18 +756,125 @@ fn write_nodes(
     }
 }
 
-fn options() -> usvg::Options<'static> {
+/// Share SVG font selection and external resource restrictions.
+/// Args: none. Returns options using one installed-font database and cached native font bytes.
+pub(crate) fn options() -> usvg::Options<'static> {
     static DB: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
     let mut options = usvg::Options::default();
     options.fontdb = DB
         .get_or_init(|| {
             let mut db = usvg::fontdb::Database::new();
             db.load_system_fonts();
+            for generic in ["serif", "sans-serif", "monospace", "cursive", "fantasy"] {
+                if let Ok(output) = std::process::Command::new("fc-match")
+                    .args(["-f", "%{family[0]}", generic])
+                    .output()
+                    && output.status.success()
+                {
+                    let family = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                    if !db
+                        .faces()
+                        .any(|f| f.families.iter().any(|(n, _)| n == &family))
+                    {
+                        continue;
+                    }
+                    match generic {
+                        "serif" => db.set_serif_family(family),
+                        "sans-serif" => db.set_sans_serif_family(family),
+                        "monospace" => db.set_monospace_family(family),
+                        "cursive" => db.set_cursive_family(family),
+                        _ => db.set_fantasy_family(family),
+                    }
+                }
+            }
             Arc::new(db)
         })
         .clone();
+    let selector = usvg::FontResolver::default_font_selector();
+    options.font_resolver.select_font = Box::new(move |font, db| {
+        let requested = font.families().iter().any(|family| match family {
+            usvg::FontFamily::Named(name) => db.faces().any(|face| {
+                face.families
+                    .iter()
+                    .any(|(n, _)| n.eq_ignore_ascii_case(name))
+            }),
+            _ => true,
+        });
+        if !requested
+            && let Some(path) = substituted_font(font).or_else(super::default_path)
+            && let Some(face) = db.faces().find(|face| match &face.source {
+                usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _) => {
+                    *p == path
+                }
+                _ => false,
+            })
+            && let Some((family, _)) = face.families.first()
+        {
+            return db.query(&usvg::fontdb::Query {
+                families: &[usvg::fontdb::Family::Name(family)],
+                weight: usvg::fontdb::Weight(font.weight()),
+                style: font.style().into(),
+                stretch: font.stretch().into(),
+                ..Default::default()
+            });
+        }
+        selector(font, db)
+    });
     options.image_href_resolver.resolve_string = Box::new(|_, _| None);
     options
+}
+
+fn substituted_font(font: &usvg::Font) -> Option<std::path::PathBuf> {
+    static MATCHES: OnceLock<Mutex<HashMap<String, Option<std::path::PathBuf>>>> = OnceLock::new();
+    let family = font
+        .families()
+        .iter()
+        .map(|family| match family {
+            usvg::FontFamily::Named(name) => name
+                .replace('\\', "\\\\")
+                .replace(':', "\\:")
+                .replace(',', "\\,")
+                .replace('=', "\\=")
+                .replace('-', "\\-"),
+            generic => generic.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let weight = match font.weight() {
+        0..150 => "thin",
+        150..250 => "extralight",
+        250..350 => "light",
+        350..450 => "regular",
+        450..550 => "medium",
+        550..650 => "demibold",
+        650..750 => "bold",
+        750..850 => "extrabold",
+        _ => "black",
+    };
+    let slant = match font.style() {
+        usvg::FontStyle::Normal => "roman",
+        usvg::FontStyle::Italic => "italic",
+        usvg::FontStyle::Oblique => "oblique",
+    };
+    let pattern = format!("{family}:weight={weight}:slant={slant}");
+    let matches = MATCHES.get_or_init(Default::default);
+    if let Some(path) = matches.lock().unwrap().get(&pattern) {
+        return path.clone();
+    }
+    let path = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}", &pattern])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from);
+    let mut matches = matches.lock().unwrap();
+    if matches.len() >= 64 {
+        matches.clear();
+    }
+    matches.insert(pattern, path.clone());
+    path
 }
 
 fn options_for(run: &TypeRun) -> usvg::Options<'static> {
@@ -877,20 +1009,9 @@ pub(crate) fn object_paint(run: &TypeRun, fill: &crate::document::Fill) -> TypeR
 
 pub(crate) fn export_fragment(run: &TypeRun, id: u64, outlines: bool) -> Option<String> {
     let original = source(run)?;
-    let options = options();
-    let family = |path: &str| {
-        options.fontdb.faces().find_map(|face| match &face.source {
-            usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _)
-                if p.to_string_lossy() == path =>
-            {
-                face.families.first().map(|(name, _)| name.clone())
-            }
-            _ => None,
-        })
-    };
     let fonts: std::collections::BTreeMap<_, _> = std::iter::once(&run.font)
         .chain(run.spans.iter().filter_map(|s| s.font.as_ref()))
-        .map(|font| (font, family(font)))
+        .map(|font| (font, installed_family(font)))
         .collect();
     let portable = fonts.iter().any(|(font, family)| {
         font.starts_with("omatype:")
@@ -914,11 +1035,9 @@ pub(crate) fn export_fragment(run: &TypeRun, id: u64, outlines: bool) -> Option<
             if attr.name() == "font-family" {
                 for (font, family) in &fonts {
                     if let Some(family) = family {
-                        let alias =
-                            format!("'{}'", font.replace('\\', "\\\\").replace('\'', "\\'"));
+                        let alias = quoted_family(font);
                         if value == alias {
-                            value =
-                                format!("'{}'", family.replace('\\', "\\\\").replace('\'', "\\'"));
+                            value = quoted_family(family);
                             break;
                         }
                     }
@@ -1354,6 +1473,44 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
     Some(result)
 }
 
+fn flow_source_root(run: &TypeRun) -> TextNode {
+    let svg = run.svg_text.as_ref().unwrap();
+    if run.spans.is_empty() && !overrides_font(run) {
+        return svg.root.clone();
+    }
+    let fragment = plain_fragment(run, 0..run.content.chars().count());
+    let Ok(xml) = roxmltree::Document::parse(&fragment) else {
+        return svg.root.clone();
+    };
+    let mut root = collect(xml.root_element(), &sheet(&xml), &mut String::new(), true)
+        .unwrap_or_else(|| svg.root.clone());
+    let fonts: BTreeMap<_, _> = std::iter::once(&run.font)
+        .chain(run.spans.iter().filter_map(|s| s.font.as_ref()))
+        .filter_map(|font| {
+            installed_family(font).map(|family| (quoted_family(font), quoted_family(&family)))
+        })
+        .collect();
+    fn families(node: &mut TextNode, fonts: &BTreeMap<String, String>) {
+        if let TextNode::Element {
+            attributes,
+            children,
+            ..
+        } = node
+        {
+            if let Some(family) = attributes.get_mut("font-family")
+                && let Some(name) = fonts.get(family)
+            {
+                *family = name.clone();
+            }
+            for child in children {
+                families(child, fonts);
+            }
+        }
+    }
+    families(&mut root, &fonts);
+    root
+}
+
 fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
     let mut out = String::new();
     let mut start = 0;
@@ -1363,9 +1520,18 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
     let TextNode::Element { attributes, .. } = &svg.root else {
         return out;
     };
+    let px = attributes
+        .get("font-size")
+        .and_then(|v| length(v, svg.base_px))
+        .unwrap_or(svg.base_px);
     out.push_str("<text");
     let mut css = String::new();
     for (key, value) in attributes {
+        if overrides_font(run)
+            && matches!(key.as_str(), "font-family" | "font-weight" | "font-style")
+        {
+            continue;
+        }
         if !(PROPERTIES.contains(&key.as_str()) || key == "xml:space") || !safe_value(value) {
             continue;
         }
@@ -1387,6 +1553,9 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
             out.push_str(&format!(" {key}=\"{}\"", escape(value)));
         }
     }
+    if overrides_font(run) {
+        out.push_str(&font_attributes(&run.font));
+    }
     if !css.is_empty() {
         out.push_str(&format!(" style=\"{}\"", escape(&css)));
     }
@@ -1395,7 +1564,7 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
         escape(&serde_json::to_string(flow).unwrap()),
         escape(
             &serde_json::to_string(&FlowSource {
-                root: svg.root.clone(),
+                root: flow_source_root(run),
                 content: run.content.clone()
             })
             .unwrap()
@@ -1453,8 +1622,8 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
             out.push_str(&format!(
                 "<tspan x=\"{}\" y=\"{}\"{}>{inner}</tspan>",
                 flow.x,
-                flow.y + run.px + row as f32 * flow.leading,
-                if run.px + row as f32 * flow.leading > flow.height {
+                flow.y + px + row as f32 * flow.leading,
+                if px + row as f32 * flow.leading > flow.height {
                     " visibility=\"hidden\""
                 } else {
                     ""

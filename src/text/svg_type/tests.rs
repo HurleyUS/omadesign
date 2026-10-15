@@ -158,6 +158,18 @@ fn svg_type_flow_retains_story_reflows_edits_and_exports_standard_text() {
             unreachable!()
         };
         run.replace_text(0, 8, "Short", None);
+        let font = run.font.clone();
+        run.font = crate::text::default_path()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        run.set_character_style(0, 5, |span| {
+            span.font = Some(font.clone());
+            span.px = Some(29.);
+            span.fill = Some(crate::document::Fill::Solid(crate::color::Rgba::rgb(
+                20, 170, 60,
+            )));
+        });
         run.contours = crate::text::shape(run);
         let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
         let current = crate::compositor::render_export(&reopened, 1).unwrap();
@@ -168,23 +180,33 @@ fn svg_type_flow_retains_story_reflows_edits_and_exports_standard_text() {
         let again = crate::formats::svg::read(&svg, "Flow SVG").unwrap().0;
         assert_eq!(types(&again)[0].content, types(&reopened)[0].content);
         assert!(types(&again)[0].svg_text.as_ref().unwrap().flow.is_some());
+        assert!(
+            error(
+                &crate::compositor::render_export(&again, 1).unwrap(),
+                &current
+            ) < 0.1
+        );
     }
 }
 
 #[test]
-fn svg_type_independent_librsvg_appearance_and_editable_export() {
+fn svg_type_independent_appearance_and_editable_export() {
     use std::{
         io::Write,
         process::{Command, Stdio},
     };
     let source = include_str!("../../../tests/assets/svg-type/affine-styles.svg");
-    fn independent(source: &str) -> tiny_skia::Pixmap {
-        let mut child = Command::new("rsvg-convert")
+    fn independent(source: &str, full_svg: bool) -> tiny_skia::Pixmap {
+        let mut command = Command::new(if full_svg { "inkscape" } else { "rsvg-convert" });
+        if full_svg {
+            command.args(["--pipe", "--export-type=png", "--export-filename=-"]);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("librsvg is required for independent SVG type qualification");
+            .expect("Inkscape and librsvg are required for independent SVG type qualification");
         child
             .stdin
             .take()
@@ -202,7 +224,7 @@ fn svg_type_independent_librsvg_appearance_and_editable_export() {
     let (doc, notes) = crate::formats::svg::read(source, "Independent type").unwrap();
     assert!(!notes.iter().any(|n| n.contains("outlines")), "{notes:?}");
     assert_eq!(types(&doc).len(), 5);
-    let expected = independent(source);
+    let expected = independent(source, true);
     let native = crate::compositor::render_export(&doc, 1).unwrap();
     diagnostic(
         "independent-native",
@@ -213,10 +235,9 @@ fn svg_type_independent_librsvg_appearance_and_editable_export() {
         let source = super::source(run).unwrap();
         let rendered = render(&source);
         diagnostic(&format!("independent-object-{i}"), &rendered, &source);
-        eprintln!(
-            "independent object {i}: {}",
-            error(&rendered, &independent(&source))
-        );
+        if i == 0 {
+            assert!(error(&rendered, &independent(&source, false)) < 1.5);
+        }
     }
     assert!(
         error(&native, &expected) < 1.5,
@@ -226,9 +247,9 @@ fn svg_type_independent_librsvg_appearance_and_editable_export() {
     let exported = crate::svg::export(&doc).unwrap();
     assert_eq!(exported.matches("<text ").count(), 5);
     assert!(
-        error(&independent(&exported), &expected) < 1.5,
+        error(&independent(&exported, true), &expected) < 1.5,
         "independent exported mean={}",
-        error(&independent(&exported), &expected)
+        error(&independent(&exported, true), &expected)
     );
 }
 
