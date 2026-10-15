@@ -10,6 +10,7 @@ pub mod psd;
 // Little CMS / LibRaw FFI bridge; see [lints] in Cargo.toml.
 pub mod raw;
 pub mod svg;
+pub mod suite_qualification;
 pub mod xcf;
 
 pub fn decode_image(bytes: &[u8]) -> Result<crate::document::Pixels, String> {
