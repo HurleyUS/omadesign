@@ -8,7 +8,7 @@
     "0.36"
   ],
   "sha256": {
-    "fields.rs": "6ec8798d70b33dcf7fbd5f644b54e50b09672d624cc3074c261b4fd5d5debe08",
+    "fields.rs": "95a14159551e3fa1c70fb44186c7153ae1a4f407f1031687e429bc4af068e2a8",
     "workspace.rs": "99ab81c8bf718be7563605aa550c6a9d7ee786bcfbfcd12c815cfeb8c00f31fe"
   },
   "directory": "vendor/oma-ui"

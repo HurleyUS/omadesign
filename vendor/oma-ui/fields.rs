@@ -53,15 +53,27 @@ pub fn number<N: egui::emath::Numeric>(
                             .labelled_by(label_response.id)
                             .on_hover_text(label);
                         if let Some(reset) = reset {
-                            if ui
+                            let reset_response = ui
                                 .small_button("Reset")
-                                .on_hover_text(format!("Reset {label}"))
-                                .clicked()
-                            {
+                                .on_hover_text(format!("Reset {label}"));
+                            reset_response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Button,
+                                    reset_response.enabled(),
+                                    format!("Reset {label}"),
+                                )
+                            });
+                            if reset_response.clicked() {
                                 *value = reset;
                                 response.mark_changed();
                             }
                         }
+                        response.widget_info(|| {
+                            let mut info =
+                                egui::WidgetInfo::drag_value(response.enabled(), value.to_f64());
+                            info.label = Some(label.into());
+                            info
+                        });
                         response
                     })
                     .inner
