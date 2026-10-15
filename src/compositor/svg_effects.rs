@@ -86,8 +86,7 @@ pub(super) fn render(
         }
     }
     let source = effect_source(&isolated, &poses)?;
-    let tree =
-        usvg::Tree::from_str(&source, &crate::svg_source::options()).map_err(|e| e.to_string())?;
+    let tree = crate::svg_source::scene(&source)?;
     let mut surface = Pixmap::new(width, height).ok_or("Could not allocate SVG effect viewport")?;
     resvg::render(&tree, transform, &mut surface.as_mut());
     Ok(surface)
