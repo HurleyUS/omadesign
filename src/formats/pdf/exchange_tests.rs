@@ -372,64 +372,100 @@ fn pdf_exchange_group_and_luminance_sources_keep_native_visibility() {
 }
 
 #[test]
-#[ignore = "independent nonisolated PDF blending: requires Poppler pdftocairo"]
+#[ignore = "independent nonisolated PDF blending: requires Poppler Splash and Cairo"]
 fn pdf_exchange_poppler_preserves_pixel_masked_pass_through_blends() {
-    let mut doc = Document::new("Masked pass through", 80., 60., 72.);
-    doc.layers.clear();
-    let mut backdrop = Layer::vector("Backdrop");
-    backdrop.kind.shapes_mut().unwrap().push(rectangle(
-        Pt::ZERO,
-        Pt::new(80., 60.),
-        Fill::Solid(Rgba::rgb(80, 170, 220)),
-    ));
-    let mut group = Layer::group("Masked pass through");
-    group.pass_through = true;
-    group.opacity = 0.7;
-    group.mask = Pixels::from_rgba(1, 1, vec![128, 128, 128, 255]);
-    group.mask_origin = Pt::new(20., 10.);
-    group.mask_size = Pt::new(40., 40.);
-    let mut child = Layer::vector("Multiply child");
-    child.parent = Some(group.id);
-    child.blend = Blend::Multiply;
-    child.kind.shapes_mut().unwrap().push(rectangle(
-        Pt::new(15., 10.),
-        Pt::new(50., 40.),
-        Fill::Solid(Rgba::rgb(220, 70, 30)),
-    ));
-    doc.layers = vec![backdrop, child, group];
-    let expected = crate::compositor::render_export(&doc, 1).unwrap();
-    let (bytes, notes) = write(&doc).unwrap();
-    assert!(notes.is_empty(), "{notes:?}");
-    let folder =
-        std::env::temp_dir().join(format!("pdf-pass-through-{}", crate::document::next_id()));
-    std::fs::create_dir_all(&folder).unwrap();
-    let path = folder.join("pass-through.pdf");
-    std::fs::write(&path, &bytes).unwrap();
-    let output = std::process::Command::new("pdftocairo")
-        .args(["-png", "-r", "72", "-singlefile"])
-        .arg(&path)
-        .arg(folder.join("actual"))
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    assert!(
-        output.stderr.is_empty(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let actual = image::open(folder.join("actual.png")).unwrap().to_rgb8();
-    let a = expected.pixel(35, 30).unwrap().demultiply();
-    let b = actual.get_pixel(35, 30).0;
-    assert!(
-        a.red().abs_diff(b[0]) < 3 && a.green().abs_diff(b[1]) < 3 && a.blue().abs_diff(b[2]) < 3,
-        "masked pass-through blending changed: {a:?} != {b:?}"
-    );
-    if let Some(receipts) = std::env::var_os("OMA_PDF_EXCHANGE_RECEIPTS") {
-        let receipts = std::path::PathBuf::from(receipts);
-        std::fs::create_dir_all(&receipts).unwrap();
-        std::fs::copy(path, receipts.join("pass-through.pdf")).unwrap();
+    for pass_through in [true, false] {
+        let mut doc = Document::new("Masked pass through", 80., 60., 72.);
+        doc.layers.clear();
+        let mut backdrop = Layer::vector("Backdrop");
+        backdrop.kind.shapes_mut().unwrap().push(rectangle(
+            Pt::ZERO,
+            Pt::new(80., 60.),
+            Fill::Solid(Rgba::rgb(80, 170, 220)),
+        ));
+        let mut group = Layer::group("Masked group");
+        group.pass_through = pass_through;
+        group.opacity = 0.7;
+        group.mask = Pixels::from_rgba(
+            3,
+            1,
+            vec![0, 0, 0, 255, 128, 128, 128, 255, 255, 255, 255, 255],
+        );
+        group.mask_origin = Pt::new(10., 10.);
+        group.mask_size = Pt::new(60., 40.);
+        let mut child = Layer::vector("Multiply child");
+        child.parent = Some(group.id);
+        child.blend = Blend::Multiply;
+        child.kind.shapes_mut().unwrap().push(rectangle(
+            Pt::new(10., 10.),
+            Pt::new(60., 40.),
+            Fill::Solid(Rgba::rgb(220, 70, 30)),
+        ));
+        doc.layers = vec![backdrop, child, group];
+        let expected = crate::compositor::render_export(&doc, 1).unwrap();
+        let (bytes, notes) = write(&doc).unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        let folder =
+            std::env::temp_dir().join(format!("pdf-pass-through-{}", crate::document::next_id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("group.pdf");
+        std::fs::write(&path, &bytes).unwrap();
+        expected.save_png(folder.join("native.png")).unwrap();
+        for (engine, name) in [("pdftoppm", "splash"), ("pdftocairo", "cairo")] {
+            let output = std::process::Command::new(engine)
+                .args(["-png", "-r", "72", "-singlefile"])
+                .arg(&path)
+                .arg(folder.join(name))
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert!(
+                output.stderr.is_empty(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let splash = image::open(folder.join("splash.png")).unwrap().to_rgb8();
+        let cairo = image::open(folder.join("cairo.png")).unwrap().to_rgb8();
+        let points=[20,40,60].map(|x|{let a=expected.pixel(x,30).unwrap().demultiply();serde_json::json!({"x":x,"native":[a.red(),a.green(),a.blue()],"splash":splash.get_pixel(x,30).0,"cairo":cairo.get_pixel(x,30).0})});
+        eprintln!("masked group pass_through={pass_through}: {points:?}");
+        if let Some(receipts) = std::env::var_os("OMA_PDF_EXCHANGE_RECEIPTS") {
+            let receipts = std::path::PathBuf::from(receipts).join(if pass_through {
+                "pass-through"
+            } else {
+                "isolated-control"
+            });
+            std::fs::create_dir_all(&receipts).unwrap();
+            for name in ["group.pdf", "native.png", "splash.png", "cairo.png"] {
+                std::fs::copy(folder.join(name), receipts.join(name)).unwrap();
+            }
+            std::fs::write(
+                receipts.join("samples.json"),
+                serde_json::to_vec_pretty(&points).unwrap(),
+            )
+            .unwrap();
+        }
+        for x in [20, 40, 60] {
+            let a = expected.pixel(x, 30).unwrap().demultiply();
+            let b = splash.get_pixel(x, 30).0;
+            assert!(
+                a.red().abs_diff(b[0]) < 3
+                    && a.green().abs_diff(b[1]) < 3
+                    && a.blue().abs_diff(b[2]) < 3,
+                "Splash masked group pass_through={pass_through}: {a:?} != {b:?}"
+            );
+            if !pass_through {
+                let b = cairo.get_pixel(x, 30).0;
+                assert!(
+                    a.red().abs_diff(b[0]) < 3
+                        && a.green().abs_diff(b[1]) < 3
+                        && a.blue().abs_diff(b[2]) < 3,
+                    "Cairo isolated control: {a:?} != {b:?}"
+                );
+            }
+        }
+        std::fs::remove_dir_all(folder).unwrap();
     }
-    std::fs::remove_dir_all(folder).unwrap();
 }
 
 #[test]
