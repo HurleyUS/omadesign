@@ -76,6 +76,20 @@ separate. Passing software checks does not establish a native Illustrator
 opening/saving session, human visual acceptance, or a new Illustrator-data
 writer roundtrip.
 
+The font fixture checks words from the independent PDF artwork against native
+characters; it does not compare per-story multiplicity or font metrics. The
+Reuters multiset checks exact characters and repeated bodies, without proving
+text placement or painter order. The author's SVG checks stroke bounds and
+widths, without proving all colors, dashes, caps, joins or gradients. Real layer
+names, parentage and painter order still need an independent source oracle;
+the generated hierarchy test covers the controlled layer/group/path case.
+
+Each real fixture also exports its first artboard after OMA reopen. Independent
+usvg/resvg and qpdf/Poppler checks require valid dimensions and visible SVG/PDF
+artwork in previews capped at 320 pixels. These checks cover portable output
+from the reopened native artwork, with source-bound receipts and export notes.
+They do not compare every artboard or establish pixel fidelity to Illustrator.
+
 Shared SVG type can replace the fallback only when it preserves the source
 characters and paragraph breaks exactly. Otherwise the editable ATE text stays
 available and a saved diagnostic identifies the fallback layout.
