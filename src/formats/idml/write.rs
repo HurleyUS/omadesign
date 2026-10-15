@@ -622,7 +622,7 @@ impl Exporter<'_> {
             l.opacity * 100.
         ))
     }
-    fn story(&self, id: u64, t: &TypeRun, color: &str) -> Result<String, String> {
+    fn story(&mut self, id: u64, t: &TypeRun, color: &str) -> Result<String, String> {
         let mut out = format!(
             "<Story Self=\"story{id}\" TrackChanges=\"false\"><StoryPreference OpticalMarginAlignment=\"false\" FrameType=\"TextFrameType\" StoryOrientation=\"Horizontal\" StoryDirection=\"LeftToRightDirection\"/>"
         );
