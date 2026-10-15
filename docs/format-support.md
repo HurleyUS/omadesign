@@ -113,3 +113,69 @@ omadesign --convert artwork.oma --output artwork.ora
 Headless document output formats are `.oma`, `.svg`, `.png`, `.jpg`/`.jpeg`, `.psd`, `.psb`, `.pdf`, `.ora` and `.idml`. RAW inspection includes camera metadata, source dimensions, precision and saved development settings. RAW-to-PNG/TIFF conversion uses the full-resolution 16-bit Photo pipeline; RAW-to-JPEG produces an 8-bit image. Saved `.omaphoto` settings are applied automatically. Converting RAW to a document format renders an 8-bit pixel layer. Same-file conversion is refused to protect the original. General source-file size is limited to 512 MiB; specific readers also enforce object, pixel, decompression or process limits.
 
 Primary references: [Affinity V3 converter source](https://gitlab.com/inkscape/extras/extension-afdesign/-/commit/cd5cf29d5df22e07b1e9209219079ca44015b7fe), [OpenRaster archive specification](https://www.openraster.org/baseline/file-layout-spec.html), [OpenRaster layer-stack specification](https://www.openraster.org/baseline/layer-stack-spec.html).
+
+### Native document depth and profiles
+
+Raster layers imported from 16-bit PNG/TIFF/PSD or float TIFF/PSD retain authoritative
+floating-point samples independently of the RGBA8 display cache. PSD/PSB and TIFF
+preserve the authored depth; RGB PNG preserves 16-bit samples. Float PNG and JPEG
+exports require an explicit document conversion. File → Color and precision converts
+working mode/profile/depth with one undo step. The .oma schema gate is provisional
+until the Craft stack is integrated.
+
+CMYK PSD and TIFF retain original ink coverage, alpha and embedded ICC bytes. Little
+CMS 2.19 is statically included in every binary, built offline from pinned MIT sources;
+`--color-runtime-check` checks the linked version. Portable archives and prefix
+installs use the same built-in engine. No system liblcms2 lookup or download is needed.
+Malformed/mismatched profiles fail with an error. Untagged CMYK retains its samples
+and explicitly reports its uncalibrated device-formula preview.
+
+Pixel masks, mask inversion/application, raster filter edits, ordinary brush painting,
+fill and erase operate on authoritative samples and support undo/reopen. Native group
+masks resize without an RGBA8 intermediate. Healing, clone and smudge use native
+float donor and working samples, including selection clipping and undo. AI cutout upscaling is refused on native layers; mask-only
+background removal preserves original samples. Live artwork-mask flattening and
+SVG/PDF/OpenRaster exchange refuse native reductions until their own precise paths
+are implemented. These limits are explicit; they do not imply a completed FMT-04 gate.
+
+Native compositing and ICC transforms are software paths. The live canvas uses an
+RGBA8 display surface. Monitor profiles, physical display accuracy and print matching
+have not been qualified by these headless checks.
+
+### Editable PSD type
+
+PSD TySh and EngineData map to native TypeRun/CharSpan objects: Unicode text,
+full affine transform, requested font, per-run size/color, tracking, leading,
+baseline shift and horizontal/vertical scale remain editable. Export regenerates
+standard TySh/EngineData from current native text. Multiple type objects in one
+native layer become separate type layers in a Photoshop group. Original descriptor
+fields and unsupported warp settings remain in the project and exported PSD.
+
+Missing fonts produce an explicit note and native fallback preview while retaining
+the requested name. Text warp and vertical orientation currently retain their
+Photoshop parameters but use horizontal, unwarped native previews. Native path/SVG
+positioning exports as editable Photoshop point text with an explicit note. Saved
+pixels remain the fallback when a type descriptor cannot be parsed. These limits
+are separate from the independent editable horizontal type acceptance fixture.
+
+### Placed PSD sources and smart filters
+
+SoLd/SoLE and legacy PlLd records retain their source association, full perspective
+quad and complete Photoshop descriptor. Embedded lnk2/lnk3/lnkD sources use the
+shared immutable SourceAttachment store once. Linked source descriptors and missing
+source state survive .oma and PSD export; no linked path is followed automatically.
+
+The raster inspector can make a placed source, edit a separate PSD source copy,
+reload that edited source, replace/relink the source, adjust/toggle supported smart
+filters, and rasterize explicitly. Each replacement/filter change is one undo step;
+previous original bytes remain recoverable. Native moves, scales, rotations and
+shears update the exported placed-object quad. Perspective preview recomputation
+samples native floating-point source pixels. Gaussian blur, motion blur,
+brightness/contrast and invert have native filter mappings. Their parameters and
+unknown filter descriptors remain standard Photoshop data in exported files.
+
+An unsupported active filter or warp keeps the imported saved preview and gives
+an explicit explanation before native recomputation. Missing external sources can
+be relinked without discarding their stored placement/filter parameters. Native
+source editing/filter recomputation is software-qualified separately from Adobe
+Photoshop/GIMP application testing and native desktop interaction.
