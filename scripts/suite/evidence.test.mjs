@@ -10,13 +10,15 @@ import { buildBinding } from './build.mjs';
 import { hash } from './contract.mjs';
 import { cameraChecks } from './raw-evidence.mjs';
 
+const compilerTools={helper_sha256:'4'.repeat(64),receipt_helper_sha256:'5'.repeat(64),config_sha256:'6'.repeat(64),cargo_args:['test','--locked','--no-run'],executed_cargo_args:['test','--message-format=json-render-diagnostics','--locked','--no-run']};
+
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 fs.mkdirSync(path.join(root,'.artifacts'),{recursive:true});
 const scratch=fs.mkdtempSync(path.join(root,'.artifacts/suite-evidence-'));
 test.after(()=>fs.rmSync(scratch,{recursive:true,force:true}));
 
 test('locked compiler artifacts bind the original bytes, never a later reused target or a zero-artifact run',()=>{
-  const record={schema:1,repository:'omadesign',revision:'1'.repeat(40),source_tree:'2'.repeat(40),dirty_before:false,dirty_after:false,exit_code:0,signal:null,receipt_errors:[],executables:[{path:path.join(scratch,'already-overwritten-or-missing'),sha256:'3'.repeat(64),size:123,profile:{test:true}}]};
+  const record={...compilerTools,schema:1,repository:'omadesign',revision:'1'.repeat(40),source_tree:'2'.repeat(40),dirty_before:false,dirty_after:false,exit_code:0,signal:null,receipt_errors:[],executables:[{path:path.join(scratch,'already-overwritten-or-missing'),sha256:'3'.repeat(64),size:123,profile:{test:true}}]};
   const config={repositories:{omadesign:{worktree:root}}};
   const save=r=>{const bytes=JSON.stringify(r)+'\n';const file=path.join(scratch,`${hash(bytes)}.json`);fs.writeFileSync(file,bytes);return file};
   const binding=buildBinding(config,save(record));
@@ -24,6 +26,9 @@ test('locked compiler artifacts bind the original bytes, never a later reused ta
   assert.equal(binding.test_execution_proven,false);
   assert.throws(()=>buildBinding(config,save({...record,executables:[]})),/exactly one/);
   assert.throws(()=>buildBinding(config,save({...record,dirty_after:true})),/Clean successful/);
+  assert.throws(()=>buildBinding(config,save({...record,receipt_helper_sha256:undefined})),/binding unavailable/);
+  assert.throws(()=>buildBinding(config,save({...record,executed_cargo_args:['test','--locked','--release']})),/binding unavailable/);
+  assert.throws(()=>buildBinding(config,save({...record,cargo_args:['test','--','--locked'],executed_cargo_args:['test','--message-format=json-render-diagnostics','--','--locked']})),/binding unavailable/);
   const corrupt=save(record);fs.appendFileSync(corrupt,' ');
   assert.throws(()=>buildBinding(config,corrupt),/integrity/);
 });
@@ -76,7 +81,7 @@ test('owner proofs reject altered artifacts, old source and absent acceptance ch
   const file=path.join(scratch,'UI-03.omadesign.json');
   const requirements=[{id:'UI-03',product:'omadesign',checks:['UI-03']}];
   const local={directory:scratch,roots:{omadesign:checkout},builds:{omadesign:{...current,binary:process.execPath,...binary}}};
-  const compile={schema:1,repository:'omadesign',revision:current.revision,source_tree:current.tree,dirty_before:false,dirty_after:false,exit_code:0,signal:null,receipt_errors:[],executables:[{path:process.execPath,sha256:binary.sha256,size:binary.bytes}]};
+  const compile={...compilerTools,schema:1,repository:'omadesign',revision:current.revision,source_tree:current.tree,dirty_before:false,dirty_after:false,exit_code:0,signal:null,receipt_errors:[],executables:[{path:process.execPath,sha256:binary.sha256,size:binary.bytes}]};
   const compileBytes=JSON.stringify(compile)+'\n';
   const compileFile=path.join(scratch,`${hash(compileBytes)}.json`);
   fs.writeFileSync(compileFile,compileBytes);
@@ -112,11 +117,22 @@ test('UI semantic proof cannot satisfy appearance and wrong executable or missin
   assert.equal(valid.appearance.status,'unavailable');
   const capture=path.join(scratch,'synthetic-capture.proof');
   fs.writeFileSync(capture,'synthetic pinned appearance bytes; no rendered app proof');
+  const font=path.join(scratch,'synthetic-font.proof'),theme=path.join(scratch,'synthetic-theme.proof');
+  fs.writeFileSync(font,'synthetic-font');
+  fs.writeFileSync(theme,'synthetic-theme');
   request.fixture.ui={font_sha256:hash('synthetic-font'),theme_sha256:hash('synthetic-theme'),appearance_references:[1,1.5,2].map(scale=>({scale,sha256:fingerprint(capture).sha256}))};
-  request.ui_captures=Object.fromEntries([1,1.5,2].map(scale=>[String(scale),{path:capture,revision:packet.revision,binary_sha256:packet.binary_sha256,fixture_sha256:packet.fixture_sha256,host_sha256:packet.host_sha256,font_sha256:request.fixture.ui.font_sha256,theme_sha256:request.fixture.ui.theme_sha256}]));
+  request.ui_captures=Object.fromEntries([1,1.5,2].map(scale=>[String(scale),{path:capture,font_path:font,theme_path:theme,revision:packet.revision,binary_sha256:packet.binary_sha256,fixture_sha256:packet.fixture_sha256,host_sha256:packet.host_sha256,font_sha256:request.fixture.ui.font_sha256,theme_sha256:request.fixture.ui.theme_sha256}]));
   assert.equal(run(packet,0).appearance.status,'passed');
   request.ui_captures['1'].revision='4'.repeat(40);
   assert.equal(run(packet).appearance.status,'unavailable');
+  request.ui_captures['1'].revision=packet.revision;
+  fs.writeFileSync(font,'changed font bytes with unchanged claimed hash');
+  assert.equal(run(packet).appearance.status,'unavailable');
+  fs.rmSync(font);
+  assert.equal(run(packet).appearance.status,'unavailable');
+  fs.writeFileSync(font,'synthetic-font');
   fs.rmSync(artifact);
-  assert.equal(run(packet).editability.status,'unavailable');
+  const missing=run(packet);
+  assert.equal(missing.editability.status,'unavailable');
+  assert.equal(missing.appearance.status,'passed');
 });
