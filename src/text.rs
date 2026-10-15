@@ -521,58 +521,90 @@ fn buzz_shape(_bytes: &[u8], run: &TypeRun) -> Option<Vec<Vec<Pt>>> {
 /// Keep native glyph curves for painting ordinary editable text.
 /// Args: the composed text run. Returns its exact path, or no path for other layout routes.
 pub(crate) fn outline_path(run: &TypeRun) -> Option<tiny_skia::Path> {
-    use ab_glyph::OutlineCurve;
-    if run.content.is_empty() || run.frame.is_some() || run.on_path.is_some() || run.svg_text.is_some() {
-        return None;
-    }
-    if run.contours != shape(run) {
+    if !has_outline_path(run) {
         return None;
     }
     let mut path = tiny_skia::PathBuilder::new();
     for line in compose(run).iter() {
         for glyph in &line.glyphs {
-            let Some((outline, scale)) = composer::glyph_outline(run, glyph) else {
-                continue;
-            };
-            let map = |p: ab_glyph::Point| {
-                run.map_point(Pt::new(
-                    run.origin.x + glyph.x + p.x * scale * glyph.hscale,
-                    run.origin.y + glyph.y - p.y * scale * glyph.vscale,
-                ))
-            };
-            let mut last = None;
-            for curve in &outline.curves {
-                let start = match *curve {
-                    OutlineCurve::Line(a, _) | OutlineCurve::Quad(a, _, _) | OutlineCurve::Cubic(a, _, _, _) => a,
-                };
-                if last != Some(start) {
-                    if last.is_some() { path.close(); }
-                    let a = map(start);
-                    path.move_to(a.x, a.y);
-                }
-                let end = match *curve {
-                    OutlineCurve::Line(_, b) | OutlineCurve::Quad(_, _, b) | OutlineCurve::Cubic(_, _, _, b) => b,
-                };
-                match *curve {
-                    OutlineCurve::Line(_, b) => {
-                        let b = map(b);
-                        path.line_to(b.x, b.y);
-                    }
-                    OutlineCurve::Quad(_, b, c) => {
-                        let (b, c) = (map(b), map(c));
-                        path.quad_to(b.x, b.y, c.x, c.y);
-                    }
-                    OutlineCurve::Cubic(_, b, c, d) => {
-                        let (b, c, d) = (map(b), map(c), map(d));
-                        path.cubic_to(b.x, b.y, c.x, c.y, d.x, d.y);
-                    }
-                }
-                last = Some(end);
-            }
-            if last.is_some() { path.close(); }
+            append_glyph_outline(&mut path, run, glyph);
         }
     }
     path.finish()
+}
+
+fn has_outline_path(run: &TypeRun) -> bool {
+    !run.content.is_empty() && run.frame.is_none() && run.on_path.is_none()
+        && run.svg_text.is_none() && run.contours == shape(run)
+}
+
+/// Append one positioned glyph using its original font curves.
+/// Args: output builder, semantic text run and composed glyph. Returns nothing.
+fn append_glyph_outline(path: &mut tiny_skia::PathBuilder, run: &TypeRun, glyph: &LayoutGlyph) {
+    use ab_glyph::OutlineCurve;
+    let Some((outline, scale)) = composer::glyph_outline(run, glyph) else { return; };
+    let map = |p: ab_glyph::Point| run.map_point(Pt::new(
+        run.origin.x + glyph.x + p.x * scale * glyph.hscale,
+        run.origin.y + glyph.y - p.y * scale * glyph.vscale,
+    ));
+    let mut last = None;
+    for curve in &outline.curves {
+        let start = match *curve {
+            OutlineCurve::Line(a, _) | OutlineCurve::Quad(a, _, _) | OutlineCurve::Cubic(a, _, _, _) => a,
+        };
+        if last != Some(start) {
+            if last.is_some() { path.close(); }
+            let a = map(start);
+            path.move_to(a.x, a.y);
+        }
+        let end = match *curve {
+            OutlineCurve::Line(_, b) | OutlineCurve::Quad(_, _, b) | OutlineCurve::Cubic(_, _, _, b) => b,
+        };
+        match *curve {
+            OutlineCurve::Line(_, b) => {
+                let b = map(b);
+                path.line_to(b.x, b.y);
+            }
+            OutlineCurve::Quad(_, b, c) => {
+                let (b, c) = (map(b), map(c));
+                path.quad_to(b.x, b.y, c.x, c.y);
+            }
+            OutlineCurve::Cubic(_, b, c, d) => {
+                let (b, c, d) = (map(b), map(c), map(d));
+                path.cubic_to(b.x, b.y, c.x, c.y, d.x, d.y);
+            }
+        }
+        last = Some(end);
+    }
+    if last.is_some() { path.close(); }
+}
+
+/// Paint character ranges with the same glyph curves as whole-object text.
+/// Args: run and inherited object fill. Returns ordered fill paths in document coordinates.
+pub(crate) fn paint_paths(run: &TypeRun, inherited: &crate::document::Fill) -> Vec<(crate::document::Fill, tiny_skia::Path)> {
+    if !has_outline_path(run) {
+        return paint_groups(run, inherited).into_iter().filter_map(|(fill, contours)| {
+            let mut path = tiny_skia::PathBuilder::new();
+            for contour in contours {
+                if contour.len() < 2 { continue; }
+                path.move_to(contour[0].x, contour[0].y);
+                for p in &contour[1..] { path.line_to(p.x, p.y); }
+                path.close();
+            }
+            path.finish().map(|path| (fill, path))
+        }).collect();
+    }
+    let mut paths: Vec<(crate::document::Fill, tiny_skia::PathBuilder)> = Vec::new();
+    for line in compose(run).iter() {
+        for glyph in &line.glyphs {
+            let fill = run.character_style(glyph.cluster).fill.unwrap_or_else(|| inherited.clone());
+            if !paths.last().is_some_and(|(previous, _)| *previous == fill) {
+                paths.push((fill, tiny_skia::PathBuilder::new()));
+            }
+            append_glyph_outline(&mut paths.last_mut().unwrap().1, run, glyph);
+        }
+    }
+    paths.into_iter().filter_map(|(fill, path)| path.finish().map(|path| (fill, path))).collect()
 }
 
 mod composer;

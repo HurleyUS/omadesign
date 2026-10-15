@@ -1272,11 +1272,11 @@ fn draw_shape_inner(
     let painted=rich.is_none() && if let Geom::Text(run)=&shape.geom {crate::text::has_character_paint(run)}else{false};
     if painted && fill_reveal>0. {
         let Geom::Text(run)=&shape.geom else{unreachable!()};
-        for (fill,mut contours) in crate::text::paint_groups(run,&shape.style.fill) {
-            if shape.rotation.abs()>1e-5{let center=shape.geom.bbox().center();for point in contours.iter_mut().flatten(){*point=point.rotate_about(center,shape.rotation);}}
+        for (fill,glyph_path) in crate::text::paint_paths(run,&shape.style.fill) {
             if fill.is_none(){continue;}
-            let part=Shape::new(Geom::Poly{contours,winding:true},shape.style.clone());
-            let Some(glyph_path)=part.get_cached_path(96)else{continue;};
+            let center=shape.geom.bbox().center();
+            let rotation=Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y);
+            let Some(glyph_path)=glyph_path.transform(rotation)else{continue;};
             if let Fill::Pattern(pattern) = &fill {
                 draw_pattern_fill(pm, pattern, &glyph_path, shape, xf, op, blend, fill_reveal, mask, true);
                 continue;
