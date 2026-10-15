@@ -409,12 +409,18 @@ impl Replica {
     /// Materialize a converged native document, retaining this device's cloud link.
     /// Args: local document for metadata. Returns editable data or a validation error.
     pub fn document(&self, local: &Document) -> Result<Document, String> {
+        let (mut doc, _) = self.rendered()?;
+        doc.cloud = local.cloud.clone();
+        doc.workspace = local.workspace;
+        Ok(doc)
+    }
+
+    fn rendered(&self) -> Result<(Document, BTreeSet<String>), String> {
         let cells = self.cells();
         let value = inflate("", &cells).ok_or("Live document has no root")?;
         let mut doc: Document =
             serde_json::from_value(value).map_err(|e| format!("Invalid live document: {e}"))?;
-        doc.cloud = local.cloud.clone();
-        doc.workspace = local.workspace;
+        let mut repaired = BTreeSet::new();
         if doc.artboards.is_empty() {
             doc.artboardless = true;
         }
@@ -450,6 +456,7 @@ impl Replica {
             if !present.insert(shape.id) {
                 continue;
             }
+            repaired.insert(key.clone());
             let layer = doc
                 .layers
                 .iter()
@@ -480,6 +487,7 @@ impl Replica {
             while let Some(id) = parent {
                 if !seen.insert(id) || seen.len() > 64 || !groups.contains_key(&id) {
                     layer.parent = None;
+                    repaired.insert(format!("/@entities/{}/parent", layer.id));
                     break;
                 }
                 parent = groups[&id];
@@ -498,15 +506,104 @@ impl Replica {
                 while let Some(id) = parent {
                     if !seen.insert(id) || seen.len() > 64 || !frames.contains_key(&id) {
                         shape.layout.parent = None;
+                        repaired.insert(format!("/@entities/{}/layout/parent", shape.id));
                         break;
                     }
                     parent = frames[&id];
                 }
             }
         }
+        let tokens: BTreeMap<_, _> = doc
+            .layout_tokens
+            .iter()
+            .map(|token| (token.id, token.value))
+            .collect();
+        let mut names = BTreeSet::new();
+        for token in &mut doc.layout_tokens {
+            if !names.insert(token.name.to_lowercase()) {
+                token.name = format!(
+                    "{} {}",
+                    token.name.chars().take(100).collect::<String>(),
+                    token.id
+                );
+                names.insert(token.name.to_lowercase());
+                repaired.insert(format!("/@entities/{}/name", token.id));
+            }
+        }
+        let mut masks = Vec::new();
+        for layer in &mut doc.layers {
+            masks.push((layer.id, None, std::mem::take(&mut layer.artwork_masks)));
+            for shape in layer.kind.shapes_mut().into_iter().flatten() {
+                for property in crate::layout_tokens::TokenProperty::all() {
+                    if let Some(id) = shape.layout.tokens.get(property)
+                        && !tokens
+                            .get(&id)
+                            .is_some_and(|value| property.accepts(*value))
+                    {
+                        shape.layout.tokens.set(property, None);
+                        repaired.insert(format!(
+                            "/@entities/{}/layout/tokens/{}",
+                            shape.id,
+                            property.name()
+                        ));
+                    }
+                }
+                masks.push((
+                    layer.id,
+                    Some(shape.id),
+                    std::mem::take(&mut shape.artwork_masks),
+                ));
+            }
+        }
+        masks.sort_by_key(|(layer, shape, _)| shape.unwrap_or(*layer));
+        for (layer_id, shape_id, candidates) in masks {
+            let index = doc
+                .layers
+                .iter()
+                .position(|layer| layer.id == layer_id)
+                .unwrap();
+            for mask in candidates {
+                let append =
+                    |doc: &mut Document, mask: Option<crate::artwork_mask::ArtworkMask>| {
+                        let layer = &mut doc.layers[index];
+                        let masks = if let Some(id) = shape_id {
+                            &mut layer
+                                .kind
+                                .shapes_mut()
+                                .unwrap()
+                                .iter_mut()
+                                .find(|shape| shape.id == id)
+                                .unwrap()
+                                .artwork_masks
+                        } else {
+                            &mut layer.artwork_masks
+                        };
+                        if let Some(mask) = mask {
+                            masks.push(mask);
+                        } else {
+                            masks.pop();
+                        }
+                    };
+                if mask.source.resolve(&doc).is_none() {
+                    repaired.insert(format!(
+                        "/@entities/{}/artwork_masks",
+                        shape_id.unwrap_or(layer_id)
+                    ));
+                    continue;
+                }
+                append(&mut doc, Some(mask));
+                if doc.validate_artwork_masks().is_err() {
+                    append(&mut doc, None);
+                    repaired.insert(format!(
+                        "/@entities/{}/artwork_masks",
+                        shape_id.unwrap_or(layer_id)
+                    ));
+                }
+            }
+        }
         doc.ensure_ids()?;
         doc.validate_hierarchy()?;
-        Ok(doc)
+        Ok((doc, repaired))
     }
 
     /// Identify concurrent property writes for an explicit conflict receipt.
@@ -514,7 +611,10 @@ impl Replica {
     pub fn conflicts(&self) -> BTreeSet<String> {
         let active = self.active();
         let mut writes: BTreeMap<&str, Vec<(&Change, &Option<Cell>)>> = BTreeMap::new();
-        let mut conflicts = BTreeSet::new();
+        let mut conflicts = self
+            .rendered()
+            .map(|(_, repaired)| repaired)
+            .unwrap_or_default();
         let cells = self.cells();
         for (key, parent) in cells
             .range("/@parent/".into()..)
@@ -1012,5 +1112,62 @@ mod tests {
             snapshot(&output).unwrap(),
             snapshot(&a.document(&doc).unwrap()).unwrap()
         );
+    }
+    #[test]
+    fn deleted_variables_and_reciprocal_masks_detach_without_losing_artwork() {
+        use crate::artwork_mask::{ArtworkMask, MaskSource};
+        use crate::layout_tokens::{DesignToken, TokenProperty};
+        let (mut doc, mut a, mut b) = pair();
+        let x = shape("X");
+        let y = shape("Y");
+        let (xid, yid) = (x.id, y.id);
+        let layer = doc.layers[1].id;
+        doc.layers[1].kind.shapes_mut().unwrap().extend([x, y]);
+        let token = DesignToken::color("White", crate::color::Rgba::WHITE);
+        let tid = token.id;
+        doc.layout_tokens.push(token);
+        a.base = snapshot(&doc).unwrap();
+        b.base = a.base.clone();
+        let mut left = doc.clone();
+        let mut right = doc.clone();
+        crate::layout_tokens::remove_token(&mut left, tid);
+        crate::layout_tokens::bind(&mut right, 1, &[xid], TokenProperty::Fill, Some(tid)).unwrap();
+        left.find_shape_mut(1, xid)
+            .unwrap()
+            .artwork_masks
+            .push(ArtworkMask::new(MaskSource {
+                layer,
+                shape: Some(yid),
+            }));
+        right
+            .find_shape_mut(1, yid)
+            .unwrap()
+            .artwork_masks
+            .push(ArtworkMask::new(MaskSource {
+                layer,
+                shape: Some(xid),
+            }));
+        a.record(&left).unwrap();
+        b.record(&right).unwrap();
+        exchange(&mut a, &mut b);
+        let merged = a.document(&doc).unwrap();
+        merged.validate_hierarchy().unwrap();
+        assert_eq!(merged.layers[1].kind.shapes().unwrap().len(), 2);
+        assert!(
+            merged
+                .find_shape(1, xid)
+                .unwrap()
+                .layout
+                .tokens
+                .fill
+                .is_none()
+        );
+        assert!(!a.conflicts().is_empty());
+        assert!(!a.record(&merged).unwrap());
+        assert_eq!(
+            snapshot(&merged).unwrap(),
+            snapshot(&b.document(&doc).unwrap()).unwrap()
+        );
+        crate::project::decode(&crate::project::encode(&merged).unwrap()).unwrap();
     }
 }
