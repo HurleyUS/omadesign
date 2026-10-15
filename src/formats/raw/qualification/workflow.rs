@@ -375,7 +375,7 @@ fn save_photo(
 
 /// Record actual process memory alongside admitted buffer ownership.
 /// Args: workflow stage and monotonic start. Returns no host names or local paths; unavailable OS counters remain null.
-fn resource_sample(stage: &str, started: Instant) -> Value {
+pub(super) fn resource_sample(stage: &str, started: Instant) -> Value {
     let status = fs::read_to_string("/proc/self/status").unwrap_or_default();
     let bytes = |counter: &str| {
         status.lines().find_map(|line| {
