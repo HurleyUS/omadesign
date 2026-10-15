@@ -29,9 +29,9 @@ if (lane === 'affected') {
   const raw = execFileSync('git', ['-C', diffRoot, 'diff', '--no-renames', '--name-only', '-z', `${options.base}...HEAD`]);
   changed = raw.toString().split('\0').filter(Boolean);
 }
-const selection = ['product','baseline'].includes(lane) ? { ids:index.fixtures.filter(f=>f.product === options.product && (lane!=='baseline' || f.cohort!=='ui')).map(f=>f.id), reason:`${lane} headless developer lane; does not qualify a full candidate` } : select(index, lane, changed,options['diff-product']);
+const selection = ['product','baseline'].includes(lane) ? { ids:index.fixtures.filter(f=>f.product === options.product && (lane!=='baseline' || f.cohort!=='ui')).map(f=>f.id), reason:`${lane} headless developer lane; does not qualify a full candidate` } : select(index, lane, changed,options['diff-product'] ?? 'omadesign');
 const fixtures = index.fixtures.filter(f => selection.ids.includes(f.id));
-const cohorts = (index.cohorts ?? []).filter(c=>lane==='candidate' || (lane==='affected' && selection.ids.length>0 && (selection.ids.length===index.fixtures.length || changed.some(p=>c.affected.some(s=>p.startsWith(s))))));
+const cohorts = (index.cohorts ?? []).filter(c=>lane==='candidate' || (lane==='affected' && selection.ids.length>0 && (options['diff-product'] ?? 'omadesign')==='omadesign' && (selection.full || changed.some(p=>c.affected.some(s=>p.startsWith(s))))));
 /** Verify the enclosing shared lock rather than trusting an internal CLI marker.
  * Args: optional canonical config. Returns nothing or throws before any fixture work.
  */
