@@ -792,6 +792,8 @@ impl LayerKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub psd_smart: Option<crate::formats::psd::smart::SmartObject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub psd_type: Option<crate::formats::psd::type_layer::TypeData>,
     pub id: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -850,6 +852,7 @@ impl Layer {
             is_group: false,
             pass_through: false,
             psd_type: None,
+            psd_smart:None,
             text_wrap: Default::default(),
             mask: None,
             artwork_masks: Vec::new(),
@@ -875,6 +878,7 @@ impl Layer {
             is_group: false,
             pass_through: false,
             psd_type:None,
+            psd_smart:None,
             text_wrap: Default::default(),
             mask: None,
             artwork_masks: Vec::new(),
@@ -906,6 +910,7 @@ impl Layer {
             is_group: false,
             pass_through: false,
             psd_type:None,
+            psd_smart:None,
             text_wrap: Default::default(),
             mask: None,
             artwork_masks: Vec::new(),
@@ -1731,6 +1736,7 @@ impl RasterState {
 
 #[derive(Clone, Debug)]
 pub enum Cmd {
+    SetSmartLayer {index:usize,before:Box<Layer>,after:Box<Layer>},
     SetDocumentColor {before:crate::deep_color::cms::DocumentColor,after:crate::deep_color::cms::DocumentColor},
     SetCanvas { before: CanvasSettings, after: CanvasSettings },
     SetFillOpacity {
@@ -2201,6 +2207,7 @@ fn coalesce(prev: &mut Cmd, next: &Cmd) -> bool {
 
 pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
     match cmd {
+        Cmd::SetSmartLayer{index,before,after}=>Cmd::SetSmartLayer{index,before:after,after:before},
         Cmd::SetDocumentColor {before,after}=>Cmd::SetDocumentColor {before:after,after:before},
         Cmd::SetCanvas { before, after } => Cmd::SetCanvas { before: after, after: before },
         Cmd::SetFillOpacity {
@@ -2534,6 +2541,7 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
 
 pub fn apply(doc: &mut Document, cmd: &Cmd) {
     match cmd {
+        Cmd::SetSmartLayer{index,after,..}=>{if let Some(layer)=doc.layers.get_mut(*index){*layer=(**after).clone();}}
         Cmd::SetDocumentColor{after,..}=>doc.color=after.clone(),
         Cmd::SetCanvas { after, .. } => {
             doc.name = after.name.clone();

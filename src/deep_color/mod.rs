@@ -555,3 +555,9 @@ impl Pixels {
         Ok(out)
     }
 }
+
+/// Sample authored pixels with premultiplied bilinear interpolation.
+/// Args: pixels and source-grid coordinates. Returns straight RGBA.
+pub fn sample_at(pixels: &Pixels, x: f32, y: f32) -> [f32; 4] {
+    composite::sample(pixels, x, y)
+}
