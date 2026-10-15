@@ -112,7 +112,7 @@ if (sourceFile) {
       assert(exported.equals(expected), `changed master payload ${uri}`);
       assert(nativePayload?.equals(expected), `native payload ${uri}`);
       assert(masters.some(([, xml]) => attrs(xml, '//Link/@LinkResourceURI').includes(uri)), `lost master URI ${uri}`);
-      if (!source.has(path)) assert(masters.some(([, xml]) => xpath(xml, `string(//Link[@LinkResourceURI=${literal(uri)}]/@StoredState)`) === 'Embedded'), `loaded master link must be marked embedded: ${uri}`);
+      if (!source.has(path)) assert(masters.some(([, xml]) => xpath(xml, `string(//Link[@LinkResourceURI=${literal(uri)}]/@StoredState)`).trim() === 'Embedded'), `loaded master link must be marked embedded: ${uri}`);
       payloads.push({uri, path, source:source.has(path) ? 'package' : 'source-folder', storage:parts.has(path) ? 'ZIP part' : 'inline Contents', bytes:expected.length, sha256:sha(expected)});
     }
   }
