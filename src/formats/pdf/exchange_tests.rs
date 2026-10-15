@@ -1,0 +1,250 @@
+use super::*;
+use crate::artwork_mask::{ArtworkMask, MaskMode, MaskSource};
+use crate::gradient::{Gradient, GradientKind, GradientStop};
+
+fn rectangle(origin: Pt, size: Pt, fill: Fill) -> Shape {
+    Shape::new(
+        Geom::Rect {
+            origin,
+            size,
+            radius: 0.,
+        },
+        Style { fill, stroke: None },
+    )
+}
+fn vector_document() -> Document {
+    let mut doc = Document::new("Vector exchange", 200., 120., 72.);
+    doc.layers.clear();
+    let mut background = Layer::vector("Backdrop");
+    background.kind.shapes_mut().unwrap().push(rectangle(
+        Pt::ZERO,
+        Pt::new(200., 120.),
+        Fill::Solid(Rgba::WHITE),
+    ));
+    let mut source = Layer::vector("Editable vector mask source");
+    source.kind.shapes_mut().unwrap().push(rectangle(
+        Pt::new(12., 12.),
+        Pt::new(74., 80.),
+        Fill::Solid(Rgba::BLACK),
+    ));
+    let mut group = Layer::group("Isolated translucent group");
+    group.pass_through = false;
+    group.opacity = 0.7;
+    group.artwork_masks.push(ArtworkMask::new(MaskSource {
+        layer: source.id,
+        shape: None,
+    }));
+    group.artwork_masks[0].region = Some(crate::geom::Bounds::from_min_size(
+        Pt::new(16., 16.),
+        Pt::new(66., 70.),
+    ));
+    let mut layer = Layer::vector("Vector gradients");
+    layer.parent = Some(group.id);
+    let mut gradient = Gradient::new(
+        GradientKind::Linear,
+        Rgba::rgb(255, 0, 0),
+        Rgba::rgb(0, 0, 255),
+    );
+    gradient.stops.insert(
+        1,
+        GradientStop {
+            offset: 0.4,
+            color: Rgba::new(0, 220, 30, 130),
+        },
+    );
+    layer.kind.shapes_mut().unwrap().push(rectangle(
+        Pt::new(8., 8.),
+        Pt::new(82., 90.),
+        Fill::Gradient(gradient),
+    ));
+    let mut radial = Gradient::new(
+        GradientKind::Radial,
+        Rgba::rgb(20, 240, 250),
+        Rgba::rgb(210, 20, 120),
+    );
+    radial.to = [0.9, 0.5];
+    let mut shape = rectangle(
+        Pt::new(105., 12.),
+        Pt::new(75., 75.),
+        Fill::Gradient(radial),
+    );
+    shape.rotation = 0.12;
+    layer.kind.shapes_mut().unwrap().push(shape);
+    let mut radial_layer = Layer::vector("Radial artwork");
+    radial_layer
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .push(layer.kind.shapes_mut().unwrap().pop().unwrap());
+    let mut hidden = Layer::vector("Hidden locked layer");
+    hidden.visible = false;
+    hidden.locked = true;
+    hidden.kind.shapes_mut().unwrap().push(rectangle(
+        Pt::ZERO,
+        Pt::new(200., 120.),
+        Fill::Solid(Rgba::BLACK),
+    ));
+    doc.layers = vec![background, source, layer, group, radial_layer, hidden];
+    doc
+}
+fn subtype(object: &Object, name: &[u8]) -> bool {
+    object
+        .as_stream()
+        .ok()
+        .is_some_and(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(name))
+}
+
+#[test]
+fn pdf_exchange_keeps_vector_shadings_masks_clips_and_optional_layers() {
+    let doc = vector_document();
+    let original = serde_json::to_string(&doc).unwrap();
+    let (bytes, notes) = write(&doc).unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let pdf = Pdf::load_mem(&bytes).unwrap();
+    assert!(
+        !pdf.objects.values().any(|o| subtype(o, b"Image")),
+        "vector paint or masks were rasterized"
+    );
+    assert!(
+        pdf.objects
+            .values()
+            .filter_map(|o| o.as_dict().ok())
+            .any(|d| d.get(b"ShadingType").and_then(Object::as_i64).ok() == Some(2))
+    );
+    assert!(
+        pdf.objects
+            .values()
+            .filter_map(|o| o.as_dict().ok())
+            .any(|d| d.get(b"ShadingType").and_then(Object::as_i64).ok() == Some(3))
+    );
+    assert!(
+        pdf.objects
+            .values()
+            .filter_map(|o| o.as_dict().ok())
+            .any(|d| d.get(b"SMask").is_ok())
+    );
+    assert!(
+        pdf.objects
+            .values()
+            .filter_map(|o| o.as_stream().ok())
+            .any(|s| decoded(s, STREAM_LIMIT)
+                .ok()
+                .and_then(|b| Content::decode(&b).ok())
+                .is_some_and(|c| c.operations.iter().any(|o| o.operator == "W")))
+    );
+    let catalog = pdf.catalog().unwrap();
+    let oc = dictionary(&pdf, catalog.get(b"OCProperties").unwrap()).unwrap();
+    let defaults = dictionary(&pdf, oc.get(b"D").unwrap()).unwrap();
+    assert_eq!(defaults.get(b"OFF").unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(
+        defaults.get(b"Locked").unwrap().as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        serde_json::to_string(&doc).unwrap(),
+        original,
+        "export mutated source masks"
+    );
+    let (loaded, notes) = read(&bytes, "vectors.pdf").unwrap();
+    assert!(
+        notes
+            .iter()
+            .all(|n| !n.contains("unsupported") && !n.contains("could not")),
+        "{notes:?}"
+    );
+    assert!(
+        loaded
+            .layers
+            .iter()
+            .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+            .any(|s| s
+                .style
+                .fill
+                .gradient()
+                .is_some_and(|g| g.kind == GradientKind::Radial))
+    );
+}
+
+#[test]
+#[ignore = "independent PDF rendering: requires Poppler utilities"]
+fn pdf_exchange_poppler_matches_vector_masks_gradients_and_native_reopen() {
+    let folder = std::env::temp_dir().join(format!(
+        "pdf-vector-exchange-{}",
+        crate::document::next_id()
+    ));
+    std::fs::create_dir_all(&folder).unwrap();
+    let doc = vector_document();
+    let native = folder.join("source.oma");
+    crate::project::save_to(&doc, &native).unwrap();
+    let reopened = crate::project::load_from(&native).unwrap();
+    assert_eq!(reopened.mask_sources().len(), 1);
+    let expected = crate::compositor::render_export(&reopened, 1).unwrap();
+    let (bytes, notes) = write(&reopened).unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let pdf = folder.join("vectors.pdf");
+    std::fs::write(&pdf, &bytes).unwrap();
+    let images = std::process::Command::new("pdfimages")
+        .arg("-list")
+        .arg(&pdf)
+        .output()
+        .unwrap();
+    assert!(
+        images.status.success(),
+        "{}",
+        String::from_utf8_lossy(&images.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&images.stdout).lines().count(),
+        2,
+        "{}",
+        String::from_utf8_lossy(&images.stdout)
+    );
+    let output = std::process::Command::new("pdftocairo")
+        .args(["-png", "-r", "72", "-singlefile"])
+        .arg(&pdf)
+        .arg(folder.join("poppler"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "PDF renderer diagnostics: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let actual = image::open(folder.join("poppler.png")).unwrap().to_rgb8();
+    assert_eq!(actual.dimensions(), (200, 120));
+    let difference = expected
+        .pixels()
+        .iter()
+        .zip(actual.pixels())
+        .map(|(a, b)| {
+            let a = a.demultiply();
+            u64::from(a.red().abs_diff(b.0[0]))
+                + u64::from(a.green().abs_diff(b.0[1]))
+                + u64::from(a.blue().abs_diff(b.0[2]))
+        })
+        .sum::<u64>() as f64
+        / (200. * 120. * 3.);
+    expected.save_png(folder.join("native.png")).unwrap();
+    eprintln!(
+        "vector exchange: {} bytes, 0 images, Poppler mean absolute channel difference {difference:.4}/255",
+        bytes.len()
+    );
+    if let Some(receipts) = std::env::var_os("OMA_PDF_EXCHANGE_RECEIPTS") {
+        let receipts = std::path::PathBuf::from(receipts);
+        std::fs::create_dir_all(&receipts).unwrap();
+        for name in ["vectors.pdf", "source.oma", "native.png", "poppler.png"] {
+            std::fs::copy(folder.join(name), receipts.join(name)).unwrap();
+        }
+    }
+    assert!(
+        difference < 2.5,
+        "vector PDF appearance differs by {difference}/255; evidence in {}",
+        folder.display()
+    );
+    std::fs::remove_dir_all(folder).unwrap();
+}
