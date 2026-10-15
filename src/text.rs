@@ -420,7 +420,7 @@ fn map_curves(
         .collect()
 }
 
-fn flatten_outline(curves: &[ab_glyph::OutlineCurve]) -> Vec<Vec<Pt>> {
+fn flatten_outline(curves: &[ab_glyph::OutlineCurve], tolerance: f32) -> Vec<Vec<Pt>> {
     use ab_glyph::OutlineCurve;
     let start_of = |c: &OutlineCurve| match c {
         OutlineCurve::Line(p0, _)
@@ -451,29 +451,11 @@ fn flatten_outline(curves: &[ab_glyph::OutlineCurve]) -> Vec<Vec<Pt>> {
         match c {
             OutlineCurve::Line(_, p1) => pts.push(Pt::new(p1.x, p1.y)),
             OutlineCurve::Quad(p0, p1, p2) => {
-                for i in 1..=8 {
-                    let t = i as f32 / 8.0;
-                    let a = (1.0 - t) * (1.0 - t);
-                    let b = 2.0 * (1.0 - t) * t;
-                    let d = t * t;
-                    pts.push(Pt::new(
-                        a * p0.x + b * p1.x + d * p2.x,
-                        a * p0.y + b * p1.y + d * p2.y,
-                    ));
-                }
+                let [p0, p1, p2] = [p0, p1, p2].map(|p| Pt::new(p.x, p.y));
+                flatten_type_curve([p0, p0.lerp(p1, 2. / 3.), p2.lerp(p1, 2. / 3.), p2], tolerance, 0, &mut pts);
             }
             OutlineCurve::Cubic(p0, p1, p2, p3) => {
-                for i in 1..=12 {
-                    let t = i as f32 / 12.0;
-                    let a = (1.0 - t) * (1.0 - t) * (1.0 - t);
-                    let b = 3.0 * (1.0 - t) * (1.0 - t) * t;
-                    let d = 3.0 * (1.0 - t) * t * t;
-                    let e = t * t * t;
-                    pts.push(Pt::new(
-                        a * p0.x + b * p1.x + d * p2.x + e * p3.x,
-                        a * p0.y + b * p1.y + d * p2.y + e * p3.y,
-                    ));
-                }
+                flatten_type_curve([p0, p1, p2, p3].map(|p| Pt::new(p.x, p.y)), tolerance, 0, &mut pts);
             }
         }
         last_end = Some(end_of(c));
@@ -482,6 +464,20 @@ fn flatten_outline(curves: &[ab_glyph::OutlineCurve]) -> Vec<Vec<Pt>> {
         out.push(pts);
     }
     out
+}
+
+/// Flatten a type curve within its document-space error budget.
+/// Args: cubic controls, local tolerance, bounded depth and output points. Returns nothing.
+fn flatten_type_curve(points: [Pt; 4], tolerance: f32, depth: u8, out: &mut Vec<Pt>) {
+    let [a, b, c, d] = points;
+    let error = crate::geom::seg_dist(b, a, d).max(crate::geom::seg_dist(c, a, d));
+    if depth == 10 || error <= tolerance.max(1e-6) {
+        out.push(d);
+        return;
+    }
+    let (left, right) = crate::geom::split_cubic(a, b, c, d, 0.5);
+    flatten_type_curve(left, tolerance, depth + 1, out);
+    flatten_type_curve(right, tolerance, depth + 1, out);
 }
 
 fn fallback_block(content: &str, px: f32, origin: Pt) -> Vec<Vec<Pt>> {
@@ -891,6 +887,29 @@ mod tests {
             content: content.into(),
             px: 48.0,
             ..TypeRun::default()
+        }
+    }
+
+    #[test]
+    fn svg_type_outline_flattening_respects_curved_edge_error() {
+        use ab_glyph::{OutlineCurve, point};
+        let curves = [
+            OutlineCurve::Quad(point(0., 0.), point(0., 64.), point(64., 64.)),
+            OutlineCurve::Cubic(point(64., 64.), point(80., 64.), point(80., 0.), point(128., 0.)),
+            OutlineCurve::Line(point(128., 0.), point(0., 0.)),
+        ];
+        let tolerance = 1. / 64.;
+        let contours = flatten_outline(&curves, tolerance);
+        assert_eq!(contours.len(), 1);
+        assert!(contours[0].len() <= 2050);
+        for i in 0..=512 {
+            let t = i as f32 / 512.;
+            let quad = Pt::new(64. * t * t, 128. * t - 64. * t * t);
+            let cubic = crate::geom::eval_cubic(Pt::new(64., 64.), Pt::new(80., 64.), Pt::new(80., 0.), Pt::new(128., 0.), t);
+            for point in [quad, cubic] {
+                let error = contours[0].windows(2).map(|p| crate::geom::seg_dist(point, p[0], p[1])).fold(f32::INFINITY, f32::min);
+                assert!(error <= tolerance * 1.01, "curve edge error={error}");
+            }
         }
     }
 

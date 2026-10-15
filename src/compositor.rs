@@ -1661,8 +1661,8 @@ mod tests {
                 let differences: Vec<_> = actual.data().iter().zip(expected.data()).map(|(a, b)| a.abs_diff(*b)).collect();
                 let mean = differences.iter().map(|v| *v as f64).sum::<f64>() / differences.len() as f64;
                 assert!(mean < 0.05 && *differences.iter().max().unwrap() <= 2, "rotation={rotation}, reveal={reveal}, mean={mean}");
-                assert!(actual.pixels().iter().filter(|p| p.red() > p.blue() * 2 && p.alpha() > 10).count() > 20);
-                assert!(actual.pixels().iter().filter(|p| p.blue() > p.red() * 2 && p.alpha() > 10).count() > 20);
+                assert!(actual.pixels().iter().filter(|p| u16::from(p.red()) > u16::from(p.blue()) * 2 && p.alpha() > 10).count() > 20);
+                assert!(actual.pixels().iter().filter(|p| u16::from(p.blue()) > u16::from(p.red()) * 2 && p.alpha() > 10).count() > 20);
                 assert!(actual.pixels().iter().map(|p| p.alpha()).max().unwrap() <= 64);
             }
         }
