@@ -1,281 +1,69 @@
 {
   "version": 1,
-  "candidate": [
-    "oma-layered-psd",
-    "oma-layered-psb",
-    "oma-layered-ora",
-    "oma-vector-masks",
-    "oma-pdf-rectangle"
-  ],
-  "optional_evidence_tiers": [
-    "native-window",
-    "device",
-    "physical",
-    "human"
-  ],
+  "candidate": ["oma-layered-psd","oma-layered-psb","oma-layered-ora","oma-vector-masks","oma-pdf-rectangle","audio-tone-codecs","audio-native-session","audio-groove-members","video-fractional-rgba-pcm","video-editable-timeline","video-movable-archive","omadesign-ui","omatainer-ui","editbay-ui"],
+  "optional_evidence_tiers": ["native-window","device","physical","human"],
   "fixtures": [
-    {
-      "product": "omadesign",
-      "provenance": {
-        "license": "MIT",
-        "source": "Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md",
-        "authoring": "Independent fixture generator or published SVG/PDF specification; pinned bytes"
-      },
-      "losses": [],
-      "required": [
-        "appearance",
-        "editability",
-        "undo",
-        "save_reopen",
-        "failure",
-        "preservation"
-      ],
-      "required_tiers": [
-        "headless"
-      ],
-      "adapter": {
-        "root": "omadesign",
-        "path": "scripts/suite/omadesign.mjs",
-        "kind": "product"
-      },
-      "limits": {
-        "deadline_ms": 30000,
-        "max_input_bytes": 1048576,
-        "max_render_pixels": 65536
-      },
-      "tools": [],
-      "id": "oma-layered-psd",
-      "input": {
-        "root": "omadesign",
-        "path": "src/formats/psd/fixtures/independent-rle.psd",
-        "bytes": 934,
-        "sha256": "e0d1fe1561d7d33fe83ac7422879a41720981c5b9b3d874bb77bceee6df4d661"
-      },
-      "reference": {
-        "root": "omadesign",
-        "path": "qualification/suite/fixtures/psd-reference.json",
-        "bytes": 385,
-        "sha256": "ba88bea9e974f9efb9af3068fee26965c9b11deb8c4840bd39fb84b33787011a"
-      },
-      "affected": [
-        "src/formats/psd",
-        "src/formats/suite_qualification.rs",
-        "scripts/suite/omadesign.mjs"
-      ],
-      "expected": {}
-    },
-    {
-      "product": "omadesign",
-      "provenance": {
-        "license": "MIT",
-        "source": "Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md",
-        "authoring": "Independent fixture generator or published SVG/PDF specification; pinned bytes"
-      },
-      "losses": [],
-      "required": [
-        "appearance",
-        "editability",
-        "undo",
-        "save_reopen",
-        "failure",
-        "preservation"
-      ],
-      "required_tiers": [
-        "headless"
-      ],
-      "adapter": {
-        "root": "omadesign",
-        "path": "scripts/suite/omadesign.mjs",
-        "kind": "product"
-      },
-      "limits": {
-        "deadline_ms": 30000,
-        "max_input_bytes": 1048576,
-        "max_render_pixels": 65536
-      },
-      "tools": [],
-      "id": "oma-layered-psb",
-      "input": {
-        "root": "omadesign",
-        "path": "src/formats/psd/fixtures/independent-rle.psb",
-        "bytes": 1054,
-        "sha256": "a3f48e6c54c889880867a6c7ecfc2cd93ec41767765f16fe87145ca3421195fc"
-      },
-      "reference": {
-        "root": "omadesign",
-        "path": "qualification/suite/fixtures/psd-reference.json",
-        "bytes": 385,
-        "sha256": "ba88bea9e974f9efb9af3068fee26965c9b11deb8c4840bd39fb84b33787011a"
-      },
-      "affected": [
-        "src/formats/psd",
-        "src/formats/suite_qualification.rs",
-        "scripts/suite/omadesign.mjs"
-      ],
-      "expected": {}
-    },
-    {
-      "product": "omadesign",
-      "provenance": {
-        "license": "MIT",
-        "source": "Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md",
-        "authoring": "Independent fixture generator or published SVG/PDF specification; pinned bytes"
-      },
-      "losses": [],
-      "required": [
-        "appearance",
-        "editability",
-        "undo",
-        "save_reopen",
-        "failure",
-        "preservation"
-      ],
-      "required_tiers": [
-        "headless"
-      ],
-      "adapter": {
-        "root": "omadesign",
-        "path": "scripts/suite/omadesign.mjs",
-        "kind": "product"
-      },
-      "limits": {
-        "deadline_ms": 30000,
-        "max_input_bytes": 1048576,
-        "max_render_pixels": 65536
-      },
-      "tools": [],
-      "id": "oma-layered-ora",
-      "input": {
-        "root": "omadesign",
-        "path": "src/formats/openraster/fixtures/independent.ora",
-        "bytes": 1177,
-        "sha256": "0aa786f66611064d22270074b34ae519cf5e51991afdadb71dd0560f84cc01ef"
-      },
-      "reference": {
-        "root": "omadesign",
-        "path": "qualification/suite/fixtures/ora-reference.json",
-        "bytes": 417,
-        "sha256": "99c131fc14a34dc8bb98da07bccd84af08bbb65705797da9f96e79a0635dd584"
-      },
-      "affected": [
-        "src/formats/openraster",
-        "src/formats/suite_qualification.rs",
-        "scripts/suite/omadesign.mjs"
-      ],
-      "expected": {}
-    },
-    {
-      "product": "omadesign",
-      "provenance": {
-        "license": "MIT",
-        "source": "Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md",
-        "authoring": "Independent fixture generator or published SVG/PDF specification; pinned bytes"
-      },
-      "losses": [],
-      "required": [
-        "appearance",
-        "editability",
-        "undo",
-        "save_reopen",
-        "failure",
-        "preservation"
-      ],
-      "required_tiers": [
-        "headless"
-      ],
-      "adapter": {
-        "root": "omadesign",
-        "path": "scripts/suite/omadesign.mjs",
-        "kind": "product"
-      },
-      "limits": {
-        "deadline_ms": 30000,
-        "max_input_bytes": 1048576,
-        "max_render_pixels": 65536
-      },
-      "tools": [
-        "rsvg-convert"
-      ],
-      "id": "oma-vector-masks",
-      "input": {
-        "root": "omadesign",
-        "path": "qualification/suite/fixtures/vector-masks.svg",
-        "bytes": 531,
-        "sha256": "8031c67bb159e4f929ff032c3ae593dc75f96cadf17499b8372879a1f5b36c89"
-      },
-      "reference": {
-        "root": "omadesign",
-        "path": "qualification/suite/fixtures/vector-masks.svg",
-        "bytes": 531,
-        "sha256": "8031c67bb159e4f929ff032c3ae593dc75f96cadf17499b8372879a1f5b36c89"
-      },
-      "affected": [
-        "src/formats/svg",
-        "src/formats/suite_qualification.rs",
-        "scripts/suite/omadesign.mjs"
-      ],
-      "expected": {
-        "min_vector_objects": 3,
-        "max_raster_layers": 0,
-        "artwork_masks": 2
-      }
-    },
-    {
-      "product": "omadesign",
-      "provenance": {
-        "license": "MIT",
-        "source": "Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md",
-        "authoring": "Independent fixture generator or published SVG/PDF specification; pinned bytes"
-      },
-      "losses": [
-        "Single-page, unprofiled vector geometry only; fonts, color profiles and layered interchange are owned by PDF feature qualification."
-      ],
-      "required": [
-        "appearance",
-        "editability",
-        "undo",
-        "save_reopen",
-        "failure",
-        "preservation"
-      ],
-      "required_tiers": [
-        "headless"
-      ],
-      "adapter": {
-        "root": "omadesign",
-        "path": "scripts/suite/omadesign.mjs",
-        "kind": "product"
-      },
-      "limits": {
-        "deadline_ms": 30000,
-        "max_input_bytes": 1048576,
-        "max_render_pixels": 65536
-      },
-      "tools": [
-        "pdftoppm"
-      ],
-      "id": "oma-pdf-rectangle",
-      "input": {
-        "root": "omadesign",
-        "path": "qualification/suite/fixtures/rectangle.pdf",
-        "bytes": 459,
-        "sha256": "0a81466f5be9661e84ba21923c20262f04d4bab3a201c206b0882589d5576f5e"
-      },
-      "reference": {
-        "root": "omadesign",
-        "path": "qualification/suite/fixtures/rectangle.pdf",
-        "bytes": 459,
-        "sha256": "0a81466f5be9661e84ba21923c20262f04d4bab3a201c206b0882589d5576f5e"
-      },
-      "affected": [
-        "src/formats/pdf",
-        "src/formats/suite_qualification.rs",
-        "scripts/suite/omadesign.mjs"
-      ],
-      "expected": {
-        "min_vector_objects": 1,
-        "max_raster_layers": 0
-      }
-    }
-  ]
+    {"product":"omadesign","provenance":{"license":"MIT","source":"Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md","authoring":"Independent fixture generator or published SVG/PDF specification; pinned bytes"},"losses":[],"required":["appearance","editability","undo","save_reopen","failure","preservation"],"required_tiers":["headless"],"adapter":{"root":"omadesign","path":"scripts/suite/omadesign.mjs","kind":"product"},"limits":{"deadline_ms":30000,"max_input_bytes":1048576,"max_render_pixels":65536},"tools":[],"id":"oma-layered-psd","input":{"root":"omadesign","path":"src/formats/psd/fixtures/independent-rle.psd","bytes":934,"sha256":"e0d1fe1561d7d33fe83ac7422879a41720981c5b9b3d874bb77bceee6df4d661"},"reference":{"root":"omadesign","path":"qualification/suite/fixtures/psd-reference.json","bytes":385,"sha256":"ba88bea9e974f9efb9af3068fee26965c9b11deb8c4840bd39fb84b33787011a"},"affected":["src/formats/psd","src/formats/suite_qualification.rs","scripts/suite/omadesign.mjs"],"expected":{}},
+    {"product":"omadesign","provenance":{"license":"MIT","source":"Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md","authoring":"Independent fixture generator or published SVG/PDF specification; pinned bytes"},"losses":[],"required":["appearance","editability","undo","save_reopen","failure","preservation"],"required_tiers":["headless"],"adapter":{"root":"omadesign","path":"scripts/suite/omadesign.mjs","kind":"product"},"limits":{"deadline_ms":30000,"max_input_bytes":1048576,"max_render_pixels":65536},"tools":[],"id":"oma-layered-psb","input":{"root":"omadesign","path":"src/formats/psd/fixtures/independent-rle.psb","bytes":1054,"sha256":"a3f48e6c54c889880867a6c7ecfc2cd93ec41767765f16fe87145ca3421195fc"},"reference":{"root":"omadesign","path":"qualification/suite/fixtures/psd-reference.json","bytes":385,"sha256":"ba88bea9e974f9efb9af3068fee26965c9b11deb8c4840bd39fb84b33787011a"},"affected":["src/formats/psd","src/formats/suite_qualification.rs","scripts/suite/omadesign.mjs"],"expected":{}},
+    {"product":"omadesign","provenance":{"license":"MIT","source":"Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md","authoring":"Independent fixture generator or published SVG/PDF specification; pinned bytes"},"losses":[],"required":["appearance","editability","undo","save_reopen","failure","preservation"],"required_tiers":["headless"],"adapter":{"root":"omadesign","path":"scripts/suite/omadesign.mjs","kind":"product"},"limits":{"deadline_ms":30000,"max_input_bytes":1048576,"max_render_pixels":65536},"tools":[],"id":"oma-layered-ora","input":{"root":"omadesign","path":"src/formats/openraster/fixtures/independent.ora","bytes":1177,"sha256":"0aa786f66611064d22270074b34ae519cf5e51991afdadb71dd0560f84cc01ef"},"reference":{"root":"omadesign","path":"qualification/suite/fixtures/ora-reference.json","bytes":417,"sha256":"99c131fc14a34dc8bb98da07bccd84af08bbb65705797da9f96e79a0635dd584"},"affected":["src/formats/openraster","src/formats/suite_qualification.rs","scripts/suite/omadesign.mjs"],"expected":{}},
+    {"product":"omadesign","provenance":{"license":"MIT","source":"Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md","authoring":"Independent fixture generator or published SVG/PDF specification; pinned bytes"},"losses":[],"required":["appearance","editability","undo","save_reopen","failure","preservation"],"required_tiers":["headless"],"adapter":{"root":"omadesign","path":"scripts/suite/omadesign.mjs","kind":"product"},"limits":{"deadline_ms":30000,"max_input_bytes":1048576,"max_render_pixels":65536},"tools":["rsvg-convert"],"id":"oma-vector-masks","input":{"root":"omadesign","path":"qualification/suite/fixtures/vector-masks.svg","bytes":531,"sha256":"8031c67bb159e4f929ff032c3ae593dc75f96cadf17499b8372879a1f5b36c89"},"reference":{"root":"omadesign","path":"qualification/suite/fixtures/vector-masks.svg","bytes":531,"sha256":"8031c67bb159e4f929ff032c3ae593dc75f96cadf17499b8372879a1f5b36c89"},"affected":["src/formats/svg","src/formats/suite_qualification.rs","scripts/suite/omadesign.mjs"],"expected":{"min_vector_objects":3,"max_raster_layers":0,"artwork_masks":2}},
+    {"product":"omadesign","provenance":{"license":"MIT","source":"Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md","authoring":"Independent fixture generator or published SVG/PDF specification; pinned bytes"},"losses":["Single-page, unprofiled vector geometry only; fonts, color profiles and layered interchange are owned by PDF feature qualification."],"required":["appearance","editability","undo","save_reopen","failure","preservation"],"required_tiers":["headless"],"adapter":{"root":"omadesign","path":"scripts/suite/omadesign.mjs","kind":"product"},"limits":{"deadline_ms":30000,"max_input_bytes":1048576,"max_render_pixels":65536},"tools":["pdftoppm"],"id":"oma-pdf-rectangle","input":{"root":"omadesign","path":"qualification/suite/fixtures/rectangle.pdf","bytes":459,"sha256":"0a81466f5be9661e84ba21923c20262f04d4bab3a201c206b0882589d5576f5e"},"reference":{"root":"omadesign","path":"qualification/suite/fixtures/rectangle.pdf","bytes":459,"sha256":"0a81466f5be9661e84ba21923c20262f04d4bab3a201c206b0882589d5576f5e"},"affected":["src/formats/pdf","src/formats/suite_qualification.rs","scripts/suite/omadesign.mjs"],"expected":{"min_vector_objects":1,"max_raster_layers":0}},
+    {"id":"audio-tone-codecs","product":"omatainer","input":{"root":"omatainer","path":"tests/fixtures/audio/tone.flac","bytes":15004,"sha256":"ea440a0e10d78243b7fcd92b3cf5e7998c8b0d95d4100fa18687f7adc931f4a6"},"reference":{"root":"omatainer","path":"tests/fixtures/audio/README.md","bytes":3275,"sha256":"06caea8414fb1fdeba65910984128f88022b0f35e8b7a8b4967469bdb0d275a7"},"dependencies":[{"root":"omatainer","path":"src/engine/decode/tests.rs","bytes":15165,"sha256":"dc9c462a9db2973279b2e60ff8841c45b528346650dd1303ce118a1450b318f9"},{"root":"omatainer","path":"tests/fixtures/audio/tone.ogg","bytes":5442,"sha256":"ebc85aa6cfc74d049a03ecac2215063a50d2ab02b931abb8e0a15285e0ab2378"},{"root":"omatainer","path":"tests/fixtures/audio/tone.mp3","bytes":3524,"sha256":"09dbd544561b1b38ddd9a64991f8caadfac0cd0644fe45435cb7cdc6cb7170ba"},{"root":"omatainer","path":"tests/fixtures/audio/tone.m4a","bytes":3919,"sha256":"4a24363782935022df775fa038098c857a2bbf740549e109a8f05c377469237d"},{"root":"omatainer","path":"tests/fixtures/audio/tone-estimated.mp3","bytes":3332,"sha256":"db3476a2c3bfb5c3838b867d819194bfed908240779a9e219514bbf879a052a0"}],"provenance":{"license":"MIT","source":"Existing original source-generated fixtures and assertions, no client media","authoring":"Existing decoder/project/beatgrid fixture generators and independent sinusoid/member oracles; exact pinned sources"},"losses":["Lossy codecs may retain priming/padding:12000..14304 decoded frames; no universal gapless claim. Signal check is independent sinusoidal projection, not physical audibility."],"required":["appearance","failure","preservation"],"required_tiers":["headless"],"adapter":{"root":"omatainer","path":"scripts/suite-qualification.mjs","kind":"product"},"limits":{"deadline_ms":180000,"max_input_bytes":4194304},"affected":["src/engine/decode","scripts/suite-qualification"],"tools":[]},
+    {"id":"audio-native-session","product":"omatainer","input":{"root":"omatainer","path":"src/engine/project/tests.rs","bytes":51251,"sha256":"0cf81adb65aa1099a2a5a59cda6db314bee7ab747a23cf9a144dbb940f0f70f6"},"reference":{"root":"omatainer","path":"src/engine/undo/tests.rs","bytes":53181,"sha256":"ff0a751568a566587ac1f49cffe530b98908123eacfdf6d3f563ff85422b4d4f"},"dependencies":[],"provenance":{"license":"MIT","source":"Existing original source-generated fixtures and assertions, no client media","authoring":"Existing decoder/project/beatgrid fixture generators and independent sinusoid/member oracles; exact pinned sources"},"losses":["Stopped software project/render recall only; native window, plugin editor, devices and physical timing require separate receipts."],"required":["editability","undo","save_reopen","failure","preservation"],"required_tiers":["headless"],"adapter":{"root":"omatainer","path":"scripts/suite-qualification.mjs","kind":"product"},"limits":{"deadline_ms":180000,"max_input_bytes":4194304},"affected":["src/engine/project","src/engine/undo","src/project_file","scripts/suite-qualification"],"tools":[]},
+    {"id":"audio-groove-members","product":"omatainer","input":{"root":"omatainer","path":"tests/fixtures/beatgrid/11_rock_100_beat_4-4.wav","bytes":1697950,"sha256":"6e4f313f3dee5482bdc328fbd54893cc3a0f7fe9e960045b837b123e0a17dd4a"},"reference":{"root":"omatainer","path":"tests/fixtures/beatgrid/11_rock_100_beat_4-4.mid","bytes":545,"sha256":"26906e263271dfecdc0674f665a606d524badbc9ec384cd177e9fffe5e3e6c50"},"dependencies":[{"root":"omatainer","path":"tests/fixtures/beatgrid/sources.json","bytes":1522,"sha256":"04df228b01a61d1b208da34e1631a2b84f6e828d2823dee71fb0a8489baa0124"},{"root":"omatainer","path":"tests/fixtures/beatgrid/CC-BY-4.0.txt","bytes":18657,"sha256":"9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411"},{"root":"omatainer","path":"src/engine/beatgrid/variable_tests.rs","bytes":22314,"sha256":"b4634194cc39707fd23756b26f2d818f76f12e5838898d29723467bb8faeb2e0"}],"provenance":{"license":"CC-BY-4.0","source":"Google LLC; Gillick, Roberts, Engel, Eck, Bamman. Learning to Groove with Inverse Sequence Transformations, ICML2019; existing tests/fixtures/beatgrid/sources.json pins exact WAV/MIDI members; archive digest not verified.","authoring":"Existing decoder/project/beatgrid fixture generators and independent sinusoid/member oracles; exact pinned sources"},"losses":["Human electronic drum recording; hand-authored anchors exercise PCM continuity, not automatic grid accuracy or acoustic drummer ground truth."],"required":["appearance","preservation"],"required_tiers":["headless"],"adapter":{"root":"omatainer","path":"scripts/suite-qualification.mjs","kind":"product"},"limits":{"deadline_ms":180000,"max_input_bytes":4194304},"affected":["src/engine/beatgrid","tests/fixtures/beatgrid","scripts/suite-qualification"],"tools":[]},
+    {"id":"video-fractional-rgba-pcm","product":"editbay","input":{"root":"editbay","path":"crates/editbay-media/tests/delivery.rs","bytes":11690,"sha256":"fbd01fafb00b464ebf38bf82b402ce448a76a04f58091eccb5a585571066674c"},"reference":{"root":"editbay","path":"crates/editbay-media/tests/delivery.rs","bytes":11690,"sha256":"fbd01fafb00b464ebf38bf82b402ce448a76a04f58091eccb5a585571066674c"},"dependencies":[],"provenance":{"license":"MIT","source":"Existing original source-generated fixtures and assertions, no client media","authoring":"Existing native delivery/timeline/archive test generators with exact mathematical frame/sample/channel/clock assertions"},"losses":["Source-generated32x18 RGBA/unequal PCM at30000/1001; exact lossless assertions and explicit H264/ProRes RMS/priming bounds. Writer/reader share FFmpeg; independent codec conformance not established."],"required":["appearance","failure","preservation"],"required_tiers":["headless"],"adapter":{"root":"editbay","path":"scripts/suite-qualification.mjs","kind":"product"},"limits":{"deadline_ms":180000,"max_input_bytes":4194304},"affected":["crates/editbay-media/","crates/editbay-delivery/","scripts/suite-qualification"],"tools":[]},
+    {"id":"video-editable-timeline","product":"editbay","input":{"root":"editbay","path":"crates/editbay-core/tests/timeline.rs","bytes":19275,"sha256":"fd90522df049532a9f5a3d1808056c29ef9483fc6ec118e53eb00cba696ba204"},"reference":{"root":"editbay","path":"crates/editbay-core/tests/timeline.rs","bytes":19275,"sha256":"fd90522df049532a9f5a3d1808056c29ef9483fc6ec118e53eb00cba696ba204"},"dependencies":[],"provenance":{"license":"MIT","source":"Existing original source-generated fixtures and assertions, no client media","authoring":"Existing native delivery/timeline/archive test generators with exact mathematical frame/sample/channel/clock assertions"},"losses":["Typed headless timeline and exact source positions only; decoded playback/render/window acceptance is separate."],"required":["editability","undo","save_reopen","failure","preservation"],"required_tiers":["headless"],"adapter":{"root":"editbay","path":"scripts/suite-qualification.mjs","kind":"product"},"limits":{"deadline_ms":180000,"max_input_bytes":4194304},"affected":["crates/editbay-core/src/timeline","crates/editbay-core/src/commands","scripts/suite-qualification"],"tools":[]},
+    {"id":"video-movable-archive","product":"editbay","input":{"root":"editbay","path":"crates/editbay-core/tests/archive.rs","bytes":2166,"sha256":"349b6e4b1c194bc8b00e43ecbb38f5c93d4f5e10021cd806f14186ab6c91db5f"},"reference":{"root":"editbay","path":"crates/editbay-core/tests/archive.rs","bytes":2166,"sha256":"349b6e4b1c194bc8b00e43ecbb38f5c93d4f5e10021cd806f14186ab6c91db5f"},"dependencies":[],"provenance":{"license":"MIT","source":"Existing original source-generated fixtures and assertions, no client media","authoring":"Existing native delivery/timeline/archive test generators with exact mathematical frame/sample/channel/clock assertions"},"losses":["Small authored retained media member; moved archive and mutation refusal do not prove large-client archive endurance."],"required":["editability","save_reopen","failure","preservation"],"required_tiers":["headless"],"adapter":{"root":"editbay","path":"scripts/suite-qualification.mjs","kind":"product"},"limits":{"deadline_ms":180000,"max_input_bytes":4194304},"affected":["crates/editbay-core/src/archive","crates/editbay-core/src/storage","crates/editbay-core/src/project","scripts/suite-qualification"],"tools":[]},
+    {"id":"omadesign-ui","cohort":"ui","product":"omadesign","input":{"root":"omadesign","path":"src/ui/shared_fields_tests.rs","bytes":5564,"sha256":"0e5d94b9044af850a6a196b661e713c6bde2b5d5b4302bc431a4c5cb78905b06"},"reference":{"root":"ui-references","path":"omadesign-1.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omadesign appearance reference at 1 scale and actual font/theme identity","scale":1},"dependencies":[{"root":"ui-references","path":"omadesign-1.5.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omadesign appearance reference at 1.5 scale and actual font/theme identity","scale":1.5},{"root":"ui-references","path":"omadesign-2.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omadesign appearance reference at 2 scale and actual font/theme identity","scale":2}],"provenance":{"license":"MIT original test generators; future reference rights must be established before pinning","source":"Existing real app UI fixtures; generator-source pin only, not a runtime pass","authoring":"Pinned committed app fixture code; exact owner source/executable runtime receipts required"},"losses":["Headless UI assertions, rendered/reference appearance, native window, physical device and human review are separate. No existing semantics/scale test is promoted to a visual golden or document save/undo proof."],"required":["editability","undo","save_reopen","keyboard","focus","mixed","invalid","error","appearance","preservation"],"required_tiers":["headless"],"adapter":{"root":"omadesign","path":"scripts/suite/ui-evidence.mjs","kind":"product"},"limits":{"deadline_ms":30000,"max_input_bytes":4194304},"affected":["src/ui/","src/app/","vendor/oma-ui/"],"tools":[],"ui":{"fixture_origin_revision":"e6d15c9bd345d0282e91199a774d1c80ae437e68","appearance_references":[{"root":"ui-references","path":"omadesign-1.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omadesign appearance reference at 1 scale and actual font/theme identity","scale":1},{"root":"ui-references","path":"omadesign-1.5.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omadesign appearance reference at 1.5 scale and actual font/theme identity","scale":1.5},{"root":"ui-references","path":"omadesign-2.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omadesign appearance reference at 2 scale and actual font/theme identity","scale":2}],"scales":[1,1.5,2],"font_sha256":null,"theme_sha256":null,"appearance_policy":"Exact deterministic headless PNG reference with actual font/theme hashes; missing pins remain unavailable. Screenshots do not prove functional checks."}},
+    {"id":"omatainer-ui","cohort":"ui","product":"omatainer","input":{"root":"omatainer","path":"src/ui/mixer/tests.rs","bytes":13645,"sha256":"f5c9b930c713181811a0a953e43b806b6cf06c718dce37488a123aec081860b6"},"reference":{"root":"ui-references","path":"omatainer-1.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omatainer appearance reference at 1 scale and actual font/theme identity","scale":1},"dependencies":[{"root":"ui-references","path":"omatainer-1.5.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omatainer appearance reference at 1.5 scale and actual font/theme identity","scale":1.5},{"root":"ui-references","path":"omatainer-2.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omatainer appearance reference at 2 scale and actual font/theme identity","scale":2}],"provenance":{"license":"MIT original test generators; future reference rights must be established before pinning","source":"Existing real app UI fixtures; generator-source pin only, not a runtime pass","authoring":"Pinned committed app fixture code; exact owner source/executable runtime receipts required"},"losses":["Headless UI assertions, rendered/reference appearance, native window, physical device and human review are separate. No existing semantics/scale test is promoted to a visual golden or document save/undo proof."],"required":["editability","undo","save_reopen","keyboard","focus","mixed","invalid","error","appearance","preservation"],"required_tiers":["headless"],"adapter":{"root":"omadesign","path":"scripts/suite/ui-evidence.mjs","kind":"product"},"limits":{"deadline_ms":30000,"max_input_bytes":4194304},"affected":["src/ui/","src/theme","src/panel_workspace","vendor/oma-ui/"],"tools":[],"ui":{"fixture_origin_revision":"23c6338dba0ac935ebd30cb4519edba80121b8d9","appearance_references":[{"root":"ui-references","path":"omatainer-1.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omatainer appearance reference at 1 scale and actual font/theme identity","scale":1},{"root":"ui-references","path":"omatainer-1.5.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omatainer appearance reference at 1.5 scale and actual font/theme identity","scale":1.5},{"root":"ui-references","path":"omatainer-2.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned omatainer appearance reference at 2 scale and actual font/theme identity","scale":2}],"scales":[1,1.5,2],"font_sha256":null,"theme_sha256":null,"appearance_policy":"Exact deterministic headless PNG reference with actual font/theme hashes; missing pins remain unavailable. Screenshots do not prove functional checks."}},
+    {"id":"editbay-ui","cohort":"ui","product":"editbay","input":{"root":"editbay","path":"crates/editbay-app/src/timeline_ui.rs","bytes":97328,"sha256":"ddb468c2df4b6393e2381efe6bc3d5e6dc014f6516430dd2a094c2501a6abad8"},"reference":{"root":"ui-references","path":"editbay-1.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 1 scale and actual font/theme identity","scale":1},"dependencies":[{"root":"ui-references","path":"editbay-1.5.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 1.5 scale and actual font/theme identity","scale":1.5},{"root":"ui-references","path":"editbay-2.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 2 scale and actual font/theme identity","scale":2}],"provenance":{"license":"MIT original test generators; future reference rights must be established before pinning","source":"Existing real app UI fixtures; generator-source pin only, not a runtime pass","authoring":"Pinned committed app fixture code; exact owner source/executable runtime receipts required"},"losses":["Headless UI assertions, rendered/reference appearance, native window, physical device and human review are separate. No existing semantics/scale test is promoted to a visual golden or document save/undo proof."],"required":["editability","undo","save_reopen","keyboard","focus","mixed","invalid","error","appearance","preservation"],"required_tiers":["headless"],"adapter":{"root":"omadesign","path":"scripts/suite/ui-evidence.mjs","kind":"product"},"limits":{"deadline_ms":30000,"max_input_bytes":4194304},"affected":["crates/editbay-app/","vendor/oma-ui/"],"tools":[],"ui":{"fixture_origin_revision":"ff9220b041a41fc7c4cc3ed94e7b78ddbfd333ef","appearance_references":[{"root":"ui-references","path":"editbay-1.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 1 scale and actual font/theme identity","scale":1},{"root":"ui-references","path":"editbay-1.5.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 1.5 scale and actual font/theme identity","scale":1.5},{"root":"ui-references","path":"editbay-2.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 2 scale and actual font/theme identity","scale":2}],"scales":[1,1.5,2],"font_sha256":null,"theme_sha256":null,"appearance_policy":"Exact deterministic headless PNG reference with actual font/theme hashes; missing pins remain unavailable. Screenshots do not prove functional checks."}}
+  ],
+  "cohorts": [
+    {"id":"raw-camera","type":"photo03","manifest":{"root":"raw-camera","path":"docs/qa/raw-camera-manifest.json","bytes":350928,"sha256":"97f49687be152cea579326f9ed764b05553bde46cba53273a735d4821c36f3ac"},"inspector":{"root":"raw-camera","path":"scripts/raw-qualification.mjs","bytes":30770,"sha256":"e73b25c91735544385759c1212e566f5098d2dcc7323ad8acaaf2f724c1e1dbd"},"advertised":{"root":"raw-camera","path":"src/formats/raw.rs","bytes":17088,"sha256":"6f529b2cb204f8be8aa001ed3013f8765c5fba1c062a3b03b0bfb76abf70b5b4"},"source_revision":"870ef7a3e63b4d1160a1602d96281368adb6c12d","required":true,"affected":["src/formats/raw","src/photo","docs/qa/raw-camera-manifest.json","scripts/raw-qualification.mjs"],"policy":"Every required case in the pinned PHOTO03 manifest; no mode inventory/acquisition duplicate. Missing inputs/references/executables/receipts fail, never skip-pass."}
+  ],
+  "owner_gates": [
+    {"id":"SUITE-01","product":"omadesign","checks":["SUITE-01"]},
+    {"id":"SUITE-01","product":"omatainer","checks":["SUITE-01"]},
+    {"id":"SUITE-01","product":"editbay","checks":["SUITE-01"]},
+    {"id":"UI-02","product":"omadesign","checks":["UI-02"]},
+    {"id":"UI-02","product":"omatainer","checks":["UI-02"]},
+    {"id":"UI-02","product":"editbay","checks":["UI-02"]},
+    {"id":"UI-01","product":"omadesign","checks":["UI-01"]},
+    {"id":"UI-01","product":"omatainer","checks":["UI-01"]},
+    {"id":"UI-01","product":"editbay","checks":["UI-01"]},
+    {"id":"AUDIO-01","product":"omatainer","checks":["AUDIO-01"]},
+    {"id":"VIDEO-01","product":"editbay","checks":["VIDEO-01"]},
+    {"id":"VIDEO-02","product":"editbay","checks":["VIDEO-02"]},
+    {"id":"SVG-06","product":"omadesign","checks":["SVG-06"]},
+    {"id":"SVG-07","product":"omadesign","checks":["SVG-07"]},
+    {"id":"SVG-08","product":"omadesign","checks":["SVG-08"]},
+    {"id":"FMT-01","product":"omadesign","checks":["FMT-01"]},
+    {"id":"FMT-02","product":"omadesign","checks":["FMT-02"]},
+    {"id":"FMT-04","product":"omadesign","checks":["FMT-04"]},
+    {"id":"FMT-03","product":"omadesign","checks":["FMT-03"]},
+    {"id":"FMT-05","product":"omadesign","checks":["FMT-05"]},
+    {"id":"PHOTO-01","product":"omadesign","checks":["PHOTO-01"]},
+    {"id":"PHOTO-02","product":"omadesign","checks":["PHOTO-02"]},
+    {"id":"LAYOUT-01","product":"omadesign","checks":["LAYOUT-01"]},
+    {"id":"LAYOUT-03","product":"omadesign","checks":["LAYOUT-03"]},
+    {"id":"MOTION-01","product":"omadesign","checks":["MOTION-01"]},
+    {"id":"MOTION-02","product":"omadesign","checks":["MOTION-02"]},
+    {"id":"AUDIO-02","product":"omatainer","checks":["AUDIO-02"]},
+    {"id":"VIDEO-03","product":"editbay","checks":["VIDEO-03"]},
+    {"id":"VIDEO-04","product":"editbay","checks":["VIDEO-04"]},
+    {"id":"VIDEO-05","product":"editbay","checks":["VIDEO-05"]},
+    {"id":"VIDEO-06","product":"editbay","checks":["VIDEO-06"]},
+    {"id":"UI-03","product":"omadesign","checks":["UI-03"]},
+    {"id":"UI-03","product":"omatainer","checks":["UI-03"]},
+    {"id":"UI-03","product":"editbay","checks":["UI-03"]},
+    {"id":"UI-05","product":"omadesign","checks":["UI-05"]},
+    {"id":"UI-05","product":"omatainer","checks":["UI-05"]},
+    {"id":"UI-05","product":"editbay","checks":["UI-05"]},
+    {"id":"PHOTO-03","product":"omadesign","checks":["PHOTO-03"]},
+    {"id":"LAYOUT-02","product":"omadesign","checks":["LAYOUT-02"]},
+    {"id":"AUDIO-03","product":"omatainer","checks":["AUDIO-03"]},
+    {"id":"AUDIO-04","product":"omatainer","checks":["AUDIO-04"]},
+    {"id":"VIDEO-08","product":"editbay","checks":["VIDEO-08"]}
+  ],
+  "history": "qualification/suite/history.json"
 }
