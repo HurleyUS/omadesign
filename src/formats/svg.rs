@@ -367,9 +367,7 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
     for (range, replacement) in edits {
         normalized.replace_range(range, &replacement);
     }
-    let mut options = usvg::Options::default();
-    options.fontdb_mut().load_system_fonts();
-    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    let options = crate::text::svg_type::options();
     let tree = usvg::Tree::from_str(&normalized, &options)
         .map_err(|e| format!("Could not parse SVG: {e}"))?;
     let type_xml=roxmltree::Document::parse_with_options(&normalized,roxmltree::ParsingOptions{allow_dtd:true,nodes_limit:400000,entity_resolver:None}).map_err(|e|e.to_string())?;
@@ -1817,8 +1815,7 @@ mod tests {
         let (doc, notes) = read(source, "SVG appearance").unwrap();
         let actual =
             super::super::decode_image(&crate::compositor::export_png(&doc, 1).unwrap()).unwrap();
-        let mut options = usvg::Options::default();
-        options.fontdb_mut().load_system_fonts();
+        let options = crate::text::svg_type::options();
         let tree = usvg::Tree::from_str(source, &options).unwrap();
         let mut expected = tiny_skia::Pixmap::new(actual.w, actual.h).unwrap();
         resvg::render(&tree, Transform::identity(), &mut expected.as_mut());
