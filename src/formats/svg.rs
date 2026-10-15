@@ -376,6 +376,7 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
         definitions: normalized_definitions(&tree).into(),
         raw_definitions: raw_definitions(&xml, &sheet).into(),
         definition_cache: HashMap::new(),
+        effect_sources: std::collections::HashSet::new(),
         original_definitions: xml
             .descendants()
             .filter(|n| n.has_tag_name("filter"))
@@ -402,6 +403,7 @@ struct Reader<'a> {
     raw_definitions: std::sync::Arc<str>,
     original_definitions: std::sync::Arc<str>,
     definition_cache: HashMap<String, std::sync::Arc<str>>,
+    effect_sources: std::collections::HashSet<String>,
     pixel_bytes: u64,
     mask_sources: HashMap<usize, MaskSource>,
 }
@@ -495,18 +497,48 @@ impl Reader<'_> {
                         && g.opacity().get() == 1.
                         && g.blend_mode() == usvg::BlendMode::Normal;
                     self.meta(&mut layer, g.id());
-                    if !g.filters().is_empty() {
+                    let source_id = if !g.id().is_empty() {
+                        g.id().to_string()
+                    } else {
+                        g.children()
+                            .iter()
+                            .find_map(|n| {
+                                self.metadata
+                                    .get(n.id())
+                                    .filter(|m| !m.filter_ids.is_empty())
+                                    .map(|_| n.id().to_string())
+                            })
+                            .unwrap_or_default()
+                    };
+                    let raw_ids = self
+                        .metadata
+                        .get(&source_id)
+                        .map(|m| m.filter_ids.clone())
+                        .unwrap_or_default();
+                    if !g.filters().is_empty() || !raw_ids.is_empty() {
                         let raw = self
                             .metadata
-                            .get(g.id())
+                            .get(&source_id)
                             .map(|m| m.filter_ids.clone())
                             .unwrap_or_default();
-                        let filters: Vec<String> = if raw.len() == g.filters().len() {
-                            raw
+                        let filters: Vec<String> =
+                            if raw.len() == g.filters().len() || g.filters().is_empty() {
+                                raw
+                            } else {
+                                Vec::new()
+                            };
+                        let filters = if filters.is_empty() {
+                            g.filters()
+                                .iter()
+                                .map(|f| f.id().to_string())
+                                .collect::<Vec<_>>()
                         } else {
-                            Vec::new()
+                            filters
                         };
-                        let raw = !filters.is_empty();
+                        let raw = !filters.is_empty()
+                            && filters
+                                .iter()
+                                .all(|id| self.raw_definitions.contains(&format!("id=\"{id}\"")));
                         let filters = if raw {
                             filters
                         } else {
@@ -542,7 +574,11 @@ impl Reader<'_> {
                     if !layer.artwork_masks.is_empty() {
                         layer.pass_through = false;
                     }
+                    if layer.svg_filter.is_some() {
+                        self.effect_sources.insert(source_id.clone());
+                    }
                     self.children(g, Some(layer.id), depth + 1)?;
+                    self.effect_sources.remove(&source_id);
                     self.doc.layers.push(layer);
                 }
                 usvg::Node::Path(path) => {
@@ -739,6 +775,25 @@ impl Reader<'_> {
             }
         }
         layer.kind.shapes_mut().unwrap().extend(shapes);
+        if !self.effect_sources.contains(path.id()) {
+            let ids = self
+                .metadata
+                .get(path.id())
+                .map(|m| m.filter_ids.clone())
+                .unwrap_or_default();
+            if !ids.is_empty() {
+                layer.svg_filter = Some(crate::svg_source::SvgFilterGraph {
+                    definitions: self.resources(&ids, true),
+                    original_definitions: self.original_definitions.clone(),
+                    filters: ids,
+                    transform: matrix(transform),
+                    reductions: crate::svg_source::reductions(&format!(
+                        "<svg>{}</svg>",
+                        self.original_definitions
+                    )),
+                });
+            }
+        }
         self.doc.layers.push(layer);
         Ok(true)
     }

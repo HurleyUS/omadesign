@@ -102,7 +102,7 @@ impl Context<'_, '_> {
         {
             return;
         }
-        if !layer.is_group {
+        if !layer.is_group && layer.svg_filter.is_none() {
             if is_paper_raster(layer) {
                 return;
             }
