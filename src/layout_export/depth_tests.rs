@@ -137,6 +137,44 @@ fn document_wide_reachable_graph_reopens_without_private_siblings_and_invalid_li
 }
 
 #[test]
+fn native_present_navigation_changes_canvas_size_without_flattening_transition() {
+    let (mut doc, a, b, _, _) = graph();
+    if let Geom::Rect { size, .. } = &mut doc.find_shape_mut(1, b).unwrap().geom {
+        size.y = 220.;
+    }
+    let go = doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .find(|s| s.name == "Go B")
+        .unwrap()
+        .id;
+    let mut state = crate::layout_prototype::PrototypeState::default();
+    state.start(&doc, a).unwrap();
+    let (_, before) = crate::ui::layout_presentation(&doc, &state, 600.).unwrap();
+    assert!(state.activate(&doc, go, Trigger::Click).unwrap());
+    let (_, after) = crate::ui::layout_presentation(&doc, &state, 600.).unwrap();
+    assert_eq!((before.width, before.height), (600., 400.));
+    assert_eq!((after.width, after.height), (600., 220.));
+    assert_eq!(state.last_transition, Transition::SlideLeft);
+    assert_eq!(state.duration_ms, 5000);
+    if let Ok(directory) = std::env::var("OMADESIGN_LAYOUT_PROOF") {
+        let path = std::path::Path::new(&directory);
+        std::fs::write(
+            path.join("transition.html"),
+            export_html(&doc, 0, a).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(path.join("transition-expected.json"), serde_json::json!({
+            "kind":"actual native Present materialized canvas sizes; native UI stretches old texture into new canvas rectangle",
+            "before":[before.width,before.height],"after":[after.width,after.height],
+            "transition":"SlideLeft","duration":5000
+        }).to_string()).unwrap();
+    }
+}
+
+#[test]
 fn native_present_canvas_clips_an_oversized_overlay_without_changing_the_document() {
     let (mut doc, a, b, overlay, _) = graph();
     crate::layout::set_bounds(

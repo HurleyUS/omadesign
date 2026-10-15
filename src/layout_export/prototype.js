@@ -181,17 +181,22 @@ function transition(before,interaction){
  if(animation){animation();animation=null;}
  const duration=Math.min(10000,Math.max(0,Number(interaction.duration_ms)||0));
  if(interaction.transition==='Instant'||!duration||matchMedia('(prefers-reduced-motion: reduce)').matches)return;
- const after=snapshot(), old=document.createElement('div'), next=document.createElement('div');
+ const after=snapshot(), old=document.createElement('div'), next=document.createElement('div'), previous=document.createElement('div');
+ const width=parseFloat(before.style.width),height=parseFloat(before.style.height),newWidth=parseFloat(after.style.width),newHeight=parseFloat(after.style.height);
+ Object.assign(previous.style,{position:'absolute',width:width+'px',height:height+'px',containerType:'inline-size',transformOrigin:'0 0',transform:'scale('+newWidth/width+','+newHeight/height+')'});
+ previous.append(...before.childNodes);
+ for(const key of ['left','top','width','height'])before.style[key]=after.style[key];
  Object.assign(old.style,{position:'absolute',inset:'0'});Object.assign(next.style,{position:'absolute',inset:'0'});
- old.append(...before.childNodes);next.append(...after.childNodes);before.append(old,next);
+ old.append(previous);next.append(...after.childNodes);before.append(old,next);
  // Native Present uses smoothstep on the complete composited canvas.
- const keys=Array.from({length:61},(_,i)=>{const t=i/60,s=t*t*(3-2*t),d=interaction.transition==='SlideLeft'?-1:1;
-  return interaction.transition==='Dissolve'?{offset:t,opacity:s}:{offset:t,transform:'translateX('+(-d*(1-s)*100)+'%)'};});
- const oldKeys=keys.map((k,i)=>interaction.transition==='Dissolve'?{offset:k.offset,opacity:1}:{offset:k.offset,transform:'translateX('+((interaction.transition==='SlideLeft'?-1:1)*(i/60)**2*(3-2*i/60)*100)+'%)'});
+ const direction=interaction.transition==='SlideLeft'?-1:1;
+ const keys=interaction.transition==='Dissolve'?[{opacity:0},{opacity:1}]:[{transform:'translateX('+(-direction*100)+'%)'},{transform:'translateX(0%)'}];
+ const oldKeys=interaction.transition==='Dissolve'?[{opacity:1},{opacity:1}]:[{transform:'translateX(0%)'},{transform:'translateX('+(direction*100)+'%)'}];
  // A dialog is in the top layer; its animation proxy must live there as well.
  (overlay.open?overlay:document.body).append(before);
  if(overlay.open){const r=overlay.getBoundingClientRect();before.style.left=r.left+'px';before.style.top=r.top+'px';}
- const animations=[old.animate(oldKeys,{duration,easing:'linear',fill:'both'}),next.animate(keys,{duration,easing:'linear',fill:'both'})];
+ const timing={duration,easing:'cubic-bezier(0.3333333333333333,0,0.6666666666666666,1)',fill:'both'};
+ const animations=[old.animate(oldKeys,timing),next.animate(keys,timing)];
  const live=[frame(),...overlays.map(e=>e.node)],opacities=live.map(n=>n.style.opacity);live.forEach(n=>n.style.opacity='0');
  let done=false;const cleanup=()=>{if(done)return;done=true;animations.forEach(a=>a.cancel());before.remove();live.forEach((n,i)=>n.style.opacity=opacities[i]);geometry();};animation=cleanup;
  Promise.all(animations.map(a=>a.finished.catch(()=>{}))).then(()=>{cleanup();if(animation===cleanup){animation=null;settleHover();}});
