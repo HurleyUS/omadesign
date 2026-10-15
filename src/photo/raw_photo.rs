@@ -11,6 +11,21 @@ pub struct AdmittedImage {
     pub image: RgbaImage,
     pub(crate) memory: Arc<resources::Lease>,
 }
+impl AdmittedImage {
+    /// Admit an already bounded derived preview into retained ownership.
+    /// Args: validated RGBA preview. Returns its owner or an immediate pressure error.
+    pub(crate) fn from_raster(image: RgbaImage) -> Result<Self, String> {
+        if image.w == 0
+            || image.h == 0
+            || u64::from(image.w) * u64::from(image.h) * 4 != image.data.len() as u64
+        {
+            return Err("Invalid photo preview".into());
+        }
+        let memory = resources::global()
+            .reserve_now(image.data.capacity() as u64, &Cancellation::default())?;
+        Ok(Self { image, memory })
+    }
+}
 
 #[derive(Debug)]
 pub struct AdmittedSamples {
@@ -106,6 +121,7 @@ fn development_memory(
     channel_bytes: u64,
     params: &DevelopParams,
     cancel: &Cancellation,
+    now: bool,
 ) -> Result<Arc<resources::Lease>, String> {
     let count = u64::from(source.0)
         .checked_mul(u64::from(source.1))
@@ -114,14 +130,25 @@ fn development_memory(
         .checked_mul(u64::from(output.1))
         .ok_or("Photo output dimensions overflow")?;
     let per_source = 12
+        + if now { 6 } else { 0 }
         + if params.optics.active() { 4 } else { 0 }
         + if params.clarity.abs() > 0.001 { 12 } else { 0 };
     let demand = count
         .checked_mul(per_source)
         .and_then(|n| n.checked_add(output.checked_mul(4 * channel_bytes)?))
-        .and_then(|n| n.checked_add(96 * 1024 * 1024))
+        .and_then(|n| {
+            n.checked_add(if now {
+                8 * 1024 * 1024
+            } else {
+                96 * 1024 * 1024
+            })
+        })
         .ok_or("Photo development memory demand overflow")?;
-    resources::global().reserve(demand, cancel)
+    if now {
+        resources::global().reserve_now(demand, cancel)
+    } else {
+        resources::global().reserve(demand, cancel)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -132,11 +159,6 @@ pub struct LinearImage {
 }
 
 impl LinearImage {
-    pub(super) fn preview(w: u32, h: u32, pixels: &[u16], max_edge: u32) -> Self {
-        Self::preview_cancellable(w, h, pixels, max_edge, &Cancellation::default())
-            .expect("bounded linear preview")
-    }
-
     /// Resize linear samples using row-bounded separable triangle filtering.
     /// Args: validated source samples, preview edge and job owner. Returns RGB16 without a source-sized float intermediate.
     fn preview_cancellable(
@@ -158,7 +180,7 @@ impl LinearImage {
         let demand = u64::from(pw) * u64::from(ph) * 6
             + u64::from(w) * (12 * rayon::current_num_threads() as u64 + 32)
             + 8 * 1024 * 1024;
-        let _memory = resources::global().reserve(demand, cancel)?;
+        let _memory = resources::global().reserve_now(demand, cancel)?;
         let mut output = photo_buffer(pw as usize * ph as usize * 3)?;
         if (pw, ph) == (w, h) {
             output.copy_from_slice(pixels);
@@ -386,16 +408,76 @@ impl PhotoImage {
         params
     }
 
-    pub fn render_preview(&self) -> RgbaImage {
-        if let Some(raw) = &self.raw_preview {
-            let (w, h, data) = develop_inner::<u8>(
+    pub fn render_preview(&self) -> Result<AdmittedImage, String> {
+        let cancel = Cancellation::default();
+        let params = self.raw_params();
+        let dims = self
+            .raw_preview
+            .as_ref()
+            .map_or((self.preview.w, self.preview.h), |raw| (raw.w, raw.h));
+        let memory = development_memory(
+            dims,
+            params.output_dim(dims.0, dims.1),
+            1,
+            &params,
+            &cancel,
+            true,
+        )?;
+        let (w, h, data) = if let Some(raw) = &self.raw_preview {
+            develop_checked::<u8>(
                 DevelopSource::linear(raw.w, raw.h, &raw.pixels),
-                &self.raw_params(),
-            );
-            RgbaImage { w, h, data }
+                &params,
+                &cancel,
+            )?
         } else {
-            develop(&self.preview, &self.develop)
-        }
+            develop_checked::<u8>(DevelopSource::rgba(&self.preview), &params, &cancel)?
+        };
+        memory.resize_now(data.capacity() as u64, &cancel)?;
+        Ok(AdmittedImage {
+            image: RgbaImage { w, h, data },
+            memory,
+        })
+    }
+
+    /// Render a small edited preview with retained, nonblocking memory ownership.
+    /// Args: maximum edge. Returns derived RGBA8 or an immediate pressure error; original samples stay unchanged.
+    pub fn render_thumbnail(&self, max_edge: u32) -> Result<AdmittedImage, String> {
+        let cancel = Cancellation::default();
+        let params = self.raw_params();
+        let source = self
+            .raw_preview
+            .as_ref()
+            .map_or((self.preview.w, self.preview.h), |raw| (raw.w, raw.h));
+        let scale = (max_edge.max(1) as f64 / f64::from(source.0.max(source.1))).min(1.);
+        let dims = (
+            (f64::from(source.0) * scale).round().max(1.) as u32,
+            (f64::from(source.1) * scale).round().max(1.) as u32,
+        );
+        let memory = development_memory(
+            dims,
+            params.output_dim(dims.0, dims.1),
+            1,
+            &params,
+            &cancel,
+            true,
+        )?;
+        let (w, h, data) = if let Some(raw) = &self.raw_preview {
+            let linear =
+                LinearImage::preview_cancellable(raw.w, raw.h, &raw.pixels, max_edge, &cancel)?;
+            develop_checked::<u8>(
+                DevelopSource::linear(linear.w, linear.h, &linear.pixels),
+                &params,
+                &cancel,
+            )?
+        } else {
+            let preview = self.preview.downscaled(max_edge.max(1));
+            develop_checked::<u8>(DevelopSource::rgba(&preview), &params, &cancel)?
+        };
+        memory.resize_now(data.capacity() as u64, &cancel)?;
+        Ok(AdmittedImage {
+            image: RgbaImage { w, h, data },
+            memory,
+        })
     }
 
     pub fn render_full(&self) -> Result<AdmittedImage, String> {
@@ -413,6 +495,7 @@ impl PhotoImage {
             4,
             &params,
             cancel,
+            false,
         )?;
         let (width, height, samples) = if let Some(raw) = &self.raw {
             develop_checked::<f32>(
@@ -443,6 +526,7 @@ impl PhotoImage {
             1,
             &params,
             cancel,
+            false,
         )?;
         let (w, h, data) = if let Some(raw) = &self.raw {
             develop_checked::<u8>(
@@ -489,7 +573,7 @@ impl PhotoImage {
             .checked_mul(9)
             .and_then(|n| n.checked_add(1024 * 1024))
             .ok_or("Photo encoded size overflow")?;
-        let memory = development_memory(dimensions, output, 2, &params, cancel)?;
+        let memory = development_memory(dimensions, output, 2, &params, cancel, false)?;
         memory.resize(
             memory
                 .bytes()
@@ -578,6 +662,32 @@ impl PhotoImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_thumbnail_retains_admission_until_its_last_consumer_drops() {
+        let photo = PhotoImage::from_full(
+            "queued".into(),
+            RgbaImage {
+                w: 64,
+                h: 48,
+                data: vec![100; 64 * 48 * 4],
+            },
+        );
+        let thumbnail = photo.render_thumbnail(32).unwrap();
+        let lease = Arc::downgrade(&thumbnail.memory);
+        let (tx, rx) = std::sync::mpsc::sync_channel(2);
+        tx.send(thumbnail).unwrap();
+        drop(photo);
+        assert!(lease.upgrade().is_some());
+        let received = rx.recv().unwrap();
+        assert_eq!((received.w, received.h), (32, 24));
+        assert_eq!(
+            received.memory.bytes(),
+            received.image.data.capacity() as u64
+        );
+        drop(received);
+        assert!(lease.upgrade().is_none());
+    }
 
     #[test]
     fn bounded_linear_preview_matches_triangle_reference_at_multiple_sizes() {

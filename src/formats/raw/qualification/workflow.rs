@@ -631,7 +631,7 @@ fn check_render(
     tolerance: Tolerance,
 ) -> Result<(), String> {
     let raw = photo.raw.as_ref().ok_or("missing raw")?;
-    let preview = photo.render_preview();
+    let preview = photo.render_preview()?;
     let scale = (1600.0 / f64::from(raw.width.max(raw.height))).min(1.0);
     let dims = (
         (f64::from(raw.width) * scale).round().max(1.0) as u32,
@@ -653,7 +653,7 @@ fn check_render(
     for (name, actual, linear, source_dims) in [
         (
             "normalized_preview",
-            &preview,
+            &*preview,
             resized.as_raw().as_slice(),
             dims,
         ),

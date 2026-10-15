@@ -108,7 +108,7 @@ pub struct PhotoSession {
     pub fit_scale: f32,
     pub show_original: bool,
     pub crop_drag: Option<(Pt, Pt)>,
-    pub adjusted: Option<RgbaImage>,
+    pub adjusted: Option<photo::AdmittedImage>,
     pub hists: [Histogram; 4],
     pub tex: Option<egui::TextureHandle>,
     pub orig_tex: Option<egui::TextureHandle>,
@@ -888,9 +888,17 @@ impl PhotoSession {
         let Some(img) = self.selected() else {
             return;
         };
-        let out = img.render_preview();
-        self.hists = photo::histograms(&out);
-        self.adjusted = Some(out);
+        match img.render_preview() {
+            Ok(out) => {
+                self.hists = photo::histograms(&out);
+                self.adjusted = Some(out);
+            }
+            Err(error) => {
+                self.adjusted = None;
+                self.tex = None;
+                self.status = error;
+            }
+        }
         self.dirty = false;
     }
 }
