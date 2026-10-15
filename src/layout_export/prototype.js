@@ -1,15 +1,16 @@
 (()=>{
 'use strict';
 const stage=document.getElementById('stage'), overlay=document.getElementById('overlay');
-const history=[], overlays=[], committed=new Map(), hoverRestore=new Map();
-let current=__ROOT__, animation, hovered=null, pointer=null, lastInteraction={transition:"Instant",duration_ms:0};
+const history=[], overlays=[], committed=new Map(), temporary=new Map(), hoverRestore=new Map();
+let current=__ROOT__, animation, hovered=null, pointer=null, hoverScheduled=false, lastInteraction={transition:"Instant",duration_ms:0};
 const variantTemplate=(node,id)=>document.getElementById('variant-'+node.dataset.variantContext+'-'+node.dataset.component+'-'+id);
 const template=id=>document.getElementById('screen-'+id);
 const frame=()=>stage.firstElementChild;
 const top=()=>overlays.length?overlays[overlays.length-1].node:frame();
 const focus=node=>(node.querySelector('.interactive')||node).focus({preventScroll:true});
 function restoreHover(){
- const changed=hoverRestore.size>0;
+ const changed=temporary.size>0;
+ temporary.clear();
  for(const [node,original] of hoverRestore){if(node.isConnected){node.replaceWith(original);applyCommittedChildren(original);}}
  hoverRestore.clear();
  return changed;
@@ -31,8 +32,9 @@ function applyCommitted(root){
  for(let pass=0;pass<64;pass++){
   let changed=false;
   for(const node of [root,...root.querySelectorAll('[data-component]')]){
-   if(!node.isConnected||!committed.has(node.dataset.component))continue;
-   const id=committed.get(node.dataset.component);
+   const state=temporary.has(node.dataset.component)?temporary:committed;
+   if(!node.isConnected||!state.has(node.dataset.component))continue;
+   const id=state.get(node.dataset.component);
    if(node.dataset.variant===String(id))continue;
    const next=replaceVariant(node,id);if(node===root)root=next;changed=true;
   }
@@ -131,6 +133,7 @@ function geometry(){
   root.style.left=Math.max(0,(r.width-root.getBoundingClientRect().width)/2)+'px';
   root.style.top=Math.max(0,(r.height-root.getBoundingClientRect().height)/2)+'px';
  }
+ scheduleHover();
 }
 function modal(){
  frame().inert=overlays.length>0;
@@ -202,14 +205,19 @@ function act(node,i){
  }
  if(a==='CloseOverlay')return closeOverlay();
  if(a.SetVariant){
-  const instance=node.closest('[data-component]'),key=instance.dataset.component,id=a.SetVariant.component;
+  const source=node.closest('[data-component]'),key=source.dataset.component,id=a.SetVariant.component;
+  const instance=[top(),...top().querySelectorAll('[data-component]')].find(n=>n.dataset.component===key)||source;
+  const previous=temporary.has(key)?temporary.get(key):committed.get(key);
   if(i.trigger==='Hover'){
+   if(previous===id)return false;
+   temporary.set(key,id);if(!instance.isConnected)return true;
    if(!hoverRestore.has(instance))hoverRestore.set(instance,instance.cloneNode(true));
    const original=hoverRestore.get(instance);hoverRestore.delete(instance);
    const next=replaceVariant(instance,id);hoverRestore.set(next,original);applyCommittedChildren(next);geometry();return true;
   }
-  committed.set(key,id);
+  temporary.delete(key);committed.set(key,id);
   for(const [hovered] of hoverRestore)if(hovered.dataset.component===key)hoverRestore.delete(hovered);
+  if(previous===id||!instance.isConnected)return previous!==id;
   const next=replaceVariant(instance,id);applyCommittedChildren(next);geometry();return true;
  }
  return false;
@@ -230,6 +238,9 @@ function dispatch(event,trigger){
 }
 document.addEventListener('click',e=>dispatch(e,'Click'));
 document.addEventListener('pointerdown',e=>dispatch(e,'Press'));
+function scheduleHover(){
+ if(hoverScheduled)return;hoverScheduled=true;requestAnimationFrame(()=>{hoverScheduled=false;settleHover();});
+}
 function settleHover(){
  if(animation)return;
  const target=pointer?document.elementFromPoint(pointer[0],pointer[1]):null;

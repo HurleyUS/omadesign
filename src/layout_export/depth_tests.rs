@@ -260,6 +260,7 @@ fn conflicting_variant_rules_are_scoped_to_emitted_state_and_export_deterministi
     assert_eq!(state.active_variants.get(&instance), Some(&v2));
     state.clear_hover();
     assert_eq!(state.active_variants.get(&instance), Some(&v1));
+    assert!(!state.activate(&reopened, instance, Trigger::Click).unwrap());
     let preview = state.preview_document(&reopened).unwrap();
     let Geom::Text(label) = &preview.find_shape(0, label_instance).unwrap().geom else {
         panic!()
@@ -273,11 +274,31 @@ fn conflicting_variant_rules_are_scoped_to_emitted_state_and_export_deterministi
     )));
     assert!(!html.contains(&format!("{{[data-node=\"{instance}\"]")));
     assert!(!html.contains(&format!("id=\"screen-{v1}\"")));
+    let mut compound = reopened.layout_snapshot();
+    let actions = &mut compound
+        .find_shape_mut(0, instance)
+        .unwrap()
+        .layout
+        .interactions;
+    let mut first = actions[0].clone();
+    first.action = Action::SetVariant { component: v2 };
+    actions.insert(0, first);
+    let mut ordered = crate::layout_prototype::PrototypeState::default();
+    ordered.start(&compound, a).unwrap();
+    ordered
+        .activate(&compound, instance, Trigger::Click)
+        .unwrap();
+    assert_eq!(ordered.active_variants.get(&instance), Some(&v1));
     if let Ok(directory) = std::env::var("OMADESIGN_LAYOUT_PROOF") {
         let path = std::path::Path::new(&directory);
         assert!(path.is_absolute() && directory.starts_with("/home/"));
         std::fs::create_dir_all(path).unwrap();
         std::fs::write(path.join("prototype.html"), &html).unwrap();
+        std::fs::write(
+            path.join("compound.html"),
+            export_html(&compound, 0, a).unwrap(),
+        )
+        .unwrap();
         std::fs::write(
             path.join("prototype.oma"),
             crate::project::encode(&reopened).unwrap(),
@@ -561,6 +582,13 @@ fn prototype_ids_remain_exact_above_javascript_number_precision() {
     let html = export_html(&doc, 0, root).unwrap();
     assert!(html.contains("let current=\"9007199254741100\""));
     assert!(html.contains("&quot;target&quot;:&quot;9007199254741101&quot;"));
+    if let Ok(directory) = std::env::var("OMADESIGN_LAYOUT_PROOF") {
+        std::fs::write(
+            std::path::Path::new(&directory).join("exact-ids.html"),
+            html,
+        )
+        .unwrap();
+    }
 }
 
 #[test]
