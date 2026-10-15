@@ -156,6 +156,24 @@ pub(crate) fn escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+fn inline_png(value: &str) -> bool {
+    let Some(data) = value.strip_prefix("data:image/png;base64,") else {
+        return false;
+    };
+    if data.len() > 90 * 1024 * 1024 {
+        return false;
+    }
+    let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data) else {
+        return false;
+    };
+    if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+        return false;
+    }
+    let w = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+    let h = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+    w > 0 && h > 0 && u64::from(w) * u64::from(h) <= 64 * 1024 * 1024
+}
+
 fn attributes(
     node: roxmltree::Node<'_, '_>,
     sheet: &simplecss::StyleSheet<'_>,
@@ -169,10 +187,16 @@ fn attributes(
         } else {
             a.name()
         };
+        if name == "data-oma-object-paint" {
+            continue;
+        }
         if name.to_ascii_lowercase().starts_with("on") || matches!(name, "id" | "class" | "style") {
             continue;
         }
-        if name == "href" && !a.value().starts_with('#') {
+        if name == "href"
+            && !a.value().starts_with('#')
+            && !(node.has_tag_name("image") && inline_png(a.value()))
+        {
             continue;
         }
         attrs.insert(name.into(), a.value().into());
@@ -342,17 +366,25 @@ fn definition(node: roxmltree::Node<'_, '_>, sheet: &simplecss::StyleSheet<'_>, 
                 | "pattern"
                 | "clipPath"
                 | "mask"
+                | "image"
         )
     {
         return;
     }
     let tag = node.tag_name().name();
+    if tag == "image"
+        && !node
+            .attributes()
+            .any(|a| a.name() == "href" && inline_png(a.value()))
+    {
+        return;
+    }
     out.push_str(&format!("<{tag}"));
     if let Some(id) = node.attribute("id") {
         out.push_str(&format!(" id=\"{}\"", escape(id)));
     }
     for (key, value) in attributes(node, sheet) {
-        if !safe_value(&value) {
+        if !safe_value(&value) && !(tag == "image" && key == "href" && inline_png(&value)) {
             continue;
         }
         out.push_str(&format!(" {key}=\"{}\"", escape(&value)));
@@ -597,7 +629,7 @@ fn write_nodes(
                 if let Some(fill) = &span.fill {
                     match fill {
                         crate::document::Fill::Solid(c) => {
-                            attrs.push_str(&format!(" fill=\"{}\"", c.css()))
+                            attrs.push_str(&format!(" fill=\"{}\" fill-opacity=\"1\"", c.css()))
                         }
                         crate::document::Fill::None => attrs.push_str(" fill=\"none\""),
                         _ => attrs.push_str(&format!(
@@ -787,7 +819,19 @@ pub fn source(run: &TypeRun) -> Option<String> {
         b.union_pt(point);
     }
     let mut seen = std::collections::HashSet::new();
-    for fill in run.spans.iter().filter_map(|s| s.fill.as_ref()) {
+    let object_fill = if let TextNode::Element { attributes, .. } = &svg.root {
+        attributes
+            .get("data-oma-object-paint")
+            .and_then(|v| serde_json::from_str::<crate::document::Fill>(v).ok())
+    } else {
+        None
+    };
+    for fill in run
+        .spans
+        .iter()
+        .filter_map(|s| s.fill.as_ref())
+        .chain(object_fill.as_ref())
+    {
         let id = paint_id(fill);
         if seen.insert(id.clone()) {
             definitions.push_str(&crate::svg::type_paint_definition(
@@ -795,6 +839,7 @@ pub fn source(run: &TypeRun) -> Option<String> {
                 b,
                 &id,
                 matrix.invert().unwrap_or_default(),
+                &run.contours,
             ));
         }
     }
@@ -808,13 +853,27 @@ pub fn source(run: &TypeRun) -> Option<String> {
     ))
 }
 
+/// Apply inherited object paint to a temporary SVG source view.
+/// Args: native run and object fill. Returns a clone retaining explicit source and native range paints.
 pub(crate) fn object_paint(run: &TypeRun, fill: &crate::document::Fill) -> TypeRun {
     let mut run = run.clone();
-    run.set_character_style(0, run.content.chars().count(), |span| {
-        if span.fill.is_none() {
-            span.fill = Some(fill.clone());
-        }
-    });
+    if let Some(SvgText {
+        root: TextNode::Element { attributes, .. },
+        ..
+    }) = &mut run.svg_text
+    {
+        let value = match fill {
+            crate::document::Fill::None => "none".into(),
+            crate::document::Fill::Solid(c) => c.css(),
+            _ => format!("url(#{})", paint_id(fill)),
+        };
+        attributes.insert("fill".into(), value);
+        attributes.insert("fill-opacity".into(), "1".into());
+        attributes.insert(
+            "data-oma-object-paint".into(),
+            serde_json::to_string(fill).unwrap(),
+        );
+    }
     run
 }
 
@@ -1404,7 +1463,13 @@ pub(crate) fn prepare_flow(source: &str) -> Result<Option<String>, String> {
         .descendants()
         .filter(|n| n.has_tag_name("flowRoot") || n.has_tag_name("text"))
     {
-        let attrs = attributes(node, &sheet);
+        let outer = attributes(node, &sheet);
+        let (mut svg, content) = capture(&xml, node, String::new(), 16.);
+        let attrs = if let TextNode::Element { attributes, .. } = &svg.root {
+            attributes.clone()
+        } else {
+            outer.clone()
+        };
         let rect = if node.has_tag_name("flowRoot") {
             node.descendants().find(|n| n.has_tag_name("rect"))
         } else {
@@ -1475,7 +1540,7 @@ pub(crate) fn prepare_flow(source: &str) -> Result<Option<String>, String> {
                 })
                 .unwrap_or(px * 1.2),
         };
-        let (mut svg, content) = capture(&xml, node, String::new(), px);
+        svg.base_px = px;
         svg.flow = Some(flow.clone());
         let mut run = TypeRun {
             content,
@@ -1485,8 +1550,29 @@ pub(crate) fn prepare_flow(source: &str) -> Result<Option<String>, String> {
         };
         let mut fragment = flow_fragment(&run, &flow);
 
-        if let Some(transform) = node.attribute("transform") {
-            fragment = format!("<g transform=\"{}\">{fragment}</g>", escape(transform));
+        let mut wrapper = String::new();
+        for key in [
+            "transform",
+            "opacity",
+            "filter",
+            "clip-path",
+            "mask",
+            "mix-blend-mode",
+        ] {
+            if let Some(value) = crate::formats::svg::cascaded_property(node, &sheet, key)
+                .or_else(|| outer.get(key).cloned())
+            {
+                if safe_value(&value) {
+                    if key == "mix-blend-mode" {
+                        wrapper.push_str(&format!(" style=\"mix-blend-mode:{}\"", escape(&value)));
+                    } else {
+                        wrapper.push_str(&format!(" {key}=\"{}\"", escape(&value)));
+                    }
+                }
+            }
+        }
+        if !wrapper.is_empty() {
+            fragment = format!("<g{wrapper}>{fragment}</g>");
         }
         changes.push((node.range(), fragment));
         run.content.clear();

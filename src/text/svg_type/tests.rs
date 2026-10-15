@@ -459,3 +459,89 @@ fn svg_type_reviewed_viewport_units_opacity_gradient_edits_and_flow_leading() {
             < 0.001
     );
 }
+
+#[test]
+fn svg_type_flow_effects_inherited_metrics_inline_patterns_and_typing_opacity() {
+    use base64::Engine;
+    let hidden = r##"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180"><g font-family="DejaVu Sans" font-size="40"><text y="40" opacity="0" style="inline-size:180px">Flow words with inherited metrics wrap.</text></g></svg>"##;
+    let (hidden_doc, _) = crate::formats::svg::read(hidden, "Hidden flow").unwrap();
+    assert!(
+        crate::compositor::render_export(&hidden_doc, 1)
+            .unwrap()
+            .pixels()
+            .iter()
+            .all(|p| p.alpha() == 0)
+    );
+    let visible = hidden.replace("opacity=\"0\"", "opacity=\"1\"");
+    let (doc, _) = crate::formats::svg::read(&visible, "Inherited flow").unwrap();
+    let flow = types(&doc)[0]
+        .svg_text
+        .as_ref()
+        .unwrap()
+        .flow
+        .as_ref()
+        .unwrap();
+    assert!((flow.leading - 48.).abs() < 0.01);
+    assert!((flow.y - 0.).abs() < 0.01);
+    let mut tile = tiny_skia::Pixmap::new(8, 8).unwrap();
+    tile.fill(tiny_skia::Color::from_rgba8(20, 170, 60, 255));
+    let data = base64::engine::general_purpose::STANDARD.encode(tile.encode_png().unwrap());
+    let source = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="140"><defs><pattern id="tile" patternUnits="userSpaceOnUse" width="8" height="8"><image href="data:image/png;base64,{data}" width="8" height="8"/></pattern></defs><text x="20" y="80" font-family="DejaVu Sans" font-size="40" transform="rotate(8 20 80)" fill="url(#tile)">Pattern</text></svg>"##
+    );
+    let (doc, _) = crate::formats::svg::read(&source, "Image pattern type").unwrap();
+    assert_eq!(types(&doc).len(), 1);
+    let expected = render(&source);
+    let native = crate::compositor::render_export(&doc, 1).unwrap();
+    assert!(error(&native, &expected) < 0.1);
+    let exported = crate::svg::export(&doc).unwrap();
+    assert!(error(&render(&exported), &expected) < 0.1);
+    let again = crate::formats::svg::read(&exported, "Pattern type again")
+        .unwrap()
+        .0;
+    assert!(
+        error(
+            &crate::compositor::render_export(&again, 1).unwrap(),
+            &expected
+        ) < 0.1
+    );
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="140"><text x="20" y="80" font-family="DejaVu Sans" font-size="40" transform="rotate(8 20 80)" fill="#248" fill-opacity=".5">AA</text></svg>"##;
+    let (mut doc, _) = crate::formats::svg::read(source, "Typing opacity").unwrap();
+    let shape = doc
+        .layers
+        .iter_mut()
+        .filter_map(|l| l.kind.shapes_mut())
+        .flatten()
+        .find(|s| matches!(s.geom, Geom::Text(_)))
+        .unwrap();
+    let Geom::Text(run) = &mut shape.geom else {
+        unreachable!()
+    };
+    let pending = run.character_style(1);
+    run.replace_text(2, 2, "A", Some(pending));
+    run.contours = crate::text::shape(run);
+    let expected = render(&source.replace(">AA</text>", ">AAA</text>"));
+    assert!(
+        error(
+            &crate::compositor::render_export(&doc, 1).unwrap(),
+            &expected
+        ) < 0.1
+    );
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="140"><text x="20" y="80" font-family="DejaVu Sans" font-size="40" transform="rotate(8 20 80)" fill="#248">A<tspan fill="#d24">B</tspan></text></svg>"##;
+    let (mut doc, _) = crate::formats::svg::read(source, "Object paint inheritance").unwrap();
+    doc.layers
+        .iter_mut()
+        .filter_map(|l| l.kind.shapes_mut())
+        .flatten()
+        .find(|s| matches!(s.geom, Geom::Text(_)))
+        .unwrap()
+        .style
+        .fill = crate::document::Fill::Solid(crate::color::Rgba::rgb(20, 170, 60));
+    let expected = render(&source.replace("fill=\"#248\"", "fill=\"#14aa3c\""));
+    assert!(
+        error(
+            &crate::compositor::render_export(&doc, 1).unwrap(),
+            &expected
+        ) < 0.1
+    );
+}

@@ -219,11 +219,9 @@ fn fill_reference(defs:&mut String,grad_id:&mut usize,fill:&Fill,shape:&Shape)->
 }
 
 /// Encode native character paint through the shared SVG gradient writer.
-/// Args: native fill, document bounds, unique ID and document-to-type matrix. Returns local SVG definitions.
-pub(crate) fn type_paint_definition(fill:&Fill,b:Bounds,id:&str,inverse:tiny_skia::Transform)->String{
-    use crate::gradient::{Gradient,GradientKind};
-    let gradient=match fill{Fill::Gradient(g)=>g.clone(),Fill::Linear{from,to,c0,c1}=>{let mut g=Gradient::new(GradientKind::Linear,*c0,*c1);g.from=*from;g.to=*to;g},Fill::Radial{c0,c1}=>{let mut g=Gradient::new(GradientKind::Radial,*c0,*c1);if b.height()>b.width(){g.to=[0.5,1.];}g},_=>return String::new()};
-    let shape=Shape::new(Geom::Rect{origin:b.min,size:b.size(),radius:0.},crate::document::Style{fill:fill.clone(),stroke:None});let mut defs=String::new();gradient_reference(&mut defs,&mut 0,&gradient,&shape,0.);
+/// Args: native fill, document bounds, unique ID, document-to-type matrix and glyph contours. Returns local SVG definitions.
+pub(crate) fn type_paint_definition(fill:&Fill,b:Bounds,id:&str,inverse:tiny_skia::Transform,contours:&[Vec<Pt>])->String{
+    let geom=if contours.is_empty(){Geom::Rect{origin:b.min,size:b.size(),radius:0.}}else{Geom::Poly{contours:contours.to_vec(),winding:true}};let shape=Shape::new(geom,crate::document::Style{fill:fill.clone(),stroke:None});let mut defs=String::new();fill_reference(&mut defs,&mut 0,fill,&shape);
     let matrix=format!("matrix({} {} {} {} {} {})",inverse.sx,inverse.ky,inverse.kx,inverse.sy,inverse.tx,inverse.ty);
     defs=defs.replace("id=\"g1\"",&format!("id=\"{id}\""));
     if defs.contains("patternTransform=\""){defs=defs.replace("patternTransform=\"",&format!("patternTransform=\"{matrix} "));}else{defs=defs.replace("gradientUnits=",&format!("gradientTransform=\"{matrix}\" gradientUnits="));}defs
