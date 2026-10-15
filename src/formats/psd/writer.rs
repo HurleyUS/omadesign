@@ -17,6 +17,7 @@ struct Record {
     channels: Vec<(i16, Vec<u8>)>,
     overlay: Option<super::effects::Overlay>,
     type_data: Option<Vec<u8>>,
+    smart_data: Option<Vec<u8>>,
 }
 
 fn u16(out: &mut Vec<u8>, value: u16) {
@@ -181,6 +182,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             channels: Vec::new(),
             overlay: None,
             type_data: None,
+            smart_data: None,
         };
         add_pixels(
             &mut record,
@@ -224,6 +226,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             channels: Vec::new(),
             overlay: None,
             type_data: None,
+            smart_data: None,
         });
     }
     let mut layer_info = Vec::new();
@@ -242,6 +245,17 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
     let mut layer_mask = Vec::new();
     section(&mut layer_mask, &layer_info, large)?;
     u32(&mut layer_mask, 0); // Global mask.
+    let (embedded, external) = super::smart::write_links(doc)?;
+    for (key, data, wide) in [(b"lnk2", embedded, large), (b"lnkE", external, false)] {
+        if data.is_empty() {
+            continue;
+        }
+        layer_mask.extend_from_slice(b"8BIM");
+        layer_mask.extend_from_slice(key);
+        length(&mut layer_mask, data.len(), wide)?;
+        layer_mask.extend_from_slice(&data);
+        layer_mask.extend(std::iter::repeat_n(0, (4 - data.len() % 4) % 4));
+    }
     let mut out = Vec::new();
     out.extend_from_slice(b"8BPS");
     u16(&mut out, if large { 2 } else { 1 });
@@ -345,6 +359,7 @@ fn collect(
                 channels: Vec::new(),
                 overlay: None,
                 type_data: None,
+                smart_data: None,
             });
             collect(
                 doc,
@@ -380,6 +395,7 @@ fn collect(
             channels: Vec::new(),
             overlay: super::effects::overlay(&layer.filters),
             type_data: None,
+            smart_data: None,
         };
         if let Some(shape) = layer
             .kind
@@ -395,6 +411,9 @@ fn collect(
             )?);
             record.opacity =
                 (record.opacity as f32 * shape.opacity * shape.fill_opacity).round() as u8;
+        }
+        if layer.psd_smart.is_some() {
+            record.smart_data = Some(super::smart::encode(layer)?);
         }
         if layer.is_group {
             if layer.filters.active() && record.overlay.is_none() {
@@ -734,6 +753,9 @@ fn write_record(out: &mut Vec<u8>, record: &Record, large: bool) -> Result<(), S
     }
     if let Some(data) = &record.type_data {
         tagged(&mut extra, b"TySh", data)?;
+    }
+    if let Some(data) = &record.smart_data {
+        tagged(&mut extra, b"SoLd", data)?;
     }
     section(out, &extra, false)
 }

@@ -96,6 +96,7 @@ pub(super) struct Record {
     pub mask: Option<Mask>,
     pub real_mask: Option<Mask>,
     pub type_data: Option<Vec<u8>>,
+    pub smart_data: Option<([u8; 4], Vec<u8>)>,
     pub filters: crate::filter::FilterStack,
 }
 
@@ -106,6 +107,7 @@ pub(super) struct Parsed {
     pub depth: u16,
     pub dpi: f32,
     pub icc_profile: Vec<u8>,
+    pub linked: Vec<super::smart::LinkedFile>,
     pub layers: Vec<Record>,
     pub merged: Option<Vec<Vec<u8>>>,
     pub warnings: Vec<String>,
@@ -179,6 +181,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
     }
     let mut layer_mask = r.section(large)?;
     let mut layers = Vec::new();
+    let mut linked = Vec::new();
     let mut merged_alpha = false;
     let mut allocation = 0usize;
     if layer_mask.remaining() > 0 {
@@ -192,6 +195,10 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
         }
         while layer_mask.remaining() >= 12 {
             let (key, data) = tagged(&mut layer_mask, large, 4)?;
+            if matches!(&key, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE") {
+                budget(&mut allocation, data.len())?;
+                linked.extend(super::smart::linked_files(data)?);
+            }
             if matches!(&key, b"Layr" | b"Lr16" | b"Lr32") && layers.is_empty() {
                 let mut info = Reader::new(data);
                 (layers, merged_alpha) =
@@ -238,6 +245,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
         depth,
         dpi,
         icc_profile,
+        linked,
         layers,
         merged,
         warnings,
@@ -404,6 +412,7 @@ fn parse_layers(
         let mut name = extra.pascal(4)?;
         let mut section = 0;
         let mut type_data = None;
+        let mut smart_data = None;
         let mut record_blend = blend;
         let mut filters = crate::filter::FilterStack::default();
         while extra.remaining() >= 12 {
@@ -438,10 +447,15 @@ fn parse_layers(
                     budget(allocation, data.len())?;
                     type_data = Some(data.to_vec());
                 }
-                b"SoLd" | b"SoLE" | b"PlLd" | b"plLd" => warn(
-                    warnings,
-                    "Smart objects are imported from their saved layer pixels; embedded documents and smart filters are not editable.",
-                ),
+                b"SoLd" | b"SoLE" | b"PlLd" => {
+                    if data.len() > 16 * 1024 * 1024 {
+                        return Err("Excessive Photoshop placed-layer data".into());
+                    }
+                    if smart_data.is_none() || matches!(&key, b"SoLd" | b"SoLE") {
+                        budget(allocation, data.len())?;
+                        smart_data = Some((key, data.to_vec()));
+                    }
+                }
                 b"vmsk" | b"vsms" => warn(
                     warnings,
                     "Photoshop vector masks are not converted to editable paths; saved pixel masks are used when present.",
@@ -480,6 +494,7 @@ fn parse_layers(
             mask,
             real_mask,
             type_data,
+            smart_data,
             filters,
         });
     }
