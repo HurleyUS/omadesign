@@ -465,6 +465,7 @@ pub struct Studio {
     pub shape_rename: Option<(usize, u64, String)>,
     pub clipboard_rasters: Vec<Layer>,
     file_jobs: Vec<file_io::ImportJob>,
+    file_failures: Vec<file_io::FileFailure>,
     pending_open_files: std::collections::VecDeque<(PathBuf, file_io::ImportMode)>,
     file_dialog: Option<file_dialogs::FileDialogJob>,
     clipboard_jobs: Vec<clipboard::PasteJob>,
@@ -714,6 +715,7 @@ impl Studio {
             shape_rename: None,
             clipboard_rasters: vec![],
             file_jobs: vec![],
+            file_failures: vec![],
             pending_open_files: Default::default(),
             file_dialog: None,
             clipboard_jobs: vec![],
@@ -4667,6 +4669,7 @@ impl eframe::App for Studio {
         crate::ui::anim_export::poll(&ctx, self);
         crate::ui::run(ui, self);
         if !self.file_dialog_pending() {
+            self.file_activity_windows(&ctx);
             self.import_notes_window(&ctx);
         }
     }
