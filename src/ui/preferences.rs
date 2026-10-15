@@ -328,7 +328,15 @@ mod keyboard_tests {
             .collect()
     }
 
-    fn frame(ctx: &egui::Context, studio: &mut Studio, events: Vec<Event>) -> egui::FullOutput {
+    fn frame(ctx: &egui::Context, studio: &mut Studio, mut events: Vec<Event>) -> egui::FullOutput {
+        let modifiers = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        events.insert(0, Event::ModifiersChanged(modifiers));
         let mut output = ctx.run_ui(
             egui::RawInput {
                 events,
@@ -389,7 +397,11 @@ mod keyboard_tests {
         let name = "Tracking / kerning increment (/1000 em)";
         let output = tab_to(&ctx, &mut studio, name);
         let tracking = field(&output, name);
-        frame(&ctx, &mut studio, tap(Key::Enter, Modifiers::NONE));
+        assert_eq!(
+            ctx.memory(|memory| memory.focused())
+                .map(|id| id.accesskit_id()),
+            Some(tracking)
+        );
         frame(
             &ctx,
             &mut studio,
