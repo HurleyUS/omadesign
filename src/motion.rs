@@ -1488,6 +1488,7 @@ fn import_lottie_value(
             continue;
         }
         if ty != 4 {
+            if layers.iter().all(|l|l["ty"]!=0 && l["ty"]!=4) {return Err(import_failure(v));}
             return Err(format!("CompositionUnsupported: Lottie layer type {ty}"));
         }
         let Some((geom, fill, stroke)) = layer_geom(layer) else {
