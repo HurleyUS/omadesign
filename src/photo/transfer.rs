@@ -15,6 +15,7 @@ pub struct Categories {
     pub rotation: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub optics: bool,
+    #[serde(skip_serializing_if = "is_false")]
     pub local: bool,
 }
 

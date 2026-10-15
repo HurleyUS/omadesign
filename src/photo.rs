@@ -111,7 +111,7 @@ pub struct DevelopParams {
     pub crop: Option<[f32; 4]>,
     #[serde(default, skip_serializing_if = "optics::OpticalSettings::is_default")]
     pub optics: optics::OpticalSettings,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local_adjustments: Vec<local::LocalAdjustment>,
 }
 

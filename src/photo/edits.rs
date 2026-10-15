@@ -295,3 +295,29 @@ mod tests {
         assert!(load(&source, &identity).unwrap_err().contains("2 MiB"));
     }
 }
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+    #[test]
+    fn sidecars_choose_the_oldest_version_preserving_all_adjustments() {
+        let identity = SourceIdentity {
+            size_bytes: 4,
+            modified_seconds: 1,
+            modified_nanos: 0,
+        };
+        let mut p = DevelopParams::default();
+        let version = |p: &DevelopParams| {
+            serde_json::from_slice::<serde_json::Value>(&encode(&identity,p).unwrap()).unwrap()["version"].as_u64().unwrap()
+        };
+        assert_eq!(version(&p), 1);
+        p.optics.profile.distortion[0] = 0.1;
+        assert_eq!(version(&p), 2);
+        p.local_adjustments
+            .push(crate::photo::local::LocalAdjustment {
+                exposure: 1.,
+                ..Default::default()
+            });
+        assert_eq!(version(&p), 3);
+    }
+}
