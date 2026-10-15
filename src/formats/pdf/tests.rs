@@ -767,7 +767,7 @@ fn pdf_subpaths(geom: Geom, rotation: f32) -> Vec<Vec<Operation>> {
     let resources = inherited(&pdf, page, b"Resources")
         .and_then(|o| dictionary(&pdf, o))
         .unwrap();
-    let operations = content(&pdf, &pdf.get_page_content(page).unwrap(), resources);
+    let operations = content(&pdf, &pdf.get_page_content(page), resources);
     let mut subpaths = Vec::new();
     let mut current = Vec::new();
     for operation in operations {

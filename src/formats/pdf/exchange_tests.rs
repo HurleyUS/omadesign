@@ -302,3 +302,70 @@ fn pdf_exchange_pixel_masks_keep_gradient_strokes_as_vector_artwork() {
             .any(|s| s.style.fill.gradient().is_some())
     );
 }
+
+#[test]
+fn pdf_exchange_mask_sources_survive_effect_fallback_and_shape_references() {
+    for effect_on_source in [false, true] {
+        for shape_source in [false, true] {
+            let mut doc = vector_document();
+            if shape_source {
+                doc.layers[3].artwork_masks[0].source.shape =
+                    Some(doc.layers[1].kind.shapes().unwrap()[0].id);
+            }
+            let index = if effect_on_source { 1 } else { 3 };
+            doc.layers[index]
+                .filters
+                .items
+                .push(crate::filter::Fx::Blur { std: 1.5 });
+            let expected = crate::compositor::render_export(&doc, 1).unwrap();
+            let (bytes, notes) = write(&doc).unwrap();
+            assert!(
+                notes.iter().any(|n| n.contains("unsupported effects")),
+                "{notes:?}"
+            );
+            let (loaded, _) = read(&bytes, "effect-mask.pdf").unwrap();
+            let actual = crate::compositor::render_export(&loaded, 1).unwrap();
+            let difference = expected
+                .data()
+                .iter()
+                .zip(actual.data())
+                .map(|(a, b)| u64::from(a.abs_diff(*b)))
+                .sum::<u64>() as f64
+                / expected.data().len() as f64;
+            assert!(
+                difference < 1.,
+                "source effect={effect_on_source}, shape source={shape_source}: mask lost or changed by {difference}/255"
+            );
+        }
+    }
+}
+
+#[test]
+fn pdf_exchange_group_and_luminance_sources_keep_native_visibility() {
+    for visible in [true, false] {
+        let mut doc = vector_document();
+        let mut source_group = Layer::group("Mask source group");
+        source_group.visible = visible;
+        doc.layers[1].parent = Some(source_group.id);
+        doc.layers[1].kind.shapes_mut().unwrap()[0].style.fill = Fill::Solid(Rgba::WHITE);
+        doc.layers[3].artwork_masks[0].source = MaskSource {
+            layer: source_group.id,
+            shape: None,
+        };
+        doc.layers[3].artwork_masks[0].mode = MaskMode::Luminance;
+        doc.layers.push(source_group);
+        let expected = crate::compositor::render_export(&doc, 1).unwrap();
+        let (bytes, notes) = write(&doc).unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        let (loaded, _) = read(&bytes, "group-mask.pdf").unwrap();
+        let actual = crate::compositor::render_export(&loaded, 1).unwrap();
+        let a = expected.pixel(40, 40).unwrap().demultiply();
+        let b = actual.pixel(40, 40).unwrap().demultiply();
+        assert!(
+            a.red().abs_diff(b.red()) < 3
+                && a.green().abs_diff(b.green()) < 3
+                && a.blue().abs_diff(b.blue()) < 3,
+            "mask source visible={visible}: {a:?} != {b:?}"
+        );
+    }
+}
