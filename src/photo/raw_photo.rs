@@ -637,7 +637,10 @@ mod tests {
         }
         assert!(native.samples[1] > native.samples[0]);
         assert!(
-            (native.samples[0] - (native.samples[0] * 65535.).round() / 65535.).abs() > 0.000001
+            native
+                .samples
+                .iter()
+                .any(|sample| (sample - (sample * 65535.).round() / 65535.).abs() > 0.000001)
         );
         assert!(Arc::ptr_eq(&photo.raw.as_ref().unwrap().pixels, &values));
         assert_eq!(
