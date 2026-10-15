@@ -192,10 +192,16 @@ fn gradient_reference(
             )
         } else {
             format!(
-                "cx=\"{}\" cy=\"{}\" r=\"{}\"",
+                "cx=\"0\" cy=\"0\" r=\"1\" fx=\"{}\" fy=\"{}\" fr=\"{}\" gradientTransform=\"matrix({} {} {} {} {} {})\"",
+                gradient.focal[0],
+                gradient.focal[1],
+                gradient.inner_radius,
+                gradient.radial_transform(shape.geom.bbox()).sx,
+                gradient.radial_transform(shape.geom.bbox()).ky,
+                gradient.radial_transform(shape.geom.bbox()).kx,
+                gradient.radial_transform(shape.geom.bbox()).sy,
                 a.x,
-                a.y,
-                (b - a).length().max(0.001)
+                a.y
             )
         };
         defs.push_str(&format!(
