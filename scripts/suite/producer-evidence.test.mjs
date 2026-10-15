@@ -175,10 +175,110 @@ test('missing/corrupt records, compiler/source/tool/count regressions and promot
 
 test('reviewed cohort is fixed; shared caption/editorial generators have one execution group each',()=>{
   const index=JSON.parse(fs.readFileSync(path.join(root,'qualification/suite/owner-sources.json')));
-  assert.equal(index.routes.length,28);
+  assert.equal(index.routes.length,29);
   for(const id of ['editbay.editorial.group.v1','editbay.captions.group.v1']) assert.equal(index.routes.filter(r=>r.generator_id===id).length,2);
-  assert.equal(index.routes.filter(r=>r.family==='video' && !r.generator_id.includes('.group.')).length,4);
+  assert.equal(index.routes.filter(r=>r.family==='video.followon').length,5);
+  assert.equal(index.video_followon.runs.length,5);
   assert.equal(index.runs['captions.ui'].counts.passed+index.runs['captions.formats'].counts.passed,34);
   assert.equal(index.runs.editorial.counts.passed,6);
   assert.throws(()=>producerEvidence({...index,routes:[]}),/cohort incomplete/);
+});
+
+/** Make tiny authored video observations, including absent executable paths.
+ * Args: fixture name. Returns private records and editors; never product proof.
+ */
+function videoFixture(name) {
+  const f=fixture(name), {index,put,file}=f;
+  const publicIndex=JSON.parse(fs.readFileSync(path.join(root,'qualification/suite/owner-sources.json')));
+  const conf=index.video_followon={version:1,runs:publicIndex.video_followon.runs,refs:{},support:{},generators:publicIndex.video_followon.generators,unavailable:publicIndex.video_followon.unavailable};
+  const revision=index.runs['captions.ui'].revision, tree=index.runs['captions.ui'].tree;
+  for(const [id,passed,ignored]of [['scopes.numeric',14,0],['scopes.viewer',1,0],['multicam.core',12,0],['multicam.app',10,1],['multicam.native',1,0]]) {
+    const compiler=JSON.parse(fs.readFileSync(file('captions.ui.compiler')));
+    compiler.cargo_args=['test','--locked','-p',id,'--','--test-threads=1'];
+    compiler.executed_cargo_args=['test','--message-format=json-render-diagnostics',...compiler.cargo_args.slice(1)];
+    put(id+'.compiler',compiler,true);
+    put(id+'.log',`Running synthetic (${compiler.executables[0].path})\ntest result: ok. ${passed} passed; 0 failed; ${ignored} ignored;\nCargo receipt: ${file(id+'.compiler')}\n`);
+    index.runs[id]={...structuredClone(index.runs['captions.ui']),compiler:id+'.compiler',log:id+'.log',counts:{passed,failed:0,ignored},cargo_args:compiler.cargo_args};
+  }
+  for(const prefix of ['scopes','multicam']) {
+    const id=prefix+'.cli',compiler=JSON.parse(fs.readFileSync(file('captions.ui.compiler')));
+    compiler.cargo_args=['build','--locked','-p','synthetic-cli'];
+    compiler.executed_cargo_args=['build','--message-format=json-render-diagnostics',...compiler.cargo_args.slice(1)];
+    compiler.executables[0].target={name:'synthetic-cli'};
+    put(id,compiler,true);
+    conf.support[id]={asset:id,revision,tree,cargo_args:compiler.cargo_args,executables:[{sha256:compiler.executables[0].sha256,bytes:1,target:'synthetic-cli'}]};
+  }
+  const ref=(key,value)=>{const id='video.followon.'+key;put(id,value);conf.refs[key]=id;return {path:file(id),sha256:index.assets[id].sha256,bytes:index.assets[id].bytes};};
+  const cli=prefix=>({build_receipt:file(prefix+'.cli'),source_revision:revision,fingerprint:{sha256:conf.support[prefix+'.cli'].executables[0].sha256,bytes:1}});
+  const owner={project_id:'synthetic',revision:1};
+  const report=(frame,white)=>({identity:{frame,composition:'synthetic',version:owner},settings:{reference_white_nits:white},valid_pixels:256,sampled_pixels:256,statistics:{linear_rgb:[frame/4,.75-frame/4,.125].map(n=>({minimum:n,maximum:n})),luminance_nits:Object.fromEntries(['minimum','maximum'].map(k=>[k,(.2126*frame/4+.7152*(.75-frame/4)+.0722*.125)*white]))}});
+  const input=ref('viewer.input','synthetic native input');
+  const viewer={schema:'editbay.native-viewer-scopes.v1',status:'passed',cli:cli('scopes'),native_project:input.path,composition:'synthetic',owner:{version:owner},paused_before:report(0,100),paused_same_frame_new_settings:report(0,200),first_picture_enabled_after_unscoped_preparation:{old_report:null,accepted_report:report(0,203)},prepared_frames:[0,1,2,3].map(frame=>({frame,queued_report:report(frame,200),accepted_refreshed_report:report(frame,203)})),worker_joined:true,stale_owner:{cancelled:true,discarded:true},stale_serial_rejections:1,prepared_queue:{prepared:4,queued:4,discarded:0},display_completions:{events:[0,1,2,3].map(frame=>({frame})),summary:{unique_completed:4,observed_sound_end_us:null}}};
+  const independent_reports=[0,1].map(i=>ref('scopes.report.'+i,{report:{sampled_pixels:12,valid_pixels:10}}));
+  const independent_packet=ref('scopes.independent',{status:'passed',cases:independent_reports.map(r=>({file:r.path,ranges:'passed',clipping:'passed',all_five_density_grids:'passed'}))});
+  const a={schema:1,revision,source_tree:tree,runtime_packet:{...ref('viewer.packet',viewer),native_project:input},compiler_receipts:{viewer:{path:file('scopes.viewer.compiler')},numeric:{path:file('scopes.numeric.compiler')}},raw_logs:{viewer:{path:file('scopes.viewer.log')}},exact_scope_evidence:{independent_packet,independent_reports},limits:['Synthetic offscreen evidence only']};
+  const assets=[0,1,2].map(i=>ref('delivery.input.'+i,'synthetic media/font '+i));
+  const preservation=Object.fromEntries(['cancel_before_publication','existing_master','existing_sidecar','original_camera_compositions','save_reopen','source_hashes','undo_redo'].map(k=>[k,true]));
+  const masters=['fixed','all','follow','captioned'].map((name,i)=>{
+    const numeric_oracle={pictures:10,mono_samples:20000,maximum_color_error_bytes:0,maximum_pcm_error:0,changed_caption_pixels:i===3?30:0};
+    const master=ref('delivery.'+name+'.master','synthetic master '+name), native_project=ref('delivery.'+name+'.native_project','synthetic project '+name);
+    const receipt=ref('delivery.'+name+'.receipt',{numeric_oracle,receipt:{file_sha256:master.sha256,file_bytes:master.bytes,pixel_sha256:hash('pixels'),decoded_pixel_sha256:hash('pixels'),pcm_sha256:hash('pcm'),decoded_pcm_sha256:hash('pcm'),profile:{width:16,height:16,frames:10,sample_rate:48000,channels:['FC']}}});
+    return {name,master,native_project,receipt,numeric_oracle};
+  });
+  const program_scopes=[0,9].map((frame,i)=>{const linear={identity:{frame},statistics:{linear_rgb:(i?[0,1,0]:[1,0,0]).map(n=>({minimum:n,maximum:n})),luminance_nits:{minimum:i?71.52:21.26,maximum:i?71.52:21.26}}};return {frame,linear,same_frame_nits:{identity:{frame},statistics:{luminance_nits:{minimum:linear.statistics.luminance_nits.minimum*2,maximum:linear.statistics.luminance_nits.maximum*2}}}};});
+  const delivery={schema:1,status:'passed',cli:cli('multicam'),policy_deliveries:masters.slice(0,3).map(m=>({master:m.master.path,native:m.native_project.path,numeric_oracle:m.numeric_oracle})),captioned_numeric_oracle:masters[3].numeric_oracle,input_assets:assets,preservation,program_scopes};
+  const b={schema:1,revision,source_tree:tree,compiler:{file:{path:file('multicam.native.compiler')}},raw_test:{log:{path:file('multicam.native.log')},native_packet:ref('delivery.packet',delivery),wrapper:ref('delivery.wrapper',{exit_code:0,signal:null,revision,args:index.runs['multicam.native'].cargo_args,log:file('multicam.native.log')})},inputs:assets,masters,independent_inspection:{file:ref('delivery.independent',{status:'passed',revision,tool:{sha256:hash('recorded only; do not open executable')},cases:masters.map(m=>({...m.master,video:{codec_name:'png',nb_read_frames:'10'},audio:{codec_name:'pcm_f32le',duration_ts:20000}}))})},preservation:{current_sentinels:[ref('delivery.sentinel.0','owner master'),ref('delivery.sentinel.1','owner sidecar')]},vtt:ref('delivery.vtt','WEBVTT\n\n00:00:00.125 --> 00:00:00.250\nI\n\n'),limitations:['Synthetic producer observations only']};
+  index.routes=index.routes.slice(0,24).concat(publicIndex.routes.filter(r=>r.family==='video.followon').map(r=>({...r,revision})));
+  const required_routes=index.routes.filter(r=>r.family==='video.followon').map(r=>({id:r.id,commit:revision}));
+  f.edit('video',p=>{p.required_routes.splice(4,4,...required_routes.filter(r=>r.id!=='editbay.multicam.caption-delivery.cpu.v1'));});
+  put('video.followon.hub',{current_scope_result:{revision},current_multicam_result:{revision},prepared_viewer_scopes_route:{commit:revision},required_routes,prepared_runtime_route:{commit:revision}});
+  put('video.followon.e7',a);put('video.followon.7f',b);
+  return {...f,inspect:()=>producerEvidence(index,f.roots,{videoOnly:true})};
+}
+
+test('video-only joins five original runs; deduplicates two multicam routes and one four-master execution',()=>{
+  const f=videoFixture('video-boundaries');
+  const r=f.inspect();
+  assert.equal(r.integrity_passed,true,JSON.stringify(r.errors));
+  assert.equal(r.runs.length,5);
+  assert.equal(r.routes.length,5);
+  assert.equal(r.generators.length,4);
+  assert.deepEqual(r.generators.find(g=>g.id==='editbay.multicam.group.v1').execution_runs,['multicam.core','multicam.app']);
+  assert.equal(r.video_observations.delivery.original_tests,1);
+  assert.equal(r.video_observations.delivery.masters.length,4);
+  assert.equal(r.runs.find(r=>r.id==='multicam.app').counts.ignored,1);
+  assert.equal(r.node_sha256,null);
+  assert.equal(r.public_candidate,false);
+  assert.equal(r.routes.every(r=>r.current_candidate_status==='unavailable'),true);
+  assert.equal(r.verified_artifacts.some(a=>a.id.startsWith('tool.')||a.id.startsWith('delivery.case')),false);
+  assert.equal(JSON.stringify(r).includes(f.roots.records),false);
+  assert.equal(fs.existsSync(path.join(f.roots.records,'target')),false);
+  const combined=producerEvidence(f.index,f.roots);
+  assert.equal(combined.integrity_passed,true,JSON.stringify(combined.errors));
+  assert.equal(combined.routes.length,29);
+  assert.equal(combined.cases.length,20);
+  assert.equal(combined.runs.find(r=>r.id==='routing.failedd72').status,'failed');
+});
+
+test('video source/helper/command/count and retained input/master/reference mutations fail required routes',()=>{
+  const checks=[
+    f=>{f.index.runs['scopes.viewer'].sources['source.txt']=hash('wrong generator')},
+    f=>fs.appendFileSync(f.file('helper.serialized-cargo.mjs'),'changed'),
+    f=>fs.rmSync(f.file('video.followon.delivery.input.0')),
+    f=>fs.appendFileSync(f.file('video.followon.delivery.fixed.master'),'changed'),
+    f=>fs.rmSync(f.file('video.followon.scopes.report.0')),
+    f=>f.edit('multicam.native.compiler',r=>{r.executed_cargo_args.push('changed command')}),
+    f=>f.put('multicam.native.log',fs.readFileSync(f.file('multicam.native.log'),'utf8').replace('1 passed','0 passed')),
+    f=>f.edit('video.followon.7f',r=>{r.revision='f'.repeat(40)}),
+    f=>f.edit('video.followon.delivery.packet',r=>{r.cli.fingerprint.sha256=hash('another CLI')}),
+    f=>f.edit('video.followon.viewer.packet',r=>{r.worker_joined=false}),
+    f=>{f.index.assets['video.followon.delivery.input.0'].root='system'},
+  ];
+  for(const [i,mutate]of checks.entries()){
+    const f=videoFixture('video-reject-'+i);mutate(f);const r=f.inspect();
+    assert.equal(r.integrity_passed,false,'mutation '+i);
+    assert.equal(r.routes.every(r=>r.status==='unavailable'),true,'routes '+i);
+    assert.equal(r.public_candidate,false);
+    assert.ok(r.errors.length>0);
+  }
 });
