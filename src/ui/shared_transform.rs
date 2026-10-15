@@ -34,12 +34,24 @@ pub(super) fn mixed(ui: &mut Ui, studio: &mut Studio) -> bool {
         .iter()
         .map(|(_, shape)| {
             let bounds = shape.geom.bbox();
+            let pose = studio.live_pose(shape.id);
+            let bounds = if studio.is_motion() {
+                pose.map_bounds(shape.world_bbox())
+            } else {
+                bounds
+            };
             [
                 bounds.min.x,
                 bounds.min.y,
                 bounds.width(),
                 bounds.height(),
-                shape.rotation.to_degrees(),
+                (shape.rotation
+                    + if studio.is_motion() {
+                        pose.rotation
+                    } else {
+                        0.0
+                    })
+                .to_degrees(),
             ]
         })
         .collect();
@@ -219,8 +231,8 @@ mod tests {
             .map(|s| s.geom.bbox().min)
             .collect();
         assert_eq!(positions, vec![Pt::new(20.0, 50.0), Pt::new(220.0, 50.0)]);
-        let encoded = serde_json::to_vec(&studio.doc).unwrap();
-        let reopened: crate::document::Document = serde_json::from_slice(&encoded).unwrap();
+        let encoded = crate::project::encode(&studio.doc).unwrap();
+        let reopened = crate::project::decode(&encoded).unwrap();
         assert_eq!(
             reopened.layers[0].kind.shapes().unwrap()[1].geom.bbox().min,
             Pt::new(220.0, 50.0)
