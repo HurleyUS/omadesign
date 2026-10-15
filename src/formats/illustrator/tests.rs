@@ -581,6 +581,7 @@ fn independent_fixture(file: &str, expected_boards: usize, needs_type: bool) {
     );
     assert_eq!(doc.artboards, reopened.artboards);
     assert_eq!(doc.import_notes, reopened.import_notes);
+    independent_external_roundtrip(&path, &sha256, &reopened);
     if !needs_type {
         let svg = std::fs::read_to_string(directory.join("Test-Inkscape-LineIssue.svg")).unwrap();
         assert_eq!(
@@ -661,4 +662,193 @@ fn independent_fixture(file: &str, expected_boards: usize, needs_type: bool) {
         text.len(),
         notes.len()
     );
+}
+
+/// Check portable exports after native reopen.
+/// `source` locates ignored QA outputs, `sha256` binds the original AI, and
+/// `reopened` is the verified OMA codec result. Returns after independent SVG/PDF
+/// parsing and bounded first-artboard renders contain actual visible artwork.
+fn independent_external_roundtrip(source: &Path, sha256: &str, reopened: &Document) {
+    use crate::document::LayerKind;
+    const MAX_EDGE: u32 = 320;
+    let board = reopened.artboards.first().expect("real AI has an artboard");
+    assert!(
+        board.origin.x.abs() < 0.001 && board.origin.y.abs() < 0.001,
+        "the pinned corpus first artboard must start at the native origin"
+    );
+    assert!(board.size.x > 0. && board.size.y > 0.);
+    let bounds = board.local_bounds();
+    let native_visible_objects: usize = reopened
+        .layers
+        .iter()
+        .enumerate()
+        .filter(|(index, layer)| {
+            !layer.is_group && layer.opacity > 0. && reopened.layer_visible(*index)
+        })
+        .map(|(_, layer)| match &layer.kind {
+            LayerKind::Vector { shapes } => shapes
+                .iter()
+                .filter(|shape| {
+                    shape.visible
+                        && !shape.guide
+                        && shape.opacity > 0.
+                        && (!shape.style.fill.is_none()
+                            || shape.style.stroke.as_ref().is_some_and(|s| s.width > 0.))
+                        && bounds.intersects(
+                            shape
+                                .world_bbox()
+                                .inflate(shape.style.stroke.as_ref().map_or(0., |s| s.width)),
+                        )
+                })
+                .count(),
+            LayerKind::Raster { .. } => usize::from(
+                layer
+                    .kind
+                    .raster_bounds()
+                    .is_some_and(|b| bounds.intersects(b)),
+            ),
+        })
+        .sum();
+    assert!(
+        native_visible_objects > 0,
+        "selected real artboard must contain visible native artwork"
+    );
+    let mut scene = reopened.clone();
+    scene.artboards = vec![board.clone()];
+    scene.width = board.size.x;
+    scene.height = board.size.y;
+    let svg_path = source.with_extension("external-roundtrip.svg");
+    let pdf_path = source.with_extension("external-roundtrip.pdf");
+    let svg_preview = source.with_extension("external-svg.png");
+    let pdf_prefix = source.with_extension("external-pdf");
+    let pdf_preview = source.with_extension("external-pdf.png");
+    let receipt_path = source.with_extension("external-roundtrip.json");
+    let svg = crate::svg::export(&scene).expect("real AI native artwork exports as SVG");
+    std::fs::write(&svg_path, &svg).unwrap();
+    let mut options = usvg::Options::default();
+    options.fontdb_mut().load_system_fonts();
+    let svg_tree =
+        usvg::Tree::from_str(&svg, &options).expect("independent usvg parser accepts exported SVG");
+    assert!((svg_tree.size().width() - scene.width).abs() < 0.01);
+    assert!((svg_tree.size().height() - scene.height).abs() < 0.01);
+    assert!(!svg_tree.root().children().is_empty());
+    let scale = MAX_EDGE as f32 / scene.width.max(scene.height);
+    let svg_width = (scene.width * scale).round().clamp(1., MAX_EDGE as f32) as u32;
+    let svg_height = (scene.height * scale).round().clamp(1., MAX_EDGE as f32) as u32;
+    let mut svg_pixels = tiny_skia::Pixmap::new(svg_width, svg_height).unwrap();
+    svg_pixels.fill(tiny_skia::Color::WHITE);
+    resvg::render(
+        &svg_tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut svg_pixels.as_mut(),
+    );
+    svg_pixels.save_png(&svg_preview).unwrap();
+    let svg_nonwhite = svg_pixels
+        .pixels()
+        .iter()
+        .filter(|pixel| pixel.red() < 250 || pixel.green() < 250 || pixel.blue() < 250)
+        .count();
+    assert!(
+        svg_nonwhite >= 4,
+        "independent SVG render must contain visible artwork, not an empty viewport"
+    );
+    let (pdf, pdf_notes) =
+        crate::formats::pdf::write(&scene).expect("real AI native artwork exports as PDF");
+    std::fs::write(&pdf_path, &pdf).unwrap();
+    let syntax = std::process::Command::new("qpdf")
+        .arg("--check")
+        .arg(&pdf_path)
+        .env("LC_ALL", "C")
+        .output()
+        .expect("external PDF roundtrip requires qpdf");
+    assert!(
+        syntax.status.success(),
+        "qpdf rejects exported PDF: {} {}",
+        String::from_utf8_lossy(&syntax.stdout),
+        String::from_utf8_lossy(&syntax.stderr)
+    );
+    let info = std::process::Command::new("pdfinfo")
+        .args(["-f", "1", "-l", "1"])
+        .arg(&pdf_path)
+        .env("LC_ALL", "C")
+        .output()
+        .expect("external PDF roundtrip requires Poppler pdfinfo");
+    assert!(
+        info.status.success(),
+        "Poppler rejects exported PDF: {}",
+        String::from_utf8_lossy(&info.stderr)
+    );
+    let info = String::from_utf8(info.stdout).unwrap();
+    let pages = info
+        .lines()
+        .find_map(|line| line.strip_prefix("Pages:"))
+        .unwrap()
+        .trim()
+        .parse::<usize>()
+        .unwrap();
+    assert_eq!(pages, 1, "only the selected artboard is exported for QA");
+    let page_size = info
+        .lines()
+        .find_map(|line| {
+            line.trim_start()
+                .starts_with("Page")
+                .then(|| line.split_once("size:").map(|(_, size)| size))
+                .flatten()
+        })
+        .expect("pdfinfo reports first page dimensions")
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    let pdf_width = page_size[0].parse::<f32>().unwrap();
+    let pdf_height = page_size[2].parse::<f32>().unwrap();
+    assert!((pdf_width - board.size.x).abs() < 0.02);
+    assert!((pdf_height - board.size.y).abs() < 0.02);
+    let rendered = std::process::Command::new("pdftoppm")
+        .args(["-f", "1", "-l", "1", "-singlefile", "-scale-to"])
+        .arg(MAX_EDGE.to_string())
+        .arg("-png")
+        .arg(&pdf_path)
+        .arg(&pdf_prefix)
+        .env("LC_ALL", "C")
+        .output()
+        .expect("external PDF roundtrip requires Poppler pdftoppm");
+    assert!(
+        rendered.status.success(),
+        "Poppler could not render exported PDF: {}",
+        String::from_utf8_lossy(&rendered.stderr)
+    );
+    let pdf_pixels = crate::formats::decode_image(&std::fs::read(&pdf_preview).unwrap())
+        .expect("Poppler output is a readable PNG");
+    assert!(pdf_pixels.w <= MAX_EDGE && pdf_pixels.h <= MAX_EDGE);
+    assert!(pdf_pixels.w.abs_diff(svg_width) <= 1 && pdf_pixels.h.abs_diff(svg_height) <= 1);
+    let pdf_nonwhite = pdf_pixels
+        .data
+        .chunks_exact(4)
+        .filter(|pixel| pixel[3] > 0 && pixel[..3].iter().any(|channel| *channel < 250))
+        .count();
+    assert!(
+        pdf_nonwhite >= 4,
+        "independent PDF render must contain visible artwork, not an empty page"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(std::fs::read(source).unwrap())),
+        sha256,
+        "portable export checks must preserve original AI bytes"
+    );
+    let file_record = |path: &Path| {
+        let bytes = std::fs::read(path).unwrap();
+        serde_json::json!({"name":path.file_name().unwrap().to_string_lossy(),"bytes":bytes.len(),"sha256":format!("{:x}",Sha256::digest(&bytes))})
+    };
+    let receipt = serde_json::json!({
+        "source":source.file_name().unwrap().to_string_lossy(),
+        "source_sha256":sha256,
+        "path":"AI import -> OMA encode/decode -> real SVG/PDF exporters -> usvg/resvg and qpdf/Poppler",
+        "original_artboard_count":reopened.artboards.len(),
+        "checked_artboard":{"name":board.name,"origin":board.origin,"size":board.size,"native_visible_objects":native_visible_objects},
+        "export_scope":"One first artboard at native origin; original native geometry, sources, hierarchy and full original-artboard assertions remain unchanged",
+        "svg":{"file":file_record(&svg_path),"parser":"usvg","renderer":"resvg","width":svg_tree.size().width(),"height":svg_tree.size().height(),"preview":file_record(&svg_preview),"preview_pixels":[svg_width,svg_height],"nonwhite_pixels":svg_nonwhite},
+        "pdf":{"file":file_record(&pdf_path),"syntax_check":"qpdf --check passed","parser":"Poppler pdfinfo","pages":pages,"width_points":pdf_width,"height_points":pdf_height,"renderer":"Poppler pdftoppm first page only","preview":file_record(&pdf_preview),"preview_pixels":[pdf_pixels.w,pdf_pixels.h],"nonwhite_pixels":pdf_nonwhite,"export_notes":pdf_notes},
+        "limits":{"maximum_preview_edge":MAX_EDGE,"maximum_pdf_pages_exported_and_rendered":1},
+        "proof_boundary":"Valid expected-size portable exports and nonempty independently rendered artwork after native codec reopen on one selected real artboard. Does not establish universal pixel fidelity, full-document artboard fidelity, source hierarchy equivalence, exact font/run paint retention in external editors, or an Illustrator editing-data writer roundtrip."
+    });
+    std::fs::write(receipt_path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
 }
