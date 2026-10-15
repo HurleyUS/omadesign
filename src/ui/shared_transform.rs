@@ -261,3 +261,62 @@ mod tests {
         assert_eq!(encoded, serde_json::to_vec(&studio.doc).unwrap());
     }
 }
+
+#[cfg(test)]
+mod idle_render_tests {
+    use super::*;
+    #[test]
+    fn shared_large_single_mixed_and_locked_selection_never_edits_on_render() {
+        for count in [0, 1, 2] {
+            for locked in [false, true] {
+                let mut studio = Studio::new();
+                studio.show_welcome = false;
+                studio.doc = crate::document::Document::new(
+                    "Large imported artwork",
+                    3_000_000.0,
+                    2_000_000.0,
+                    72.0,
+                );
+                let mut layer = crate::document::Layer::vector("Vectors");
+                for index in 0..2 {
+                    let mut shape = crate::document::Shape::new(
+                        crate::geom::Geom::Rect {
+                            origin: Pt::new(12_000_000.0 + index as f32 * 100.0, -6_000_000.0),
+                            size: Pt::new(2_000_000.0, 800_000.0),
+                            radius: 0.0,
+                        },
+                        Default::default(),
+                    );
+                    shape.rotation = (720.0 + index as f32 * 30.0).to_radians();
+                    if index < count {
+                        studio.selection.push((0, shape.id));
+                    }
+                    layer.kind.shapes_mut().unwrap().push(shape);
+                }
+                layer.locked = locked;
+                studio.doc.layers = vec![layer];
+                studio.active_layer = Some(0);
+                let before = crate::project::encode(&studio.doc).unwrap();
+                let ctx = eframe::egui::Context::default();
+                for _ in 0..3 {
+                    let _ = ctx.run_ui(
+                        eframe::egui::RawInput {
+                            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                                eframe::egui::Pos2::ZERO,
+                                eframe::egui::vec2(1280.0, 900.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| super::super::studios::right_panel(ui, &mut studio),
+                    );
+                }
+                assert_eq!(
+                    before,
+                    crate::project::encode(&studio.doc).unwrap(),
+                    "selection={count} locked={locked}"
+                );
+                assert!(!studio.dirty);
+            }
+        }
+    }
+}
