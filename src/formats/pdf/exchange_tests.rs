@@ -460,3 +460,38 @@ fn pdf_exchange_plain_vectors_avoid_per_object_transparency_forms() {
             .data()
     );
 }
+
+#[test]
+fn pdf_exchange_applies_fill_opacity_once_to_overlapping_fill_and_stroke() {
+    let mut doc = Document::new("Fill opacity", 80., 60., 72.);
+    doc.layers.clear();
+    let mut layer = Layer::vector("Translucent object");
+    let mut shape = rectangle(
+        Pt::new(15., 15.),
+        Pt::new(40., 30.),
+        Fill::Solid(Rgba::rgb(255, 0, 0)),
+    );
+    shape.fill_opacity = 0.5;
+    shape.style.stroke = Some(Stroke {
+        color: Rgba::rgb(0, 0, 255),
+        width: 8.,
+        ..Default::default()
+    });
+    layer.kind.shapes_mut().unwrap().push(shape);
+    doc.layers.push(layer);
+    let expected = crate::compositor::render_export(&doc, 1).unwrap();
+    let (bytes, notes) = write(&doc).unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let (loaded, _) = read(&bytes, "fill-opacity.pdf").unwrap();
+    let actual = crate::compositor::render_export(&loaded, 1).unwrap();
+    for (x, y) in [(16, 25), (35, 25)] {
+        let a = expected.pixel(x, y).unwrap().demultiply();
+        let b = actual.pixel(x, y).unwrap().demultiply();
+        assert!(
+            a.red().abs_diff(b.red()) < 2
+                && a.green().abs_diff(b.green()) < 2
+                && a.blue().abs_diff(b.blue()) < 2,
+            "fill/stroke opacity applied twice at{x},{y}: {a:?}!={b:?}"
+        );
+    }
+}

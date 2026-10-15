@@ -236,6 +236,7 @@ impl Writer {
                             continue;
                         }
                         if shape.opacity >= 1.
+                            && shape.fill_opacity >= 1.
                             && shape.blend == Blend::Normal
                             && shape.mask.is_none()
                             && shape.artwork_masks.is_empty()
@@ -260,8 +261,11 @@ impl Writer {
                             depth + 1,
                         )?;
                         op(&mut scene.ops, "q", &[]);
-                        let state =
-                            self.state(byte(shape.opacity), byte(shape.opacity), shape.blend);
+                        let state = self.state(
+                            byte(shape.opacity * shape.fill_opacity),
+                            byte(shape.opacity * shape.fill_opacity),
+                            shape.blend,
+                        );
                         scene.invoke("gs", "ExtGState", state);
                         scene.invoke("Do", "XObject", id);
                         op(&mut scene.ops, "Q", &[]);
@@ -362,7 +366,7 @@ impl Writer {
                 _ => None,
             }
         };
-        let alpha = solid.map_or(1., |c| c.a as f32 / 255.) * shape.fill_opacity;
+        let alpha = solid.map_or(1., |c| c.a as f32 / 255.);
         let mut scene = Scene::default();
         let state = self.state(byte(alpha), byte(alpha), Blend::Normal);
         scene.invoke("gs", "ExtGState", state);
