@@ -595,3 +595,54 @@ mod scene_tests {
         });
     }
 }
+
+#[cfg(test)]
+mod independent_tests {
+    #[test]
+    #[ignore = "requires rsvg-convert; uses only disposable home-project scratch"]
+    fn svg_paint_independent_librsvg_and_disk_reopen() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="140"><defs><radialGradient id="radial" gradientUnits="userSpaceOnUse" cx="40" cy="40" r="34" fx="32" fy="35" fr="4" gradientTransform="matrix(1 .1 .35 .8 -8 4)"><stop stop-color="#28a"/><stop offset=".4" stop-color="#6d8"/><stop offset="1" stop-color="#f64"/></radialGradient><linearGradient id="reflect" gradientUnits="userSpaceOnUse" x2="20" y2="12" spreadMethod="reflect"><stop stop-color="#164"/><stop offset="1" stop-color="#fe8"/></linearGradient><symbol id="tile" viewBox="0 0 10 10"><path d="M0 0H5V10H0Z" fill="#28a"/><circle cx="7" cy="5" r="2" fill="#e73"/></symbol><pattern id="paint" patternUnits="userSpaceOnUse" width="12" height="10" patternTransform="skewX(15)"><use href="#tile" width="12" height="10"/></pattern></defs><path d="M8 8H82V95H8Z" fill="url(#radial)"/><path d="M94 8H172V65H94Z" fill="url(#reflect)"/><path d="M8 103H172V132H8Z" fill="url(#paint)"/></svg>"##;
+        let (doc, notes) = crate::formats::svg::read(source, "Independent paint").unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join(".artifacts")
+            .join(format!(
+                "svg-paint-{}-{}",
+                std::process::id(),
+                crate::document::next_id()
+            ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("paint.oma");
+        crate::project::save_to(&doc, &path).unwrap();
+        let reopened = crate::project::load_from(&path).unwrap();
+        let svg = crate::svg::export(&reopened).unwrap();
+        assert!(!svg.contains("<image"));
+        let svg_path = dir.join("paint.svg");
+        std::fs::write(&svg_path, svg).unwrap();
+        let png = dir.join("reference.png");
+        let result = std::process::Command::new("rsvg-convert")
+            .arg(&svg_path)
+            .arg("-o")
+            .arg(&png)
+            .status()
+            .unwrap();
+        assert!(result.success());
+        let expected = tiny_skia::Pixmap::decode_png(&std::fs::read(&png).unwrap()).unwrap();
+        let actual = crate::compositor::render_export_at(&reopened, 1., 0., true).unwrap();
+        let sum: u64 = actual
+            .data()
+            .iter()
+            .zip(expected.data())
+            .map(|(a, b)| u64::from(a.abs_diff(*b)))
+            .sum();
+        let mean = sum as f64 / actual.data().len() as f64;
+        std::fs::remove_dir_all(&dir).unwrap();
+        println!("independent librsvg SVG paint mean channel error={mean}");
+        assert!(
+            mean < 1.5,
+            "independent librsvg SVG paint mean channel error={mean}"
+        );
+    }
+}
