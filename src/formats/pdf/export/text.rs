@@ -146,6 +146,7 @@ pub(super) fn write(
         stroke_style(&mut out.ops, shape);
     }
     let [a, b, c, d, _, _] = run.transform.unwrap_or([1., 0., 0., 1., 0., 0.]);
+    let mut last_mode = None;
     for line in lines.iter() {
         let mut clusters = line
             .glyphs
@@ -278,16 +279,16 @@ pub(super) fn write(
                 }
             }
             out.ops.extend(glyph_ops);
-            op(
-                &mut out.ops,
-                "Tr",
-                &[match (color.is_some(), stroke.is_some()) {
-                    (true, true) => 2.,
-                    (true, false) => 0.,
-                    (false, true) => 1.,
-                    _ => 3.,
-                }],
-            );
+            let mode = match (color.is_some(), stroke.is_some()) {
+                (true, true) => 2.,
+                (true, false) => 0.,
+                (false, true) => 1.,
+                _ => 3.,
+            };
+            if last_mode != Some(mode) {
+                op(&mut out.ops, "Tr", &[mode]);
+                last_mode = Some(mode);
+            }
             out.ops.push(show);
             op(&mut out.ops, "ET", &[]);
         }
@@ -348,7 +349,7 @@ pub(super) fn outlines(
         }
         let mut clip = shape.clone();
         for point in contours.iter_mut().flatten() {
-            *point = point.rotate_about(shape.geom.bbox().center(), shape.rotation);
+            *point = point.rotate_about(center, shape.rotation);
         }
         clip.geom = Geom::Poly {
             contours,

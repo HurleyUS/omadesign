@@ -436,7 +436,7 @@ impl Writer {
                 && gradient
                     .radial_transform(shape.geom.bbox())
                     .invert()
-                    .is_none()
+                    .is_none_or(|t| !t.is_finite())
             {
                 return Err("PDF radial paint matrix is singular".into());
             }

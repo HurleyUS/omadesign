@@ -192,7 +192,6 @@ fn filtered(source_mask: bool) -> Document {
         doc.layers.push(layer);
     } else {
         let mut source = Layer::vector("Hidden live mask");
-        source.visible = false;
         source.kind.shapes_mut().unwrap().push(rect(
             Pt::new(200., 120.),
             Pt::new(90., 80.),
@@ -282,12 +281,14 @@ fn inspect(doc: &Document, name: &str, limit: f64) -> (Pdf, f64) {
     let mut native = image::RgbImage::new(actual.width(), actual.height());
     let mut total = 0u64;
     let mut max = 0u8;
+    let mut painted = 0usize;
     for (x, y, p) in actual.enumerate_pixels() {
         let n = expected
             .pixel(x + board.origin.x as u32, y + board.origin.y as u32)
             .unwrap()
             .demultiply();
         let n = [n.red(), n.green(), n.blue()];
+        painted += usize::from(n.iter().any(|v| *v < 245));
         native.put_pixel(x, y, image::Rgb(n));
         for (a, b) in n.into_iter().zip(p.0) {
             let d = a.abs_diff(b);
@@ -297,10 +298,66 @@ fn inspect(doc: &Document, name: &str, limit: f64) -> (Pdf, f64) {
     }
     native.save(folder.join("native.png")).unwrap();
     let mean = total as f64 / f64::from(actual.width() * actual.height() * 3);
-    std::fs::write(folder.join("result.json"),serde_json::to_vec_pretty(&serde_json::json!({"name":name,"bytes":bytes.len(),"mean_channel_error":mean,"max_channel_error":max,"notes":notes})).unwrap()).unwrap();
+    let mut ranges = vec![];
+    if name == "native-text" {
+        let shape = doc
+            .layers
+            .iter()
+            .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+            .find(|s| matches!(s.geom, Geom::Text(_)))
+            .unwrap();
+        let Geom::Text(run) = &shape.geom else {
+            unreachable!()
+        };
+        let lines = crate::text::compose(run);
+        for (start, end) in [(7, 11), (12, 17), (18, 24)] {
+            let mut points = lines
+                .iter()
+                .flat_map(|l| &l.glyphs)
+                .filter(|g| g.cluster >= start && g.cluster < end)
+                .flat_map(|g| crate::text::glyph_contours(run, g))
+                .flatten()
+                .map(|p| {
+                    run.map_point(p)
+                        .rotate_about(shape.geom.bbox().center(), shape.rotation)
+                });
+            let mut region = Bounds::from_pt(points.next().unwrap());
+            for point in points {
+                region.union_pt(point);
+            }
+            let region = region.inflate(1.);
+            let mut sum = 0u64;
+            let mut count = 0u64;
+            for (x, y, p) in actual.enumerate_pixels() {
+                if region.contains(Pt::new(
+                    x as f32 + board.origin.x,
+                    y as f32 + board.origin.y,
+                )) {
+                    sum += native
+                        .get_pixel(x, y)
+                        .0
+                        .into_iter()
+                        .zip(p.0)
+                        .map(|(a, b)| u64::from(a.abs_diff(b)))
+                        .sum::<u64>();
+                    count += 3;
+                }
+            }
+            ranges.push((start, end, sum as f64 / count.max(1) as f64));
+        }
+    }
+    std::fs::write(folder.join("result.json"),serde_json::to_vec_pretty(&serde_json::json!({"name":name,"bytes":bytes.len(),"mean_channel_error":mean,"max_channel_error":max,"painted_pixels":painted,"text_range_errors":ranges,"notes":notes})).unwrap()).unwrap();
     eprintln!(
         "PDF adapter {name}: {} bytes, native/Cairo mean {mean:0.4}/255, max {max}, notes {notes:?}",
         bytes.len()
+    );
+    assert!(
+        painted > 100,
+        "{name} fixture contains no meaningful artwork"
+    );
+    assert!(
+        ranges.iter().all(|(_, _, error)| *error < 4.),
+        "{name} effective range font/paint changed: {ranges:?}"
     );
     assert!(
         mean < limit,
@@ -324,7 +381,7 @@ fn pdf_adapter_affine_periodic_fields_stroke_alpha_real_output() {
             .filter_map(|o| o.as_stream().ok())
             .any(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image"))
     );
-    for kind in [1, 3] {
+    for kind in [2, 3] {
         assert!(
             pdf.objects
                 .values()
