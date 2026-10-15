@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { contained, fingerprint, source } from './contract.mjs';
+import { verifyCompilerReceipt } from './build.mjs';
 
 /** Retain stricter owner gates in addition to the shared candidate cohort.
  * Args: required gate IDs, local owner packets, roots and actual build bindings.
@@ -14,6 +15,7 @@ export function ownerEvidence(requirements,{directory,roots,builds}) {
       row.receipt_sha256=fingerprint(file).sha256;
       const actual=source(roots[requirement.product]);
       const build=builds[`${requirement.id}.${requirement.product}`] ?? builds[requirement.product];
+      verifyCompilerReceipt(build);
       if (actual.dirty || packet.revision!==actual.revision || packet.tree!==actual.tree || !build?.binary || build.revision!==actual.revision || build.tree!==actual.tree || packet.binary_sha256!==fingerprint(build.binary).sha256 || packet.binary_sha256!==build.sha256) throw Error('historical source/binary binding');
       if (packet.version!==1 || packet.id!==requirement.id || packet.product!==requirement.product || packet.status!=='passed' || !Array.isArray(packet.checks) || !packet.checks.length) throw Error('required owner checks unavailable');
       const artifacts=[];
