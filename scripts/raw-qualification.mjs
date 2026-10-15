@@ -122,11 +122,16 @@ export async function inspectCase(entry, binding, corpus) {
   const source = binding.source ?? path.join(corpus, 'raw', entry.source.filename);
   const checked = await inspectFile(source, entry.source.sha256);
   const errors = checked.error ? [checked.error] : [];
+  for (const key of ['make', 'model', 'compression', 'cfa', 'bit_depth', 'sensor_dimensions', 'active_dimensions', 'output_dimensions', 'orientation', 'camera_wb', 'profile']) {
+    if (entry.identity[key] === null || entry.identity[key] === '') errors.push({kind:'missing', detail:`Unpinned camera identity: ${key}`});
+  }
+  if (!entry.source.url || !entry.source.license || !entry.source.provenance) errors.push({kind:'missing', detail:'Source URL/license/provenance is incomplete'});
   const bytes = checked.actual === null ? null : fs.statSync(source).size;
   if (bytes > sourceBudget) errors.push({ kind: 'scheduling_required', detail: 'Source exceeds the 512 MiB acquisition/test budget; parent resource scheduling required. No product support conclusion.' });
   if (bytes !== null && entry.source.size_bytes !== null && bytes !== entry.source.size_bytes) errors.push({ kind: 'invalid', detail: 'Source length differs from pin' });
   const references = [];
   for (const reference of entry.references.filter(ref => ref.kind !== 'display_look')) {
+    if (!reference.dimensions || !reference.toolchain.version || !reference.toolchain.platform || !reference.toolchain.command.length) errors.push({kind:'missing', detail:`${reference.id}: missing reference geometry/toolchain version/platform/recipe`});
     const referencePath = binding.references?.[reference.id] ?? (reference.filename ? path.join(corpus, 'references', reference.filename) : null);
     const observed = await inspectFile(referencePath, reference.sha256);
     const executable = await inspectFile(binding.executables?.[reference.id], reference.toolchain.executable_sha256);
