@@ -66,12 +66,12 @@ function gridAxis(node,tracks,axis){
  const items=[...node.children].filter(n=>n.matches('[data-node]')&&getComputedStyle(n).position!=='absolute');
  const cells=items.map(item=>{const css=getComputedStyle(item),start=parseInt(column?css.gridColumnStart:css.gridRowStart)-1,span=parseInt((column?css.gridColumnEnd:css.gridRowEnd).replace('span',''))||1;return {item,start,span};}).filter(c=>Number.isFinite(c.start));
  const count=Math.max(tracks.length,(column?cs.gridTemplateColumns:cs.gridTemplateRows).split(' ').filter(v=>/px$/.test(v)).length,...cells.map(c=>c.start+c.span));if(!count)return;
- tracks=Array.from({length:count},(_,i)=>tracks[i]||{size:column||cells.some(c=>c.item.dataset.heightSizing==='Fill'&&c.start<=i&&c.start+c.span>i)?{Fraction:1}:'Hug'});
+ tracks=Array.from({length:count},(_,i)=>tracks[i]||{size:column||cells.some(c=>c.item.dataset.heightSizing==='Fill'&&c.start<=i&&c.start+c.span>i)?{Fraction:1}:'Hug',min:node.dataset.gridAdvanced==='false'?1:0});
  const sizes=tracks.map(track=>{const [min,max]=trackLimits(track);return trackKind(track)==='Fixed'?Math.max(min,Math.min(max,trackSize(track))):min;});
  const hug=node.dataset[column?'widthSizing':'heightSizing']==='Hug';
  cells.sort((a,b)=>a.span-b.span||a.start-b.start);
  for(const cell of cells){
-  const itemCss=getComputedStyle(cell.item),natural=Number(cell.item.dataset.basis.split(',')[column?0:1])+(column?0:(parseFloat(itemCss.marginTop)||0)+(parseFloat(itemCss.marginBottom)||0)),indices=Array.from({length:cell.span},(_,j)=>cell.start+j);
+  const itemCss=getComputedStyle(cell.item),basis=cell.item.hasAttribute('data-text-ink')&&cell.item.dataset[column?'widthSizing':'heightSizing']==='Hug'?cell.item.getBoundingClientRect()[column?'width':'height']:Number(cell.item.dataset.basis.split(',')[column?0:1]),natural=basis+(column?0:(parseFloat(itemCss.marginTop)||0)+(parseFloat(itemCss.marginBottom)||0)),indices=Array.from({length:cell.span},(_,j)=>cell.start+j);
   const required=Math.max(0,natural-gap*(cell.span-1)),present=indices.reduce((sum,i)=>sum+sizes[i],0);if(required<=present)continue;
   const flexible=indices.filter(i=>trackKind(tracks[i])==='Hug');
   const fixed=indices.filter(i=>!flexible.includes(i)).reduce((sum,i)=>sum+sizes[i],0);
@@ -103,17 +103,17 @@ function layouts(){
    if(node.dataset.authoredAlign===undefined)node.dataset.authoredAlign=node.style.alignItems;
    node.style.setProperty('align-items',node.dataset.authoredAlign);
    const spec=JSON.parse(node.dataset.grid),cs=getComputedStyle(node);
+   for(const child of node.children){if(child.dataset.baseline){child.style.marginTop='';child.style.marginBottom='';}}
    if(cs.display==='grid'){
     gridAxis(node,spec.column_tracks||[],'Columns');gridAxis(node,spec.row_tracks||[],'Rows');
    }
-   for(const child of node.children){if(child.dataset.baseline){child.style.marginTop='';child.style.marginBottom='';}}
    if(cs.alignItems!=='baseline'||(cs.display==='flex'&&cs.flexDirection==='column'))continue;
    const children=[...node.children].filter(n=>n.matches('[data-node]')&&getComputedStyle(n).position!=='absolute');
    node.style.setProperty('align-items','start','important');
    const lines=new Map();
    for(const child of children){const key=cs.display==='grid'?getComputedStyle(child).gridRowStart:child.offsetTop;(lines.get(key)||lines.set(key,[]).get(key)).push(child);}
    for(const line of lines.values()){
-    const data=line.map(child=>{if(!child.dataset.baseline)return {child,height:child.getBoundingClientRect().height};const [offset,ascent,descent,px]=child.dataset.baseline.split(',').map(Number),text=child.querySelector('text,span'),scale=text?(parseFloat(getComputedStyle(text).fontSize)||px)/px:1;return {child,offset:offset*scale,ascent:ascent*scale,descent:descent*scale,height:child.getBoundingClientRect().height};});
+    const data=line.map(child=>{if(!child.dataset.baseline)return {child,height:child.getBoundingClientRect().height};const [offset,ascent,descent,px]=child.dataset.baseline.split(',').map(Number),text=child.querySelector('text,span'),scale=child.hasAttribute('data-text-ink')?parseFloat(getComputedStyle(child).getPropertyValue('--text-scale'))||1:text?(parseFloat(getComputedStyle(text).fontSize)||px)/px:1;return {child,offset:offset*scale,ascent:ascent*scale,descent:descent*scale,height:child.getBoundingClientRect().height};});
     const baseline=Math.max(0,...data.filter(d=>d.offset!==undefined).map(d=>Math.max(d.offset,d.ascent)));
     const height=Math.max(0,...data.map(d=>d.offset===undefined?d.height:baseline+Math.max(d.height-d.offset,d.descent)));
     for(const d of data)if(d.offset!==undefined){d.child.style.marginTop=(baseline-d.offset)+'px';d.child.style.marginBottom=Math.max(0,height-(baseline-d.offset)-d.height)+'px';}

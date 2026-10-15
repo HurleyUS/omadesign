@@ -373,6 +373,25 @@ fn axis_css(shape: &Shape, parent: Option<&Shape>, horizontal: bool, css: &mut S
     }
 }
 
+fn text_box(shape: &Shape) -> Pt {
+    let bounds = shape.geom.bbox();
+    let mut size = bounds.size();
+    if let Geom::Text(run) = &shape.geom {
+        let (width, height) = crate::text::measure(run);
+        if shape.layout.width == Sizing::Hug
+            || (shape.layout.text_size.is_some() && run.wrap_width.is_none())
+        {
+            size.x = width;
+        }
+        if shape.layout.height == Sizing::Hug || shape.layout.text_size.is_some() {
+            size.y = height;
+        }
+    }
+    size.x = size.x.clamp(1., 1_000_000.);
+    size.y = size.y.clamp(1., 1_000_000.);
+    size
+}
+
 fn fill_css(fill: &Fill) -> String {
     match fill {
         Fill::Gradient(g) => {
@@ -462,38 +481,40 @@ impl<'a> Html<'a> {
         depth: usize,
     ) -> Result<(), String> {
         let original = *self.shapes.get(&id).ok_or("Missing frame child")?;
-        let canonical =
-            if matches!(original.geom, Geom::Text(_)) && original.layout.text_size.is_some() {
-                let mut canonical = original.clone();
-                let Geom::Text(run) = &mut canonical.geom else {
-                    unreachable!()
-                };
-                let px = original.layout.text_size.unwrap();
-                let ratio = px / run.px.max(1.0);
-                if run.leading > 0.0 {
-                    run.leading *= ratio;
-                }
-                run.tracking *= ratio;
-                run.scale_character_metrics(ratio);
-                run.px = px;
-                if original.layout.width == Sizing::Hug {
-                    run.wrap_width = None;
-                }
-                let (width, height) = crate::text::measure(run);
-                let before = original.geom.bbox();
-                let width = if original.layout.width == Sizing::Hug {
-                    width
-                } else {
-                    before.width()
-                };
+        let canonical = if matches!(original.geom, Geom::Text(_))
+            && original.layout.text_size.is_some()
+        {
+            let mut canonical = original.clone();
+            let Geom::Text(run) = &mut canonical.geom else {
+                unreachable!()
+            };
+            let px = original.layout.text_size.unwrap();
+            let ratio = px / run.px.max(1.0);
+            if run.leading > 0.0 {
+                run.leading *= ratio;
+            }
+            run.tracking *= ratio;
+            run.scale_character_metrics(ratio);
+            run.px = px;
+            if original.layout.width == Sizing::Hug {
+                run.wrap_width = None;
+            }
+            let before = original.geom.bbox();
+            if run.wrap_width.is_none() {
+                run.contours = crate::text::shape(run);
+                let ink = canonical.geom.bbox();
+                canonical.geom.translate(before.min - ink.min);
+            } else {
+                let (_, height) = crate::text::measure(run);
                 crate::layout::set_bounds(
                     &mut canonical.geom,
-                    crate::geom::Bounds::from_min_size(before.min, Pt::new(width, height)),
+                    crate::geom::Bounds::from_min_size(before.min, Pt::new(before.width(), height)),
                 );
-                Some(canonical)
-            } else {
-                None
-            };
+            }
+            Some(canonical)
+        } else {
+            None
+        };
         let shape = canonical.as_ref().unwrap_or(original);
         if !shape.visible || shape.guide {
             return Ok(());
@@ -512,6 +533,28 @@ impl<'a> Html<'a> {
         });
         axis_css(shape, parent, true, &mut css);
         axis_css(shape, parent, false, &mut css);
+        if let Geom::Text(run) = &shape.geom {
+            if run.wrap_width.is_none() {
+                let size = text_box(shape);
+                if shape.layout.width == Sizing::Hug
+                    || (shape.layout.text_size.is_some() && shape.layout.width != Sizing::Fill)
+                {
+                    let _ = write!(css, "width:{:.6}px;", size.x);
+                }
+                if shape.layout.height == Sizing::Hug
+                    || (shape.layout.text_size.is_some() && shape.layout.height != Sizing::Fill)
+                {
+                    let _ = write!(css, "height:{:.6}px;", size.y);
+                }
+                let b = shape.geom.bbox();
+                let _ = write!(
+                    css,
+                    "--ink-width:{:.6};--ink-height:{:.6};--text-scale:1;",
+                    b.width(),
+                    b.height()
+                );
+            }
+        }
         if let Some(parent) = parent.filter(|_| !shape.layout.absolute) {
             if let Some(stack) = parent
                 .layout
@@ -664,12 +707,10 @@ impl<'a> Html<'a> {
             }
         }
         let bounds = shape.geom.bbox();
+        let basis = text_box(shape);
         let mut metadata = format!(
             " data-basis=\"{:.6},{:.6}\" data-width-sizing=\"{:?}\" data-height-sizing=\"{:?}\"",
-            bounds.width(),
-            bounds.height(),
-            shape.layout.width,
-            shape.layout.height
+            basis.x, basis.y, shape.layout.width, shape.layout.height
         );
         if let Some(stack) = &shape.layout.stack {
             let _ = write!(
@@ -685,6 +726,10 @@ impl<'a> Html<'a> {
                 .filter_map(|id| self.shapes.get(id).copied())
                 .filter(|s| s.visible && !s.guide && !s.layout.absolute)
                 .collect();
+            let advanced = !stack.column_tracks.is_empty()
+                || !stack.row_tracks.is_empty()
+                || children.iter().any(|s| !s.layout.grid.is_auto());
+            let _ = write!(metadata, " data-grid-advanced=\"{advanced}\"");
             let mut widths: Vec<_> = shape
                 .layout
                 .breakpoints
@@ -717,6 +762,9 @@ impl<'a> Html<'a> {
             }
         }
         if let Geom::Text(run) = &shape.geom {
+            if run.wrap_width.is_none() {
+                metadata.push_str(" data-text-ink");
+            }
             if let Some((ascent, descent, line_gap)) = crate::text::font_metrics_for(run) {
                 let baseline = crate::text::caret_pt(run, 0).y - bounds.min.y;
                 let _ = write!(
@@ -1113,7 +1161,7 @@ pub fn export_html(doc: &Document, layer: usize, frame_id: u64) -> Result<String
     ))
 }
 
-const BASE_CSS: &str = "*{box-sizing:border-box}body{margin:0;background:#17191d;font-family:system-ui,sans-serif}#stage{display:flex;justify-content:center;min-height:100vh;width:clamp(240px,100%,2560px);margin:0 auto;container-type:inline-size}.node{flex-shrink:0}.node>svg{display:block;overflow:visible}.interactive{cursor:pointer}.interactive:focus-visible{outline:2px solid #5b9fff!important;outline-offset:3px!important}#overlay{position:fixed;inset:auto;margin:0;container-type:inline-size;padding:0;border:0;background:transparent;max-width:none;max-height:none;overflow:visible}#overlay::backdrop{background:transparent}.overlay-layer{position:absolute;inset:0;background:rgba(0,0,0,0.392157)}.overlay-layer>.node{position:absolute!important}#prototype-error{color:#fff;background:#a22;margin:0}#prototype-error:empty{display:none}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}";
+const BASE_CSS: &str = "*{box-sizing:border-box}body{margin:0;background:#17191d;font-family:system-ui,sans-serif}#stage{display:flex;justify-content:center;min-height:100vh;width:clamp(240px,100%,2560px);margin:0 auto;container-type:inline-size}.node{flex-shrink:0}.node>svg{display:block;overflow:visible}.node[data-text-ink]>svg{width:calc(var(--ink-width)*var(--text-scale)*1px);height:calc(var(--ink-height)*var(--text-scale)*1px);max-width:none}.interactive{cursor:pointer}.interactive:focus-visible{outline:2px solid #5b9fff!important;outline-offset:3px!important}#overlay{position:fixed;inset:auto;margin:0;container-type:inline-size;padding:0;border:0;background:transparent;max-width:none;max-height:none;overflow:visible}#overlay::backdrop{background:transparent}.overlay-layer{position:absolute;inset:0;background:rgba(0,0,0,0.392157)}.overlay-layer>.node{position:absolute!important}#prototype-error{color:#fff;background:#a22;margin:0}#prototype-error:empty{display:none}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}";
 const PROTOTYPE_RUNTIME: &str = include_str!("layout_export/prototype.js");
 
 #[cfg(test)]

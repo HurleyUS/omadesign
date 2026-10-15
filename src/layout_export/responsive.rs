@@ -93,17 +93,28 @@ pub(super) fn breakpoints(shape: &Shape, scope: &str) -> String {
                 })
                 .unwrap_or(0.0)
                 * ratio;
-            let _ = write!(
-                text_css,
-                "[data-state=\"{scope}\"][data-node=\"{}\"]>span{{font-size:{px:.3}px!important;line-height:{leading:.3}px!important;letter-spacing:{:.3}px!important;top:{top:.3}px!important;{} }}",
-                shape.id,
-                run.tracking * ratio,
-                if shape.layout.width == Sizing::Hug {
-                    "width:max-content!important;"
-                } else {
-                    ""
+            if run.wrap_width.is_none() {
+                let size = text_box(shape);
+                let _ = write!(css, "--text-scale:{ratio:.9};");
+                if shape.layout.width == Sizing::Hug || shape.layout.width == Sizing::Fixed {
+                    let _ = write!(css, "width:{:.6}px;", size.x * ratio);
                 }
-            );
+                if shape.layout.height != Sizing::Fill {
+                    let _ = write!(css, "height:{:.6}px;", size.y * ratio);
+                }
+            } else {
+                let _ = write!(
+                    text_css,
+                    "[data-state=\"{scope}\"][data-node=\"{}\"]>span{{font-size:{px:.3}px!important;line-height:{leading:.3}px!important;letter-spacing:{:.3}px!important;top:{top:.3}px!important;{} }}",
+                    shape.id,
+                    run.tracking * ratio,
+                    if shape.layout.width == Sizing::Hug {
+                        "width:max-content!important;"
+                    } else {
+                        ""
+                    }
+                );
+            }
         }
         let _ = write!(
             output,

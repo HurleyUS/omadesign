@@ -309,6 +309,41 @@ fn conflicting_variant_rules_are_scoped_to_emitted_state_and_export_deterministi
             serde_json::json!({"a":a,"instance":instance,"other":other,"label":label_instance,"compact":v1,"wide":v2}).to_string(),
         )
         .unwrap();
+        let mut expectations = Vec::new();
+        for width in [390., 599., 600., 601., 768., 1440.] {
+            let mut resized = reopened.layout_snapshot();
+            let mut geometry = resized.find_shape(0, a).unwrap().geom.clone();
+            crate::layout::set_bounds(
+                &mut geometry,
+                crate::geom::Bounds::from_min_size(Pt::ZERO, Pt::new(width, 400.)),
+            );
+            crate::layout::apply_resize(&mut resized, &[(0, a, geometry)], &[(0, a)]);
+            for (name, trigger) in [
+                ("base", None),
+                ("compact", Some(Trigger::Click)),
+                ("wide", Some(Trigger::Hover)),
+            ] {
+                let mut state = crate::layout_prototype::PrototypeState::default();
+                state.start(&resized, a).unwrap();
+                if let Some(trigger) = trigger {
+                    state.activate(&resized, instance, trigger).unwrap();
+                }
+                let preview = state.preview_document(&resized).unwrap();
+                let mut shapes = Vec::new();
+                for id in [instance, other, label_instance] {
+                    let shape = preview.find_shape(0, id).unwrap();
+                    let b = shape.geom.bbox();
+                    let resolved = crate::layout::resolve_for_width(&shape.layout, width);
+                    shapes.push(serde_json::json!({"id":id,"x":b.min.x,"y":b.min.y,"width":b.width(),"height":b.height(),"baseline":if let Geom::Text(run)=&shape.geom{Some(crate::text::caret_pt(run,0).y)}else{None},"px":if let Geom::Text(run)=&shape.geom{Some(run.px)}else{None},"gap":resolved.stack.as_ref().map(|s|s.gap),"direction":resolved.stack.as_ref().map(|s|s.direction)}));
+                }
+                expectations.push(serde_json::json!({"width":width,"state":name,"shapes":shapes}));
+            }
+        }
+        std::fs::write(
+            path.join("variant-expected.json"),
+            serde_json::to_string(&expectations).unwrap(),
+        )
+        .unwrap();
     }
 }
 
@@ -668,6 +703,52 @@ fn capped_hug_and_fraction_tracks_keep_the_hand_derived_budget_in_exports() {
     if let Ok(directory) = std::env::var("OMADESIGN_LAYOUT_PROOF") {
         std::fs::write(
             std::path::Path::new(&directory).join("grid-limits.html"),
+            export_html(&doc, 0, id).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn legacy_uniform_grid_retains_one_pixel_tracks_when_the_viewport_is_narrow() {
+    let mut doc = Document::new("Dense legacy grid", 240., 40., 96.);
+    doc.layers = vec![Layer::vector("Grid")];
+    let mut root = make_frame(Pt::ZERO, Pt::new(240., 40.));
+    let id = root.id;
+    root.layout.stack = Some(crate::layout::AutoStack {
+        flow: StackFlow::Grid,
+        columns: 256,
+        padding: [0.; 4],
+        gap: 0.,
+        cross_gap: 0.,
+        ..Default::default()
+    });
+    doc.layers[0].kind.shapes_mut().unwrap().push(root);
+    let mut last = 0;
+    for column in 0..256 {
+        let mut child = Shape::new(
+            Geom::Rect {
+                origin: Pt::ZERO,
+                size: Pt::new(20., 20.),
+                radius: 0.,
+            },
+            Style::default(),
+        );
+        child.name = format!("Legacy column {column}");
+        child.layout.parent = Some(id);
+        child.layout.width = Sizing::Fill;
+        child.layout.height = Sizing::Fill;
+        last = child.id;
+        doc.layers[0].kind.shapes_mut().unwrap().push(child);
+    }
+    crate::layout::reflow(&mut doc, 0, id);
+    let doc = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+    let bounds = doc.find_shape(0, last).unwrap().geom.bbox();
+    assert_eq!(bounds.min.x, 255.);
+    assert_eq!(bounds.width(), 1.);
+    if let Ok(directory) = std::env::var("OMADESIGN_LAYOUT_PROOF") {
+        std::fs::write(
+            std::path::Path::new(&directory).join("grid-legacy.html"),
             export_html(&doc, 0, id).unwrap(),
         )
         .unwrap();
