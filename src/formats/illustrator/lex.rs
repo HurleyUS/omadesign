@@ -95,11 +95,6 @@ impl<'a> Lexer<'a> {
         rest.get(..n).unwrap_or_default()
     }
 
-    /// Where the next token is looked for.
-    pub fn offset(&self) -> usize {
-        self.pos
-    }
-
     /// The data from `from` to `to` (empty where that isn't in it).
     pub fn slice(&self, from: usize, to: usize) -> &'a [u8] {
         self.src.get(from..to).unwrap_or_default()

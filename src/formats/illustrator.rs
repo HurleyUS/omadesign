@@ -35,6 +35,17 @@ pub fn read_with_path(
     }
     let data = editing_data(bytes)?;
     let (mut doc, mut notes) = reader::read(&data, name, path)?;
+    let id = doc.retain_source(crate::source_attachment::SourceAttachment::new(
+        name,
+        "illustrator",
+        bytes.to_vec(),
+    )?);
+    for layer in &mut doc.layers {
+        if layer.source_attachment.is_none() {
+            layer.source_attachment = Some(id.clone());
+        }
+    }
+    doc.validate_sources()?;
     notes.insert(0, "Illustrator editing data imported as native editable artwork; the PDF preview was not used as its document structure.".into());
     doc.import_notes = notes.clone();
     Ok((doc, notes))

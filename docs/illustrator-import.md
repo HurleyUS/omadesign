@@ -41,14 +41,15 @@ EPS ASCII85, legacy editable text, group hierarchy, multiple artboards,
 compound paths, unsupported-feature notes, malformed input, linked source
 deduplication and native save/reopen.
 
-The ignored `illustrator_independent_real_fixture_without_pdf_preview_and_oma_reopen`
-test reads a directory given by `OMADESIGN_ILLUSTRATOR_FIXTURE`. It requires the
+The ignored `illustrator_independent_` tests read a directory given by
+`OMADESIGN_ILLUSTRATOR_FIXTURE`. They require the
 following independent, real Illustrator files. They are deliberately absent
 from this repository:
 
 - `Test-Inkscape-LineIssue.ai` and `.svg`, supplied by their author in
   [Ink/Stitch issue 1623](https://github.com/inkstitch/inkstitch/issues/1623).
-  The test compares stroke placement and widths against the author's SVG.
+  The test compares stroke placement and widths against the author's SVG parsed
+  directly by usvg, independently of Omadesign's SVG import conversions.
   The attachment has no explicit redistribution license.
 - `font_template.ai` from
   [fontpixel/font-template at 6b613e2](https://github.com/fontpixel/font-template/blob/6b613e2d73d7189b754db04fb5c62e198594d882/font_template.ai),
@@ -59,6 +60,13 @@ from this repository:
   Its text engine contains 107 stories. The root README names ISC while the
   subdirectory's license is MIT; this fixture is used only for local, read-only
   QA without assuming redistribution rights.
+  Its editing data has five artboards (`xs`, `sm`, `md`, `lg`, `xl`); the single
+  PDF page has the `xl` crop size but contains Adobe's no-PDF-content notice.
+  The test checks all five names and placements, then compares an exact multiset
+  of 104 live story texts against independent qpdf/Node ATE extraction. It keeps
+  paragraph breaks, blank lines and duplicate text occurrences; three orphan
+  stories and 61 undo records are not active artwork. The reusable extractor is
+  `node scripts/inspect-ai-live-text.mjs INPUT.ai OUTPUT.json [POPPLER-TEXT.html]`.
 
 The test removes every PDF page's `Contents`, confirms identical editing data,
 and compares the resulting native geometry, paint and artboards with the
@@ -67,3 +75,21 @@ checks native save/reopen. The generated and independent real-file checks are
 separate. Passing software checks does not establish a native Illustrator
 opening/saving session, human visual acceptance, or a new Illustrator-data
 writer roundtrip.
+
+The font fixture checks words from the independent PDF artwork against native
+characters; it does not compare per-story multiplicity or font metrics. The
+Reuters multiset checks exact characters and repeated bodies, without proving
+text placement or painter order. The author's SVG checks stroke bounds and
+widths, without proving all colors, dashes, caps, joins or gradients. Real layer
+names, parentage and painter order still need an independent source oracle;
+the generated hierarchy test covers the controlled layer/group/path case.
+
+Each real fixture also exports its first artboard after OMA reopen. Independent
+usvg/resvg and qpdf/Poppler checks require valid dimensions and visible SVG/PDF
+artwork in previews capped at 320 pixels. These checks cover portable output
+from the reopened native artwork, with source-bound receipts and export notes.
+They do not compare every artboard or establish pixel fidelity to Illustrator.
+
+Shared SVG type can replace the fallback only when it preserves the source
+characters and paragraph breaks exactly. Otherwise the editable ATE text stays
+available and a saved diagnostic identifies the fallback layout.

@@ -117,10 +117,12 @@ struct Reader<'a> {
     raster: Option<(String, Vec<V>)>,
     source: Option<&'a Path>,
     texts: Option<super::text::Texts>,
+    text_slots: Vec<(u64, usize, usize, bool)>,
     last: Option<u64>,
     objects: usize,
     sources: HashMap<String, crate::source_attachment::SourceAttachment>,
     source_bytes: usize,
+    raster_placements: HashMap<u64, [f32; 6]>,
 }
 
 /// Reconstruct native artwork.
@@ -156,10 +158,12 @@ pub(super) fn read(
         raster: None,
         source,
         texts: super::text::Texts::read(data),
+        text_slots: vec![],
         last: None,
         objects: 0,
         sources: HashMap::new(),
         source_bytes: 0,
+        raster_placements: HashMap::new(),
     };
     while let Some(token) = reader.lex.next_token() {
         if reader.values.len() > 1_000_000 || reader.layers.len() > 100_000 {
@@ -404,25 +408,32 @@ impl Reader<'_> {
         if frame.kind != kind {
             return Err(format!("Unbalanced Illustrator {kind}"));
         }
+        let mut layer = frame.layer;
         if kind == "Compound" && !frame.contours.is_empty() {
             let geom = Geom::Paths {
                 paths: frame.contours,
                 winding: self.state.winding,
             };
             let shape = self.shape(geom, frame.paint.0, frame.paint.1);
-            let mut layer = Layer::vector("Compound path");
-            layer.parent = frame.layer.parent;
-            layer.kind.shapes_mut().unwrap().push(shape);
-            self.last = Some(layer.id);
-            self.layers.push(layer);
-        } else {
-            let mut layer = frame.layer;
-            if let Some(clip) = frame.clip {
-                layer.artwork_masks.push(ArtworkMask::new(clip));
+            let mut compound = Layer::vector("Compound path");
+            compound.kind.shapes_mut().unwrap().push(shape);
+            if self
+                .layers
+                .iter()
+                .any(|child| child.parent == Some(layer.id))
+            {
+                compound.parent = Some(layer.id);
+                self.layers.push(compound);
+            } else {
+                compound.parent = layer.parent;
+                layer = compound;
             }
-            self.last = Some(layer.id);
-            self.layers.push(layer);
         }
+        if let Some(clip) = frame.clip {
+            layer.artwork_masks.push(ArtworkMask::new(clip));
+        }
+        self.last = Some(layer.id);
+        self.layers.push(layer);
         self.state = frame.state;
         Ok(())
     }
@@ -494,12 +505,10 @@ impl Reader<'_> {
                         (pt.y - bounds.min.y) / size.y.max(0.0001),
                     ]
                 };
-                let gradient = Gradient {
-                    kind: *kind,
-                    from: norm(place.from),
-                    to: norm(place.to),
-                    stops: stops.clone(),
-                };
+                let mut gradient = Gradient::new(*kind, Rgba::BLACK, Rgba::WHITE);
+                gradient.from = norm(place.from);
+                gradient.to = norm(place.to);
+                gradient.stops = stops.clone();
                 if place.stroke {
                     if let Some(stroke) = shape.style.stroke.as_mut() {
                         stroke.gradient = Some(gradient);
@@ -984,7 +993,7 @@ impl Reader<'_> {
         }
     }
 
-    fn dictionary(&mut self, obj: &Obj, _hidden: bool) -> Result<(), String> {
+    fn dictionary(&mut self, obj: &Obj, hidden: bool) -> Result<(), String> {
         if obj.ty == "Document" {
             fn find<'a>(obj: &'a Obj, key: &str, depth: usize) -> Option<&'a Obj> {
                 if depth > 64 {
@@ -1063,12 +1072,17 @@ impl Reader<'_> {
                 .texts
                 .as_ref()
                 .and_then(|texts| texts.shape(story, frame, template));
-            if let Some((shape, notes)) = shape {
+            if let Some((mut shape, notes)) = shape {
                 for note in notes {
                     self.note(note);
                 }
+                shape.visible = self.state.visible;
+                shape.locked = self.state.locked;
+                shape.opacity = self.state.opacity;
+                shape.blend = self.state.blend;
                 let mut layer = Layer::vector("Text");
                 layer.kind.shapes_mut().unwrap().push(shape);
+                self.text_slots.push((layer.id, story, frame, hidden));
                 self.add(layer)?;
             } else {
                 self.note(format!("Illustrator story {story}, frame {frame} could not be reconstructed as editable type."));
@@ -1090,6 +1104,8 @@ impl Reader<'_> {
                 stroke: None,
             });
             let mut shape = Shape::new(Geom::Text(text), style);
+            shape.visible = self.state.visible;
+            shape.locked = self.state.locked;
             shape.opacity = self.state.opacity;
             shape.blend = self.state.blend;
             let mut layer = Layer::vector("Text");
@@ -1155,6 +1171,7 @@ impl Reader<'_> {
                 .map(|t| (8191.5 - (t[0] + t[2]) / 2., 8191.5 + (t[1] + t[3]) / 2.))
                 .unwrap_or((place.bounds[0], place.bounds[1]));
             let origin = Pt::new(a * ox + c * oy + tx, b * ox + d * oy + ty);
+            let (sx, sy) = (w / pixels.w.max(1) as f32, h / pixels.h.max(1) as f32);
             let mut layer = Layer::placed_raster(
                 place.path.clone(),
                 pixels,
@@ -1162,13 +1179,10 @@ impl Reader<'_> {
                 Pt::new(w * a.hypot(b), h * c.hypot(d)),
             );
             layer.source_attachment = source_id;
-            if let crate::document::LayerKind::Raster {
-                rotation, shear, ..
-            } = &mut layer.kind
-            {
-                *rotation = b.atan2(a);
-                *shear = (a * c + b * d) / (a * d - b * c).abs().max(1e-6);
-            }
+            self.raster_placements.insert(
+                layer.id,
+                [a * sx, b * sx, c * sy, d * sy, origin.x, origin.y],
+            );
             if preview_only {
                 self.note(format!("Linked picture {} uses its saved preview; relink the original file for full resolution.",place.path));
             }
@@ -1255,23 +1269,31 @@ impl Reader<'_> {
         let pixels = crate::document::Pixels::from_rgba(w, h, rgba)
             .ok_or("Invalid Illustrator image samples")?;
         let [a, b, c, d, tx, ty] = matrix;
-        let mut layer = Layer::placed_raster(
+        let layer = Layer::placed_raster(
             "Embedded picture",
             pixels,
             Pt::new(tx, ty),
             Pt::new(w as f32 * a.hypot(b), h as f32 * c.hypot(d)),
         );
-        if let crate::document::LayerKind::Raster {
-            rotation, shear, ..
-        } = &mut layer.kind
-        {
-            *rotation = b.atan2(a);
-            *shear = (a * c + b * d) / (a * d - b * c).abs().max(1e-6);
-        }
+        self.raster_placements
+            .insert(layer.id, [a, -b, c, -d, tx, ty]);
         self.add(layer)
     }
 
     fn finish(mut self, name: &str) -> Result<(Document, Vec<String>), String> {
+        let plain = self
+            .text_slots
+            .iter()
+            .filter(|(_, _, _, hidden)| !hidden)
+            .map(|(_, story, frame, _)| (*story, *frame))
+            .collect::<std::collections::HashSet<_>>();
+        let copies = self
+            .text_slots
+            .iter()
+            .filter(|(_, story, frame, hidden)| *hidden && plain.contains(&(*story, *frame)))
+            .map(|(id, _, _, _)| *id)
+            .collect::<std::collections::HashSet<_>>();
+        self.layers.retain(|l| !copies.contains(&l.id));
         if self.layers.is_empty() {
             return Err("Illustrator editing data contains no supported artwork".into());
         }
@@ -1336,15 +1358,10 @@ impl Reader<'_> {
                     }
                 }
             }
-            if let crate::document::LayerKind::Raster {
-                origin,
-                size,
-                rotation,
-                ..
-            } = &mut layer.kind
-            {
-                *origin = transform(*origin) - Pt::new(0., size.y);
-                *rotation = -*rotation;
+            if let Some(matrix) = self.raster_placements.get(&layer.id) {
+                if place_pixels(layer, *matrix, first)? {
+                    self.notes.insert("Sheared Illustrator pictures are resampled into placed raster layers; retained linked source bytes remain unchanged.".into());
+                }
             }
         }
         let mut doc = Document::new(name, 1., 1., 72.);
@@ -1369,6 +1386,90 @@ impl Reader<'_> {
                 board
             })
             .collect();
+        if let Some(texts) = &self.texts {
+            let mut body = String::new();
+            let mut targets = HashMap::new();
+            let template = self
+                .template
+                .map(|t| ((t[0] + t[2]) / 2., (t[1] + t[3]) / 2.))
+                .unwrap_or((0., 0.));
+            for (layer, story, frame, _) in &self.text_slots {
+                if !doc.layers.iter().any(|l| l.id == *layer) {
+                    continue;
+                }
+                let id = format!("ai-type-{layer}");
+                if let Some(svg) = texts.svg_story(*story, *frame, template, first, &id) {
+                    body.push_str(&svg);
+                    targets.insert(id, *layer);
+                }
+            }
+            if !body.is_empty() {
+                let svg = format!(
+                    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\">{body}</svg>",
+                    doc.width, doc.height
+                );
+                match crate::formats::svg::read(&svg, "Illustrator type") {
+                    Ok((typed, notes)) => {
+                        for shape in typed
+                            .layers
+                            .iter()
+                            .filter_map(|l| l.kind.shapes())
+                            .flatten()
+                        {
+                            if !matches!(&shape.geom, Geom::Text(_)) {
+                                continue;
+                            }
+                            if let Some(layer) = targets
+                                .get(&shape.name)
+                                .and_then(|id| doc.layers.iter_mut().find(|l| l.id == *id))
+                                && let Some(original) =
+                                    layer.kind.shapes_mut().and_then(|s| s.first_mut())
+                            {
+                                let (Geom::Text(source), Geom::Text(imported)) =
+                                    (&original.geom, &shape.geom)
+                                else {
+                                    continue;
+                                };
+                                if source.content != imported.content {
+                                    self.notes.insert("Illustrator source text keeps its original characters and paragraph breaks; the shared SVG type importer changed its content, so native fallback layout is retained.".into());
+                                    continue;
+                                }
+                                original.geom = shape.geom.clone();
+                                original.style = shape.style.clone();
+                                original.rotation = shape.rotation;
+                            }
+                        }
+                        self.notes
+                            .extend(notes.into_iter().map(|n| format!("Illustrator type: {n}")));
+                    }
+                    Err(error) => {
+                        self.notes.insert(format!("Illustrator styled type could not use the shared SVG importer: {error}. Editable source characters remain available."));
+                    }
+                }
+            }
+        }
+        for layer in &mut doc.layers {
+            if let Some(shapes) = layer.kind.shapes_mut() {
+                for shape in shapes {
+                    crate::text::fill_contours(&mut shape.geom);
+                    if self.text_slots.iter().any(|(id, _, _, _)| *id == layer.id)
+                        && shape.rotation.abs() > 1e-6
+                    {
+                        let anchor = if let Geom::Text(text) = &shape.geom {
+                            text.origin
+                        } else {
+                            continue;
+                        };
+                        let centre = shape.geom.bbox().center();
+                        shape
+                            .geom
+                            .translate(centre.rotate_about(anchor, shape.rotation) - centre);
+                    }
+                }
+            }
+        }
+        doc.validate_hierarchy()
+            .map_err(|error| format!("Invalid Illustrator artwork hierarchy: {error}"))?;
         Ok((doc, self.notes.into_iter().collect()))
     }
 }
@@ -1407,4 +1508,78 @@ fn preview(data: &[u8]) -> Option<crate::document::Pixels> {
         }
     }
     crate::document::Pixels::from_rgba(w as u32, h as u32, rgba)
+}
+
+/// Place picture pixels using their exact Illustrator affine.
+/// `matrix` maps pixel coordinates to art space and `board` gives its first
+/// artboard. Returns whether shear required resampling; rotation and reflection
+/// keep the original sample grid with a native placement transform.
+fn place_pixels(layer: &mut Layer, matrix: [f32; 6], board: [f32; 4]) -> Result<bool, String> {
+    use crate::document::{LayerKind, Pixels};
+    let LayerKind::Raster {
+        pixels,
+        origin,
+        size,
+        rotation,
+        shear,
+    } = &mut layer.kind
+    else {
+        return Ok(false);
+    };
+    if !matrix.iter().all(|v| v.is_finite() && v.abs() < 1e8) {
+        return Err("Invalid Illustrator picture transform".into());
+    }
+    let [a, b, c, d, tx, ty] = matrix;
+    let top_left = Pt::new(tx - board[0], board[3] - ty);
+    let dx = Pt::new(a * pixels.w as f32, -b * pixels.w as f32);
+    let dy = Pt::new(c * pixels.h as f32, -d * pixels.h as f32);
+    let dimensions = Pt::new(dx.length(), dy.length());
+    if dimensions.x <= 0.0001 || dimensions.y <= 0.0001 || dx.cross(dy).abs() < 1e-10 {
+        return Err("Degenerate Illustrator picture transform".into());
+    }
+    if dx.dot(dy).abs() < dimensions.x * dimensions.y * 0.0001 {
+        if dx.cross(dy) < 0. {
+            let row = pixels.w as usize * 4;
+            for y in 0..pixels.h as usize / 2 {
+                let opposite = pixels.h as usize - y - 1;
+                for x in 0..row {
+                    pixels.data.swap(y * row + x, opposite * row + x);
+                }
+            }
+            pixels.touch();
+        }
+        let centre = top_left + (dx + dy) * 0.5;
+        *origin = centre - dimensions * 0.5;
+        *size = dimensions;
+        *rotation = dx.y.atan2(dx.x);
+        *shear = 0.;
+        return Ok(false);
+    }
+    let corners = [top_left, top_left + dx, top_left + dy, top_left + dx + dy];
+    let min = corners.iter().copied().reduce(Pt::min).unwrap();
+    let max = corners.iter().copied().reduce(Pt::max).unwrap();
+    let width = (max.x - min.x).ceil().max(1.) as u32;
+    let height = (max.y - min.y).ceil().max(1.) as u32;
+    if width as u64 * height as u64 > 32 << 20 {
+        return Err("Transformed Illustrator picture exceeds 32 megapixels".into());
+    }
+    let mut output = tiny_skia::Pixmap::new(width, height)
+        .ok_or("Could not allocate transformed Illustrator picture")?;
+    let input = pixels
+        .to_pixmap()
+        .ok_or("Invalid Illustrator picture pixels")?;
+    output.draw_pixmap(
+        0,
+        0,
+        input.as_ref(),
+        &tiny_skia::PixmapPaint::default(),
+        tiny_skia::Transform::from_row(a, -b, c, -d, top_left.x - min.x, top_left.y - min.y),
+        None,
+    );
+    *pixels = Pixels::from_pixmap(&output);
+    *origin = min;
+    *size = Pt::new(width as f32, height as f32);
+    *rotation = 0.;
+    *shear = 0.;
+    Ok(true)
 }
