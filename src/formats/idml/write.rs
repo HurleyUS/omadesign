@@ -38,6 +38,13 @@ pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
             );
         }
     }
+    for l in &doc.layers {
+        if doc.publishing.inherited_layers.contains(&l.id)
+            && doc.publishing.inherited_fingerprints.get(&l.id) != Some(&fingerprint(l)?)
+        {
+            return Err("A master preview was edited. Save .oma to retain that edit; IDML master overrides are not supported.".into());
+        }
+    }
     let inherited: HashSet<_> = doc.publishing.inherited_layers.iter().copied().collect();
     for l in &doc.layers {
         if inherited.contains(&l.id) {
@@ -199,7 +206,7 @@ pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
         "Resources/Styles.xml".into(),
         package("Styles", &styles).into_bytes(),
     ));
-    let mut colors = "<Swatch Self=\"Swatch/None\" Name=\"None\"/>".into();
+    let mut colors: String = "<Swatch Self=\"Swatch/None\" Name=\"None\"/>".into();
     for (id, c) in &ex.colors {
         colors += &format!(
             "<Color Self=\"{}\" Name=\"{}\" Model=\"Process\" Space=\"RGB\" ColorValue=\"{} {} {}\"/>",
@@ -235,6 +242,7 @@ pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
         xml(&doc.name)
     );
     parts.insert(0, ("designmap.xml".into(), design.into_bytes()));
+    parts.push(("META-INF/container.xml".into(), b"<?xml version=\"1.0\"?><container xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\" version=\"1.0\"><rootfiles><rootfile full-path=\"designmap.xml\" media-type=\"text/xml\"/></rootfiles></container>".to_vec()));
     let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
     w.start_file(
         "mimetype",
@@ -245,6 +253,8 @@ pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
         .map_err(|e| e.to_string())?;
     let mut total = 0;
     for (name, bytes) in parts {
+        roxmltree::Document::parse(std::str::from_utf8(&bytes).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Invalid generated IDML {name}: {e}"))?;
         total += bytes.len();
         if bytes.len() as u64 > MAX_PART || total > MAX_TOTAL {
             return Err("IDML export exceeds expanded package budget".into());

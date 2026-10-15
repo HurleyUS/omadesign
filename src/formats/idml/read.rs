@@ -139,6 +139,14 @@ pub fn read_with_links(
     im.doc.bleed = im.doc.publishing.bleed.into_iter().fold(0., f32::max);
     im.doc.show_bleed = im.doc.bleed > 0.;
     crate::text_geometry::reflow(&mut im.doc);
+    for l in &im.doc.layers {
+        if im.doc.publishing.inherited_layers.contains(&l.id) {
+            im.doc
+                .publishing
+                .inherited_fingerprints
+                .insert(l.id, fingerprint(l)?);
+        }
+    }
     im.doc.validate_hierarchy()?;
     Ok((im.doc, im.notes))
 }

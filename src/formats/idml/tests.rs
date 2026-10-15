@@ -178,3 +178,52 @@ fn emits_standard_zip_xml_without_native_sidecar() {
         }
     }
 }
+
+#[test]
+fn master_preview_edits_are_never_silently_discarded() {
+    let (mut doc, _) = read(FIXTURE, "Publishing").unwrap();
+    let id = doc.publishing.inherited_layers[0];
+    doc.layers.iter_mut().find(|l| l.id == id).unwrap().opacity = 0.5;
+    assert!(
+        write(&doc)
+            .unwrap_err()
+            .contains("master preview was edited")
+    );
+}
+
+#[test]
+fn styled_font_ranges_shape_and_edit_with_native_character_indices() {
+    use crate::geom::{CharSpan, TypeRun};
+    let font = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/assets/fonts/EBGaramond.ttf"
+    );
+    let mut run = TypeRun {
+        content: "Café bold".into(),
+        font: font.into(),
+        px: 20.,
+        spans: vec![CharSpan {
+            start: 5,
+            end: 9,
+            font: Some(font.into()),
+            publishing_style: Some("CharacterStyle/Emphasis".into()),
+            hscale: Some(140.),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let before = crate::text::compose(&run);
+    assert!(
+        before[0]
+            .glyphs
+            .iter()
+            .all(|g| !crate::text::glyph_contours(&run, g).is_empty() || g.is_space)
+    );
+    run.replace_text(0, 4, "Résumé", None);
+    assert_eq!(run.spans[0].start, 7);
+    assert_eq!(run.spans[0].end, 11);
+    assert_eq!(
+        run.spans[0].publishing_style.as_deref(),
+        Some("CharacterStyle/Emphasis")
+    );
+}

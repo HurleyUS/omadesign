@@ -179,3 +179,11 @@ fn package(kind: &str, body: &str) -> String {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><idPkg:{kind} xmlns:idPkg=\"{NS}\" DOMVersion=\"16.0\">{body}</idPkg:{kind}>"
     )
 }
+
+fn fingerprint(layer: &crate::document::Layer) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(layer).map_err(|e| e.to_string())?)
+    ))
+}

@@ -18,6 +18,7 @@ pub struct Publishing {
     pub links: BTreeMap<u64, String>,
     /// Locked master previews are generated from the retained source, not exported twice.
     pub inherited_layers: Vec<u64>,
+    pub inherited_fingerprints: BTreeMap<u64, String>,
 }
 impl Publishing {
     /// Detect publishing data. Takes this record and returns whether it is empty.
