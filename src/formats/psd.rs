@@ -223,6 +223,10 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
         if let Some((key, data)) = &record.smart_data {
             match smart::decode(*key, data, &layer, None, &mut warnings) {
                 Ok(mut smart) => {
+                    smart.retained_blocks = record.smart_blocks.clone();
+                    if !smart.retained_blocks.is_empty() {
+                        warn(&mut warnings, "Photoshop smart-filter masks are retained for export with the saved preview; native recomputation requires disabling those filters.");
+                    }
                     let psd_id = smart
                         .descriptor
                         .get("Idnt")
