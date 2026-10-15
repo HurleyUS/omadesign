@@ -1,6 +1,8 @@
 //! Decode large documents away from the UI thread; apply results on their owner.
 use super::*;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 #[derive(Clone, Copy)]
 pub(super) enum ImportMode {
@@ -21,6 +23,13 @@ pub(super) struct ImportJob {
     mode: ImportMode,
     owner: String,
     frame: Option<(usize, u64)>,
+    stage: Arc<Mutex<&'static str>>,
+    started: Instant,
+}
+pub(super) struct FileFailure {
+    path: PathBuf,
+    mode: ImportMode,
+    message: String,
 }
 enum Completed {
     Imported(crate::import::Imported),
@@ -103,12 +112,16 @@ impl Studio {
         }
         let (tx, receiver) = mpsc::channel();
         let input = path.clone();
+        let stage = Arc::new(Mutex::new("Opening document"));
+        let progress = Arc::clone(&stage);
         std::thread::spawn(move || {
             if matches!(mode, ImportMode::Recover | ImportMode::RecoverBackground) {
                 let _ = tx.send(crate::project::load_swap(&input).map(Completed::Recovered));
                 return;
             }
-            let result = crate::import::open_any(&input).and_then(|imported| {
+            let result = crate::import::open_with_progress(&input, |value| {
+                if let Ok(mut stage) = progress.lock() { *stage = value; }
+            }).and_then(|imported| {
                 if let crate::import::Imported::Photo(photo) = imported {
                     crate::formats::cli::photo_document(&photo)
                         .map(crate::import::Imported::Document)
@@ -128,6 +141,8 @@ impl Studio {
             mode,
             owner: self.swap_id.clone(),
             frame,
+            stage,
+            started: Instant::now(),
         });
     }
 
@@ -157,6 +172,8 @@ impl Studio {
             mode: ImportMode::PhotoToDesign,
             owner: self.swap_id.clone(),
             frame: None,
+            stage: Arc::new(Mutex::new("Developing full-resolution photo")),
+            started: Instant::now(),
         });
     }
 
@@ -194,6 +211,7 @@ impl Studio {
                         "Could not {action} {}: {error}",
                         job.path.file_name().unwrap_or_default().to_string_lossy()
                     );
+                    self.file_failures.push(FileFailure { path: job.path, mode: job.mode, message: self.status.clone() });
                 }
                 Ok(Completed::Exported(notes)) => {
                     crate::telemetry::count("feature.export");
@@ -386,7 +404,52 @@ impl Studio {
             mode: ImportMode::Export,
             owner: self.swap_id.clone(),
             frame: None,
+            stage: Arc::new(Mutex::new("Writing export")),
+            started: Instant::now(),
         });
+    }
+
+    pub(super) fn file_activity_windows(&mut self, ctx: &egui::Context) {
+        if !self.file_jobs.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            egui::Window::new("Working on files")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0., 70.))
+                .show(ctx, |ui| {
+                    for job in &self.file_jobs {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(job.path.file_name().unwrap_or_default().to_string_lossy());
+                        });
+                        let stage = job.stage.lock().map(|stage| *stage).unwrap_or("Working");
+                        ui.label(format!("{stage} · {:.0} s elapsed", job.started.elapsed().as_secs_f32()));
+                    }
+                    if !self.pending_open_files.is_empty() {
+                        ui.label(format!("{} more files queued", self.pending_open_files.len()));
+                    }
+                });
+        }
+        if self.file_failures.is_empty() { return; }
+        let mut open = true;
+        let mut retry = None;
+        egui::Window::new("Files need attention").open(&mut open).default_width(520.)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().max_height(360.).show(ui, |ui| {
+                    for (index, failure) in self.file_failures.iter().enumerate() {
+                        ui.label(&failure.message);
+                        if matches!(failure.mode, ImportMode::Open | ImportMode::OpenBackground | ImportMode::Template | ImportMode::Recover | ImportMode::RecoverBackground)
+                            && ui.button("Retry").clicked() { retry = Some(index); }
+                        ui.separator();
+                    }
+                });
+            });
+        if !open { self.file_failures.clear(); }
+        else if let Some(index) = retry {
+            let failure = self.file_failures.remove(index);
+            self.pending_open_files.push_back((failure.path, failure.mode));
+            self.start_next_open();
+        }
     }
 
     pub(super) fn import_notes_window(&mut self, ctx: &egui::Context) {
@@ -417,6 +480,37 @@ impl Studio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_activity_and_failures_remain_visible_without_replacing_work() {
+        let folder = TestFolder::new();
+        let path = folder.0.join("broken.svg");
+        std::fs::write(&path, "<svg>broken").unwrap();
+        let mut studio = Studio::new();
+        let before = serde_json::to_value(&studio.doc).unwrap();
+        studio.open_paths(vec![path]);
+        let ctx = egui::Context::default();
+        let text = |studio: &mut Studio| {
+            let mut result = String::new();
+            for _ in 0..3 {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| studio.file_activity_windows(ui.ctx()));
+                output.textures_delta.clear();
+                for shape in output.shapes {
+                    if let egui::Shape::Text(text) = shape.shape { result.push_str(&text.galley.job.text); }
+                }
+            }
+            result
+        };
+        let pending = text(&mut studio);
+        assert!(pending.contains("Working on files") && pending.contains("broken.svg") && pending.contains("elapsed"), "{pending}");
+        finish_jobs(&mut studio);
+        assert_eq!(studio.file_failures.len(), 1);
+        studio.status = "Another action".into();
+        let failed = text(&mut studio);
+        assert!(failed.contains("Files need attention") && failed.contains("Could not open broken.svg") && failed.contains("Retry"), "{failed}");
+        assert_eq!(serde_json::to_value(&studio.doc).unwrap(), before);
+        assert!(studio.file_jobs.is_empty());
+    }
 
     struct TestFolder(PathBuf);
     impl TestFolder {
@@ -880,6 +974,8 @@ mod tests {
             mode: ImportMode::Open,
             owner: studio.swap_id.clone(),
             frame: None,
+            stage: Arc::new(Mutex::new("Opening document")),
+            started: Instant::now(),
         });
         studio.poll_file_jobs(&egui::Context::default());
         assert_eq!(studio.tab_count(), 2);
@@ -925,6 +1021,8 @@ mod tests {
             mode: ImportMode::Place,
             owner: studio.swap_id.clone(),
             frame: None,
+            stage: Arc::new(Mutex::new("Opening document")),
+            started: Instant::now(),
         });
         studio.poll_file_jobs(&ctx);
         studio.ingest_dropped(std::path::Path::new("ignored.oma"), None);

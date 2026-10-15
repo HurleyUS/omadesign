@@ -37,6 +37,11 @@ pub fn classify(path: &Path) -> &'static str {
 }
 
 pub fn open_any(path: &Path) -> Result<Imported, String> {
+    open_with_progress(path, |_| {})
+}
+
+pub(crate) fn open_with_progress(path: &Path, stage: impl Fn(&'static str)) -> Result<Imported, String> {
+    stage("Reading document");
     let name = file_name(path);
     let kind = classify(path);
     if matches!(kind, "raw" | "photo-settings") {
@@ -51,7 +56,9 @@ pub fn open_any(path: &Path) -> Result<Imported, String> {
         return Ok(Imported::Document(crate::project::load_from(path)?));
     }
     if kind == "affinity" {
+        stage("Converting Affinity artwork");
         let (svg, mut notes) = crate::formats::affinity::read(path)?;
+        stage("Building editable vector objects");
         let (doc, svg_notes) = crate::formats::svg::read(&svg, &name)?;
         notes.extend(svg_notes);
         return document(doc, notes);
@@ -64,6 +71,7 @@ pub fn open_any(path: &Path) -> Result<Imported, String> {
     }
     let bytes = read_bounded(path)?;
     if kind == "svg" || looks_svg(&bytes) {
+        stage("Reading SVG objects");
         let decoded;
         let data = if bytes.starts_with(&[0x1f, 0x8b]) {
             use std::io::Read;
@@ -107,7 +115,9 @@ pub fn open_any(path: &Path) -> Result<Imported, String> {
         return document(doc, notes);
     }
     if bytes.starts_with(&[0x00, 0xff, 0x4b, 0x41]) {
+        stage("Converting Affinity artwork");
         let (svg, mut notes) = crate::formats::affinity::read(path)?;
+        stage("Building editable vector objects");
         let (doc, more) = crate::formats::svg::read(&svg, &name)?;
         notes.extend(more);
         return document(doc, notes);
