@@ -139,6 +139,7 @@ pub(super) fn write(
         .chain(std::iter::once(run.content.len()))
         .collect::<Vec<_>>();
     let text_bounds = shape.geom.bbox();
+    let text_page_bounds = paint::local_bounds(bounds, text_bounds.center(), shape.rotation);
     op(&mut out.ops, "q", &[]);
     rotate_matrix(&mut out.ops, text_bounds.center(), shape.rotation);
     if shape.style.stroke.as_ref().is_some_and(|s| s.width > 0.) {
@@ -270,7 +271,7 @@ pub(super) fn write(
                     crate::document::Style { fill, stroke: None },
                 );
                 painted.id = shape.id;
-                writer.paint(&painted, false, bounds, out)?;
+                writer.paint(&painted, false, text_page_bounds, out)?;
                 op(&mut out.ops, "Q", &[]);
                 if stroke.is_none() {
                     continue;
@@ -329,19 +330,31 @@ pub(super) fn outlines(
         }
         op(&mut out.ops, "q", &[]);
         rotate_matrix(&mut out.ops, shape.geom.bbox().center(), shape.rotation);
-        writer.children(&doc, None, bounds, out, 0, true)?;
+        writer.children(
+            &doc,
+            None,
+            paint::local_bounds(bounds, shape.geom.bbox().center(), shape.rotation),
+            out,
+            0,
+            true,
+        )?;
         op(&mut out.ops, "Q", &[]);
         return Ok(());
     }
-    for (fill, contours) in crate::text::paint_groups(run, &shape.style.fill) {
+    let center = shape.geom.bbox().center();
+    for (fill, mut contours) in crate::text::paint_groups(run, &shape.style.fill) {
         if fill.is_none() {
             continue;
         }
         let mut clip = shape.clone();
+        for point in contours.iter_mut().flatten() {
+            *point = point.rotate_about(shape.geom.bbox().center(), shape.rotation);
+        }
         clip.geom = Geom::Poly {
             contours,
             winding: true,
         };
+        clip.rotation = 0.;
         op(&mut out.ops, "q", &[]);
         path(&mut out.ops, &clip);
         op(&mut out.ops, "W", &[]);

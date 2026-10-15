@@ -468,7 +468,8 @@ impl Writer {
             if gradient.kind == GradientKind::Radial {
                 matrix(&mut scene.ops, gradient.radial_transform(shape.geom.bbox()));
             }
-            let shading = self.shading(&gradient, shape.geom.bbox(), false)?;
+            let extent = paint::local_bounds(bounds, shape.geom.bbox().center(), shape.rotation);
+            let shading = self.shading(&gradient, shape.geom.bbox(), extent, false)?;
             scene.invoke("sh", "Shading", shading);
             let id = self.form(scene, bounds, true)?;
             let id = if gradient.stops.iter().any(|s| s.color.a != 255) {
@@ -477,7 +478,7 @@ impl Writer {
                 if gradient.kind == GradientKind::Radial {
                     matrix(&mut alpha.ops, gradient.radial_transform(shape.geom.bbox()));
                 }
-                let shading = self.shading(&gradient, shape.geom.bbox(), true)?;
+                let shading = self.shading(&gradient, shape.geom.bbox(), extent, true)?;
                 alpha.invoke("sh", "Shading", shading);
                 let mask = self.form(alpha, bounds, true)?;
                 self.masked(id, mask, MaskMode::Luminance, bounds)?
@@ -521,6 +522,7 @@ impl Writer {
         &mut self,
         gradient: &Gradient,
         bounds: Bounds,
+        extent: Bounds,
         alpha: bool,
     ) -> Result<ObjectId, String> {
         let (a, b) = gradient.endpoints(bounds);
@@ -529,7 +531,7 @@ impl Writer {
             return Err("Unsupported PDF gradient reached vector writer".into());
         }
         if gradient.spread != crate::gradient::Spread::Pad {
-            return paint::field(&mut self.pdf, gradient, bounds, alpha);
+            return paint::field(&mut self.pdf, gradient, bounds, extent, alpha);
         }
         let coords = if radial {
             vec![
