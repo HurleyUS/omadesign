@@ -18,10 +18,35 @@ pub fn decode_image(bytes: &[u8]) -> Result<crate::document::Pixels, String> {
     limits.max_image_height = Some(32768);
     limits.max_alloc = Some(256 * 1024 * 1024);
     reader.limits(limits);
-    let rgba = reader
+    let decoded = reader
         .decode()
-        .map_err(|e| format!("Could not decode embedded image: {e}"))?
-        .to_rgba8();
+        .map_err(|e| format!("Could not decode embedded image: {e}"))?;
+    if matches!(
+        decoded.color(),
+        image::ColorType::L16
+            | image::ColorType::La16
+            | image::ColorType::Rgb16
+            | image::ColorType::Rgba16
+            | image::ColorType::Rgb32F
+            | image::ColorType::Rgba32F
+    ) {
+        let depth = if matches!(
+            decoded.color(),
+            image::ColorType::Rgb32F | image::ColorType::Rgba32F
+        ) {
+            crate::deep_color::Depth::F32
+        } else {
+            crate::deep_color::Depth::U16
+        };
+        let rgba = decoded.to_rgba32f();
+        return crate::document::Pixels::from_samples(
+            rgba.width(),
+            rgba.height(),
+            depth,
+            rgba.into_raw(),
+        );
+    }
+    let rgba = decoded.to_rgba8();
     if u64::from(rgba.width()) * u64::from(rgba.height()) > 64 * 1024 * 1024 {
         return Err("Embedded image exceeds 64 megapixels".into());
     }

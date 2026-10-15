@@ -183,3 +183,56 @@ mod sample_bytes {
 
 #[cfg(test)]
 mod tests;
+
+impl Pixels {
+    /// Pad or crop a native grid without resampling.
+    /// Args: new dimensions and old-grid offset. Returns a buffer preserving all copied samples.
+    pub fn reframed(&self, w: u32, h: u32, dx: i64, dy: i64) -> Result<Self, String> {
+        let count = (w as usize)
+            .checked_mul(h as usize)
+            .and_then(|n| n.checked_mul(4))
+            .filter(|&n| n <= 128 * 1024 * 1024)
+            .ok_or("Native reframe exceeds working limit")?;
+        let mut out = vec![0.; count];
+        for y in 0..self.h {
+            let ny = y as i64 + dy;
+            if ny < 0 || ny >= h as i64 {
+                continue;
+            }
+            for x in 0..self.w {
+                let nx = x as i64 + dx;
+                if nx < 0 || nx >= w as i64 {
+                    continue;
+                }
+                let i = (ny as usize * w as usize + nx as usize) * 4;
+                out[i..i + 4]
+                    .copy_from_slice(&self.sample(y as usize * self.w as usize + x as usize));
+            }
+        }
+        Self::from_samples(
+            w,
+            h,
+            self.native.as_ref().map_or(Depth::U8, |n| n.depth),
+            out,
+        )
+    }
+
+    /// Paint an overlay into authored samples.
+    /// Args: matching straight RGBA overlay and opacity. Returns an error for mismatched dimensions.
+    pub fn paint_overlay(&mut self, overlay: &Pixels, opacity: f32) -> Result<(), String> {
+        if (self.w, self.h) != (overlay.w, overlay.h) {
+            return Err("Paint overlay dimensions mismatch".into());
+        }
+        let samples = (0..self.w as usize * self.h as usize)
+            .flat_map(|i| {
+                blend_pixel(
+                    self.sample(i),
+                    overlay.sample(i),
+                    crate::color::Blend::Normal,
+                    opacity,
+                )
+            })
+            .collect();
+        self.set_samples(samples)
+    }
+}

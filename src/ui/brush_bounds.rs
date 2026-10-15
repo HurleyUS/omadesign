@@ -143,12 +143,18 @@ pub(super) fn ensure(
     let (w, h) = ((right - left) as u32, (bottom - top) as u32);
     let offset = (-left, -top);
     let allocation = "Not enough memory to extend this pixel layer";
-    let resized = Pixels::from_rgba(
-        w,
-        h,
-        reframe(&pixels.data, (pixels.w, pixels.h), (w, h), offset).ok_or(allocation)?,
-    )
-    .ok_or(allocation)?;
+    let resized = if pixels.native.is_some() {
+        pixels
+            .reframed(w, h, offset.0, offset.1)
+            .map_err(|_| allocation)?
+    } else {
+        Pixels::from_rgba(
+            w,
+            h,
+            reframe(&pixels.data, (pixels.w, pixels.h), (w, h), offset).ok_or(allocation)?,
+        )
+        .ok_or(allocation)?
+    };
     let overlay_data = reframe(
         overlay.data(),
         (overlay.width(), overlay.height()),
@@ -172,14 +178,17 @@ pub(super) fn ensure(
         None
     };
     let mask = if let Some(mask) = &target.mask {
-        Some(
+        Some(if mask.native.is_some() {
+            mask.reframed(w, h, offset.0, offset.1)
+                .map_err(|_| allocation)?
+        } else {
             Pixels::from_rgba(
                 w,
                 h,
                 reframe(&mask.data, (mask.w, mask.h), (w, h), offset).ok_or(allocation)?,
             )
-            .ok_or(allocation)?,
-        )
+            .ok_or(allocation)?
+        })
     } else {
         None
     };

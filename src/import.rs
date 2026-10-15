@@ -40,7 +40,10 @@ pub fn open_any(path: &Path) -> Result<Imported, String> {
     open_with_progress(path, |_| {})
 }
 
-pub(crate) fn open_with_progress(path: &Path, stage: impl Fn(&'static str)) -> Result<Imported, String> {
+pub(crate) fn open_with_progress(
+    path: &Path,
+    stage: impl Fn(&'static str),
+) -> Result<Imported, String> {
     stage("Reading document");
     let name = file_name(path);
     let kind = classify(path);
@@ -123,6 +126,20 @@ pub(crate) fn open_with_progress(path: &Path, stage: impl Fn(&'static str)) -> R
         return document(doc, notes);
     }
     match crate::formats::decode_image(&bytes) {
+        Ok(pixels) if pixels.native.is_some() => {
+            let mut doc = crate::document::Document::new(&name, 1., 1., 72.);
+            doc.width = pixels.w as f32;
+            doc.height = pixels.h as f32;
+            doc.transparent = true;
+            doc.artboards = crate::document::Artboard::tiled(1, doc.width, doc.height);
+            doc.layers = vec![crate::document::Layer::placed_raster(
+                &name,
+                pixels,
+                crate::geom::Pt::ZERO,
+                crate::geom::Pt::new(doc.width, doc.height),
+            )];
+            document(doc, vec![])
+        }
         Ok(pixels) => Ok(Imported::Raster {
             name,
             image: RgbaImage {

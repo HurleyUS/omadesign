@@ -86,25 +86,36 @@ impl Studio {
     /// Returning true lets Undo cancel the current gesture before touching history.
     pub(crate) fn end_pixel_stroke(&mut self, cancel: bool) -> bool {
         if matches!(self.op, Some(Op::Brush { .. })) {
-            let Some(Op::Brush { layer, before, mut buf, .. }) = self.op.take() else {
+            let Some(Op::Brush {
+                layer,
+                before,
+                mut buf,
+                ..
+            }) = self.op.take()
+            else {
                 unreachable!()
             };
             self.paint_contact = None;
             self.brush.pressure = 1.0;
-            if !cancel
-                && let Some(selection) = self.cached_pixel_sel_mask(layer)
-            {
+            if !cancel && let Some(selection) = self.cached_pixel_sel_mask(layer) {
                 paint::feather_overlay(&mut buf, &selection);
             }
             if let Some(target) = self.doc.layers.get_mut(layer) {
-                if cancel || self.brush.opacity <= 0.0 || buf.pixels().iter().all(|p| p.alpha() == 0) {
+                if cancel
+                    || self.brush.opacity <= 0.0
+                    || buf.pixels().iter().all(|p| p.alpha() == 0)
+                {
                     before.restore(target);
                 } else if let Some(pixels) = target.kind.pixels_mut() {
-                    if let Some(mut destination) = pixels.to_pixmap() {
+                    if pixels.native.is_some() {
+                        let _ =
+                            pixels.paint_overlay(&Pixels::from_pixmap(&buf), self.brush.opacity);
+                    } else if let Some(mut destination) = pixels.to_pixmap() {
                         paint::blend_onto(&mut destination, &buf, self.brush.opacity);
                         *pixels = Pixels::from_pixmap(&destination);
                     }
-                    if pixels.data != before.kind.pixels().unwrap().data
+                    if pixels.native != before.kind.pixels().unwrap().native
+                        || pixels.data != before.kind.pixels().unwrap().data
                         || target.kind.raster_xform() != before.kind.raster_xform()
                     {
                         let after = crate::document::RasterState::capture(target).unwrap();
@@ -771,6 +782,22 @@ impl Studio {
         let Some(mut mask) = layer.mask.clone() else {
             return;
         };
+        if mask.native.is_some() {
+            let samples = (0..mask.w as usize * mask.h as usize)
+                .flat_map(|i| {
+                    let p = mask.sample(i);
+                    let v = 1. - (p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722) * p[3];
+                    [v, v, v, 1.]
+                })
+                .collect();
+            if let Err(error) = mask.set_samples(samples) {
+                self.status = error;
+                return;
+            }
+            self.replace_layer_mask(index, Some(mask));
+            self.status = "Mask inverted".into();
+            return;
+        }
         for pixel in mask.data.as_chunks_mut::<4>().0 {
             // Include alpha, so an erased/transparent mask pixel inverts to white.
             let amount = mask_amount(pixel);
@@ -813,6 +840,33 @@ impl Studio {
         };
         if mask.w != pixels.w || mask.h != pixels.h || mask.data.len() != pixels.data.len() {
             self.status = "Mask size does not match its pixel layer".into();
+            return;
+        }
+        if pixels.native.is_some() || mask.native.is_some() {
+            let after = match pixels.masked(mask) {
+                Ok(after) => after,
+                Err(error) => {
+                    self.status = error;
+                    return;
+                }
+            };
+            let cmd = Cmd::NativePixels {
+                layer: index,
+                mask: false,
+                before: pixels.clone(),
+                after,
+            };
+            let old_mask = mask.clone();
+            self.commit(Cmd::Batch(vec![
+                cmd,
+                Cmd::SetLayerMask {
+                    index,
+                    before: Some(old_mask),
+                    after: None,
+                },
+            ]));
+            self.paint_mask = false;
+            self.status = "Native-precision mask applied".into();
             return;
         }
         let before = pixels.data.clone();
