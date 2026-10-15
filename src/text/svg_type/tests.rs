@@ -32,6 +32,16 @@ fn error(a: &tiny_skia::Pixmap, b: &tiny_skia::Pixmap) -> f32 {
         / a.data().len() as f32
 }
 
+fn diagnostic(name: &str, image: &tiny_skia::Pixmap, source: &str) {
+    if let Some(directory) = std::env::var_os("OMA_SVG_TYPE_DIAGNOSTICS") {
+        let directory = std::path::Path::new(&directory);
+        image
+            .save_png(directory.join(format!("{name}.png")))
+            .unwrap();
+        std::fs::write(directory.join(format!("{name}.svg")), source).unwrap();
+    }
+}
+
 #[test]
 fn svg_type_rotated_reflected_mixed_positioned_rtl_vertical_and_path_roundtrip() {
     for text in [
@@ -194,6 +204,20 @@ fn svg_type_independent_librsvg_appearance_and_editable_export() {
     assert_eq!(types(&doc).len(), 5);
     let expected = independent(source);
     let native = crate::compositor::render_export(&doc, 1).unwrap();
+    diagnostic(
+        "independent-native",
+        &native,
+        &crate::svg::export(&doc).unwrap(),
+    );
+    for (i, run) in types(&doc).iter().enumerate() {
+        let source = super::source(run).unwrap();
+        let rendered = render(&source);
+        diagnostic(&format!("independent-object-{i}"), &rendered, &source);
+        eprintln!(
+            "independent object {i}: {}",
+            error(&rendered, &independent(&source))
+        );
+    }
     assert!(
         error(&native, &expected) < 1.5,
         "independent native mean={}",
@@ -393,7 +417,7 @@ fn svg_type_reviewed_viewport_units_opacity_gradient_edits_and_flow_leading() {
         );
         assert!(error(&render(&crate::svg::export(&doc).unwrap()), &expected) < 0.1);
     }
-    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="140"><defs><linearGradient id="ink"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><text x="20" y="80" font-family="DejaVu Sans" font-size="45" transform="rotate(8 20 80)" fill="url(#ink)" stroke="#248" stroke-width="12">Paint</text></svg>"##;
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="140"><defs><linearGradient id="ink"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><text x="20" y="80" font-family="DejaVu Sans" font-size="45" transform="rotate(8 20 80)" fill="url(#ink)" stroke="#248" stroke-width="12" paint-order="stroke fill">Paint</text></svg>"##;
     let (mut doc, _) = crate::formats::svg::read(source, "Paint source").unwrap();
     let image = crate::compositor::render_export(&doc, 1).unwrap();
     let shape = doc

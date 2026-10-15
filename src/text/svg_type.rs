@@ -499,11 +499,9 @@ pub(crate) fn capture(
         attributes.insert("xml:space".into(), "preserve".into());
     }
     let mut definitions = String::new();
-    for defs in xml
-        .root_element()
-        .children()
-        .filter(|n| n.has_tag_name("defs"))
-    {
+    for defs in xml.descendants().filter(|n| {
+        n.has_tag_name("defs") && !n.ancestors().skip(1).any(|a| a.has_tag_name("defs"))
+    }) {
         definition(defs, &sheet, &mut definitions);
     }
     for path in xml.descendants().filter(|n| {
@@ -879,9 +877,25 @@ pub(crate) fn object_paint(run: &TypeRun, fill: &crate::document::Fill) -> TypeR
 
 pub(crate) fn export_fragment(run: &TypeRun, id: u64, outlines: bool) -> Option<String> {
     let original = source(run)?;
-    let portable = run.font.starts_with("omatype:")
-        || run.font != run.svg_text.as_ref()?.base_font
-        || run.spans.iter().any(|s| s.font.as_ref().is_some());
+    let options = options();
+    let family = |path: &str| {
+        options.fontdb.faces().find_map(|face| match &face.source {
+            usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _)
+                if p.to_string_lossy() == path =>
+            {
+                face.families.first().map(|(name, _)| name.clone())
+            }
+            _ => None,
+        })
+    };
+    let fonts: std::collections::BTreeMap<_, _> = std::iter::once(&run.font)
+        .chain(run.spans.iter().filter_map(|s| s.font.as_ref()))
+        .map(|font| (font, family(font)))
+        .collect();
+    let portable = fonts.iter().any(|(font, family)| {
+        font.starts_with("omatype:")
+            || family.is_none() && **font != run.svg_text.as_ref().unwrap().base_font
+    });
     let source = if outlines || portable {
         layout(run)?.tree.to_string(&usvg::WriteOptions::default())
     } else {
@@ -897,6 +911,19 @@ pub(crate) fn export_fragment(run: &TypeRun, id: u64, outlines: bool) -> Option<
     for node in xml.descendants().filter(|n| n.is_element()) {
         for attr in node.attributes() {
             let mut value = attr.value().to_owned();
+            if attr.name() == "font-family" {
+                for (font, family) in &fonts {
+                    if let Some(family) = family {
+                        let alias =
+                            format!("'{}'", font.replace('\\', "\\\\").replace('\'', "\\'"));
+                        if value == alias {
+                            value =
+                                format!("'{}'", family.replace('\\', "\\\\").replace('\'', "\\'"));
+                            break;
+                        }
+                    }
+                }
+            }
             if attr.name() == "id" {
                 value = format!("{prefix}{value}");
             } else {
