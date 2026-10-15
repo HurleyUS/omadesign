@@ -2,6 +2,16 @@ use super::*;
 
 const DNG: &[u8] = include_bytes!("synthetic.dng");
 
+#[test]
+fn sensor_reference_is_unscaled_unoriented_mosaic_including_borders() {
+    let sensor = decode_sensor(DNG, &Cancellation::default()).unwrap();
+    assert_eq!((sensor.width, sensor.height), (64, 48));
+    let raw = &DNG[DNG.len() - 64 * 48 * 2..];
+    for (sample, expected) in sensor.samples.iter().zip(raw.as_chunks::<2>().0) {
+        assert_eq!(*sample, u16::from_le_bytes(*expected));
+    }
+}
+
 /// Create a bounded Bayer frame that takes the real native interpolation path.
 /// Args: sensor width and height. Returns an original MIT calibration DNG without an embedded preview.
 fn calibration_dng(w: u32, h: u32) -> Vec<u8> {
@@ -67,11 +77,11 @@ fn shared_raw_samples_keep_legacy_json_array_and_restore_admission() {
     assert!(encoded.contains("\"pixels\":["));
     assert!(!encoded.contains("memory"));
     let mut restored: RawImage = serde_json::from_str(&encoded).unwrap();
-    let before = resources::global().usage().0;
+    let before = resources::global().retained(&restored.pixels).unwrap();
     restored.admit_memory(&Cancellation::default()).unwrap();
     assert_eq!(
-        before,
-        resources::global().usage().0,
+        true,
+        std::sync::Arc::ptr_eq(&before, restored.memory.as_ref().unwrap()),
         "restored samples must reuse their preallocation lease"
     );
     assert_eq!(image.pixels, restored.pixels);

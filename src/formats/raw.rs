@@ -175,6 +175,7 @@ unsafe extern "C" {
         reserve: unsafe extern "C" fn(*const c_void, u64) -> i32,
         memory_context: *const c_void,
         memory_limit: u64,
+        sensor_only: i32,
     ) -> i32;
     fn oma_raw_free(owner: *mut c_void);
 }
@@ -198,15 +199,19 @@ pub fn decode_cancellable(bytes: &[u8], cancel: &Cancellation) -> Result<RawImag
     decode_reserved(bytes, cancel, &input)
 }
 
-pub(crate) fn decode_reserved(
+fn native_decode(
     bytes: &[u8],
     cancel: &Cancellation,
-    input: &resources::Lease,
-) -> Result<RawImage, String> {
+    sensor_only: bool,
+) -> Result<
+    (
+        NativeImage,
+        std::sync::Arc<resources::Lease>,
+        std::sync::MutexGuard<'static, ()>,
+    ),
+    String,
+> {
     cancel.check()?;
-    if input.bytes() < bytes.len() as u64 {
-        return Err("RAW input is not covered by its memory reservation".into());
-    }
     if bytes.is_empty() {
         return Err("RAW input must not be empty".into());
     }
@@ -233,6 +238,7 @@ pub(crate) fn decode_reserved(
             reserve_native,
             (&admission as *const Admission).cast(),
             resources::global().usage().1,
+            i32::from(sensor_only),
         )
     };
     cancel.check()?;
@@ -248,6 +254,22 @@ pub(crate) fn decode_reserved(
         let error = text(&native.error);
         return Err(format!("Could not decode camera RAW: {error}"));
     }
+    Ok((native, admission.lease, _decoder))
+}
+
+pub(crate) fn decode_reserved(
+    bytes: &[u8],
+    cancel: &Cancellation,
+    input: &resources::Lease,
+) -> Result<RawImage, String> {
+    cancel.check()?;
+    if input.bytes() < bytes.len() as u64 {
+        return Err("RAW input is not covered by its memory reservation".into());
+    }
+    if bytes.is_empty() {
+        return Err("RAW input must not be empty".into());
+    }
+    let (native, lease, _decoder) = native_decode(bytes, cancel, false)?;
     let count = u64::from(native.width) * u64::from(native.height);
     if count == 0
         || count
@@ -322,7 +344,7 @@ pub(crate) fn decode_reserved(
         width: native.width,
         height: native.height,
         pixels: pixels.clone(),
-        memory: Some(admission.lease.clone()),
+        memory: Some(lease.clone()),
         metadata: RawMetadata {
             make: text(&native.make),
             model: text(&native.model),
@@ -345,8 +367,8 @@ pub(crate) fn decode_reserved(
         warnings,
     };
     drop(native);
-    admission.lease.resize(retained_bytes, cancel)?;
-    resources::global().retain(&pixels, admission.lease.clone());
+    lease.resize(retained_bytes, cancel)?;
+    resources::global().retain(&pixels, lease.clone());
     Ok(image)
 }
 
@@ -393,3 +415,59 @@ fn text<const N: usize>(field: &[c_char; N]) -> String {
 #[cfg(test)]
 #[path = "raw/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "raw/qualification.rs"]
+mod qualification;
+
+#[cfg(test)]
+struct SensorImage {
+    width: u32,
+    height: u32,
+    samples: std::sync::Arc<resources::Allocation<u16>>,
+}
+
+#[cfg(test)]
+fn decode_sensor(bytes: &[u8], cancel: &Cancellation) -> Result<SensorImage, String> {
+    let _input = resources::global().reserve(bytes.len() as u64, cancel)?;
+    let (native, lease, _decoder) = native_decode(bytes, cancel, true)?;
+    let count = u64::from(native.width) * u64::from(native.height);
+    if count == 0
+        || count.checked_mul(2) != Some(native.data_size)
+        || native.colors != 1
+        || native.bits != 16
+        || native.data.is_null()
+        || native.data_size > isize::MAX as u64
+    {
+        return Err("Invalid sensor reference plane".into());
+    }
+    let mut values: Vec<u16> = Vec::new();
+    values
+        .try_reserve_exact(count as usize)
+        .map_err(|_| "Not enough memory for the sensor reference")?;
+    // SAFETY: validated native storage remains owned through this bounded copy; u16 has no invalid bit patterns.
+    unsafe {
+        let bytes = std::slice::from_raw_parts(native.data, native.data_size as usize);
+        for (index, chunk) in bytes.chunks(4 * 1024 * 1024).enumerate() {
+            cancel.check()?;
+            std::ptr::copy_nonoverlapping(
+                chunk.as_ptr(),
+                values
+                    .as_mut_ptr()
+                    .cast::<u8>()
+                    .add(index * 4 * 1024 * 1024),
+                chunk.len(),
+            );
+        }
+        values.set_len(count as usize);
+    }
+    let (width, height) = (native.width, native.height);
+    drop(native);
+    lease.resize(values.capacity() as u64 * 2, cancel)?;
+    let samples = resources::global().adopt(values, lease)?;
+    Ok(SensorImage {
+        width,
+        height,
+        samples,
+    })
+}
