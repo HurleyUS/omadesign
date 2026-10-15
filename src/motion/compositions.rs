@@ -251,6 +251,21 @@ pub fn export(doc: &Document) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Save a motion envelope with the native portable-font archive.
+/// Args: document and destination. Returns validation/archive/write errors.
+pub fn save_to(doc: &Document, path: &std::path::Path) -> Result<(), String> {
+    crate::project::save_serialized_document(doc, path, &export(doc)?)
+}
+
+/// Open a motion envelope through the sole project typography loader.
+/// Args: source path. Returns editable artwork or a named archive/parse error.
+pub fn load_from(path: &std::path::Path) -> Result<Document, String> {
+    crate::typography::load_for_document(path)?;
+    let doc = import(&std::fs::read_to_string(path).map_err(|e| e.to_string())?)?;
+    crate::typography::validate_document_fonts(&doc)?;
+    Ok(doc)
+}
+
 /// Read a portable motion project.
 /// Args: bounded UTF-8 interchange text. Returns the full editable document.
 pub fn import(source: &str) -> Result<Document, String> {

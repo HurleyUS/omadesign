@@ -2354,7 +2354,9 @@ mod tests {
             middle["s"][0]["v"][0][1], 0.0,
             "half fill starts at object centre"
         );
-        let svg = crate::svg::export_animated(&doc).unwrap();
+        let report=crate::svg::animated_export(&doc).unwrap();
+        assert!(!report.warnings.is_empty());
+        let svg=report.svg;
         assert!(svg.contains("<linearGradient"));
         assert!(svg.contains("attributeName=\"height\""));
         assert!(svg.contains("attributeName=\"stroke-dashoffset\""));

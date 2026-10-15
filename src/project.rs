@@ -177,8 +177,13 @@ fn decompress_pixels(px: &Pixels) -> Result<Pixels, String> {
 }
 
 pub fn save_to(doc: &Document, path: &Path) -> Result<(), String> {
+    save_serialized_document(doc, path, &encode(doc)?)
+}
+
+/// Save a native envelope with the shared font archive and atomic writer.
+/// Args: document, destination and serialized envelope. Returns a write/archive error.
+pub(crate) fn save_serialized_document(doc: &Document, path: &Path, s: &str) -> Result<(), String> {
     use std::io::Write;
-    let s = encode(doc)?;
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -1172,3 +1177,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+mod motion_archive_tests;

@@ -59,8 +59,7 @@ pub(crate) fn open_with_progress(path: &Path, stage: impl Fn(&'static str)) -> R
         return Ok(Imported::Document(crate::project::load_from(path)?));
     }
     if kind == "motion-project" {
-        let source=std::fs::read_to_string(path).map_err(|e|e.to_string())?;
-        return Ok(Imported::Document(crate::motion::compositions::import(&source)?));
+        return Ok(Imported::Document(crate::motion::compositions::load_from(path)?));
     }
     if kind == "model" {
         let model=crate::scene3d::import_model(path)?;

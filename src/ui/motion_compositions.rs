@@ -10,9 +10,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                 .pick_file()
         {
             let imported = if path.extension().is_some_and(|e| e == "omamotion") {
-                std::fs::read_to_string(&path)
-                    .map_err(|e| e.to_string())
-                    .and_then(|s| crate::motion::compositions::import(&s))
+                crate::motion::compositions::load_from(&path)
             } else {
                 crate::project::load_from(&path)
             };
@@ -38,8 +36,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                 .set_file_name(format!("{}.omamotion", studio.doc.name))
                 .save_file()
         {
-            studio.status = match crate::motion::compositions::export(&studio.doc)
-                .and_then(|s| std::fs::write(&path, s).map_err(|e| e.to_string()))
+            studio.status = match crate::motion::compositions::save_to(&studio.doc, &path)
             {
                 Ok(()) => "Motion project saved".into(),
                 Err(e) => e,

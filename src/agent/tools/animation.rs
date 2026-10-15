@@ -45,9 +45,7 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                     let path = files::path(args)?;
                     files::regular(&path, 64 * 1024 * 1024)?;
                     let doc = if path.extension().is_some_and(|e| e == "omamotion") {
-                        crate::motion::compositions::import(
-                            &std::fs::read_to_string(&path).map_err(|e| e.to_string())?,
-                        )?
+                        crate::motion::compositions::load_from(&path)?
                     } else {
                         crate::project::load_from(&path)?
                     };

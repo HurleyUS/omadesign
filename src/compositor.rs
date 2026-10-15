@@ -945,7 +945,9 @@ pub(crate) fn item_alpha(
 }
 
 /// Paint the keyed fill, stroke width, and gradient angle onto a copy of the design.
-fn posed_paint(shape: &mut Shape, pose: Pose) {
+/// Apply the native animated paint channels.
+/// Args: editable shape and sampled pose. Updates its gradient and stroke paint.
+pub(crate) fn posed_paint(shape: &mut Shape, pose: Pose) {
     if let Some(offset) = pose.gradient_angle.filter(|offset| offset.abs() > 1e-3) {
         tilt_gradient(shape, offset);
     }
