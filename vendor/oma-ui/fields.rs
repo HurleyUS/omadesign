@@ -29,6 +29,7 @@ pub fn number<N: egui::emath::Numeric>(
     state: FieldState<'_>,
 ) -> FieldResponse {
     let before = *value;
+    let enabled = ui.is_enabled() && !state.locked;
     let mut reset_clicked = false;
     let key = ui.make_persistent_id(id);
     ui.push_id(key, |ui| {
@@ -36,13 +37,14 @@ pub fn number<N: egui::emath::Numeric>(
             ui.set_min_width(0.0);
             let label_response = ui.add(egui::Label::new(label).wrap());
             let mut response = ui
-                .add_enabled_ui(!state.locked, |ui| {
+                .add_enabled_ui(enabled, |ui| {
                     ui.horizontal(|ui| {
                         let width = (ui.available_width()
                             - if reset.is_some() { 48.0 } else { 0.0 })
                         .max(24.0);
                         let mut drag = egui::DragValue::new(value)
                             .range(range)
+                            .clamp_existing_to_range(false)
                             .speed(0.5)
                             .max_decimals(2)
                             .suffix(unit);
@@ -83,7 +85,7 @@ pub fn number<N: egui::emath::Numeric>(
                 .inner;
             let cancelled = (response.has_focus() || response.lost_focus() || response.dragged())
                 && ui.input(|input| input.key_pressed(egui::Key::Escape));
-            if cancelled {
+            if cancelled || !enabled {
                 *value = before;
             }
             let invalid = !value.to_f64().is_finite();
@@ -94,10 +96,10 @@ pub fn number<N: egui::emath::Numeric>(
             if let Some(error) = state.error.or(invalid.then_some("Enter a finite number")) {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
-            let changed = response.changed() && !cancelled && !invalid && !state.locked;
+            let changed = response.changed() && !cancelled && !invalid && enabled;
             let committed = !cancelled
                 && !invalid
-                && !state.locked
+                && enabled
                 && (reset_clicked
                     || response.drag_stopped()
                     || response.lost_focus()

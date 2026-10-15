@@ -114,3 +114,46 @@ fn shared_field_drag_reports_preview_then_final_commit() {
     assert!(flags[1], "release must commit the gesture");
     assert!(!flags[2]);
 }
+
+#[test]
+fn shared_fields_never_clamp_existing_large_or_locked_mixed_values_on_render() {
+    for (original, range) in [
+        (12_000_000.0, -100000.0..=100000.0),
+        (-6_000_000.0, -100000.0..=100000.0),
+        (2_000_000.0, 1.0..=20000.0),
+        (720.0, -180.0..=180.0),
+    ] {
+        for state in [
+            FieldState::default(),
+            FieldState {
+                mixed: true,
+                ..Default::default()
+            },
+            FieldState {
+                mixed: true,
+                locked: true,
+                ..Default::default()
+            },
+        ] {
+            let ctx = egui::Context::default();
+            let mut value = original;
+            for _ in 0..3 {
+                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let result = number(
+                        ui,
+                        "large-existing",
+                        "Imported value",
+                        &mut value,
+                        range.clone(),
+                        " px",
+                        None,
+                        state,
+                    );
+                    assert!(!result.changed);
+                    assert!(!result.committed);
+                });
+                assert_eq!(value, original);
+            }
+        }
+    }
+}
