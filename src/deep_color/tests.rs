@@ -867,7 +867,7 @@ fn cmyk_to_rgb_uses_requested_source_rendering_intent() {
 
 #[test]
 fn tiff_auxiliary_samples_are_refused_before_native_pixel_decode() {
-    use tiff::{encoder::{TiffEncoder,colortype},tags::ExtraSamples};
+    use ::tiff::{encoder::{TiffEncoder,colortype},tags::ExtraSamples};
     for alpha in [false,true] {
         let mut bytes = std::io::Cursor::new(Vec::new());
         {

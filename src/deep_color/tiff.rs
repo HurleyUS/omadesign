@@ -62,7 +62,9 @@ pub fn encode(pixels: &Pixels) -> Result<Vec<u8>, String> {
 pub fn decode(bytes: &[u8]) -> Result<Option<Pixels>, String> {
     if ![b"II\x2a\0",b"MM\0\x2a",b"II\x2b\0",b"MM\0\x2b"].iter().any(|magic| bytes.starts_with(*magic)) {return Ok(None);}
     let _metadata = resources::global().reserve_now(16 * 1024 * 1024,&storage::check)?;
-    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?.with_limits(tiff::decoder::Limits {ifd_value_size:16 * 1024 * 1024,..Default::default()});
+    let mut limits = tiff::decoder::Limits::default();
+    limits.ifd_value_size = 16 * 1024 * 1024;
+    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?.with_limits(limits);
     let color = decoder.colortype().map_err(|e| e.to_string())?;
     let (channels,cmyk) = match color {tiff::ColorType::CMYK(_) => (4,true),tiff::ColorType::CMYKA(_) => (5,true),tiff::ColorType::RGB(_) => (3,false),tiff::ColorType::RGBA(_) => (4,false),_ => return Ok(None)};
     let stored_channels = decoder.get_tag_u32(Tag::SamplesPerPixel).map_err(|e| e.to_string())?;
@@ -86,7 +88,10 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Pixels>, String> {
     let compression = decoder.get_tag_u32(Tag::Compression).unwrap_or(1);
     let scratch = if compression == 1 {64 * 1024} else {chunk.checked_mul(bps).and_then(|n| n.checked_add(bytes.len())).ok_or("TIFF codec working bytes overflow")?};
     let _codec = resources::global().reserve_now(scratch as u64,&storage::check)?;
-    let limits = tiff::decoder::Limits {decoding_buffer_size:layout.complete_len,intermediate_buffer_size:scratch.max(64 * 1024),ifd_value_size:16 * 1024 * 1024};
+    let mut limits = tiff::decoder::Limits::default();
+    limits.decoding_buffer_size = layout.complete_len;
+    limits.intermediate_buffer_size = scratch.max(64 * 1024);
+    limits.ifd_value_size = 16 * 1024 * 1024;
     decoder = decoder.with_limits(limits);
     let profile = decoder.find_tag(Tag::IccProfile).map_err(|e| e.to_string())?.map(|v| v.into_u8_vec()).transpose().map_err(|e| e.to_string())?.unwrap_or_default();
     let associated = decoder.find_tag_unsigned_vec::<u16>(Tag::ExtraSamples).map_err(|e| e.to_string())?.is_some_and(|v| v.first() == Some(&1));
