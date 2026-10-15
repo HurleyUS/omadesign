@@ -353,36 +353,36 @@ mod idle_render_tests {
     use super::*;
     #[test]
     fn shared_large_single_mixed_and_locked_selection_never_edits_on_render() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"
+            width="3000000" height="2000000" viewBox="0 0 3000000 2000000">
+            <rect x="12000000" y="-6000000" width="2000000" height="800000"/>
+            <rect x="12000100" y="-6000000" width="2000000" height="800000"/>
+            </svg>"#;
+        let document = crate::formats::svg::read(svg, "Large imported artwork")
+            .unwrap()
+            .0;
+        assert_eq!(
+            (document.width, document.height),
+            (3_000_000.0, 2_000_000.0)
+        );
+        let imported: Vec<_> = document
+            .layers
+            .iter()
+            .enumerate()
+            .flat_map(|(layer, row)| {
+                row.kind
+                    .shapes()
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(move |shape| (layer, shape.id))
+            })
+            .collect();
+        assert_eq!(imported.len(), 2);
         for count in [0, 1, 2] {
             for locked in [false, true] {
                 let mut studio = Studio::new();
                 studio.show_welcome = false;
-                let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"
-                    width="3000000" height="2000000" viewBox="0 0 3000000 2000000">
-                    <rect x="12000000" y="-6000000" width="2000000" height="800000"/>
-                    <rect x="12000100" y="-6000000" width="2000000" height="800000"/>
-                    </svg>"#;
-                studio.doc = crate::formats::svg::read(svg, "Large imported artwork")
-                    .unwrap()
-                    .0;
-                assert_eq!(
-                    (studio.doc.width, studio.doc.height),
-                    (3_000_000.0, 2_000_000.0)
-                );
-                let imported: Vec<_> = studio
-                    .doc
-                    .layers
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(layer, row)| {
-                        row.kind
-                            .shapes()
-                            .unwrap_or(&[])
-                            .iter()
-                            .map(move |shape| (layer, shape.id))
-                    })
-                    .collect();
-                assert_eq!(imported.len(), 2);
+                studio.doc = document.clone();
                 for (index, &(layer, id)) in imported.iter().enumerate() {
                     let shape = studio.doc.find_shape_mut(layer, id).unwrap();
                     let bounds = shape.geom.bbox();
