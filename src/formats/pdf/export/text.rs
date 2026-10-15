@@ -142,9 +142,6 @@ pub(super) fn write(
     let text_page_bounds = paint::local_bounds(bounds, text_bounds.center(), shape.rotation);
     op(&mut out.ops, "q", &[]);
     rotate_matrix(&mut out.ops, text_bounds.center(), shape.rotation);
-    if shape.style.stroke.as_ref().is_some_and(|s| s.width > 0.) {
-        stroke_style(&mut out.ops, shape);
-    }
     let [a, b, c, d, _, _] = run.transform.unwrap_or([1., 0., 0., 1., 0., 0.]);
     let mut last_mode = None;
     for line in lines.iter() {
@@ -198,10 +195,9 @@ pub(super) fn write(
             } else {
                 None
             };
-            let stroke = shape.style.stroke.as_ref().filter(|s| s.width > 0.);
             let state = writer.state(
                 byte(color.map_or(1., |c| c.a as f32 / 255.)),
-                byte(stroke.map_or(1., |s| s.color.a as f32 / 255.)),
+                255,
                 Blend::Normal,
             );
             out.invoke("gs", "ExtGState", state);
@@ -213,17 +209,6 @@ pub(super) fn write(
                         color.r as f32 / 255.,
                         color.g as f32 / 255.,
                         color.b as f32 / 255.,
-                    ],
-                );
-            }
-            if let Some(s) = stroke {
-                op(
-                    &mut out.ops,
-                    "RG",
-                    &[
-                        s.color.r as f32 / 255.,
-                        s.color.g as f32 / 255.,
-                        s.color.b as f32 / 255.,
                     ],
                 );
             }
@@ -274,17 +259,10 @@ pub(super) fn write(
                 painted.id = shape.id;
                 writer.paint(&painted, false, text_page_bounds, out)?;
                 op(&mut out.ops, "Q", &[]);
-                if stroke.is_none() {
-                    continue;
-                }
+                continue;
             }
             out.ops.extend(glyph_ops);
-            let mode = match (color.is_some(), stroke.is_some()) {
-                (true, true) => 2.,
-                (true, false) => 0.,
-                (false, true) => 1.,
-                _ => 3.,
-            };
+            let mode = if color.is_some() { 0. } else { 3. };
             if last_mode != Some(mode) {
                 op(&mut out.ops, "Tr", &[mode]);
                 last_mode = Some(mode);
@@ -295,6 +273,40 @@ pub(super) fn write(
         op(&mut out.ops, "EMC", &[]);
     }
     op(&mut out.ops, "Q", &[]);
+    if let Some(stroke) = shape.style.stroke.as_ref().filter(|s| s.width > 0.) {
+        let mut style = tiny_skia::Stroke {
+            width: stroke.width,
+            line_cap: stroke.cap.to_skia(),
+            line_join: stroke.join.to_skia(),
+            ..Default::default()
+        };
+        style.dash = stroke
+            .dash
+            .and_then(|(a, b)| tiny_skia::StrokeDash::new(vec![a, b], stroke.dash_offset));
+        let outline = shape
+            .get_cached_path(96)
+            .and_then(|p| p.stroke(&style, 1.))
+            .ok_or("the text stroke cannot be outlined")?;
+        op(&mut out.ops, "q", &[]);
+        let state = writer.state(stroke.color.a, 255, Blend::Normal);
+        out.invoke("gs", "ExtGState", state);
+        op(
+            &mut out.ops,
+            "rg",
+            &[
+                stroke.color.r as f32 / 255.,
+                stroke.color.g as f32 / 255.,
+                stroke.color.b as f32 / 255.,
+            ],
+        );
+        skia_path(&mut out.ops, &outline);
+        op(&mut out.ops, "f", &[]);
+        op(&mut out.ops, "Q", &[]);
+        writer.warnings.insert(format!(
+            "PDF text object {} keeps its stroke as a vector outline; glyph fills remain embedded and editable.",
+            shape.id
+        ));
+    }
     Ok(())
 }
 
