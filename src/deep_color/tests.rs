@@ -866,6 +866,28 @@ fn cmyk_to_rgb_uses_requested_source_rendering_intent() {
 }
 
 #[test]
+fn admitted_tiff_decode_accepts_uncompressed_strips_larger_than_64k() {
+    use ::tiff::encoder::{TiffEncoder,colortype};
+    let mut values=[1000u16,2000,3000].repeat(256*128);
+    values[3]=1001;
+    let mut bytes=std::io::Cursor::new(Vec::new());
+    {
+        let mut encoder=TiffEncoder::new(&mut bytes).unwrap();
+        let mut image=encoder.new_image::<colortype::RGB16>(256,128).unwrap();
+        image.rows_per_strip(128).unwrap();
+        image.write_data(&values).unwrap();
+    }
+    assert!(bytes.get_ref().len()>64*1024);
+    let pixels=super::tiff::decode(bytes.get_ref()).unwrap().unwrap();
+    assert_eq!((pixels.w,pixels.h),(256,128));
+    assert_eq!(pixels.native.as_ref().unwrap().depth,Depth::U16);
+    let samples=pixels.samples().unwrap();
+    assert_eq!(samples[0],1000. / 65535.);
+    assert_eq!(samples[4],1001. / 65535.);
+    assert_eq!(pixels.data[0],pixels.data[4]);
+}
+
+#[test]
 fn tiff_auxiliary_samples_are_refused_before_native_pixel_decode() {
     use ::tiff::{encoder::{TiffEncoder,colortype},tags::ExtraSamples};
     for alpha in [false,true] {
