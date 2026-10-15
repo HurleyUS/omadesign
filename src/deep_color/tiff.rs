@@ -10,8 +10,16 @@ use tiff::{
 };
 
 /// Encode the document's CMYKA samples in TIFF.
-/// Args: authored pixels with retained CMYK and ICC data. Returns TIFF bytes preserving alpha and sample depth.
+/// Args: authored CMYKA pixels. Returns legacy unleased bytes; use encode_admitted for retained output.
 pub fn encode(pixels: &Pixels) -> Result<Vec<u8>, String> {
+    let output = Arc::try_unwrap(encode_admitted(pixels)?).map_err(|_| "Shared legacy TIFF output")?;
+    let (bytes, _memory) = output.into_parts();
+    Ok(bytes)
+}
+
+/// Retain encoded TIFF storage through its final consumer.
+/// Args: authored CMYKA pixels. Returns exact TIFF bytes with their shared allocation lease.
+pub fn encode_admitted(pixels: &Pixels) -> Result<crate::export::EncodedBytes, String> {
     let native = pixels
         .native
         .as_ref()
@@ -52,9 +60,7 @@ pub fn encode(pixels: &Pixels) -> Result<Vec<u8>, String> {
             Depth::F32 => write!(colortype::CMYK32Float, inks.as_slice()),
         }
     }
-    let output = Arc::try_unwrap(out.finish()?).map_err(|_| "Shared TIFF output")?;
-    let (bytes, _memory) = output.into_parts();
-    Ok(bytes)
+    out.finish()
 }
 
 /// Read RGB/CMYK TIFF directly into admitted native storage.

@@ -50,9 +50,18 @@ fn zip_channel(data: &[u8]) -> Result<Arc<Allocation<u8>>, String> {
     zip.finish().map_err(|e| format!("Could not finish Photoshop channel: {e}"))?.finish()
 }
 
-/// Export a standards-compliant RGB/8 PSD or PSB, with a compatibility composite.
-/// Vectors and native filters are rendered per layer; groups and pixel masks stay separate.
+/// Export legacy Photoshop bytes without a retained admission owner.
+/// Args: document and PSB flag. Returns unleased bytes and notes; use encode_admitted for retained output.
 pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
+    let output = encode_admitted(doc, large)?;
+    let allocation = Arc::try_unwrap(output.bytes).map_err(|_| "Shared legacy Photoshop output")?;
+    let (bytes, _memory) = allocation.into_parts();
+    Ok(PsdExport { bytes, warnings: output.warnings })
+}
+
+/// Retain standard PSD/PSB bytes through the final caller or queued file write.
+/// Args: editable document and PSB flag. Returns admitted encoded bytes and appearance notes.
+pub fn encode_admitted(doc: &Document, large: bool) -> Result<super::AdmittedPsdExport, String> {
     doc.validate_sources()?;
     if doc.layers.iter().any(|l| {
         l.kind.shapes().is_some_and(|ss| {
@@ -88,7 +97,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
                 prepared.layers.push(layer.clone());
             }
         }
-        return encode(&prepared, large);
+        return encode_admitted(&prepared, large);
     }
     if !doc.mask_sources().is_empty() {
         if doc.layers.iter().any(|l| {
@@ -98,7 +107,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             return Err("High-depth artwork masks cannot be flattened by the 8-bit compatibility renderer. Export .oma to retain original samples and editable artwork masks.".into());
         }
         let prepared = crate::compositor::raster_export_document(doc)?;
-        let mut result = encode(&prepared, large)?;
+        let mut result = encode_admitted(&prepared, large)?;
         result.warnings.push("Live artwork masks were rendered into their affected layers or groups. Save .oma or export SVG to retain editable mask sources.".into());
         return Ok(result);
     }
@@ -290,8 +299,8 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
     for ch in 0..if doc.color.model == crate::deep_color::cms::Model::Cmyk {5} else {4} {
         out.write_all(&plane(&merged, ch, depth, doc.color.model == crate::deep_color::cms::Model::Rgb)?).map_err(|e| e.to_string())?;
     }
-    Ok(PsdExport {
-        bytes: {let output = Arc::try_unwrap(out.finish()?).map_err(|_| "Shared Photoshop encoded storage")?; let (bytes, _memory) = output.into_parts(); bytes},
+    Ok(super::AdmittedPsdExport {
+        bytes: out.finish()?,
         warnings,
     })
 }

@@ -24,6 +24,12 @@ pub struct PsdExport {
     pub warnings: Vec<String>,
 }
 
+/// Encoded Photoshop output whose allocation remains admitted until its final consumer drops it.
+pub struct AdmittedPsdExport {
+    pub bytes: crate::export::EncodedBytes,
+    pub warnings: Vec<String>,
+}
+
 const MAX_LAYERS: usize = 8192;
 
 fn warn(warnings: &mut Vec<String>, text: impl Into<String>) {
@@ -671,7 +677,7 @@ fn bake_clipping(
 }
 
 mod writer;
-pub use writer::encode;
+pub use writer::{encode, encode_admitted};
 
 #[cfg(test)]
 mod tests {
