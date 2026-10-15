@@ -1,6 +1,6 @@
 use super::*;
 use crate::document::{Layer, Style};
-use crate::layout::{FrameLayout, LayoutBreakpoint, make_frame};
+use crate::layout::{LayoutBreakpoint, make_frame};
 use crate::layout_prototype::{Interaction, PrototypeAction as Action, Transition, Trigger};
 
 fn interaction(action: Action) -> Interaction {

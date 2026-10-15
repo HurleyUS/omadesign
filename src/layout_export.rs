@@ -438,7 +438,7 @@ impl<'a> Html<'a> {
                     -(face.descender() as f32) / face.units_per_em() as f32,
                 );
             }
-            let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+            let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes.as_slice());
             let _ = write!(
                 self.styles,
                 "@font-face{{font-family:'{family}';src:url(data:font/ttf;base64,{data});font-display:block;}}"
