@@ -74,10 +74,7 @@ pub(super) fn render(
         }
     }
     let source = crate::svg::export_posed(&isolated, &poses)?;
-    let mut options = usvg::Options::default();
-    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
-    let tree = usvg::Tree::from_str(&source, &options)
-        .map_err(|e| format!("Invalid SVG effect graph: {e}"))?;
+    let tree = crate::svg_source::scene(&source)?;
     let mut surface = Pixmap::new(width, height).ok_or("Could not allocate SVG effect viewport")?;
     resvg::render(&tree, transform, &mut surface.as_mut());
     Ok(surface)
