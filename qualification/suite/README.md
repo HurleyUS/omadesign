@@ -28,6 +28,23 @@ receipt. It does not start Cargo or hash a possibly overwritten target later.
 The suite checks the actual executable against that locked digest before use.
 A build binding, including `--no-run`, is explicitly not fixture execution proof.
 
+Cross-product adapter qualification uses one held global lock for the entire
+build/bind/execute group:
+
+```
+node scripts/suite/serialized-adapters.mjs plan CONFIG omatainer FULL_SHA
+node scripts/suite/serialized-adapters.mjs run CONFIG omatainer FULL_SHA /home/.../NEW_OUTPUT
+node scripts/suite/serialized-adapters.mjs run CONFIG editbay FULL_SHA /home/.../NEW_OUTPUT
+```
+
+The recipes select Omatainer's binary test target and exact EditBay media/core
+packages. They call the central helper with `--inside` under that existing lock,
+consume compiler-emitted targets from its immutable receipt, and execute the real
+adapters before releasing the same lock. There is no cache glob or later binary
+hash used to reconstruct compilation. The internal path refuses execution without
+an actual outer `flock` ancestor. This explicitly qualifies only the baseline
+developer lane; the complete public candidate still includes UI/RAW/owner gates.
+
 `--roots LOCAL_JSON` binds product IDs to local checkouts. `--builds LOCAL_JSON`
 binds each product to `{revision,tree,binary,sha256,driver,tools}`; tools are keyed
 by manifest tool ID and contain `{path,sha256,version}`. These files, inputs and
