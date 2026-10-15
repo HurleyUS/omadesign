@@ -114,13 +114,19 @@ fn native_text() -> Document {
     ];
     run.contours = crate::text::shape(&run);
     let mut layer = Layer::vector("Native editable text");
-    layer.kind.shapes_mut().unwrap().push(Shape::new(
+    let mut shape = Shape::new(
         Geom::Text(run),
         Style {
             fill: Fill::Solid(Rgba::rgb(15, 35, 65)),
-            stroke: None,
+            stroke: Some(Stroke {
+                width: 0.8,
+                color: Rgba::new(30, 45, 70, 140),
+                ..Default::default()
+            }),
         },
-    ));
+    );
+    shape.rotation = 0.04;
+    layer.kind.shapes_mut().unwrap().push(shape);
     doc.layers.push(layer);
     doc
 }

@@ -94,35 +94,43 @@ pub(super) fn write(
         }
     }
     let mut resolved = HashMap::new();
+    let mut faces: HashMap<String, (u128, u16)> = HashMap::new();
     for glyph in lines.iter().flat_map(|line| &line.glyphs) {
         let style = run.character_style(glyph.cluster);
-        let mut effective = run.clone();
-        effective.font = style.font.unwrap_or_else(|| run.font.clone());
-        effective.px = style.px.unwrap_or(run.px);
-        let bytes = crate::text::font_bytes_for(&effective)
-            .ok_or("the composer's resolved font bytes are unavailable")?;
-        let face = Face::parse(&bytes, 0).map_err(|_| "the resolved font cannot be parsed")?;
-        if !editable_font(&face) {
-            return Err("the resolved face does not permit editable outline embedding".into());
-        }
-        if face.tables().glyf.is_none()
-            || face.is_variable()
-            || bytes.starts_with(b"ttcf")
-            || bytes.len() > 16 * 1024 * 1024
-        {
-            return Err("this font container or variable/CFF face requires outlines".into());
-        }
-        if glyph.id >= face.number_of_glyphs() {
+        let font = style.font.unwrap_or_else(|| run.font.clone());
+        let (key, glyph_count) = if let Some(face) = faces.get(&font) {
+            *face
+        } else {
+            let mut effective = run.clone();
+            effective.font = font.clone();
+            let bytes = crate::text::font_bytes_for(&effective)
+                .ok_or("the composer's resolved font bytes are unavailable")?;
+            let face = Face::parse(&bytes, 0).map_err(|_| "the resolved font cannot be parsed")?;
+            if !editable_font(&face) {
+                return Err("the resolved face does not permit editable outline embedding".into());
+            }
+            if face.tables().glyf.is_none()
+                || face.is_variable()
+                || bytes.starts_with(b"ttcf")
+                || bytes.len() > 16 * 1024 * 1024
+            {
+                return Err("this font container or variable/CFF face requires outlines".into());
+            }
+            let key = crate::typography::fingerprint(&bytes);
+            if !writer.fonts.entries.contains_key(&key) {
+                writer
+                    .fonts
+                    .entries
+                    .insert(key, Embedded::new(&mut writer.pdf, bytes.clone(), &face)?);
+            }
+            let entry = (key, face.number_of_glyphs());
+            faces.insert(font, entry);
+            entry
+        };
+        if glyph.id >= glyph_count {
             return Err("the composed glyph does not belong to the resolved face".into());
         }
-        let key = crate::typography::fingerprint(&bytes);
-        if !writer.fonts.entries.contains_key(&key) {
-            writer
-                .fonts
-                .entries
-                .insert(key, Embedded::new(&mut writer.pdf, bytes.clone(), &face)?);
-        }
-        resolved.insert(glyph.cluster, (key, effective.px.max(1.)));
+        resolved.insert(glyph.cluster, (key, style.px.unwrap_or(run.px).max(1.)));
     }
     let character_bytes = run
         .content
@@ -130,8 +138,9 @@ pub(super) fn write(
         .map(|(i, _)| i)
         .chain(std::iter::once(run.content.len()))
         .collect::<Vec<_>>();
+    let text_bounds = shape.geom.bbox();
     op(&mut out.ops, "q", &[]);
-    rotate_matrix(&mut out.ops, shape.geom.bbox().center(), shape.rotation);
+    rotate_matrix(&mut out.ops, text_bounds.center(), shape.rotation);
     if shape.style.stroke.as_ref().is_some_and(|s| s.width > 0.) {
         stroke_style(&mut out.ops, shape);
     }
@@ -252,15 +261,15 @@ pub(super) fn write(
                 op(&mut out.ops, "Tr", &[7.]);
                 out.ops.push(show.clone());
                 op(&mut out.ops, "ET", &[]);
-                let mut painted = shape.clone();
-                painted.geom = Geom::Rect {
-                    origin: shape.geom.bbox().min,
-                    size: Pt::new(shape.geom.bbox().width(), shape.geom.bbox().height()),
-                    radius: 0.,
-                };
-                painted.rotation = 0.;
-                painted.style.fill = fill;
-                painted.style.stroke = None;
+                let mut painted = Shape::new(
+                    Geom::Rect {
+                        origin: text_bounds.min,
+                        size: Pt::new(text_bounds.width(), text_bounds.height()),
+                        radius: 0.,
+                    },
+                    crate::document::Style { fill, stroke: None },
+                );
+                painted.id = shape.id;
                 writer.paint(&painted, false, bounds, out)?;
                 op(&mut out.ops, "Q", &[]);
                 if stroke.is_none() {
