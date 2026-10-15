@@ -89,6 +89,11 @@ fn keyboard_motion_native_timing_and_preset_authoring_undo_and_save_reopen() {
         history,
         "Preset drafts do not edit artwork"
     );
+    studio.updates.freezing = true;
+    frame(&ctx, &mut studio, vec![]);
+    studio.updates.freezing = false;
+    let output = frame(&ctx, &mut studio, vec![]);
+    assert!(!keys::named(&output, "Fade in").1.is_disabled());
     press(&ctx, &mut studio, "Fade in");
     assert_eq!(studio.history.len(), history + 1);
     let authored = studio.doc.motion.clone();

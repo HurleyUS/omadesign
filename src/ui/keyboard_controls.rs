@@ -61,7 +61,9 @@ pub(super) fn motion_number(
     }
     number_focus(ui, &response);
     super::welcome::focus_control(ui, &response);
-    ui.data_mut(|data| data.insert_temp(owner.with("motion-number-valid"), valid));
+    if response.enabled() {
+        ui.data_mut(|data| data.insert_temp(owner.with("motion-number-valid"), valid));
+    }
     (
         super::fields::FieldResponse {
             changed: valid && !cancelled && response.changed(),
