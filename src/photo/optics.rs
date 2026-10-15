@@ -56,6 +56,12 @@ impl Default for OpticalSettings {
 }
 
 impl OpticalSettings {
+    /// Identify neutral settings for legacy preset compatibility.
+    /// Args: none. Returns true when all optical settings are defaults.
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
     /// Check calibration values before rendering.
     /// Args: none. Returns true for finite, bounded geometry and gain coefficients.
     pub fn valid(&self) -> bool {

@@ -13,7 +13,14 @@ pub struct Categories {
     pub split_tone: bool,
     pub crop: bool,
     pub rotation: bool,
+    #[serde(skip_serializing_if = "is_false")]
     pub optics: bool,
+}
+
+/// Omit inactive opt-in fields for version 1 preset readers.
+/// Args: field value. Returns true when the field can be omitted.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Default for Categories {

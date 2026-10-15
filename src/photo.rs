@@ -108,7 +108,7 @@ pub struct DevelopParams {
     pub hsl: [HslBand; 8],
     pub rotate: u32,
     pub crop: Option<[f32; 4]>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "optics::OpticalSettings::is_default")]
     pub optics: optics::OpticalSettings,
 }
 
