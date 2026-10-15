@@ -408,25 +408,32 @@ impl Reader<'_> {
         if frame.kind != kind {
             return Err(format!("Unbalanced Illustrator {kind}"));
         }
+        let mut layer = frame.layer;
         if kind == "Compound" && !frame.contours.is_empty() {
             let geom = Geom::Paths {
                 paths: frame.contours,
                 winding: self.state.winding,
             };
             let shape = self.shape(geom, frame.paint.0, frame.paint.1);
-            let mut layer = Layer::vector("Compound path");
-            layer.parent = frame.layer.parent;
-            layer.kind.shapes_mut().unwrap().push(shape);
-            self.last = Some(layer.id);
-            self.layers.push(layer);
-        } else {
-            let mut layer = frame.layer;
-            if let Some(clip) = frame.clip {
-                layer.artwork_masks.push(ArtworkMask::new(clip));
+            let mut compound = Layer::vector("Compound path");
+            compound.kind.shapes_mut().unwrap().push(shape);
+            if self
+                .layers
+                .iter()
+                .any(|child| child.parent == Some(layer.id))
+            {
+                compound.parent = Some(layer.id);
+                self.layers.push(compound);
+            } else {
+                compound.parent = layer.parent;
+                layer = compound;
             }
-            self.last = Some(layer.id);
-            self.layers.push(layer);
         }
+        if let Some(clip) = frame.clip {
+            layer.artwork_masks.push(ArtworkMask::new(clip));
+        }
+        self.last = Some(layer.id);
+        self.layers.push(layer);
         self.state = frame.state;
         Ok(())
     }
@@ -1461,6 +1468,8 @@ impl Reader<'_> {
                 }
             }
         }
+        doc.validate_hierarchy()
+            .map_err(|error| format!("Invalid Illustrator artwork hierarchy: {error}"))?;
         Ok((doc, self.notes.into_iter().collect()))
     }
 }

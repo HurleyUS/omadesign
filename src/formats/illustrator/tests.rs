@@ -198,6 +198,49 @@ fn illustrator_compounds_and_unsupported_features_are_explicit() {
 }
 
 #[test]
+fn illustrator_compound_children_keep_their_container_after_reopen() {
+    let native = program(&format!(
+        "*u\n{}\nu\n70 20 m 90 20 l 90 40 l 70 40 l f\nU\n*U",
+        rectangle()
+    ));
+    let (doc, _) = read(&native, "Compound children").unwrap();
+    doc.validate_hierarchy().unwrap();
+    let main = doc.layers.iter().find(|l| l.name == "Main").unwrap();
+    let compound = doc
+        .layers
+        .iter()
+        .find(|l| {
+            l.kind
+                .shapes()
+                .is_some_and(|s| s.iter().any(|s| matches!(&s.geom, Geom::Paths { .. })))
+        })
+        .unwrap();
+    let container = doc
+        .layers
+        .iter()
+        .find(|l| Some(l.id) == compound.parent && l.is_group)
+        .unwrap();
+    assert_eq!(container.parent, Some(main.id));
+    let nested_group = doc
+        .layers
+        .iter()
+        .find(|l| l.is_group && l.parent == Some(container.id))
+        .unwrap();
+    let nested_path = doc
+        .layers
+        .iter()
+        .find(|l| l.parent == Some(nested_group.id) && !l.is_group)
+        .unwrap();
+    assert_eq!(nested_path.kind.shapes().unwrap().len(), 1);
+    assert_eq!(compound.kind.shapes().unwrap().len(), 1);
+    let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&reopened.layers).unwrap(),
+        serde_json::to_value(&doc.layers).unwrap()
+    );
+}
+
+#[test]
 fn illustrator_damaged_containers_fail_instead_of_silent_preview_success() {
     assert!(decode_private(b"%AI12_CompressedData broken").is_err());
     assert!(decode_private(b"%AI24_ZStandard_Data broken").is_err());
