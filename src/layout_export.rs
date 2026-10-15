@@ -401,7 +401,7 @@ fn fill_css(fill: &Fill) -> String {
                 ),
             }
         }
-        Fill::None => "transparent".into(),
+        Fill::None | Fill::Pattern(_) => "transparent".into(),
         Fill::Solid(color) => color.css(),
         Fill::Linear { from, to, c0, c1 } => {
             let angle = (to[0] - from[0]).atan2(-(to[1] - from[1])).to_degrees();

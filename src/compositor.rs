@@ -875,7 +875,7 @@ fn recolor_fill(fill: &mut Fill, color: crate::color::Rgba) {
                 stop.color = color;
             }
         }
-        Fill::None => *fill = Fill::Solid(color),
+        Fill::None | Fill::Pattern(_) => *fill = Fill::Solid(color),
     }
 }
 
@@ -1207,7 +1207,11 @@ fn draw_shape_inner(
             | crate::geom::Geom::Paths { winding: true, .. } => FillRule::Winding,
             _ => FillRule::EvenOdd,
         };
-        if fill_reveal < 1.0 {
+        if let Fill::Pattern(pattern) = &shape.style.fill {
+            let rotation = Transform::from_rotate_at(shape.rotation.to_degrees(), shape.geom.bbox().center().x, shape.geom.bbox().center().y);
+            let local_path = path.clone().transform(rotation.invert().unwrap_or_default());
+            if let Some(local_path) = local_path { pattern.draw(pm, &local_path, shape.geom.bbox(), xf.pre_concat(rotation), op, blend, mask, shape.geom.nonzero_winding()); }
+        } else if fill_reveal < 1.0 {
             let bounds = shape.world_bbox();
             if let Some(rect) = tiny_skia::Rect::from_xywh(
                 bounds.min.x,
@@ -1336,7 +1340,7 @@ fn fill_paint<'a>(
                 .map(crate::gradient::texture_shader)
                 .unwrap_or_else(|| gradient.skia(geom.bbox()));
         }
-        Fill::None => {}
+        Fill::None | Fill::Pattern(_) => {}
         Fill::Solid(c) => paint.set_color(c.to_skia()),
         Fill::Linear { from, to, c0, c1 } => {
             let b = geom.bbox();

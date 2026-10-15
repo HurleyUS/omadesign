@@ -387,6 +387,7 @@ fn color_row(ui: &mut Ui, studio: &mut Studio, fill: bool) {
             Fill::Solid(c) | Fill::Linear { c0: c, .. } | Fill::Radial { c0: c, .. } => Some(*c),
             Fill::Gradient(g) => Some(g.sample(0.)),
             Fill::None => None,
+            Fill::Pattern(_) => Some(Rgba::BLACK),
         }
     } else {
         source_stroke.as_ref().map(|stroke| {
@@ -421,7 +422,7 @@ fn color_row(ui: &mut Ui, studio: &mut Studio, fill: bool) {
                     | Fill::Linear { c0: color, .. }
                     | Fill::Radial { c0: color, .. } => *color,
                     Fill::Gradient(g) => g.sample(0.),
-                    Fill::None => studio.brush.color,
+                    Fill::None | Fill::Pattern(_) => studio.brush.color,
                 }
             };
             color.a = 255;
@@ -788,7 +789,7 @@ fn color_grid(ui: &mut Ui, studio: &mut Studio, recent: bool) {
                         | Fill::Linear { c0: current, .. }
                         | Fill::Radial { c0: current, .. } => *current,
                         Fill::Gradient(gradient) => gradient.sample(0.),
-                        Fill::None => color,
+                        Fill::None | Fill::Pattern(_) => color,
                     };
                     if studio.is_motion()
                         && !style.fill.is_none()

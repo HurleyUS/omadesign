@@ -997,7 +997,7 @@ fn lottie_fill_style(shape: &Shape, center: Pt) -> Option<Value> {
     };
     match &shape.style.fill {
         Fill::Gradient(g) => Some(lottie_gradient(g, shape, center, rule)),
-        Fill::None => None,
+        Fill::None | Fill::Pattern(_) => None,
         Fill::Solid(color) => {
             let mut fill = lottie_fill(*color, 1.0);
             fill["r"] = json!(rule);
