@@ -544,7 +544,7 @@ impl PhotoImage {
         } else {
             develop_checked::<u8>(DevelopSource::rgba(&self.full), &params, cancel)?
         };
-        memory.resize(u64::from(w) * u64::from(h) * 4 + 96 * 1024 * 1024, cancel)?;
+        memory.resize(data.capacity() as u64, cancel)?;
         Ok(AdmittedImage {
             image: RgbaImage { w, h, data },
             memory,
