@@ -538,10 +538,15 @@ fn text_document() -> Document {
     doc.layers.clear();
     let mut layer = Layer::vector("Live text");
     let mut run = TypeRun {
-        font: crate::text::preferred_default_path()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned(),
+        font: [
+            "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        ]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+        .expect("PDF text fixtures need Liberation Sans or Noto Sans")
+        .into(),
         origin: Pt::new(15., 45.),
         content: "Editable office — café".into(),
         px: 24.,
@@ -557,10 +562,15 @@ fn text_document() -> Document {
         },
     ));
     let mut run = TypeRun {
-        font: crate::text::preferred_default_path()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned(),
+        font: [
+            "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        ]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+        .expect("PDF text fixtures need Liberation Sans or Noto Sans")
+        .into(),
         origin: Pt::new(18., 98.),
         content: "Rotated vector type".into(),
         px: 22.,

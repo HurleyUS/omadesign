@@ -339,10 +339,15 @@ mod tests {
     #[test]
     fn pdf_exchange_rejects_restricted_and_print_only_font_embedding() {
         let run = crate::geom::TypeRun {
-            font: crate::text::preferred_default_path()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned(),
+            font: [
+                "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+            ]
+            .into_iter()
+            .find(|p| std::path::Path::new(p).is_file())
+            .expect("PDF text fixtures need Liberation Sans or Noto Sans")
+            .into(),
             ..Default::default()
         };
         let bytes = crate::text::font_bytes_for(&run).expect("test font");
