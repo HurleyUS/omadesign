@@ -664,6 +664,7 @@ pub fn refresh(doc: &Document, index: usize, mut smart: SmartObject) -> Result<C
         .ok_or("Smart-object layer is missing")?;
     let quad = smart.current_quad(before)?;
     let source = source_document(doc, index)?;
+    smart.size = [source.width as f64, source.height as f64];
     let pixels = crate::deep_color::composite(&source, 1)?.in_document_color(
         &crate::deep_color::cms::DocumentColor {
             depth: crate::deep_color::Depth::F32,
@@ -1177,6 +1178,63 @@ mod tests {
         crate::document::apply(&mut doc, &crate::document::invert_cmd(command2));
         assert_eq!(doc.layers[0].kind.pixels().unwrap().samples(), sharp);
     }
+    #[test]
+    fn retained_filter_masks_and_unknown_blends_refuse_lossy_recompute() {
+        let mut doc = super::super::decode(FIXTURE, "Filter masks")
+            .unwrap()
+            .document;
+        let smart = doc.layers[0].psd_smart.as_mut().unwrap();
+        smart.retained_blocks.push((*b"FMsk", vec![0; 12]));
+        assert!(
+            refresh(&doc, 0, doc.layers[0].psd_smart.clone().unwrap())
+                .err()
+                .unwrap()
+                .contains("smart-filter masks")
+        );
+        let encoded = crate::project::encode(&doc).unwrap();
+        doc = crate::project::decode(&encoded).unwrap();
+        let out = super::super::encode(&doc, false).unwrap();
+        let imported = super::super::decode(&out.bytes, "Retained mask").unwrap();
+        assert!(
+            imported
+                .warnings
+                .iter()
+                .any(|n| n.contains("smart-filter masks"))
+        );
+        assert_eq!(
+            imported.document.layers[0]
+                .psd_smart
+                .as_ref()
+                .unwrap()
+                .retained_blocks,
+            vec![(*b"FMsk", vec![0; 12])]
+        );
+        let mut smart = doc.layers[0].psd_smart.clone().unwrap();
+        smart.retained_blocks.clear();
+        let stack = object_mut(&mut smart.descriptor, "filterFX").unwrap();
+        let D::List(list) = &mut stack
+            .fields
+            .iter_mut()
+            .find(|(k, _)| k == "filterFXList")
+            .unwrap()
+            .1
+        else {
+            panic!()
+        };
+        let D::Object(filter) = &mut list[0] else {
+            panic!()
+        };
+        object_mut(filter, "blendOptions").unwrap().set(
+            "Md  ",
+            D::Enum {
+                class: "BlnM".into(),
+                value: "unknownMode".into(),
+            },
+        );
+        assert!(smart.filters()[0].settings.is_none());
+        assert!(refresh(&doc, 0, smart).is_err());
+    }
+
     #[test]
     fn source_replacement_is_undoable_and_old_original_stays_recoverable() {
         let mut doc = super::super::decode(FIXTURE, "Replace").unwrap().document;
