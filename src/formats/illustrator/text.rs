@@ -341,8 +341,27 @@ impl Texts {
         } else {
             return None;
         }
+        let paragraph = chars
+            .get("5")
+            .and_then(|v| v.get("0"))
+            .map(Val::list)
+            .unwrap_or_default()
+            .first()
+            .and_then(|v| v.get("0"))
+            .and_then(|v| v.get("0"))
+            .and_then(|v| v.get("5"));
+        let alignment = paragraph
+            .and_then(|v| v.get("0"))
+            .or_else(|| main.get("3").and_then(|v| v.get("0")))
+            .and_then(Val::num)
+            .unwrap_or(0.) as i32;
+        let anchor = match alignment {
+            1 => "middle",
+            2 => "end",
+            _ => "start",
+        };
         let mut out = format!(
-            "<defs>{definitions}</defs><text id=\"{id}\" font-size=\"{px}\"{transform} style=\"{flow}\" xml:space=\"preserve\">"
+            "<defs>{definitions}</defs><text id=\"{id}\" font-size=\"{px}\" text-anchor=\"{anchor}\"{transform} style=\"{flow}\" xml:space=\"preserve\">"
         );
         let fonts = self.doc.get("0")?.get("1")?.get("0")?.list();
         let characters = content.chars().collect::<Vec<_>>();
@@ -394,7 +413,17 @@ impl Texts {
                 .and_then(Val::num)
                 .filter(|n| n.abs() < 1e5)
                 .unwrap_or(0.);
-            write!(out,"<tspan font-family=\"{}\" font-size=\"{size}\" fill=\"{fill}\" letter-spacing=\"{tracking}\" baseline-shift=\"{shift}\">{}</tspan>",escape(font),escape(&text)).ok()?;
+            let stroke = if matches!(pick("57"), Some(Val::Bool(true))) {
+                let color = pick("54").and_then(paint).unwrap_or(Rgba::BLACK).css();
+                let width = pick("63")
+                    .and_then(Val::num)
+                    .filter(|n| *n >= 0. && *n < 1e4)
+                    .unwrap_or(1.);
+                format!(" stroke=\"{color}\" stroke-width=\"{width}\"")
+            } else {
+                String::new()
+            };
+            write!(out,"<tspan font-family=\"{}\" font-size=\"{size}\" fill=\"{fill}\"{stroke} letter-spacing=\"{tracking}\" baseline-shift=\"{shift}\">{}</tspan>",escape(font),escape(&text)).ok()?;
         }
         if from < characters.len() {
             out.push_str(&escape(&characters[from..].iter().collect::<String>()));
