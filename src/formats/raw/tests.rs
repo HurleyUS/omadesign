@@ -3,6 +3,48 @@ use super::*;
 const DNG: &[u8] = include_bytes!("synthetic.dng");
 
 #[test]
+fn native_result_retains_its_memory_and_cancellable_decoder_ownership() {
+    use std::time::Duration;
+    let baseline = resources::global().usage().0;
+    let native = native_decode(DNG, &Cancellation::default(), false).unwrap();
+    assert_eq!(
+        resources::global().usage().0,
+        baseline + native.lease.bytes()
+    );
+    let token = Cancellation::default();
+    let worker_token = token.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        done_tx
+            .send(decode_cancellable(DNG, &worker_token))
+            .unwrap();
+    });
+    started_rx.recv().unwrap();
+    token.cancel();
+    assert!(
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .contains("cancelled")
+    );
+    worker.join().unwrap();
+    assert_eq!(
+        resources::global().usage().0,
+        baseline + native.lease.bytes()
+    );
+    assert!(native.image.data_size > 0 && !native.image.data.is_null());
+    drop(native);
+    assert_eq!(resources::global().usage().0, baseline);
+    let next = decode(DNG).unwrap();
+    assert_eq!((next.width, next.height), (64, 48));
+    drop(next);
+    assert_eq!(resources::global().usage().0, baseline);
+}
+
+#[test]
 fn sensor_reference_is_unscaled_unoriented_mosaic_including_borders() {
     let sensor = decode_sensor(DNG, &Cancellation::default()).unwrap();
     assert_eq!((sensor.width, sensor.height), (64, 48));

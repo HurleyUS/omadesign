@@ -188,6 +188,15 @@ impl Drop for NativeImage {
     }
 }
 
+/// Release native pixels before their reservation and decoder lock.
+/// Args: completed native image, admitted memory and exclusive decoder guard.
+/// Returns an owner that preserves this cleanup order on every error path.
+struct NativeDecoded {
+    image: NativeImage,
+    lease: std::sync::Arc<resources::Lease>,
+    _decoder: std::sync::MutexGuard<'static, ()>,
+}
+
 pub fn decode(bytes: &[u8]) -> Result<RawImage, String> {
     decode_cancellable(bytes, &Cancellation::default())
 }
@@ -203,27 +212,20 @@ fn native_decode(
     bytes: &[u8],
     cancel: &Cancellation,
     sensor_only: bool,
-) -> Result<
-    (
-        NativeImage,
-        std::sync::Arc<resources::Lease>,
-        std::sync::MutexGuard<'static, ()>,
-    ),
-    String,
-> {
+) -> Result<NativeDecoded, String> {
     cancel.check()?;
     if bytes.is_empty() {
         return Err("RAW input must not be empty".into());
     }
-    // SAFETY: Every field is a plain number, fixed byte array, or nullable raw
-    // pointer. All-zero initialization is valid, including the Drop owner.
-    let mut native: NativeImage = unsafe { std::mem::zeroed() };
     let _decoder = resources::decoder(cancel)?;
     let admission = Admission {
         cancel,
         lease: resources::global().reserve(64 * 1024 * 1024, cancel)?,
         error: std::sync::Mutex::new(None),
     };
+    // SAFETY: Every field is a plain number, fixed byte array, or nullable raw
+    // pointer. All-zero initialization is valid, including the Drop owner.
+    let mut native: NativeImage = unsafe { std::mem::zeroed() };
     // SAFETY: The borrowed byte buffer remains alive through synchronous decode.
     // The C++ adapter validates input/layout, catches exceptions and writes only
     // within the exactly matching repr(C) output. It never retains input bytes.
@@ -243,6 +245,11 @@ fn native_decode(
         )
     };
     drop(active);
+    let decoded = NativeDecoded {
+        image: native,
+        lease: admission.lease,
+        _decoder,
+    };
     cancel.check()?;
     if let Some(error) = admission
         .error
@@ -253,10 +260,10 @@ fn native_decode(
         return Err(error);
     }
     if result != 0 {
-        let error = text(&native.error);
+        let error = text(&decoded.image.error);
         return Err(format!("Could not decode camera RAW: {error}"));
     }
-    Ok((native, admission.lease, _decoder))
+    Ok(decoded)
 }
 
 pub(crate) fn decode_reserved(
@@ -271,7 +278,9 @@ pub(crate) fn decode_reserved(
     if bytes.is_empty() {
         return Err("RAW input must not be empty".into());
     }
-    let (native, lease, _decoder) = native_decode(bytes, cancel, false)?;
+    let decoded = native_decode(bytes, cancel, false)?;
+    let native = &decoded.image;
+    let lease = decoded.lease.clone();
     let count = u64::from(native.width) * u64::from(native.height);
     if count == 0
         || count
@@ -368,7 +377,7 @@ pub(crate) fn decode_reserved(
         },
         warnings,
     };
-    drop(native);
+    drop(decoded);
     lease.resize(retained_bytes, cancel)?;
     resources::global().retain(&pixels, lease.clone());
     Ok(image)
@@ -432,7 +441,9 @@ struct SensorImage {
 #[cfg(test)]
 fn decode_sensor(bytes: &[u8], cancel: &Cancellation) -> Result<SensorImage, String> {
     let _input = resources::global().reserve(bytes.len() as u64, cancel)?;
-    let (native, lease, _decoder) = native_decode(bytes, cancel, true)?;
+    let decoded = native_decode(bytes, cancel, true)?;
+    let native = &decoded.image;
+    let lease = decoded.lease.clone();
     let count = u64::from(native.width) * u64::from(native.height);
     if count == 0
         || count.checked_mul(2) != Some(native.data_size)
@@ -464,7 +475,7 @@ fn decode_sensor(bytes: &[u8], cancel: &Cancellation) -> Result<SensorImage, Str
         values.set_len(count as usize);
     }
     let (width, height) = (native.width, native.height);
-    drop(native);
+    drop(decoded);
     lease.resize(values.capacity() as u64 * 2, cancel)?;
     let samples = resources::global().adopt(values, lease)?;
     Ok(SensorImage {
