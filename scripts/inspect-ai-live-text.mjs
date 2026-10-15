@@ -23,6 +23,11 @@ const output = path.resolve(outputArgument);
 if (input === output || !output.endsWith('.json')) {
   throw new Error('Choose a separate .json output; original artwork is read-only');
 }
+const inputIdentity = fs.statSync(input);
+const outputIdentity = fs.statSync(output, { throwIfNoEntry: false });
+if (outputIdentity && inputIdentity.dev === outputIdentity.dev && inputIdentity.ino === outputIdentity.ino) {
+  throw new Error('Output aliases original artwork; choose a separate .json output');
+}
 
 /** Read qpdf output. Args: flags. Returns bounded bytes without executing a shell. */
 function qpdf(...flags) {
@@ -296,7 +301,13 @@ const receipt = {
   stories: stories.map(story => ({ ...story, live: liveIds.has(story.storyIndex) })), preview,
   proofBoundary: 'This receipt establishes source characters and live references. It does not prove native text placement, font/paint fidelity or renderer output.',
 };
-fs.writeFileSync(output, JSON.stringify(receipt, null, 2) + '\n');
+const temporaryOutput = path.join(path.dirname(output), `.${path.basename(output)}.${crypto.randomUUID()}.tmp`);
+try {
+  fs.writeFileSync(temporaryOutput, JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx' });
+  fs.renameSync(temporaryOutput, output);
+} finally {
+  fs.rmSync(temporaryOutput, { force: true });
+}
 process.stdout.write(JSON.stringify({ output: path.basename(output), sourceSha256: receipt.sourceSha256,
   counts: receipt.counts, expectedNativeTextObjects: receipt.expectedNativeTextObjects,
   orphanStoryIndices: receipt.orphanStoryIndices, multilineLiveStoryIndices: receipt.multilineLiveStories.map(story => story.storyIndex), liveContentDuplicateGroups: receipt.liveContentDuplicates.length, preview }, null, 2) + '\n');
