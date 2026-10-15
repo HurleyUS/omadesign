@@ -5,7 +5,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(crate) const VERSION: u32 = 13;
+pub(crate) const VERSION: u32 = 14;
 
 #[derive(Serialize, Deserialize)]
 struct File {
@@ -19,7 +19,9 @@ pub fn encode(doc: &Document) -> Result<String, String> {
     serde_json::to_string(&File {
         // Older readers must not silently strip a mask or change stroke placement.
         // Keep plain documents compatible with v5; v1-v13 remain readable here.
-        version: if !doc.mask_sources().is_empty() {
+        version: if !doc.sources.is_empty() || doc.layers.iter().any(|l| l.source_attachment.is_some()) {
+            14
+        } else if !doc.mask_sources().is_empty() {
             13
         } else if doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(&s.geom, crate::geom::Geom::Text(t) if !t.manual_kern.is_empty() || t.spans.iter().any(|s| s.tracking.is_some() || s.kerning.is_some() || s.leading.is_some() || s.baseline_shift.is_some() || s.hscale.is_some() || s.vscale.is_some()))) {
             12
@@ -83,6 +85,19 @@ pub fn decode(s: &str) -> Result<Document, String> {
 
 /// Shared normalization after pixels have been decoded under the caller's budgets.
 pub(crate) fn normalize_decoded_document(mut doc: Document, version: u32) -> Result<Document, String> {
+    let mut source_bytes = 0usize;
+    let mut source_ids = std::collections::HashSet::new();
+    for source in &doc.sources {
+        source.validate()?;
+        source_bytes = source_bytes.checked_add(source.bytes().len()).ok_or("Retained sources exceed 512 MiB")?;
+        if source_bytes > 512 * 1024 * 1024 { return Err("Retained sources exceed 512 MiB".into()); }
+        if !source_ids.insert(&source.id) { return Err("Duplicate retained source UUID".into()); }
+    }
+    for layer in &doc.layers {
+        if let Some(id) = &layer.source_attachment && doc.source(id).is_none() {
+            return Err(format!("Layer {} references a missing original source", layer.name));
+        }
+    }
     for layer in &mut doc.layers {
         if version < 7 { layer.filters.migrate_legacy(layer.blend); }
         if let Some(shapes) = layer.kind.shapes_mut() {

@@ -786,6 +786,8 @@ impl LayerKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
     pub id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_attachment: Option<String>,
     pub name: String,
     pub visible: bool,
     pub locked: bool,
@@ -828,6 +830,7 @@ impl Layer {
     pub fn vector(name: impl Into<String>) -> Self {
         Self {
             id: next_id(),
+            source_attachment: None,
             name: name.into(),
             visible: true,
             locked: false,
@@ -851,6 +854,7 @@ impl Layer {
     pub fn raster(name: impl Into<String>, w: u32, h: u32) -> Self {
         Self {
             id: next_id(),
+            source_attachment: None,
             name: name.into(),
             visible: true,
             locked: false,
@@ -880,6 +884,7 @@ impl Layer {
     pub fn placed_raster(name: impl Into<String>, pixels: Pixels, origin: Pt, size: Pt) -> Self {
         Self {
             id: next_id(),
+            source_attachment: None,
             name: name.into(),
             visible: true,
             locked: false,
@@ -1205,6 +1210,8 @@ pub struct Document {
     /// Conversion changes stay with the saved project for later inspection.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub import_notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<crate::source_attachment::SourceAttachment>,
     pub guides: Vec<Guide>,
     #[serde(default)]
     pub ruler: RulerSettings,
@@ -1234,6 +1241,19 @@ pub struct Document {
 }
 
 impl Document {
+    /// Retain original format data once for all referencing objects.
+    /// Args: source attachment. Returns its stable UUID.
+    pub fn retain_source(&mut self, source: crate::source_attachment::SourceAttachment) -> String {
+        let id = source.id.clone();
+        if self.source(&id).is_none() { self.sources.push(source); }
+        id
+    }
+
+    /// Find the original data referenced by an imported object.
+    /// Args: attachment UUID. Returns the retained source if present.
+    pub fn source(&self, id: &str) -> Option<&crate::source_attachment::SourceAttachment> {
+        self.sources.iter().find(|s| s.id == id)
+    }
     /// Editing layout needs vector state only. Preserve layer indices without
     /// copying image buffers or mask data into temporary solver documents.
     pub fn layout_snapshot(&self) -> Self {
@@ -1373,6 +1393,7 @@ impl Document {
             dpi,
             layers: vec![Layer::raster("Background", w, h), Layer::vector("Layer 1")],
             import_notes: vec![],
+            sources: vec![],
             guides: vec![],
             ruler: RulerSettings::default(),
             grid: Grid::default(),
