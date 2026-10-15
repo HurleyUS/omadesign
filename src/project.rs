@@ -5,7 +5,9 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(crate) const VERSION: u32 = 14;
+mod features;
+
+pub(crate) const VERSION: u32 = features::SVG_FILTER;
 
 #[derive(Serialize, Deserialize)]
 struct File {
@@ -20,49 +22,7 @@ pub fn encode(doc: &Document) -> Result<String, String> {
     pack_rasters(&mut packed)?;
     let svg_sources = crate::svg_source::pack_sources(&mut packed);
     serde_json::to_string(&File {
-        // Older readers must not silently strip a mask or change stroke placement.
-        // Keep plain documents compatible with v5; v1-v14 remain readable here.
-        version: if crate::svg_source::requires_advanced_paint(doc) || doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().any(|s|matches!(&s.geom,crate::geom::Geom::Text(t) if t.transform.is_some() || t.svg_text.is_some() || t.spans.iter().any(|s|s.font.is_some() || s.px.is_some() || s.fill.is_some()))) {
-            14
-        } else if !doc.mask_sources().is_empty() {
-            13
-        } else if doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(&s.geom, crate::geom::Geom::Text(t) if !t.manual_kern.is_empty() || t.spans.iter().any(|s| s.tracking.is_some() || s.kerning.is_some() || s.leading.is_some() || s.baseline_shift.is_some() || s.hscale.is_some() || s.vscale.is_some()))) {
-            12
-        } else if doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(&s.geom, crate::geom::Geom::Text(t) if !t.features.is_empty() || t.spans.iter().any(|s| !s.features.is_empty()))) {
-            11
-        } else if doc.layers.iter().any(|l| !l.text_wrap.is_none() || l.kind.shapes().unwrap_or(&[]).iter().any(|s| !s.text_wrap.is_none() || matches!(&s.geom,crate::geom::Geom::Text(t) if t.frame.is_some() || t.thread.is_some()))) {
-            10
-        } else if doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(&s.geom, crate::geom::Geom::Text(t) if t.on_path.is_some())) {
-            9
-        } else if doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(&s.geom, crate::geom::Geom::Text(t) if t.wrap_width.is_some() || !t.paragraphs.is_empty() || !t.spans.is_empty() || matches!(t.align, crate::geom::TextAlign::Justify{..}))) {
-            8
-        } else if doc.layers.iter().any(|l| {
-            l.fill_opacity != 1.
-                || l.blend_interior
-                || !l.filters.items.is_empty()
-                || l.kind.shapes().is_some_and(|ss| {
-                    ss.iter().any(|s| {
-                        s.fill_opacity != 1. || s.blend_interior || !s.filters.items.is_empty()
-                    })
-                })
-        }) {
-            7
-        } else if doc
-            .layers
-            .iter()
-            .filter_map(|l| l.kind.shapes())
-            .flatten()
-            .any(|s| {
-                s.mask.is_some()
-                    || s.style.stroke.as_ref().is_some_and(|stroke| {
-                        stroke.alignment != crate::document::StrokeAlignment::Center
-                    })
-            })
-        {
-            6
-        } else {
-            5
-        },
+        version: features::required_version(doc),
         doc: packed,
         svg_sources,
     })
@@ -74,6 +34,7 @@ pub fn decode(s: &str) -> Result<Document, String> {
     if !(1..=VERSION).contains(&file.version) {
         return Err("Unsupported omadesign project version".into());
     }
+    features::validate_version(&file.doc, file.version, !file.svg_sources.is_empty())?;
     let mut doc = file.doc;
     crate::svg_source::unpack_sources(&mut doc, &file.svg_sources)?;
     for layer in &mut doc.layers {
@@ -90,6 +51,10 @@ pub fn decode(s: &str) -> Result<Document, String> {
 
 /// Shared normalization after pixels have been decoded under the caller's budgets.
 pub(crate) fn normalize_decoded_document(mut doc: Document, version: u32) -> Result<Document, String> {
+    if !(1..=VERSION).contains(&version) {
+        return Err("Unsupported omadesign project version".into());
+    }
+    features::validate_version(&doc, version, false)?;
     for layer in &mut doc.layers {
         if version < 7 { layer.filters.migrate_legacy(layer.blend); }
         if let Some(shapes) = layer.kind.shapes_mut() {

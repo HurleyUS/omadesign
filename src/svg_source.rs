@@ -307,18 +307,23 @@ pub fn requires_advanced_paint(doc: &crate::document::Document) -> bool {
             || g.inner_radius != 0.
             || g.spread != crate::gradient::Spread::Pad
     };
+    let fill = |fill: &crate::document::Fill| match fill {
+        crate::document::Fill::Pattern(_) => true,
+        crate::document::Fill::Gradient(value) => gradient(value),
+        _ => false,
+    };
     doc.layers.iter().any(|layer| {
         layer.svg_filter.is_some()
             || layer.kind.shapes().is_some_and(|shapes| {
                 shapes.iter().any(|shape| {
-                    matches!(&shape.style.fill, crate::document::Fill::Pattern(_))
-                        || shape.style.fill.gradient().as_ref().is_some_and(gradient)
+                    fill(&shape.style.fill)
                         || shape
                             .style
                             .stroke
                             .as_ref()
                             .and_then(|s| s.gradient.as_ref())
                             .is_some_and(gradient)
+                        || matches!(&shape.geom, crate::geom::Geom::Text(run) if run.spans.iter().filter_map(|span|span.fill.as_ref()).any(fill))
                 })
             })
     })
@@ -471,10 +476,19 @@ fn visit_sources(doc: &mut crate::document::Document, visit: &mut impl FnMut(&mu
             visit(&mut graph.original_definitions);
         }
         for shape in layer.kind.shapes_mut().into_iter().flatten() {
-            if let crate::document::Fill::Pattern(pattern) = &mut shape.style.fill {
-                visit(&mut pattern.definitions);
+            visit_fill_source(&mut shape.style.fill, visit);
+            if let crate::geom::Geom::Text(run) = &mut shape.geom {
+                for fill in run.spans.iter_mut().filter_map(|span| span.fill.as_mut()) {
+                    visit_fill_source(fill, visit);
+                }
             }
         }
+    }
+}
+
+fn visit_fill_source(fill: &mut crate::document::Fill, visit: &mut impl FnMut(&mut Arc<str>)) {
+    if let crate::document::Fill::Pattern(pattern) = fill {
+        visit(&mut pattern.definitions);
     }
 }
 
@@ -538,7 +552,7 @@ mod tests {
                 }
                 assert_eq!(
                     version(&doc),
-                    if field == 0 { 5 } else { 14 },
+                    if field == 0 { 5 } else { 15 },
                     "field={field} stroke={stroke}"
                 );
                 let reopened =
@@ -583,7 +597,7 @@ mod tests {
         assert!(!paints[0].definitions.contains("unused"));
         let encoded = crate::project::encode(&doc).unwrap();
         let file: serde_json::Value = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(file["version"], 14);
+        assert_eq!(file["version"], 16);
         assert_eq!(file["svg_sources"].as_object().unwrap().len(), 1);
         let restored = crate::project::decode(&encoded).unwrap();
         let exported = crate::svg::export(&restored).unwrap();

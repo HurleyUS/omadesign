@@ -1,0 +1,16 @@
+# Integrated document versions
+
+These gates are implemented on the SVG integration candidate. They require integrated runtime qualification before a release. The app release number and document format number are separate.
+
+| Minimum document version | Persisted feature | First planned milestone |
+| --- | --- | --- |
+| 14 | Affine/rich type and per-span font, size or paint | 0.6.8 |
+| 15 | Gradient affine axis, focal point, inner radius or spread | 0.6.9 |
+| 16 | Vector patterns and shared SVG definition references | 0.6.10 |
+| 17 | Editable SVG filter graphs | 0.6.11 |
+
+The writer takes the highest requirement across every layer, shape and character span. A pattern used by one text range therefore requires version16 even though range styling itself requires14. Filter graphs require17 regardless of layer order. Pattern sources in text ranges use the same pooled definitions as shape fills.
+
+Plain documents still write version5. Existing versions1–13 retain their normalization paths. Known new features declared below their required version are rejected before source expansion or pixel decompression. This reader rejects versions above17; future reserved features are not advertised as readable.
+
+Compatibility checks cover mixed-feature precedence, underdeclared gradient/filter documents, plain legacy input and shared pattern definitions across native text and shape fills. Source and independent renderer acceptance remain separate. In particular, RGBA8 SVG evaluation does not establish float color fidelity, and animated affine gradients retain their own integration gate.
