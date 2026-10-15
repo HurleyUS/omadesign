@@ -3,6 +3,7 @@ use crate::{document::Document, geom::Geom};
 mod native;
 mod review;
 mod route_review;
+mod common;
 const FIXTURE: &[u8] = include_bytes!("../../../tests/assets/idml/publishing.idml");
 fn texts(doc: &Document) -> Vec<&crate::geom::TypeRun> {
     doc.layers
