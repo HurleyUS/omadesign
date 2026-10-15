@@ -648,6 +648,9 @@ fn decode(v: f64) -> f64 {
     }
 }
 fn encode(v: f64) -> f64 {
+    if v >= 1. {
+        return 1.;
+    }
     if v <= 0.0031308 {
         v * 12.92
     } else {
@@ -1140,7 +1143,10 @@ mod qualification_tests {
     }
     #[test]
     fn full_export_bounds_scene_allocation_before_creating_a_surface() {
-        let mut doc = crate::document::Document::new("Oversized", 1_000_000., 1_000_000., 96.);
+        let mut doc = crate::document::Document::new("Oversized", 64., 64., 96.);
+        doc.layers.clear();
+        doc.width = 1_000_000.;
+        doc.height = 1_000_000.;
         doc.motion.scene3d = Some(cube());
         assert!(
             crate::anim_export::render_frame(&doc, 0., 1., true)
