@@ -1,8 +1,9 @@
 //! Durable property merges and author-owned undo for live native documents.
 
 use crate::document::Document;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 type Snapshot = BTreeMap<String, Cell>;
@@ -12,6 +13,7 @@ pub enum Cell {
     Object,
     List,
     Variant(String),
+    Pixels { w: u32, h: u32, data: String },
     Value(Value),
 }
 
@@ -68,7 +70,16 @@ pub struct Replica {
 /// Turn native editable state into stable property addresses.
 /// Args: document to share. Returns its cells, excluding device and session metadata.
 pub fn snapshot(doc: &Document) -> Result<Snapshot, String> {
-    let mut value = serde_json::to_value(doc).map_err(|e| e.to_string())?;
+    let mut packed = doc.clone();
+    packed.collaboration = None;
+    packed.cloud = None;
+    packed.workspace = None;
+    visit_pixels(&mut packed, |_, pixels| {
+        pixels.data =
+            zstd::stream::encode_all(pixels.data.as_slice(), 1).map_err(|e| e.to_string())?;
+        Ok(())
+    })?;
+    let mut value = serde_json::to_value(&packed).map_err(|e| e.to_string())?;
     for key in ["cloud", "collaboration", "workspace"] {
         value.as_object_mut().unwrap().remove(key);
     }
@@ -83,12 +94,64 @@ pub fn snapshot(doc: &Document) -> Result<Snapshot, String> {
     Ok(result)
 }
 
+/// Visit document-owned pixel buffers at their shared object addresses.
+/// Args: native document and buffer visitor. Returns the first conversion error.
+fn visit_pixels(
+    doc: &mut Document,
+    mut visit: impl FnMut(&str, &mut crate::document::Pixels) -> Result<(), String>,
+) -> Result<(), String> {
+    for layer in &mut doc.layers {
+        let path = format!("/@entities/{}", layer.id);
+        if let Some(pixels) = layer.kind.pixels_mut() {
+            visit(&format!("{path}/kind/Raster/pixels"), pixels)?;
+        }
+        if let Some(pixels) = &mut layer.mask {
+            visit(&format!("{path}/mask"), pixels)?;
+        }
+        for shape in layer.kind.shapes_mut().into_iter().flatten() {
+            if let Some(pixels) = &mut shape.mask {
+                visit(&format!("/@entities/{}/mask", shape.id), pixels)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn pixel_address(path: &str) -> bool {
+    path.starts_with("/@entities/")
+        && ((path.ends_with("/mask") && path.split('/').count() == 4)
+            || (path.ends_with("/kind/Raster/pixels") && path.split('/').count() == 6))
+}
+
 fn child(path: &str, key: &str) -> String {
     format!("{path}/{}", key.replace('~', "~0").replace('/', "~1"))
 }
 
 fn flatten(path: &str, value: &Value, out: &mut Snapshot) -> Result<(), String> {
     match value {
+        Value::Object(fields) if pixel_address(path) => {
+            let w = fields
+                .get("w")
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or("Invalid live pixel width")?;
+            let h = fields
+                .get("h")
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or("Invalid live pixel height")?;
+            let bytes: Vec<u8> =
+                serde_json::from_value(fields.get("data").ok_or("Missing live pixels")?.clone())
+                    .map_err(|e| e.to_string())?;
+            out.insert(
+                path.into(),
+                Cell::Pixels {
+                    w,
+                    h,
+                    data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                },
+            );
+        }
         Value::Object(fields)
             if fields.len() == 1
                 && fields.keys().next().is_some_and(|key| {
@@ -141,6 +204,7 @@ fn flatten(path: &str, value: &Value, out: &mut Snapshot) -> Result<(), String> 
 
 fn inflate(path: &str, cells: &Snapshot) -> Option<Value> {
     match cells.get(path)? {
+        Cell::Pixels { w, h, .. } => Some(json!({"w":w,"h":h,"data":[]})),
         Cell::Value(value) => Some(value.clone()),
         Cell::Variant(variant) => Some(Value::Object(
             [(variant.clone(), inflate(&child(path, variant), cells)?)]
@@ -475,6 +539,33 @@ impl Replica {
                 });
             doc.layers[layer].kind.shapes_mut().unwrap().push(shape);
         }
+        visit_pixels(&mut doc, |path, pixels| {
+            use std::io::Read;
+            let Some(Cell::Pixels { w, h, data }) = cells.get(path) else {
+                return Ok(());
+            };
+            let expected = u64::from(*w)
+                .checked_mul(u64::from(*h))
+                .and_then(|n| n.checked_mul(4))
+                .filter(|n| *n > 0 && *n <= 512 * 1024 * 1024)
+                .ok_or("Live pixel dimensions exceed the decode budget")?;
+            let compressed = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|e| e.to_string())?;
+            let decoder = zstd::stream::read::Decoder::new(compressed.as_slice())
+                .map_err(|e| e.to_string())?;
+            let mut bytes = Vec::new();
+            decoder
+                .take(expected + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            if bytes.len() as u64 != expected {
+                return Err("Invalid live pixel buffer size".into());
+            }
+            pixels.data = bytes;
+            pixels.touch();
+            Ok(())
+        })?;
         let groups: BTreeMap<_, _> = doc
             .layers
             .iter()
@@ -1169,5 +1260,21 @@ mod tests {
             snapshot(&b.document(&doc).unwrap()).unwrap()
         );
         crate::project::decode(&crate::project::encode(&merged).unwrap()).unwrap();
+    }
+    #[test]
+    fn standard_layout_backgrounds_fit_the_live_seed_and_pixels_round_trip_losslessly() {
+        let mut doc = Document::new("Desktop layout", 1920., 1080., 72.);
+        let pixels = doc.layers[0].kind.pixels_mut().unwrap();
+        pixels.data[10..18].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        pixels.touch();
+        let seed = snapshot(&doc).unwrap();
+        assert!(serde_json::to_vec(&seed).unwrap().len() < 64_000);
+        let state = Replica::new("pixels".into(), "a".repeat(64), seed);
+        let merged = state.document(&doc).unwrap();
+        assert_eq!(
+            merged.layers[0].kind.pixels().unwrap().data,
+            doc.layers[0].kind.pixels().unwrap().data
+        );
+        assert_eq!(snapshot(&merged).unwrap(), snapshot(&doc).unwrap());
     }
 }
