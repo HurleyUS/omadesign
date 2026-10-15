@@ -462,8 +462,8 @@ mod tests {
     fn add(studio: &mut Studio, name: &str) {
         let mut shape = Shape::new(
             Geom::Rect {
-                origin: Pt::ZERO,
-                size: Pt::splat(10.),
+                origin: Pt::new(0.1, 0.3),
+                size: Pt::new(10.25, 10.),
                 radius: 0.,
             },
             Style::default(),
