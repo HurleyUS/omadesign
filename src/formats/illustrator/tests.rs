@@ -210,9 +210,15 @@ fn illustrator_compound_children_keep_their_container_after_reopen() {
         .layers
         .iter()
         .find(|l| {
-            l.kind
-                .shapes()
-                .is_some_and(|s| s.iter().any(|s| matches!(&s.geom, Geom::Paths { .. })))
+            l.kind.shapes().is_some_and(|shapes| {
+                shapes.iter().any(|shape| {
+                    shape.geom.bbox()
+                        == crate::geom::Bounds::from_min_size(
+                            crate::geom::Pt::new(10., 40.),
+                            crate::geom::Pt::splat(40.),
+                        )
+                })
+            })
         })
         .unwrap();
     let container = doc
@@ -233,6 +239,21 @@ fn illustrator_compound_children_keep_their_container_after_reopen() {
         .unwrap();
     assert_eq!(nested_path.kind.shapes().unwrap().len(), 1);
     assert_eq!(compound.kind.shapes().unwrap().len(), 1);
+    assert_eq!(
+        nested_path.kind.shapes().unwrap()[0].geom.bbox(),
+        crate::geom::Bounds::from_min_size(
+            crate::geom::Pt::new(70., 60.),
+            crate::geom::Pt::splat(20.),
+        )
+    );
+    assert_eq!(
+        doc.layers
+            .iter()
+            .filter_map(|l| l.kind.shapes())
+            .map(|s| s.len())
+            .sum::<usize>(),
+        2
+    );
     let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
     assert_eq!(
         serde_json::to_value(&reopened.layers).unwrap(),
