@@ -1176,6 +1176,18 @@ fn draw_shape_inner(
     pose: Pose,
     mask: Option<&tiny_skia::Mask>,
 ) {
+    if let crate::geom::Geom::Text(run)=&shape.geom && run.svg_text.is_some() && let Some(layout)=crate::text::svg_type::layout(run) {
+        let center=shape.geom.bbox().center();
+        let xf=t.pre_concat(pose.to_skia(shape.world_bbox().center())).pre_concat(Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y));
+        let op=opacity*pose.opacity.unwrap_or(shape.opacity);
+        if op>=1. && mask.is_none() && blend==tiny_skia::BlendMode::SourceOver {
+            resvg::render(&layout.tree,xf,&mut pm.as_mut());
+        } else if let Some(mut buffer)=Pixmap::new(pm.width(),pm.height()) {
+            resvg::render(&layout.tree,xf,&mut buffer.as_mut());
+            pm.draw_pixmap(0,0,buffer.as_ref(),&PixmapPaint{opacity:op.clamp(0.,1.),blend_mode:blend,..Default::default()},Transform::identity(),mask);
+        }
+        return;
+    }
     let Some(path) = shape.get_cached_path(96) else {
         return;
     };

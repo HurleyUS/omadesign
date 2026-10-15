@@ -351,6 +351,10 @@ fn write_shape(
         },
         extra
     );
+    if let Geom::Text(run)=&shape.geom && run.svg_text.is_some() {
+        if let Some(fragment)=crate::text::svg_type::export_fragment(run,shape.id,text_as_paths){body.push_str(&format!("<g opacity=\"{}\"{extra}>{fragment}</g>",shape.opacity));}
+        return;
+    }
     if let Geom::Text(run)=&shape.geom && run.spans.iter().any(|span|span.fill.is_some()) && run.on_path.is_none() && run.frame.is_none() {
         body.push_str(&format!("<g opacity=\"{}\"{extra}>",shape.opacity));
         for (index,(fill,contours)) in crate::text::paint_groups(run,&shape.style.fill).into_iter().enumerate() {
