@@ -11,6 +11,39 @@ use std::collections::HashSet;
 pub(super) fn prepare(
     document: &Document,
 ) -> Result<(Cow<'_, Document>, BTreeSet<String>), String> {
+    for layer in &document.layers {
+        let Some(graph) = layer.svg_filter.as_ref().filter(|g| !g.filters.is_empty()) else {
+            continue;
+        };
+        if graph.transform.iter().any(|v| !v.is_finite())
+            || crate::svg_source::transform(graph.transform)
+                .invert()
+                .is_none()
+        {
+            return Err(format!(
+                "PDF layer '{}' ({}) has an invalid retained filter transform",
+                layer.name, layer.id
+            ));
+        }
+        let source = format!("<svg>{}</svg>", graph.definitions);
+        let xml = roxmltree::Document::parse(&source).map_err(|e| {
+            format!(
+                "PDF layer '{}' has invalid retained filter source: {e}",
+                layer.name
+            )
+        })?;
+        for id in &graph.filters {
+            if !xml
+                .descendants()
+                .any(|n| n.has_tag_name("filter") && n.attribute("id") == Some(id.as_str()))
+            {
+                return Err(format!(
+                    "PDF layer '{}' ({}) is missing retained filter '{id}'",
+                    layer.name, layer.id
+                ));
+            }
+        }
+    }
     let mut affected = document
         .layers
         .iter()
@@ -163,7 +196,16 @@ pub(super) fn prepare(
             ));
             for layer in &selected {
                 if let Some(graph) = &layer.svg_filter {
-                    for note in &graph.reductions {
+                    for note in
+                        graph
+                            .reductions
+                            .iter()
+                            .cloned()
+                            .chain(crate::svg_source::reductions(&format!(
+                                "<svg>{}</svg>",
+                                graph.definitions
+                            )))
+                    {
                         warnings.insert(format!(
                             "PDF layer '{}' ({}): {note}",
                             original.name, original.id
