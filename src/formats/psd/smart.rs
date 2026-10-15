@@ -11,6 +11,8 @@ use crate::{
     source_attachment::SourceAttachment,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use crate::deep_color::storage;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SmartObject {
@@ -604,8 +606,8 @@ pub fn source_document(doc: &Document, index: usize) -> Result<Document, String>
                 crate::deep_color::cms::Model::Rgb
             },
             depth: n.depth,
-            icc_profile: n.icc_profile.clone(),
-            intent: 1,
+            icc_profile: n.icc_profile.to_vec(),
+            intent: n.intent,
         };
     }
     out.layers = vec![Layer::placed_raster(
@@ -627,9 +629,9 @@ fn apply_filters(mut source: Pixels, smart: &SmartObject) -> Result<Pixels, Stri
     for filter in smart.filters().into_iter().filter(|f| f.enabled) {
         let settings=filter.settings.ok_or_else(||format!("Smart filter '{}' has no native renderer. Disable it to recompute; its original descriptor remains retained.",filter.name))?;
         let filtered = source.filtered(&settings, None)?;
-        let a = source.samples();
-        let b = filtered.samples();
-        let samples = a
+        let a = source.samples()?;
+        let b = filtered.samples()?;
+        let samples = storage::collect(a
             .chunks_exact(4)
             .zip(b.chunks_exact(4))
             .flat_map(|(a, b)| {
@@ -654,9 +656,8 @@ fn apply_filters(mut source: Pixels, smart: &SmartObject) -> Result<Pixels, Stri
                     };
                 }
                 out
-            })
-            .collect();
-        source.set_samples(samples)?;
+            }))?;
+        source.set_sample_allocation(samples)?;
     }
     Ok(source)
 }
@@ -719,13 +720,10 @@ fn placed_pixels(source: &Pixels, quad: [f64; 8]) -> Result<(Pixels, Pt), String
         .fold(f64::NEG_INFINITY, f64::max)
         .ceil();
     let (w, h) = ((right - left) as u32, (bottom - top) as u32);
-    let count = (w as usize)
-        .checked_mul(h as usize)
-        .filter(|&n| n > 0 && n <= 16 * 1024 * 1024)
-        .ok_or("Smart-object preview exceeds 16 megapixels")?;
+    let count = storage::count(w,h,4)?;
     let m = inverse_projective(quad)?;
-    let mut samples = vec![0.; count * 4];
-    for (i, p) in samples.chunks_exact_mut(4).enumerate() {
+    let mut samples = crate::resources::global().allocate_now::<f32,_>(count,&storage::check)?;
+    for (i, p) in samples.as_mut_slice().chunks_exact_mut(4).enumerate() {
         let x = left + (i % w as usize) as f64 + 0.5;
         let y = top + (i / w as usize) as f64 + 0.5;
         let div = m[6] * x + m[7] * y + 1.;
@@ -743,16 +741,17 @@ fn placed_pixels(source: &Pixels, quad: [f64; 8]) -> Result<(Pixels, Pt), String
             (v * source.h as f64) as f32,
         ));
     }
-    Pixels::from_samples(
+    let mut placed = Pixels::from_sample_allocation(
         w,
         h,
         source
             .native
             .as_ref()
             .map_or(crate::deep_color::Depth::U8, |n| n.depth),
-        samples,
-    )
-    .map(|p| (p, Pt::new(left as f32, top as f32)))
+        Arc::new(samples),
+    )?;
+    if let Some(native) = &source.native {placed.native.as_mut().unwrap().intent = native.intent;}
+    Ok((placed, Pt::new(left as f32, top as f32)))
 }
 
 /// Recompute a placed object from its retained source and current filter parameters.
@@ -780,9 +779,10 @@ pub fn refresh(doc: &Document, index: usize, mut smart: SmartObject) -> Result<C
             .kind
             .pixels()
             .ok_or("Smart-object preview pixels are missing")?;
-        let mut samples = Vec::with_capacity(pixels.w as usize * pixels.h as usize * 4);
+        let mut samples = crate::resources::global().allocate_now::<f32,_>(storage::count(pixels.w,pixels.h,4)?,&storage::check)?;
         for y in 0..pixels.h {
             for x in 0..pixels.w {
+                let offset = (y as usize * pixels.w as usize + x as usize) * 4;
                 let (x, y) = transform(
                     inverse,
                     origin.x as f64 + x as f64 + 0.5,
@@ -793,11 +793,11 @@ pub fn refresh(doc: &Document, index: usize, mut smart: SmartObject) -> Result<C
                     (x * mask.w as f64 / original.w as f64) as f32,
                     (y * mask.h as f64 / original.h as f64) as f32,
                 );
-                samples.extend_from_slice(&value);
+                samples.as_mut_slice()[offset..offset+4].copy_from_slice(&value);
             }
         }
         let mut remapped = mask.reframed(pixels.w, pixels.h, 0, 0)?;
-        remapped.set_samples(samples)?;
+        remapped.set_sample_allocation(Arc::new(samples))?;
         after.mask = Some(remapped);
     }
     let size = Pt::new(pixels.w as f32, pixels.h as f32);
@@ -972,9 +972,11 @@ fn write_unicode(out: &mut Vec<u8>, value: &str) {
     }
 }
 
-pub(super) fn write_links(doc: &Document) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let mut embedded = Vec::new();
-    let mut external = Vec::new();
+/// Encode retained originals without an unadmitted full-source intermediate copy.
+/// Args: document with validated source references. Returns admitted embedded and external Photoshop link blocks.
+pub(super) fn write_links(doc: &Document) -> Result<(Arc<crate::resources::Allocation<u8>>, Arc<crate::resources::Allocation<u8>>), String> {
+    let mut embedded = storage::Builder::new()?;
+    let mut external = storage::Builder::new()?;
     let mut used = std::collections::HashMap::new();
     for layer in &doc.layers {
         let Some(smart) = &layer.psd_smart else {
@@ -1035,15 +1037,14 @@ pub(super) fn write_links(doc: &Document) -> Result<(Vec<u8>, Vec<u8>), String> 
             descriptor::write_versioned(&mut item, link);
             item.extend_from_slice(&size.to_be_bytes());
         }
-        if let Some(source) = source {
-            item.extend_from_slice(source.bytes());
-        }
+        let item_len = item.len().checked_add(usize::try_from(size).map_err(|_| "Photoshop source length overflows")?).ok_or("Photoshop link length overflows")?;
         let out = if linked { &mut external } else { &mut embedded };
-        out.extend_from_slice(&(item.len() as u64).to_be_bytes());
-        out.extend_from_slice(&item);
-        out.resize(out.len().next_multiple_of(4), 0);
+        out.extend(&(item_len as u64).to_be_bytes())?;
+        out.extend(&item)?;
+        if let Some(source) = source {out.extend(source.bytes())?;}
+        out.extend(&[0;3][..(4-out.len()%4)%4])?;
     }
-    Ok((embedded, external))
+    Ok((embedded.finish()?, external.finish()?))
 }
 
 /// Wrap existing raster pixels as a non-destructive placed source.
@@ -1233,11 +1234,11 @@ mod tests {
         let smart = doc.layers[0].psd_smart.clone().unwrap();
         let command = refresh(&doc, 0, smart.with_filter(0, true, Some(0.)).unwrap()).unwrap();
         crate::document::apply(&mut doc, &command);
-        let sharp = doc.layers[0].kind.pixels().unwrap().samples();
+        let sharp = doc.layers[0].kind.pixels().unwrap().samples().unwrap();
         let smart = doc.layers[0].psd_smart.clone().unwrap();
         let command2 = refresh(&doc, 0, smart.with_filter(0, true, Some(1.5)).unwrap()).unwrap();
         crate::document::apply(&mut doc, &command2);
-        assert_ne!(sharp, doc.layers[0].kind.pixels().unwrap().samples());
+        assert_ne!(sharp, doc.layers[0].kind.pixels().unwrap().samples().unwrap());
         assert_eq!(
             doc.source(doc.layers[0].source_attachment.as_deref().unwrap())
                 .unwrap()
@@ -1278,7 +1279,7 @@ mod tests {
             }
         }
         crate::document::apply(&mut doc, &crate::document::invert_cmd(command2));
-        assert_eq!(doc.layers[0].kind.pixels().unwrap().samples(), sharp);
+        assert_eq!(doc.layers[0].kind.pixels().unwrap().samples().unwrap(), sharp);
     }
     #[test]
     fn retained_filter_masks_and_unknown_blends_refuse_lossy_recompute() {
@@ -1369,7 +1370,7 @@ mod tests {
                 doc.layers[0].kind.pixels().unwrap().h
             )
         );
-        assert_eq!(mask.native.as_ref().unwrap().icc_profile, profile);
+        assert_eq!(mask.native.as_ref().unwrap().icc_profile.as_slice(), profile.as_slice());
         let saved = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
         assert_eq!(saved.layers[0].mask.as_ref().unwrap().native, mask.native);
     }
@@ -1386,11 +1387,11 @@ mod tests {
             .unwrap();
         let mut source = source_document(&doc, 0).unwrap();
         let pixels = source.layers[0].kind.pixels_mut().unwrap();
-        let mut values = pixels.samples();
-        for p in values.chunks_exact_mut(4) {
+        let mut values = pixels.copy_samples(&storage::check).unwrap();
+        for p in values.as_mut_slice().chunks_exact_mut(4) {
             p[0] = 0.875;
         }
-        pixels.set_samples(values).unwrap();
+        pixels.set_sample_allocation(Arc::new(values)).unwrap();
         *pixels = pixels.reframed(8, 4, 0, 0).unwrap();
         source.width = 8.;
         source.height = 4.;
