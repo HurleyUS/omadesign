@@ -264,3 +264,49 @@ fn svg_type_saved_metadata_cannot_add_executable_svg_content() {
         || n.attribute("onload").is_some()
         || n.has_tag_name("image")));
 }
+
+#[test]
+fn svg_type_nondefault_variable_axis_keeps_live_type_and_portable_font() {
+    let bytes = Arc::new(include_bytes!("../../../tests/assets/fonts/EBGaramond.ttf").to_vec());
+    let id = format!("omatype:{:032x}", crate::typography::fingerprint(&bytes));
+    crate::text::register_memory_font(&id, "Variable type", bytes).unwrap();
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="300" height="120"><text x="20" y="65" font-family="DejaVu Sans" font-size="42" transform="rotate(8 20 65)" style="font-variation-settings:'wght' 400">Variable type</text></svg>"##;
+    let (mut doc, _) = crate::formats::svg::read(source, "Variable type").unwrap();
+    let shape = doc
+        .layers
+        .iter_mut()
+        .filter_map(|l| l.kind.shapes_mut())
+        .flatten()
+        .find(|s| matches!(s.geom, Geom::Text(_)))
+        .unwrap();
+    let Geom::Text(run) = &mut shape.geom else {
+        unreachable!()
+    };
+    run.set_character_style(0, run.content.chars().count(), |s| {
+        s.font = Some(id.clone())
+    });
+    let light = crate::text::shape(run);
+    assert!(!light.is_empty());
+    let TextNode::Element { attributes, .. } = &mut run.svg_text.as_mut().unwrap().root else {
+        unreachable!()
+    };
+    attributes.insert("font-variation-settings".into(), "'wght' 800".into());
+    let heavy = crate::text::shape(run);
+    assert_ne!(light, heavy);
+    run.contours = heavy;
+    crate::typography::validate_document_fonts(&doc).unwrap();
+    let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+    assert_eq!(types(&reopened)[0].content, "Variable type");
+    assert!(types(&reopened)[0].svg_text.is_some());
+    let exported = crate::svg::export(&reopened).unwrap();
+    assert!(
+        !exported.contains("<text"),
+        "Portable project faces follow the existing outlined SVG delivery policy"
+    );
+    assert!(
+        error(
+            &render(&exported),
+            &crate::compositor::render_export(&reopened, 1).unwrap()
+        ) < 0.1
+    );
+}
