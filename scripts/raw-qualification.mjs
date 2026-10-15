@@ -118,7 +118,7 @@ function readBindings(filename, manifest) {
 }
 
 /** Inspect one case before any process starts. Args: case, bindings and corpus root. Returns source and reference receipts. */
-async function inspectCase(entry, binding, corpus) {
+export async function inspectCase(entry, binding, corpus) {
   const source = binding.source ?? path.join(corpus, 'raw', entry.source.filename);
   const checked = await inspectFile(source, entry.source.sha256);
   const errors = checked.error ? [checked.error] : [];
