@@ -142,7 +142,7 @@ mod tests {
         compose(run)[0].width
     }
     #[test]
-    fn native_type_affine_styled_type_survives_edit_transform_and_project_reopen() {
+    fn svg_type_native_affine_styled_type_survives_edit_transform_and_project_reopen() {
         use crate::{color::Rgba,document::{Document,Shape,Style},geom::Pt};
         let mut r=run("Type type");
         r.set_character_style(5,9,|s| {s.px=Some(70.);s.font=Some(r#"/usr/share/fonts/liberation/LiberationSans-Bold.ttf"#.into());s.fill=Some(crate::document::Fill::Solid(Rgba::rgb(220,30,50)));});
@@ -554,7 +554,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod native_type_acceptance {
+mod svg_type_native_acceptance {
     use crate::{color::Rgba,document::{Document,Fill,Layer,Shape,Style},geom::{Geom,Pt,TypeRun}};
     fn sample(content:&str)->TypeRun{TypeRun{content:content.into(),px:32.,origin:Pt::new(25.,65.),font:concat!(env!("CARGO_MANIFEST_DIR"),"/tests/assets/fonts/EBGaramond.ttf").into(),..Default::default()}}
     fn document(mut run:TypeRun)->Document{run.contours=crate::text::shape(&run);let mut doc=Document::new("Native type",320.,180.,96.);doc.width=320.;doc.height=180.;doc.transparent=true;doc.layers.clear();let mut layer=Layer::vector("Type");layer.kind.shapes_mut().unwrap().push(Shape::new(Geom::Text(run),Style::default()));doc.layers.push(layer);doc}
