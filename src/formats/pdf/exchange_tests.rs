@@ -430,3 +430,33 @@ fn pdf_exchange_poppler_preserves_pixel_masked_pass_through_blends() {
     }
     std::fs::remove_dir_all(folder).unwrap();
 }
+
+#[test]
+fn pdf_exchange_plain_vectors_avoid_per_object_transparency_forms() {
+    let mut doc = Document::new("Plain vectors", 100., 80., 72.);
+    doc.layers.clear();
+    let mut layer = Layer::vector("Plain");
+    for x in [10., 50.] {
+        layer.kind.shapes_mut().unwrap().push(rectangle(
+            Pt::new(x, 10.),
+            Pt::new(25., 40.),
+            Fill::Solid(Rgba::rgb(20, 80, 160)),
+        ));
+    }
+    doc.layers.push(layer);
+    let (bytes, notes) = write(&doc).unwrap();
+    assert!(notes.is_empty());
+    let pdf = Pdf::load_mem(&bytes).unwrap();
+    assert!(
+        !pdf.objects.values().any(|o| subtype(o, b"Form")),
+        "ordinary vectors gained unnecessary page-sized transparency forms"
+    );
+    let (imported, notes) = read(&bytes, "plain.pdf").unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(
+        crate::compositor::render_export(&doc, 1).unwrap().data(),
+        crate::compositor::render_export(&imported, 1)
+            .unwrap()
+            .data()
+    );
+}

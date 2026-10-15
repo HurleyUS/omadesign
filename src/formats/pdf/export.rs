@@ -235,6 +235,16 @@ impl Writer {
                         {
                             continue;
                         }
+                        if shape.opacity >= 1.
+                            && shape.blend == Blend::Normal
+                            && shape.mask.is_none()
+                            && shape.artwork_masks.is_empty()
+                        {
+                            op(&mut scene.ops, "q", &[]);
+                            self.shape(shape, bounds, &mut scene)?;
+                            op(&mut scene.ops, "Q", &[]);
+                            continue;
+                        }
                         let mut object = Scene::default();
                         self.shape(shape, bounds, &mut object)?;
                         let id = self.form(object, bounds, true)?;
@@ -268,15 +278,21 @@ impl Writer {
         if !mask {
             op(&mut scene.ops, "EMC", &[]);
         }
-        if layer.is_group
-            && layer.pass_through
+        if (!layer.is_group
+            && layer
+                .kind
+                .shapes()
+                .is_none_or(|shapes| shapes.iter().all(|s| s.blend == Blend::Normal))
+            || layer.is_group && layer.pass_through)
             && layer.opacity >= 1.
             && layer.fill_opacity >= 1.
             && layer.mask.is_none()
             && layer.artwork_masks.is_empty()
             && layer.blend == Blend::Normal
         {
+            op(&mut out.ops, "q", &[]);
             out.ops.extend(scene.ops);
+            op(&mut out.ops, "Q", &[]);
             merge_resources(&mut out.resources, scene.resources);
             return Ok(());
         }
@@ -311,11 +327,15 @@ impl Writer {
             self.warnings.insert("PDF text exports as vector outlines, preserving appearance but not live text editing.".into());
         }
         if !shape.style.fill.is_none() {
+            op(&mut out.ops, "q", &[]);
             self.paint(shape, false, bounds, out)?;
+            op(&mut out.ops, "Q", &[]);
         }
         if let Some(stroke) = &shape.style.stroke {
             if stroke.width > 0. {
+                op(&mut out.ops, "q", &[]);
                 self.paint(shape, true, bounds, out)?;
+                op(&mut out.ops, "Q", &[]);
             }
         }
         Ok(())
