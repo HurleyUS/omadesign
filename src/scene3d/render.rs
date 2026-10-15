@@ -1147,6 +1147,11 @@ mod qualification_tests {
                 .unwrap_err()
                 .contains("ScenePixels")
         );
+        assert!(
+            crate::compositor::export_png(&doc, 1)
+                .unwrap_err()
+                .contains("ScenePixels")
+        );
         let invalid = LinearFrame {
             width: 1,
             height: 1,

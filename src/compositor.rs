@@ -184,6 +184,17 @@ pub fn sample_color(doc: &Document, at: Pt) -> Option<Rgba> {
     };
     draw_plates(&mut pm, doc, view);
     groups::draw(&mut pm, doc, view.transform(), &Draft::none(), None, None);
+    motion_scene::draw(
+        &mut pm,
+        doc,
+        view.transform(),
+        0.,
+        0,
+        &HashMap::new(),
+        &mut || true,
+        &mut motion_scene::Budget::default(),
+    )
+    .ok()?;
     let px = pm.pixel(0, 0)?;
     if px.alpha() == 0 {
         return None;
@@ -253,6 +264,11 @@ pub(crate) fn render_export(doc: &Document, scale: u32) -> Result<Pixmap, String
     let s = scale.clamp(1, 8);
     let w = (doc.width * s as f32).round().max(1.0) as u32;
     let h = (doc.height * s as f32).round().max(1.0) as u32;
+    if (doc.motion.scene3d.is_some() || !doc.motion.compositions.is_empty())
+        && w as u64 * h as u64 > 16_000_000
+    {
+        return Err("ScenePixels: at most 16 million output pixels".into());
+    }
     let mut pm = Pixmap::new(w, h).ok_or("could not allocate export pixmap")?;
     draw_export_plates(&mut pm, doc, s as f32);
     let t = Transform::from_scale(s as f32, s as f32);
