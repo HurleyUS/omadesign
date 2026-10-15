@@ -503,6 +503,51 @@ fn identity_mesh(warp: &Descriptor) -> bool {
     true
 }
 
+/// Scale an identity warp when a replacement source changes dimensions.
+/// Args: retained placement and new source dimensions. Returns after updating its coordinate grid and size.
+fn resize_identity_source(smart: &mut SmartObject, size: [f64; 2]) {
+    let scale = [size[0] / smart.size[0], size[1] / smart.size[1]];
+    if let Some(warp) = object_mut(&mut smart.descriptor, "warp")
+        && identity_mesh(warp)
+    {
+        if let Some(bounds) = object_mut(warp, "bounds") {
+            for (key, axis) in [("Left", 0), ("Rght", 0), ("Top ", 1), ("Btom", 1)] {
+                if let Some(value) = bounds
+                    .fields
+                    .iter_mut()
+                    .find(|(k, _)| k == key)
+                    .map(|(_, v)| v)
+                {
+                    match value {
+                        D::Double(v) | D::Unit { value: v, .. } => *v *= scale[axis],
+                        D::UnitFloat { value, .. } => *value *= scale[axis] as f32,
+                        _ => {
+                            if let Some(v) = value.number() {
+                                *value = D::Double(v * scale[axis]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(mesh) = object_mut(warp, "customEnvelopeWarp")
+            && let Some(D::ObjectArray { items, .. }) = mesh
+                .fields
+                .iter_mut()
+                .find(|(k, _)| k == "meshPoints")
+                .map(|(_, v)| v)
+        {
+            for (axis, _, values) in items {
+                let factor = scale[usize::from(axis == "Vrtc")];
+                for v in values {
+                    *v *= factor;
+                }
+            }
+        }
+    }
+    smart.size = size;
+}
+
 fn object_mut<'a>(d: &'a mut Descriptor, key: &str) -> Option<&'a mut Descriptor> {
     match &mut d.fields.iter_mut().find(|(k, _)| k == key)?.1 {
         D::Object(d) => Some(d),
@@ -719,7 +764,7 @@ pub fn refresh(doc: &Document, index: usize, mut smart: SmartObject) -> Result<C
         .ok_or("Smart-object layer is missing")?;
     let quad = smart.current_quad(before)?;
     let source = source_document(doc, index)?;
-    smart.size = [source.width as f64, source.height as f64];
+    resize_identity_source(&mut smart, [source.width as f64, source.height as f64]);
     let pixels = crate::deep_color::composite(&source, 1)?.in_document_color(
         &crate::deep_color::cms::DocumentColor {
             depth: crate::deep_color::Depth::F32,
@@ -1311,10 +1356,35 @@ mod tests {
             p[0] = 0.875;
         }
         pixels.set_samples(values).unwrap();
+        *pixels = pixels.reframed(8, 4, 0, 0).unwrap();
+        source.width = 8.;
+        source.height = 4.;
+        source.artboards = crate::document::Artboard::tiled(1, 8., 4.);
+        if let LayerKind::Raster { size, .. } = &mut source.layers[0].kind {
+            *size = Pt::new(8., 4.);
+        }
         let bytes = super::super::encode(&source, false).unwrap().bytes;
         let command = replace_source(&doc, 0, "edited.psd", bytes.clone()).unwrap();
         crate::document::apply(&mut doc, &command);
         assert_ne!(doc.layers[0].source_attachment, old);
+        assert_eq!(doc.layers[0].psd_smart.as_ref().unwrap().size, [8., 4.]);
+        assert!(!doc.layers[0].psd_smart.as_ref().unwrap().has_warp());
+        let output = super::super::encode(&doc, false).unwrap();
+        let exported = super::super::decode(&output.bytes, "Relinked")
+            .unwrap()
+            .document;
+        assert_eq!(
+            exported.layers[0].psd_smart.as_ref().unwrap().size,
+            [8., 4.]
+        );
+        assert!(!exported.layers[0].psd_smart.as_ref().unwrap().has_warp());
+        if let Ok(dir) = std::env::var("OMADESIGN_DEEP_QA_DIR") {
+            std::fs::write(
+                std::path::Path::new(&dir).join("replaced-smart.psd"),
+                output.bytes,
+            )
+            .unwrap();
+        }
         assert_eq!(
             doc.layers[0]
                 .psd_smart
