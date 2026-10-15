@@ -1418,6 +1418,15 @@ impl Reader<'_> {
                                 && let Some(original) =
                                     layer.kind.shapes_mut().and_then(|s| s.first_mut())
                             {
+                                let (Geom::Text(source), Geom::Text(imported)) =
+                                    (&original.geom, &shape.geom)
+                                else {
+                                    continue;
+                                };
+                                if source.content != imported.content {
+                                    self.notes.insert("Illustrator source text keeps its original characters and paragraph breaks; the shared SVG type importer changed its content, so native fallback layout is retained.".into());
+                                    continue;
+                                }
                                 original.geom = shape.geom.clone();
                                 original.style = shape.style.clone();
                                 original.rotation = shape.rotation;
