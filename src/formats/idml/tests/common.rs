@@ -229,6 +229,24 @@ fn frame_evidence(doc: &Document) -> Vec<serde_json::Value> {
     }).collect()
 }
 
+/// Compare saved native frames at the model's exact float precision.
+/// Args: reopened document and saved evidence. Returns nothing; asserts frame order and geometry.
+fn assert_native_frames(doc: &Document, expected: &serde_json::Value) {
+    let actual = frame_evidence(doc);
+    let expected = expected.as_array().unwrap();
+    assert_eq!(actual.len(), expected.len());
+    for (a, b) in actual.iter().zip(expected) {
+        for key in ["name", "page", "visible_start", "visible_end", "overflow"] {
+            assert_eq!(a[key], b[key], "native frame {key}");
+        }
+        for key in ["transform", "bounds"] {
+            let actual: Vec<f32> = serde_json::from_value(a[key].clone()).unwrap();
+            let expected: Vec<f32> = serde_json::from_value(b[key].clone()).unwrap();
+            assert_eq!(actual, expected, "native frame {key}");
+        }
+    }
+}
+
 /// Render publication pages without conflating spread-workspace spacing with page appearance.
 /// Args: document. Returns one actual native raster per page.
 fn pages(doc: &Document) -> Vec<tiny_skia::Pixmap> {
@@ -389,10 +407,7 @@ fn reopen(native: &Path, cold: bool) -> serde_json::Value {
         serde_json::to_value(&source.paragraphs).unwrap(),
         expected["paragraphs"]
     );
-    assert_eq!(
-        frame_evidence(&doc),
-        expected["frames"].as_array().unwrap().clone()
-    );
+    assert_native_frames(&doc, &expected["frames"]);
     let before: Vec<_> = (0..2)
         .map(|i| tiny_skia::Pixmap::load_png(directory.join(format!("authored-{i}.png"))).unwrap())
         .collect();
