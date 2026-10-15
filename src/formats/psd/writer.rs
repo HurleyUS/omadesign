@@ -258,11 +258,24 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
         }
     }
     section(&mut out, &resources, false)?;
-    let mask_size = layer_info.len().checked_add(if large {12} else {8}).ok_or("Photoshop layer section size overflows")?;
+    let (embedded, external) = super::smart::write_links(doc)?;
+    let links = [(b"lnk2",embedded,large),(b"lnkE",external,false)];
+    let mut mask_size = layer_info.len().checked_add(if large {12} else {8}).ok_or("Photoshop layer section size overflows")?;
+    for (_,data,wide) in &links {
+        if !data.is_empty() {mask_size = mask_size.checked_add(if *wide {16} else {12}).and_then(|n| n.checked_add(data.len())).and_then(|n|n.checked_add((4-data.len()%4)%4)).ok_or("Photoshop linked source section size overflows")?;}
+    }
     length(&mut out, mask_size, large)?;
     section(&mut out, &layer_info, large)?;
     u32(&mut out, 0)?;
     drop(layer_info);
+    for (key,data,wide) in links {
+        if data.is_empty() {continue;}
+        out.write_all(b"8BIM").map_err(|e|e.to_string())?;
+        out.write_all(key).map_err(|e|e.to_string())?;
+        length(&mut out,data.len(),wide)?;
+        out.write_all(&data).map_err(|e|e.to_string())?;
+        out.write_all(&[0;3][..(4-data.len()%4)%4]).map_err(|e|e.to_string())?;
+    }
     let merged = if depth == 8 && doc.color.model == crate::deep_color::cms::Model::Rgb && doc.color.icc_profile.is_empty() {
         let png = crate::compositor::export_png(doc, 1)?;
         let image = image::load_from_memory(&png)
