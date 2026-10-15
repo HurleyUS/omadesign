@@ -162,10 +162,14 @@ impl Writer {
     /// Args: content, world bounds and isolation. Returns a reusable vector Form XObject.
     fn form(&mut self, scene: Scene, bounds: Bounds, isolated: bool) -> Result<ObjectId, String> {
         let bytes = scene.encode()?;
+        let mut group = dictionary! {"S"=>"Transparency","I"=>isolated,"K"=>false};
+        if isolated {
+            group.set("CS", "DeviceRGB");
+        }
         Ok(self.pdf.add_object(Stream::new(dictionary! {
             "Type"=>"XObject", "Subtype"=>"Form", "FormType"=>1,
             "BBox"=>vec![Object::Real(bounds.min.x),Object::Real(bounds.min.y),Object::Real(bounds.max.x),Object::Real(bounds.max.y)],
-            "Resources"=>scene.resources, "Group"=>dictionary! {"S"=>"Transparency", "CS"=>"DeviceRGB", "I"=>isolated, "K"=>false},
+            "Resources"=>scene.resources, "Group"=>group,
         }, bytes)))
     }
     /// Paint immediate layer children in native painter order.
