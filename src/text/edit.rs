@@ -173,6 +173,7 @@ impl TypeRun {
         );
         let a = super::char_to_byte(&self.content, start);
         let b = super::char_to_byte(&self.content, end);
+        if let Some(svg)=&mut self.svg_text {svg.replace_range(start,end,n);}
         self.manual_kern=std::mem::take(&mut self.manual_kern).into_iter().filter_map(|(at,value)| {
             if start<end && at>=start && at<=end {None} else {Some((if at>=end{at-(end-start)+n}else{at},value))}
         }).filter(|(at,_)|*at>0).collect();
@@ -225,6 +226,7 @@ impl TypeRun {
     }
     pub fn scale_character_metrics(&mut self,ratio:f32) {
         for span in &mut self.spans {
+            if let Some(px)=&mut span.px {*px*=ratio.abs();}
             if let Some(crate::geom::Leading::Fixed(value))=&mut span.leading {*value*=ratio.abs();}
             if let Some(shift)=&mut span.baseline_shift {*shift*=ratio;}
         }

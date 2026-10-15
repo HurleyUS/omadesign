@@ -303,7 +303,7 @@ pub fn compose(run: &TypeRun) -> Arc<Vec<LayoutLine>> {
                     _ => 0.,
                 };
             }
-            let height=(start..end).map(|i|super::character_metrics(run,i).leading.unwrap().pixels(run.px)).fold(0.,f32::max).max(if start==end{run.line_height()}else{1.});
+            let height=(start..end).map(|i|{let m=super::character_metrics(run,i);m.leading.unwrap().pixels(m.px.unwrap_or(run.px))}).fold(0.,f32::max).max(if start==end{run.line_height()}else{1.});
             let baseline=lines.last().map_or(0.,|previous|previous.baseline+height);
 
             for glyph in &mut glyphs {
@@ -376,6 +376,66 @@ fn cluster_x(glyphs: &[LayoutGlyph], ch: usize, end: usize, offset: f32, width: 
 }
 
 fn shape_line(
+    run: &TypeRun,
+    face: Option<&rustybuzz::Face<'_>>,
+    text: &str,
+    start: usize,
+    hyphen: bool,
+) -> Vec<LayoutGlyph> {
+    let count = text.chars().count();
+    let mut cuts = vec![0, count];
+    for span in &run.spans {
+        if span.font.is_some() || span.px.is_some() {
+            cuts.extend([
+                span.start.saturating_sub(start).min(count),
+                span.end.saturating_sub(start).min(count),
+            ]);
+        }
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    if cuts.len() <= 2
+        && run.character_style(start).font.is_none()
+        && run.character_style(start).px.is_none()
+    {
+        return shape_line_uniform(run, face, text, start, hyphen);
+    }
+    let mut glyphs = Vec::new();
+    let mut pen = 0.;
+    for pair in cuts.windows(2) {
+        let style = run.character_style(start + pair[0]);
+        let mut part = run.clone();
+        part.font = style.font.unwrap_or_else(|| run.font.clone());
+        part.px = style.px.unwrap_or(run.px);
+        let bytes = resolve_path(&part).and_then(|path| font_bytes(&path));
+        let face = bytes
+            .as_ref()
+            .and_then(|bytes| rustybuzz::Face::from_slice(bytes, 0));
+        let fragment = &text[char_to_byte(text, pair[0])..char_to_byte(text, pair[1])];
+        let mut next = shape_line_uniform(
+            &part,
+            face.as_ref(),
+            fragment,
+            start + pair[0],
+            hyphen && pair[1] == count,
+        );
+        let width = next.last().map_or(0., |g| g.x + g.advance);
+        for glyph in &mut next {
+            glyph.x += pen;
+        }
+        if pair[0]>0 {
+            let index=start+pair[0];
+            let previous=run.character_style(index-1).px.unwrap_or(run.px);
+            let boundary=run.manual_kern.get(&index).copied().unwrap_or(0.)*part.px/1000.+previous*paragraph_style(run,index).letter_spacing[1]/100.;
+            for glyph in &mut next{glyph.x+=boundary;} pen+=boundary;
+        }
+        glyphs.extend(next);
+        pen += width;
+    }
+    glyphs
+}
+
+fn shape_line_uniform(
     run: &TypeRun,
     face: Option<&rustybuzz::Face<'_>>,
     text: &str,
@@ -519,7 +579,10 @@ fn justify_glyphs(glyphs: &mut [LayoutGlyph], target: f32, style: &ParagraphStyl
 }
 
 pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
-    let Some(bytes) = resolve_path(run).and_then(|p| font_bytes(&p)) else {
+    let style = run.character_style(glyph.cluster);
+    let mut face_run = run.clone();
+    face_run.font = style.font.unwrap_or_else(|| run.font.clone());
+    let Some(bytes) = resolve_path(&face_run).and_then(|p| font_bytes(&p)) else {
         return Vec::new();
     };
     let Ok(font) = ab_glyph::FontRef::try_from_slice(&bytes) else {
@@ -528,7 +591,7 @@ pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
     let Some(outline) = font.outline(GlyphId(glyph.id)) else {
         return Vec::new();
     };
-    let scale = run.px.max(1.) / font.units_per_em().unwrap_or(1000.);
+    let scale = style.px.unwrap_or(run.px).max(1.) / font.units_per_em().unwrap_or(1000.);
     let curves = map_curves(&outline.curves, 0., 0., scale);
     flatten_outline(&curves)
         .into_iter()
