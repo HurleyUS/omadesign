@@ -13,12 +13,15 @@ pub struct Publishing {
     pub styles: Vec<PublishingStyle>,
     pub masters: Vec<MasterSpread>,
     pub master_stories: BTreeMap<String, String>,
+    pub master_layers: BTreeMap<String, String>,
+    pub master_assets: BTreeMap<String, Vec<u8>>,
     pub page_sides: BTreeMap<u64, String>,
     pub page_masters: BTreeMap<u64, String>,
     pub links: BTreeMap<u64, String>,
     /// Locked master previews are generated from the retained source, not exported twice.
     pub inherited_layers: Vec<u64>,
     pub inherited_fingerprints: BTreeMap<u64, String>,
+    pub inherited_pages: BTreeMap<u64, u64>,
 }
 impl Publishing {
     /// Detect publishing data. Takes this record and returns whether it is empty.

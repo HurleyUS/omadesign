@@ -8,7 +8,7 @@ use crate::{
 use base64::Engine as _;
 use std::{
     collections::{HashMap, HashSet},
-    io::{Cursor, Read},
+    io::{Cursor, Read, Write},
 };
 
 /// Read editable publishing content. Args: ZIP bytes and document name. Returns document and conversion notes.
@@ -21,6 +21,16 @@ pub fn read_with_links(
     bytes: &[u8],
     name: &str,
     link: &dyn Fn(&str) -> Option<Vec<u8>>,
+) -> Result<(Document, Vec<String>), String> {
+    read_with_budget(bytes, name, link, MAX_TOTAL)
+}
+
+/// Limit owned import buffers. Args: package, name, link reader, byte allowance. Returns document or a budget error.
+pub(super) fn read_with_budget(
+    bytes: &[u8],
+    name: &str,
+    link: &dyn Fn(&str) -> Option<Vec<u8>>,
+    allowance: usize,
 ) -> Result<(Document, Vec<String>), String> {
     let parts = unzip(bytes)?;
     let design = parts
@@ -61,7 +71,7 @@ pub fn read_with_links(
         frames: Vec::new(),
         parts: &parts,
         link,
-        pixels: 0,
+        budget: AllocationBudget { used: 0, allowance },
     };
     im.doc.layers.clear();
     im.doc.artboards.clear();
@@ -115,6 +125,7 @@ pub fn read_with_links(
                 .insert(attr(n, "Self"), tree.input_text()[n.range()].into());
         }
     }
+    im.master_dependencies(dm.root_element())?;
     let mut x = 0.;
     for (_, tree) in &trees {
         for n in tree
@@ -128,6 +139,8 @@ pub fn read_with_links(
         return Err("IDML has no pages".into());
     }
     im.threads()?;
+    im.stories.clear();
+    im.reserve_layout()?;
     im.doc.width = x.max(1.) - 48.;
     im.doc.height = im
         .doc
@@ -219,6 +232,64 @@ struct Frame {
     prev: String,
     next: String,
 }
+struct AllocationBudget {
+    used: usize,
+    allowance: usize,
+}
+impl AllocationBudget {
+    /// Reserve owned buffers before duplication. Args: byte count. Returns an error above the aggregate allowance.
+    fn charge(&mut self, bytes: usize) -> Result<(), String> {
+        self.used = self
+            .used
+            .checked_add(bytes)
+            .ok_or("IDML allocation budget overflow")?;
+        if self.used > self.allowance {
+            return Err(
+                "IDML owned text, image and layout buffers exceed the allocation budget".into(),
+            );
+        }
+        Ok(())
+    }
+}
+/// Count allocated text buffers. Args: native run. Returns capacities including nested style strings.
+fn run_storage(run: &TypeRun) -> usize {
+    run.content.capacity()
+        + run.font.capacity()
+        + run.spans.capacity() * std::mem::size_of::<CharSpan>()
+        + run.paragraphs.capacity() * std::mem::size_of::<ParagraphStyle>()
+        + run.features.capacity() * std::mem::size_of::<([u8; 4], u32)>()
+        + run
+            .spans
+            .iter()
+            .map(|s| {
+                s.font.as_ref().map_or(0, String::capacity)
+                    + s.publishing_style.as_ref().map_or(0, String::capacity)
+                    + s.features.capacity() * std::mem::size_of::<([u8; 4], u32)>()
+            })
+            .sum::<usize>()
+        + run
+            .paragraphs
+            .iter()
+            .map(|p| {
+                p.publishing_style.as_ref().map_or(0, String::capacity)
+                    + p.hyphen.as_ref().map_or(0, |h| h.language.capacity())
+            })
+            .sum::<usize>()
+}
+#[derive(Default)]
+struct ByteCount(usize);
+impl Write for ByteCount {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_add(bytes.len())
+            .ok_or_else(|| std::io::Error::other("IDML layout size overflow"))?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 struct Importer<'a> {
     doc: Document,
     notes: Vec<String>,
@@ -227,9 +298,92 @@ struct Importer<'a> {
     frames: Vec<Frame>,
     parts: &'a BTreeMap<String, Vec<u8>>,
     link: &'a dyn Fn(&str) -> Option<Vec<u8>>,
-    pixels: usize,
+    budget: AllocationBudget,
 }
 impl Importer<'_> {
+    fn master_dependencies(&mut self, design: Node<'_, '_>) -> Result<(), String> {
+        for source in self
+            .doc
+            .publishing
+            .masters
+            .iter()
+            .map(|m| &m.xml)
+            .chain(self.doc.publishing.master_stories.values())
+        {
+            self.budget.charge(source.capacity())?;
+            let tree = parse(source.as_bytes())?;
+            for n in tree.descendants() {
+                if let Some(id) = n
+                    .attribute("ItemLayer")
+                    .filter(|s| !s.is_empty() && *s != "n")
+                {
+                    if !self.doc.publishing.master_layers.contains_key(id) {
+                        let mut definitions = design
+                            .children()
+                            .filter(|n| tag(*n) == "Layer" && n.attribute("Self") == Some(id));
+                        let layer = definitions
+                            .next()
+                            .ok_or_else(|| format!("Missing retained master layer {id}"))?;
+                        if definitions.next().is_some() {
+                            return Err("Duplicate retained master layer ID".into());
+                        }
+                        let xml = &design.document().input_text()[layer.range()];
+                        self.budget.charge(xml.len())?;
+                        self.doc
+                            .publishing
+                            .master_layers
+                            .insert(id.into(), xml.into());
+                    }
+                }
+                if let Some(uri) = n.attribute("LinkResourceURI") {
+                    let fallback = format!("Links/{}", uri.rsplit('/').next().unwrap_or(""));
+                    if let Some((name, bytes)) = self
+                        .parts
+                        .get_key_value(uri)
+                        .or_else(|| self.parts.get_key_value(&fallback))
+                    {
+                        if !self.doc.publishing.master_assets.contains_key(name) {
+                            self.budget.charge(bytes.len())?;
+                            self.doc
+                                .publishing
+                                .master_assets
+                                .insert(name.clone(), bytes.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    fn reserve_layout(&mut self) -> Result<(), String> {
+        let runs: HashMap<_, _> = self
+            .doc
+            .layers
+            .iter()
+            .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+            .filter_map(|s| {
+                if let Geom::Text(run) = &s.geom {
+                    Some((s.id, run))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (&id, run) in &runs {
+            let head = runs
+                .get(&run.thread.as_ref().map_or(id, |t| t.story))
+                .ok_or("Missing IDML story head")?;
+            let mut count = ByteCount::default();
+            serde_json::to_writer(
+                &mut count,
+                &(run, head, usize::MAX, Some(u64::MAX), usize::MAX),
+            )
+            .map_err(|e| e.to_string())?;
+            self.budget.charge(count.0.saturating_mul(2))?;
+        }
+        let transient = runs.values().map(|run| run_storage(run)).sum::<usize>();
+        self.budget.charge(transient.saturating_mul(6))
+    }
     fn resources(&mut self, root: Node<'_, '_>) -> Result<(), String> {
         for n in root.descendants().filter(|n| n.is_element()) {
             match tag(n) {
@@ -357,6 +511,12 @@ impl Importer<'_> {
                 Some("LeftJustified") => TextAlign::Justify {
                     last: crate::geom::LastLine::Start,
                 },
+                Some("CenterJustified") => TextAlign::Justify {
+                    last: crate::geom::LastLine::Center,
+                },
+                Some("RightJustified") => TextAlign::Justify {
+                    last: crate::geom::LastLine::End,
+                },
                 _ => TextAlign::Start,
             };
             run.paragraphs.push(ParagraphStyle {
@@ -405,6 +565,7 @@ impl Importer<'_> {
                 }
             }
         }
+        self.budget.charge(run_storage(&run))?;
         if self.stories.insert(attr(n, "Self"), run).is_some() {
             return Err("Duplicate IDML story ID".into());
         }
@@ -467,7 +628,12 @@ impl Importer<'_> {
                         .or_else(|| master_pages.first().copied());
                     if let Some(mp) = selected {
                         let mb = bounds(mp, Matrix::read(mp)?)?;
-                        self.items(root, Matrix::translated(a.origin - mb.min), true, Some(mb))?;
+                        self.items(
+                            root,
+                            Matrix::translated(a.origin - mb.min),
+                            Some(a.id),
+                            Some(mb),
+                        )?;
                     }
                 } else {
                     warn(
@@ -478,16 +644,17 @@ impl Importer<'_> {
             }
             self.doc.artboards.push(a);
         }
-        self.items(n, transform.then(Matrix::translated(offset)), false, None)?;
+        self.items(n, transform.then(Matrix::translated(offset)), None, None)?;
         Ok(boxes.iter().map(|b| b.max.x + offset.x).fold(x, f32::max) + 48.)
     }
     fn items(
         &mut self,
         root: Node<'_, '_>,
         parent: Matrix,
-        inherited: bool,
+        inherited_page: Option<u64>,
         clip: Option<Bounds>,
     ) -> Result<(), String> {
+        let inherited = inherited_page.is_some();
         for n in root.children().filter(|n| n.is_element()) {
             if self.doc.layers.len() > 16384 {
                 return Err("IDML exceeds 16384 items".into());
@@ -497,7 +664,7 @@ impl Importer<'_> {
             }
             let kind = tag(n);
             if kind == "Group" {
-                self.items(n, Matrix::read(n)?.then(parent), inherited, clip)?;
+                self.items(n, Matrix::read(n)?.then(parent), inherited_page, clip)?;
                 continue;
             }
             if !matches!(
@@ -566,10 +733,7 @@ impl Importer<'_> {
                 if let Some(bytes) = bytes {
                     match crate::formats::decode_image(&bytes) {
                         Ok(px) => {
-                            self.pixels += px.data.len();
-                            if self.pixels > MAX_TOTAL {
-                                return Err("IDML decoded images exceed 256 MiB".into());
-                            }
+                            self.budget.charge(px.data.capacity())?;
                             layer = Layer::placed_raster(&name, px, b.min, b.size());
                             layer.locked = inherited;
                             layer.opacity = opacity;
@@ -613,11 +777,28 @@ impl Importer<'_> {
                 }
             } else if kind == "TextFrame" {
                 let story = attr(n, "ParentStory");
-                let mut run = self
+                let source = self
                     .stories
                     .get(&story)
-                    .cloned()
                     .ok_or_else(|| format!("Missing IDML story {story}"))?;
+                let mut run = if inherited {
+                    self.budget.charge(run_storage(source))?;
+                    source.clone()
+                } else {
+                    self.budget.charge(source.font.len())?;
+                    TypeRun {
+                        px: source.px,
+                        tracking: source.tracking,
+                        leading: source.leading,
+                        align: source.align,
+                        font: source.font.clone(),
+                        kern: source.kern,
+                        liga: source.liga,
+                        tnum: source.tnum,
+                        smcp: source.smcp,
+                        ..Default::default()
+                    }
+                };
                 run.origin = Pt::new(b.min.x, b.min.y + run.px * 0.85);
                 let mut frame = TextFrame {
                     size: b.size(),
@@ -749,6 +930,10 @@ impl Importer<'_> {
             }
             if inherited {
                 self.doc.publishing.inherited_layers.push(layer.id);
+                self.doc
+                    .publishing
+                    .inherited_pages
+                    .insert(layer.id, inherited_page.unwrap());
             }
             self.doc.layers.push(layer);
         }
@@ -766,6 +951,7 @@ impl Importer<'_> {
         }
         let mut visited = HashSet::new();
         let mut story_heads = HashSet::new();
+        let mut validated = Vec::new();
         for (head, f) in self
             .frames
             .iter()
@@ -800,31 +986,44 @@ impl Importer<'_> {
                 {
                     return Err("Inconsistent IDML text thread".into());
                 }
-                let shape = self
-                    .doc
-                    .layers
-                    .iter_mut()
-                    .filter_map(|l| l.kind.shapes_mut())
-                    .flatten()
-                    .find(|s| s.id == f.id)
-                    .ok_or("IDML text frame disappeared")?;
-                if let Geom::Text(run) = &mut shape.geom {
-                    run.thread = Some(TextThread {
-                        story: self.frames[head].id,
-                        prev: prev.map(|p| self.frames[p].id),
-                        next: next.map(|p| self.frames[p].id),
-                    });
-                    if i != head {
-                        run.content.clear();
-                        run.spans.clear();
-                        run.paragraphs.clear();
-                    }
-                }
+                validated.push((i, head, prev, next));
                 at = next;
             }
         }
         if visited.len() != self.frames.len() {
             return Err("IDML thread has a cycle or no first frame".into());
+        }
+        let mut runs: HashMap<_, _> = self
+            .doc
+            .layers
+            .iter_mut()
+            .filter_map(|l| l.kind.shapes_mut())
+            .flatten()
+            .filter_map(|s| {
+                if let Geom::Text(run) = &mut s.geom {
+                    Some((s.id, run))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (i, head, prev, next) in validated {
+            let f = &self.frames[i];
+            let run = runs.get_mut(&f.id).ok_or("IDML text frame disappeared")?;
+            if i == head {
+                let mut source = self
+                    .stories
+                    .remove(&f.story)
+                    .ok_or("Missing IDML story head")?;
+                source.origin = run.origin;
+                source.frame = run.frame.take();
+                **run = source;
+            }
+            run.thread = Some(TextThread {
+                story: self.frames[head].id,
+                prev: prev.map(|p| self.frames[p].id),
+                next: next.map(|p| self.frames[p].id),
+            });
         }
         Ok(())
     }

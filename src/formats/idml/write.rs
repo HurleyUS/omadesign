@@ -45,6 +45,22 @@ pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
             return Err("A master preview was edited. Save .oma to retain that edit; IDML master overrides are not supported.".into());
         }
     }
+    for id in &doc.publishing.inherited_layers {
+        let assigned = |page: &Artboard| {
+            doc.publishing
+                .page_masters
+                .get(&page.id)
+                .is_some_and(|master| !master.is_empty() && master != "n")
+        };
+        let active = if let Some(page) = doc.publishing.inherited_pages.get(id) {
+            boards.iter().any(|a| a.id == *page && assigned(a))
+        } else {
+            boards.iter().any(assigned)
+        };
+        if active && !doc.layers.iter().any(|l| l.id == *id) {
+            return Err("A master preview was deleted from an assigned page. Save .oma to retain that edit; IDML master overrides are not supported.".into());
+        }
+    }
     let inherited: HashSet<_> = doc.publishing.inherited_layers.iter().copied().collect();
     for l in &doc.layers {
         if inherited.contains(&l.id) {
@@ -59,6 +75,27 @@ pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
     ex.validate_threads()?;
     let mut map = String::new();
     let mut parts = Vec::new();
+    for source in doc
+        .publishing
+        .masters
+        .iter()
+        .map(|m| &m.xml)
+        .chain(doc.publishing.master_stories.values())
+    {
+        let tree = roxmltree::Document::parse(source)
+            .map_err(|e| format!("Invalid retained IDML master: {e}"))?;
+        for id in tree
+            .descendants()
+            .filter_map(|n| n.attribute("ItemLayer"))
+            .filter(|id| !id.is_empty() && *id != "n")
+        {
+            if !doc.publishing.master_layers.contains_key(id) {
+                return Err(format!(
+                    "Missing retained master layer {id}; reopen the original IDML source."
+                ));
+            }
+        }
+    }
     for (i, story) in doc.publishing.master_stories.values().enumerate() {
         let name = format!("Stories/MasterStory_{i}.xml");
         parts.push((name.clone(), package("Story", story).into_bytes()));
@@ -226,11 +263,21 @@ pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
         package("Fonts", "").into_bytes(),
     ));
     let mut layers = String::new();
+    for (id, source) in &doc.publishing.master_layers {
+        let tree = roxmltree::Document::parse(source)
+            .map_err(|e| format!("Invalid retained IDML layer: {e}"))?;
+        if tag(tree.root_element()) != "Layer"
+            || tree.root_element().attribute("Self") != Some(id.as_str())
+        {
+            return Err("Retained IDML layer has an invalid ID".into());
+        }
+        layers.push_str(source);
+    }
     for l in &doc.layers {
         if !inherited.contains(&l.id) {
             layers += &format!(
-                "<Layer Self=\"layer{}\" Name=\"{}\" Visible=\"{}\" Locked=\"{}\" IgnoreWrap=\"false\" ShowGuides=\"true\" LockGuides=\"false\" UI=\"true\"/>",
-                l.id,
+                "<Layer Self=\"{}\" Name=\"{}\" Visible=\"{}\" Locked=\"{}\" IgnoreWrap=\"false\" ShowGuides=\"true\" LockGuides=\"false\" UI=\"true\"/>",
+                ex.layer_id(l.id),
                 xml(&l.name),
                 l.visible,
                 l.locked
@@ -243,6 +290,26 @@ pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
     );
     parts.insert(0, ("designmap.xml".into(), design.into_bytes()));
     parts.push(("META-INF/container.xml".into(), b"<?xml version=\"1.0\"?><container xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\" version=\"1.0\"><rootfiles><rootfile full-path=\"designmap.xml\" media-type=\"text/xml\"/></rootfiles></container>".to_vec()));
+    let mut retained_total = parts.iter().map(|(_, bytes)| bytes.len()).sum::<usize>();
+    for (name, bytes) in &doc.publishing.master_assets {
+        retained_total = retained_total
+            .checked_add(bytes.len())
+            .ok_or("IDML export size overflow")?;
+        if bytes.len() as u64 > MAX_PART || retained_total > MAX_TOTAL {
+            return Err("IDML export exceeds expanded package budget".into());
+        }
+        if name == "mimetype"
+            || name.starts_with('/')
+            || name.contains('\\')
+            || name
+                .split('/')
+                .any(|p| p.is_empty() || p == "." || p == "..")
+            || parts.iter().any(|(part, _)| part == name)
+        {
+            return Err("Retained IDML asset has an unsafe or conflicting package path".into());
+        }
+        parts.push((name.clone(), bytes.clone()));
+    }
     let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
     w.start_file(
         "mimetype",
@@ -253,8 +320,10 @@ pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
         .map_err(|e| e.to_string())?;
     let mut total = 0;
     for (name, bytes) in parts {
-        roxmltree::Document::parse(std::str::from_utf8(&bytes).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("Invalid generated IDML {name}: {e}"))?;
+        if !doc.publishing.master_assets.contains_key(&name) {
+            roxmltree::Document::parse(std::str::from_utf8(&bytes).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("Invalid generated IDML {name}: {e}"))?;
+        }
         total += bytes.len();
         if bytes.len() as u64 > MAX_PART || total > MAX_TOTAL {
             return Err("IDML export exceeds expanded package budget".into());
@@ -280,6 +349,13 @@ struct Exporter<'a> {
     frames: HashMap<u64, &'a TypeRun>,
 }
 impl Exporter<'_> {
+    fn layer_id(&self, id: u64) -> String {
+        let mut name = format!("layer{id}");
+        while self.doc.publishing.master_layers.contains_key(&name) {
+            name.push('_');
+        }
+        name
+    }
     fn validate_threads(&self) -> Result<(), String> {
         for (&id, run) in &self.frames {
             if let Some(t) = &run.thread {
@@ -345,10 +421,10 @@ impl Exporter<'_> {
     }
     fn shape(&mut self, s: &Shape, l: &Layer, offset: Pt) -> Result<String, String> {
         let mut common = format!(
-            "Self=\"item{}\" Name=\"{}\" ItemLayer=\"layer{}\" Visible=\"{}\" Locked=\"{}\" ItemTransform=\"1 0 0 1 {} {}\"",
+            "Self=\"item{}\" Name=\"{}\" ItemLayer=\"{}\" Visible=\"{}\" Locked=\"{}\" ItemTransform=\"1 0 0 1 {} {}\"",
             s.id,
             xml(&s.name),
-            l.id,
+            self.layer_id(l.id),
             s.visible,
             s.locked,
             offset.x,
@@ -485,10 +561,10 @@ impl Exporter<'_> {
             }
         }
         Ok(format!(
-            "<Rectangle Self=\"graphic{}\" Name=\"{}\" ItemLayer=\"layer{}\" Visible=\"{}\" Locked=\"{}\" ItemTransform=\"1 0 0 1 {} {}\" FillColor=\"Swatch/None\" StrokeColor=\"Swatch/None\" StrokeWeight=\"0\" GeometricBounds=\"{} {} {} {}\">{}<Image Self=\"image{}\" ItemTransform=\"1 0 0 1 0 0\" GeometricBounds=\"{} {} {} {}\">{data}<Link Self=\"link{}\" LinkResourceURI=\"{}\" LinkResourceFormat=\"PNG\" StoredState=\"Embedded\" LinkClassID=\"35906\" LinkClientID=\"257\"/></Image><TransparencySetting><BlendingSetting Opacity=\"{}\" BlendMode=\"Normal\"/></TransparencySetting></Rectangle>",
+            "<Rectangle Self=\"graphic{}\" Name=\"{}\" ItemLayer=\"{}\" Visible=\"{}\" Locked=\"{}\" ItemTransform=\"1 0 0 1 {} {}\" FillColor=\"Swatch/None\" StrokeColor=\"Swatch/None\" StrokeWeight=\"0\" GeometricBounds=\"{} {} {} {}\">{}<Image Self=\"image{}\" ItemTransform=\"1 0 0 1 0 0\" GeometricBounds=\"{} {} {} {}\">{data}<Link Self=\"link{}\" LinkResourceURI=\"{}\" LinkResourceFormat=\"PNG\" StoredState=\"Embedded\" LinkClassID=\"35906\" LinkClientID=\"257\"/></Image><TransparencySetting><BlendingSetting Opacity=\"{}\" BlendMode=\"Normal\"/></TransparencySetting></Rectangle>",
             l.id,
             xml(&l.name),
-            l.id,
+            self.layer_id(l.id),
             l.visible,
             l.locked,
             offset.x,
@@ -520,7 +596,12 @@ impl Exporter<'_> {
                 TextAlign::Start => "LeftAlign",
                 TextAlign::Center => "CenterAlign",
                 TextAlign::End => "RightAlign",
-                TextAlign::Justify { .. } => "LeftJustified",
+                TextAlign::Justify { last } => match last {
+                    crate::geom::LastLine::Start => "LeftJustified",
+                    crate::geom::LastLine::Center => "CenterJustified",
+                    crate::geom::LastLine::End => "RightJustified",
+                    crate::geom::LastLine::Justify => "FullyJustified",
+                },
             };
             out += &format!(
                 "<ParagraphStyleRange AppliedParagraphStyle=\"{}\" Justification=\"{align}\" Hyphenation=\"{}\">",
