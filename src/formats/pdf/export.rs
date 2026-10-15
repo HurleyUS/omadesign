@@ -449,7 +449,7 @@ impl Writer {
         }
         Ok(())
     }
-    /// Export linear or radial vector shading, including premultiplied stop colors.
+    /// Export linear or radial vector shading with independent color and alpha channels.
     /// Args: gradient, unrotated geometry bounds and alpha-channel selection. Returns a shading resource.
     fn shading(
         &mut self,
@@ -471,14 +471,6 @@ impl Writer {
             return Err("PDF gradient coordinates must be finite".into());
         }
         let mut stops = gradient.stops.clone();
-        if stops.iter().any(|s| s.color.a != 255) && !alpha {
-            stops = (0..=256)
-                .map(|i| GradientStop {
-                    offset: i as f32 / 256.,
-                    color: gradient.sample(i as f32 / 256.),
-                })
-                .collect();
-        }
         if stops[0].offset > 0. {
             stops.insert(
                 0,
