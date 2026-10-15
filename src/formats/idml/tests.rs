@@ -343,3 +343,38 @@ fn idml_story_color_does_not_become_an_opaque_text_frame() {
                 && s.style.fill == crate::document::Fill::Solid(color))
     );
 }
+
+#[test]
+fn idml_native_bleed_edits_override_imported_asymmetric_bleed() {
+    let (mut doc, _) = read(FIXTURE, "Publishing").unwrap();
+    doc.bleed = 24.;
+    let (bytes, _) = write(&doc).unwrap();
+    let (round, _) = read(&bytes, "Edited bleed").unwrap();
+    assert_eq!(round.publishing.bleed, [24.; 4]);
+}
+
+#[test]
+fn idml_rejects_unsafe_archive_paths_and_a_directory_before_mimetype() {
+    use std::io::{Cursor, Write};
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    w.start_file("mimetype", options).unwrap();
+    w.write_all(MIMETYPE.as_bytes()).unwrap();
+    w.start_file("../designmap.xml", options).unwrap();
+    w.write_all(b"<Document/>").unwrap();
+    assert!(
+        read(&w.finish().unwrap().into_inner(), "unsafe")
+            .unwrap_err()
+            .contains("Unsafe IDML package path")
+    );
+    let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    w.add_directory("folder/", options).unwrap();
+    w.start_file("mimetype", options).unwrap();
+    w.write_all(MIMETYPE.as_bytes()).unwrap();
+    assert!(
+        read(&w.finish().unwrap().into_inner(), "directory")
+            .unwrap_err()
+            .contains("must start with stored mimetype")
+    );
+}

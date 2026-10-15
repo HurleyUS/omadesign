@@ -190,6 +190,9 @@ fn unzip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, String> {
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = f.name().to_string();
+        if i == 0 && (name != "mimetype" || f.compression() != zip::CompressionMethod::Stored) {
+            return Err("IDML must start with stored mimetype".into());
+        }
         if f.is_dir() {
             continue;
         }
@@ -206,9 +209,6 @@ fn unzip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, String> {
         }
         if f.size() > MAX_PART || total as u64 + f.size() > MAX_TOTAL as u64 {
             return Err("IDML expanded data exceeds its budget".into());
-        }
-        if i == 0 && (name != "mimetype" || f.compression() != zip::CompressionMethod::Stored) {
-            return Err("IDML must start with stored mimetype".into());
         }
         let mut data = Vec::new();
         f.by_ref()

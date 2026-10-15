@@ -214,7 +214,9 @@ pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
         parts.push((name.clone(), package("Story", story).into_bytes()));
         map.push_str(&format!("<idPkg:Story src=\"{name}\"/>"));
     }
-    let bleed = if doc.publishing.is_empty() {
+    let bleed = if doc.publishing.is_empty()
+        || doc.bleed != doc.publishing.bleed.into_iter().fold(0., f32::max)
+    {
         [doc.bleed; 4]
     } else {
         doc.publishing.bleed
