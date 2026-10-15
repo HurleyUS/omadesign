@@ -505,7 +505,7 @@ pub struct Pixels {
     #[serde(skip)]
     pub version: u64,
     #[serde(skip)]
-    pub(crate) cached_pm: RefCell<Option<(u64, tiny_skia::Pixmap)>>,
+    pub(crate) cached_pm: RefCell<Option<(u64, crate::deep_color::surface::Surface)>>,
     #[serde(skip)]
     pub(crate) cached_uniform: RefCell<Option<(u64, Option<Rgba>)>>,
 }
@@ -530,7 +530,7 @@ impl Pixels {
     pub fn new(w: u32, h: u32) -> Result<Self, String> {
         let count = crate::deep_color::storage::count(w, h, 4)?;
         let data = crate::resources::global()
-            .allocate::<u8, _>(count, &crate::deep_color::storage::check)?;
+            .allocate_now::<u8, _>(count, &crate::deep_color::storage::check)?;
         Self::from_byte_allocation(w, h, Arc::new(data))
     }
 
@@ -584,30 +584,27 @@ impl Pixels {
         self.cached_uniform.borrow_mut().take();
     }
 
-    fn build_pm(&self) -> Option<tiny_skia::Pixmap> {
-        crate::color::rgba_to_pixmap(self.w, self.h, &self.data)
-    }
-
-    fn ensure_pm(&self) {
+    fn ensure_pm(&self) -> Result<(), String> {
         let mut slot = self.cached_pm.borrow_mut();
-        if let Some((v, pm)) = slot.as_ref()
-            && *v == self.version
-            && pm.width() == self.w
-            && pm.height() == self.h
-        {
-            return;
+        if slot.as_ref().is_some_and(|(version, pixels)| {
+            *version == self.version && pixels.width() == self.w && pixels.height() == self.h
+        }) {
+            return Ok(());
         }
-        *slot = self.build_pm().map(|pm| (self.version, pm));
+        let pixels = crate::deep_color::surface::Surface::from_rgba(self.w, self.h, &self.data)?;
+        *slot = Some((self.version, pixels));
+        Ok(())
     }
-
     pub fn with_pm<R>(&self, f: impl FnOnce(&tiny_skia::Pixmap) -> R) -> Option<R> {
-        self.ensure_pm();
-        let slot = self.cached_pm.borrow();
-        slot.as_ref().map(|(_, pm)| f(pm))
+        self.ensure_pm().ok()?;
+        self.cached_pm.borrow().as_ref().map(|(_, pm)| f(pm))
     }
-
-    pub fn to_pixmap(&self) -> Option<tiny_skia::Pixmap> {
-        self.with_pm(|pm| pm.clone())
+    pub fn try_to_pixmap(&self) -> Result<crate::deep_color::surface::Surface, String> {
+        self.ensure_pm()?;
+        self.cached_pm.borrow().as_ref().unwrap().1.try_clone()
+    }
+    pub fn to_pixmap(&self) -> Option<crate::deep_color::surface::Surface> {
+        self.try_to_pixmap().ok()
     }
 
     /// Every pixel has alpha 0.
@@ -640,7 +637,7 @@ impl Pixels {
     }
     pub fn try_from_pixmap(pm: &tiny_skia::Pixmap) -> Result<Self, String> {
         let mut data = crate::resources::global()
-            .allocate::<u8, _>(pm.data().len(), &crate::deep_color::storage::check)?;
+            .allocate_now::<u8, _>(pm.data().len(), &crate::deep_color::storage::check)?;
         for (dst, src) in data.as_mut_slice().chunks_exact_mut(4).zip(pm.pixels()) {
             let color = src.demultiply();
             dst.copy_from_slice(&[color.red(), color.green(), color.blue(), color.alpha()]);
@@ -1881,8 +1878,8 @@ pub enum Cmd {
     Pixels {
         layer: usize,
         mask: bool,
-        before: Vec<u8>,
-        after: Vec<u8>,
+        before: Arc<crate::resources::Allocation<u8>>,
+        after: Arc<crate::resources::Allocation<u8>>,
     },
     PaintRaster {
         layer: usize,
@@ -2869,10 +2866,10 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
         } => {
             let apply_px = |px: &mut Pixels| {
                 if px.data.len() == after.len() {
-                    let Ok(bytes) = px.bytes_mut() else {
+                    if px.native.is_some() {
                         return;
-                    };
-                    bytes.copy_from_slice(after);
+                    }
+                    px.data = after.clone();
                     px.touch();
                 }
             };

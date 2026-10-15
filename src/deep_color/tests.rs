@@ -317,3 +317,36 @@ fn native_storage_shares_history_and_adopts_one_allocation_lease() {
     assert!(before.copy_samples(&cancelled).is_err());
     assert_eq!(before.sample(0), original.sample(0));
 }
+
+#[test]
+fn byte_history_swaps_prepared_storage_when_admission_is_full() {
+    use std::sync::Arc;
+    use crate::document::{Cmd, History, apply_command};
+    let pool = resources::Budget::new(12, false);
+    let before = Arc::new(pool.copy_now(&[90u8,90,90,90], &storage::check).unwrap());
+    let after = Arc::new(pool.copy_now(&[123u8,45,67,89], &storage::check).unwrap());
+    let full = pool.reserve_now(4, &storage::check).unwrap();
+    let mut doc = Document::new("Prepared byte history", 1.,1.,72.);
+    doc.layers = vec![Layer::placed_raster("Pixels", Pixels::from_byte_allocation(1,1,before.clone()).unwrap(),Pt::ZERO,Pt::new(1.,1.))];
+    let cmd = Cmd::Pixels {layer:0,mask:false,before:before.clone(),after:after.clone()};
+    let mut history = History::default();
+    apply_command(&mut doc, &cmd);history.push(cmd);
+    assert!(Arc::ptr_eq(&doc.layers[0].kind.pixels().unwrap().data,&after));
+    apply_command(&mut doc, &history.undo().unwrap());
+    assert!(Arc::ptr_eq(&doc.layers[0].kind.pixels().unwrap().data,&before));
+    apply_command(&mut doc, &history.redo().unwrap());
+    assert!(Arc::ptr_eq(&doc.layers[0].kind.pixels().unwrap().data,&after));
+    assert_eq!(pool.usage().0,12);drop(full);
+}
+
+#[test]
+fn paint_surface_retains_transferred_allocation_until_drop() {
+    let pool = resources::Budget::new(4, false);
+    let mut bytes = pool.allocate_now::<u8,_>(4,&storage::check).unwrap();
+    bytes.as_mut_slice().copy_from_slice(&[31,16,8,90]);
+    let surface = surface::Surface::from_allocation(1,1,bytes).unwrap();
+    assert_eq!(surface.data(), &[31,16,8,90]);
+    assert_eq!(surface.admitted_bytes(),4);
+    assert!(pool.reserve_now(1,&storage::check).is_err());
+    drop(surface);assert_eq!(pool.usage().0,0);
+}

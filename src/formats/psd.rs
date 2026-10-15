@@ -20,8 +20,6 @@ pub struct PsdExport {
     pub warnings: Vec<String>,
 }
 
-const MAX_PIXELS: usize = 64 * 1024 * 1024;
-const MAX_DECODED_BYTES: usize = 512 * 1024 * 1024;
 const MAX_LAYERS: usize = 8192;
 
 fn warn(warnings: &mut Vec<String>, text: impl Into<String>) {
@@ -35,8 +33,8 @@ fn dimensions(w: u32, h: u32) -> Result<usize, String> {
     let pixels = (w as usize)
         .checked_mul(h as usize)
         .ok_or("Photoshop dimensions overflow")?;
-    if pixels > MAX_PIXELS {
-        return Err("Photoshop image exceeds the 64 megapixel import/export limit".into());
+    if pixels > isize::MAX as usize / 16 {
+        return Err("Photoshop dimensions overflow addressable sample memory".into());
     }
     Ok(pixels)
 }
@@ -116,38 +114,6 @@ fn encode_blend(blend: Blend) -> &'static [u8; 4] {
 /// Read saved raster channels and reconstruct the Photoshop layer tree.
 pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
     let parsed = codec::parse(bytes)?;
-    // Account for independent group masks, whose canvas dimensions may be much
-    // larger than the (often empty) group record rectangle.
-    let mut decoded_bytes = 0usize;
-    for record in &parsed.layers {
-        let (w, h) = record.rect.size()?;
-        let rgba_bytes = dimensions(w, h)?
-            .checked_mul(4)
-            .ok_or("Photoshop layer size overflow")?;
-        let mask_bytes = if record.mask.is_some() {
-            let mask_pixels = if record.section == 1 || record.section == 2 {
-                dimensions(parsed.width, parsed.height)?
-            } else {
-                dimensions(w, h)?
-            };
-            mask_pixels
-                .checked_mul(4)
-                .ok_or("Photoshop mask size overflow")?
-        } else {
-            0
-        };
-        let channel_bytes: usize = record.pixels.iter().map(|(_, data)| data.len()).sum();
-        decoded_bytes = decoded_bytes
-            .checked_add(rgba_bytes)
-            .and_then(|n| n.checked_add(mask_bytes))
-            .and_then(|n| n.checked_add(channel_bytes))
-            .ok_or("Photoshop document size overflow")?;
-        if decoded_bytes > MAX_DECODED_BYTES {
-            return Err(
-                "Photoshop layers and masks exceed the 512 MiB decoded import limit".into(),
-            );
-        }
-    }
     let mut warnings = parsed.warnings;
     // Avoid allocating a disposable full-canvas background before loading layers.
     let mut doc = Document::new(name, 1.0, 1.0, parsed.dpi);
@@ -249,7 +215,8 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
             parsed.depth,
             |id| {
                 let idx = if id == -1 { color_count } else { id as usize };
-                channels.get(idx).map(Vec::as_slice)
+                let n = parsed.width as usize * parsed.height as usize * (parsed.depth as usize / 8);
+                channels.get(idx * n..(idx + 1) * n)
             },
         )?;
         let pixels = rgba;
@@ -286,8 +253,11 @@ fn rgba_channels<'a>(
     if channels.iter().flatten().any(|v| v.len() != n * bps) {
         return Err("Photoshop channel dimensions do not match layer".into());
     }
-    let mut samples = vec![0.; n * 4];
-    for (i, p) in samples.chunks_exact_mut(4).enumerate() {
+    let mut samples = crate::resources::global().allocate_now::<f32, _>(
+        n.checked_mul(4).ok_or("Photoshop dimensions overflow")?,
+        &crate::deep_color::storage::check,
+    )?;
+    for (i, p) in samples.as_mut_slice().chunks_exact_mut(4).enumerate() {
         if let Some(r) = channels[0] {
             let r = sample_value(r, i, depth)?;
             let g = channels[1]
@@ -319,17 +289,15 @@ fn rgba_channels<'a>(
         }
     }
     if depth == 8 {
-        Pixels::from_rgba(
+        Pixels::from_byte_allocation(
             w,
             h,
-            samples
-                .iter()
-                .map(|&v| crate::deep_color::byte(v))
-                .collect(),
+            crate::deep_color::storage::collect(
+                samples.iter().map(|&v| crate::deep_color::byte(v)),
+            )?,
         )
-        .ok_or("Invalid Photoshop pixels".into())
     } else {
-        Pixels::from_samples(
+        Pixels::from_sample_allocation(
             w,
             h,
             if depth == 16 {
@@ -337,7 +305,7 @@ fn rgba_channels<'a>(
             } else {
                 crate::deep_color::Depth::F32
             },
-            samples,
+            std::sync::Arc::new(samples),
         )
     }
 }
@@ -371,7 +339,12 @@ fn convert_mask(
     if w == 0 || h == 0 {
         return Ok(Pixels::new(1, 1)?);
     }
-    let mut data = vec![0.; dimensions(w, h)? * 4];
+    let mut data = crate::resources::global().allocate_now::<f32, _>(
+        dimensions(w, h)?
+            .checked_mul(4)
+            .ok_or("Photoshop mask dimensions overflow")?,
+        &crate::deep_color::storage::check,
+    )?;
     let offset_x = i64::from(mask.rect.left)
         + if mask.flags & 1 != 0 {
             i64::from(layer_bounds.left)
@@ -398,18 +371,17 @@ fn convert_mask(
             }
             value = 1. - ((1. - value) * mask.density as f32 / 255.);
             let p = (y as usize * w as usize + x as usize) * 4;
-            data[p..p + 4].copy_from_slice(&[value, value, value, 1.]);
+            data.as_mut_slice()[p..p + 4].copy_from_slice(&[value, value, value, 1.]);
         }
     }
     if depth == 8 {
-        Pixels::from_rgba(
+        Pixels::from_byte_allocation(
             w,
             h,
-            data.iter().map(|&v| crate::deep_color::byte(v)).collect(),
+            crate::deep_color::storage::collect(data.iter().map(|&v| crate::deep_color::byte(v)))?,
         )
-        .ok_or("Invalid Photoshop mask".into())
     } else {
-        Pixels::from_samples(
+        Pixels::from_sample_allocation(
             w,
             h,
             if depth == 16 {
@@ -417,7 +389,7 @@ fn convert_mask(
             } else {
                 crate::deep_color::Depth::F32
             },
-            data,
+            std::sync::Arc::new(data),
         )
     }
 }
@@ -470,10 +442,17 @@ fn bake_clipping(
             .raster_xform()
             .map(|(origin, _, _)| origin)
             .unwrap_or(Pt::ZERO);
-        if [base_pixels, base_layer.mask.as_ref(), Some(pixels), layer.mask.as_ref()]
-            .into_iter().flatten().any(|p| p.native.is_some())
+        if [
+            base_pixels,
+            base_layer.mask.as_ref(),
+            Some(pixels),
+            layer.mask.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|p| p.native.is_some())
         {
-            let mut samples = Vec::with_capacity(w as usize * h as usize * 4);
+            let mut samples = crate::deep_color::storage::Builder::<f32>::new()?;
             for y in 0..h {
                 for x in 0..w {
                     let bx = x as i64 + origin.x as i64 - base_origin.x as i64;
@@ -481,24 +460,42 @@ fn bake_clipping(
                     let alpha = base_pixels
                         .filter(|p| bx >= 0 && by >= 0 && bx < p.w as i64 && by < p.h as i64)
                         .map_or(0., |p| {
-                            let coverage = base_layer.mask.as_ref().map_or(1., |m|
-                                crate::deep_color::sample_at(m, (bx as f32 + 0.5) * m.w as f32 / p.w as f32, (by as f32 + 0.5) * m.h as f32 / p.h as f32)[0]);
+                            let coverage = base_layer.mask.as_ref().map_or(1., |m| {
+                                crate::deep_color::sample_at(
+                                    m,
+                                    (bx as f32 + 0.5) * m.w as f32 / p.w as f32,
+                                    (by as f32 + 0.5) * m.h as f32 / p.h as f32,
+                                )[0]
+                            });
                             p.sample(by as usize * p.w as usize + bx as usize)[3] * coverage
                         });
-                    let coverage = layer.mask.as_ref().map_or(1., |m|
-                        crate::deep_color::sample_at(m, (x as f32 + 0.5) * m.w as f32 / w as f32, (y as f32 + 0.5) * m.h as f32 / h as f32)[0]);
+                    let coverage = layer.mask.as_ref().map_or(1., |m| {
+                        crate::deep_color::sample_at(
+                            m,
+                            (x as f32 + 0.5) * m.w as f32 / w as f32,
+                            (y as f32 + 0.5) * m.h as f32 / h as f32,
+                        )[0]
+                    });
                     let value = coverage * alpha;
-                    samples.extend_from_slice(&[value, value, value, 1.]);
+                    samples.extend(&[value, value, value, 1.])?;
                 }
             }
-            doc.layers[idx].mask = Some(Pixels::from_samples(w, h, crate::deep_color::Depth::F32, samples)?);
+            doc.layers[idx].mask = Some(Pixels::from_sample_allocation(
+                w,
+                h,
+                crate::deep_color::Depth::F32,
+                samples.finish()?,
+            )?);
             continue;
         }
-        let mut mask = layer.mask.clone().unwrap_or_else(|| {
-            let mut mask = Pixels::new(w, h)?;
-            mask.bytes_mut()?.fill(255);
-            mask
-        });
+        let mut mask = match layer.mask.clone() {
+            Some(mask) => mask,
+            None => {
+                let mut mask = Pixels::new(w, h)?;
+                mask.bytes_mut()?.fill(255);
+                mask
+            }
+        };
         for y in 0..h {
             for x in 0..w {
                 let bx = x as i64 + origin.x as i64 - base_origin.x as i64;

@@ -1,5 +1,7 @@
-use super::{MAX_DECODED_BYTES, MAX_LAYERS, Rect, dimensions, warn};
+use super::{MAX_LAYERS, Rect, dimensions, warn};
 use std::io::Read;
+use crate::{resources::{self, Allocation}, deep_color::storage};
+use std::sync::Arc;
 
 pub(super) struct Reader<'a> {
     pub bytes: &'a [u8],
@@ -86,7 +88,7 @@ pub(super) struct Mask {
 pub(super) struct Record {
     pub rect: Rect,
     pub channels: Vec<(i16, usize)>,
-    pub pixels: Vec<(i16, Vec<u8>)>,
+    pub pixels: Vec<(i16, Arc<Allocation<u8>>)>,
     pub name: String,
     pub blend: [u8; 4],
     pub opacity: u8,
@@ -105,7 +107,7 @@ pub(super) struct Parsed {
     pub depth: u16,
     pub dpi: f32,
     pub layers: Vec<Record>,
-    pub merged: Option<Vec<Vec<u8>>>,
+    pub merged: Option<Arc<Allocation<u8>>>,
     pub warnings: Vec<String>,
 }
 
@@ -222,18 +224,10 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
             depth,
             large,
         )?;
-        let mut merged = samples
-            .chunks_exact(pixels * depth as usize / 8)
-            .map(|p| p.to_vec())
-            .collect::<Vec<_>>();
-        if !merged_alpha && merged.len() > color_channels(mode) {
-            warn(
-                &mut warnings,
-                "Extra merged alpha or spot channels were not treated as document transparency.",
-            );
-            merged.truncate(color_channels(mode));
+        if !merged_alpha && channels > color_channels(mode) {
+            warn(&mut warnings,"Extra merged alpha or spot channels were not treated as document transparency.");
         }
-        Some(merged)
+        Some(samples)
     } else {
         None
     };
@@ -263,9 +257,7 @@ fn budget(total: &mut usize, additional: usize) -> Result<(), String> {
     *total = total
         .checked_add(additional)
         .ok_or("Photoshop decoded size overflow")?;
-    if *total > MAX_DECODED_BYTES {
-        return Err("Photoshop layers exceed the 512 MiB decoded import limit".into());
-    }
+
     Ok(())
 }
 
@@ -534,56 +526,39 @@ pub(super) fn decode_channel(
     h: u32,
     depth: u16,
     large: bool,
-) -> Result<Vec<u8>, String> {
+) -> Result<Arc<Allocation<u8>>, String> {
+    if w == 0 || h == 0 || ![8, 16, 32].contains(&depth) {return Err("Invalid Photoshop channel dimensions or depth".into());}
     let bps = depth as usize / 8;
-    let row_bytes = (w as usize)
-        .checked_mul(bps)
-        .ok_or("Photoshop row overflow")?;
-    let expected = row_bytes
-        .checked_mul(h as usize)
-        .ok_or("Photoshop channel size overflow")?;
-    if expected > MAX_DECODED_BYTES {
-        return Err("Photoshop channel exceeds the decoded size limit".into());
-    }
+    let row_bytes = (w as usize).checked_mul(bps).ok_or("Photoshop row overflow")?;
+    let expected = row_bytes.checked_mul(h as usize).ok_or("Photoshop channel size overflow")?;
     let mut r = Reader::new(bytes);
     let compression = r.u16()?;
     let mut data = match compression {
-        0 => r.take(expected)?.to_vec(),
+        0 => resources::global().copy_now(r.take(expected)?, &storage::check)?,
         1 => {
             let entry_bytes = if large { 4 } else { 2 };
-            if h as usize > r.remaining() / entry_bytes {
-                return Err("Truncated Photoshop RLE row lengths".into());
-            }
-            let mut sizes = Vec::with_capacity(h as usize);
-            for _ in 0..h {
-                sizes.push(if large {
-                    r.u32()? as usize
-                } else {
-                    r.u16()? as usize
-                });
-            }
-            let mut data = Vec::with_capacity(expected);
-            for size in sizes {
-                unpack_bits(r.take(size)?, row_bytes, &mut data)?;
+            if h as usize > r.remaining() / entry_bytes {return Err("Truncated Photoshop RLE row lengths".into());}
+            let lengths = r.take(h as usize * entry_bytes)?;
+            let mut data = resources::global().allocate_now::<u8, _>(expected, &storage::check)?;
+            for (row, length) in data.as_mut_slice().chunks_exact_mut(row_bytes).zip(lengths.chunks_exact(entry_bytes)) {
+                let size = if large {u32::from_be_bytes(length.try_into().unwrap()) as usize} else {u16::from_be_bytes(length.try_into().unwrap()) as usize};
+                unpack_row(r.take(size)?, row)?;
             }
             data
         }
         2 | 3 => {
-            let mut data = Vec::new();
-            let decoder = flate2::read::ZlibDecoder::new(r.take(r.remaining())?);
-            decoder
-                .take(expected as u64 + 1)
-                .read_to_end(&mut data)
-                .map_err(|e| format!("Invalid Photoshop ZIP channel: {e}"))?;
-            if data.len() != expected {
-                return Err("Photoshop ZIP channel has an invalid decoded size".into());
-            }
+            let _codec = resources::global().reserve_now(64 * 1024, &storage::check)?;
+            let mut data = resources::global().allocate_now::<u8, _>(expected, &storage::check)?;
+            let mut decoder = flate2::read::ZlibDecoder::new(r.take(r.remaining())?);
+            decoder.read_exact(data.as_mut_slice()).map_err(|e| format!("Invalid Photoshop ZIP channel: {e}"))?;
+            if decoder.read(&mut [0u8; 1]).map_err(|e| e.to_string())? != 0 {return Err("Photoshop ZIP channel has an invalid decoded size".into());}
             data
         }
         _ => return Err(format!("Unsupported Photoshop compression {compression}")),
     };
     if compression == 3 {
-        for row in data.chunks_exact_mut(row_bytes) {
+        let mut planar = resources::global().allocate_now::<u8, _>(if depth == 32 {row_bytes} else {0}, &storage::check)?;
+        for row in data.as_mut_slice().chunks_exact_mut(row_bytes) {
             if depth == 16 {
                 let mut last = 0u16;
                 for sample in row.as_chunks_mut::<2>().0.iter_mut() {
@@ -595,7 +570,7 @@ pub(super) fn decode_channel(
                     row[i] = row[i].wrapping_add(row[i - 1]);
                 }
                 if depth == 32 {
-                    let planar = row.to_vec();
+                    planar.as_mut_slice().copy_from_slice(row);
                     let width = w as usize;
                     for x in 0..width {
                         for b in 0..4 {
@@ -606,9 +581,24 @@ pub(super) fn decode_channel(
             }
         }
     }
-    Ok(data)
+    Ok(Arc::new(data))
 }
 
+fn unpack_row(encoded: &[u8], output: &mut [u8]) -> Result<(), String> {
+    let mut r = Reader::new(encoded);
+    let mut offset = 0usize;
+    while r.remaining() > 0 {
+        let control = r.u8()? as i8;
+        let n = if control >= 0 {control as usize + 1} else if control != -128 {(1i16 - control as i16) as usize} else {continue};
+        let end = offset.checked_add(n).filter(|n| *n <= output.len()).ok_or("Photoshop RLE row exceeds its declared width")?;
+        if control >= 0 {output[offset..end].copy_from_slice(r.take(n)?);} else {output[offset..end].fill(r.u8()?);}
+        offset = end;
+    }
+    if offset != output.len() {return Err("Photoshop RLE row is shorter than its declared width".into());}
+    Ok(())
+}
+
+#[cfg(test)]
 fn unpack_bits(encoded: &[u8], expected: usize, output: &mut Vec<u8>) -> Result<(), String> {
     let start = output.len();
     let mut r = Reader::new(encoded);
@@ -681,7 +671,7 @@ mod tests {
             zip.finish().unwrap();
             let h = if depth == 32 { 1 } else { 2 };
             assert_eq!(
-                decode_channel(&data, 3, h, depth, false).unwrap(),
+                decode_channel(&data, 3, h, depth, false).unwrap().as_slice(),
                 expected,
                 "depth={depth}"
             );

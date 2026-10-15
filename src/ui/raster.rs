@@ -602,8 +602,8 @@ fn commit(studio: &mut Studio, session: &Session, after: Vec<u8>) -> Result<(), 
     } else {Cmd::Pixels {
         layer: index,
         mask: session.mask,
-        before: session.source.as_ref().clone(),
-        after,
+        before: pixels.data.clone(),
+        after:crate::deep_color::storage::adopt(after)?,
     }};
     apply_command(&mut studio.doc, &cmd);
     studio.history.push(cmd);

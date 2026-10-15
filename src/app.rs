@@ -225,8 +225,8 @@ pub enum Op {
     Brush {
         layer: usize,
         erase: bool,
-        buf: Pixmap,
-        preview: Option<Pixmap>,
+        buf: crate::deep_color::surface::Surface,
+        preview: Option<crate::deep_color::surface::Surface>,
         last: Option<Pt>,
         before: crate::document::RasterState,
         selection_generation: u64,
@@ -238,27 +238,27 @@ pub enum Op {
         mask: bool,
         erase: bool,
         heal: bool,
-        source: Option<Pixmap>,
-        buf: Pixmap,
+        source: Option<crate::deep_color::surface::Surface>,
+        buf: crate::deep_color::surface::Surface,
         offset: Pt,
         last: Pt,
-        before: Vec<u8>,
+        before: std::sync::Arc<crate::resources::Allocation<u8>>,
         selection_generation: u64,
     },
     Smudge {
         layer: usize,
         last: Option<Pt>,
-        buf: Pixmap,
+        buf: crate::deep_color::surface::Surface,
         published: bool,
-        before: Vec<u8>,
+        before: std::sync::Arc<crate::resources::Allocation<u8>>,
         selection_generation: u64,
     },
     Clone {
         layer: usize,
         last: Option<Pt>,
         offset: Pt,
-        buf: Pixmap,
-        before: Vec<u8>,
+        buf: crate::deep_color::surface::Surface,
+        before: std::sync::Arc<crate::resources::Allocation<u8>>,
         selection_generation: u64,
     },
     Marquee {
@@ -776,6 +776,12 @@ impl Studio {
             self.new_doc_bleed,
             self.new_doc_safe,
         );
+        if self.persona == Persona::Pixel {
+            match Layer::raster("Layer 1", doc.width.round() as u32, doc.height.round() as u32) {
+                Ok(layer) => doc.layers[1] = layer,
+                Err(error) => {self.status = error; return;}
+            }
+        }
         doc.ruler.guides_locked = self.startup_preferences.guides_locked_by_default;
         crate::project::delete_swap(&self.swap_id);
         self.replace_active_tab(TabState::new(doc, None));

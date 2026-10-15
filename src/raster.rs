@@ -6,7 +6,7 @@ use rayon::prelude::*;
 trait AdmittedCollect: IndexedParallelIterator<Item = [f32; 4]> + Sized {
     fn admit(self) -> Result<Allocation<[f32; 4]>, String> {
         let mut out = crate::resources::global()
-            .allocate::<[f32; 4], _>(self.len(), &crate::deep_color::storage::check)?;
+            .allocate_now::<[f32; 4], _>(self.len(), &crate::deep_color::storage::check)?;
         self.zip(out.as_mut_slice().par_iter_mut())
             .for_each(|(src, dst)| *dst = src);
         Ok(out)
@@ -629,14 +629,14 @@ fn blur_channels(
     radius: f32,
 ) -> Result<Allocation<[f32; 4]>, String> {
     if radius < 0.1 {
-        return crate::resources::global().copy(src, &crate::deep_color::storage::check);
+        return crate::resources::global().copy_now(src, &crate::deep_color::storage::check);
     }
     let r = (radius * 0.58).round().clamp(1.0, 128.0) as i32;
-    let mut out = crate::resources::global().copy(src, &crate::deep_color::storage::check)?;
+    let mut out = crate::resources::global().copy_now(src, &crate::deep_color::storage::check)?;
     // Three separable box passes approximate a Gaussian in linear time.
     for _ in 0..3 {
         let mut tmp = crate::resources::global()
-            .allocate::<[f32; 4], _>(out.len(), &crate::deep_color::storage::check)?;
+            .allocate_now::<[f32; 4], _>(out.len(), &crate::deep_color::storage::check)?;
         tmp.as_mut_slice()
             .par_chunks_mut(w as usize)
             .enumerate()
@@ -661,7 +661,7 @@ fn blur_channels(
             });
         // Transpose to keep vertical sliding-window passes parallel and contiguous.
         let mut transposed = crate::resources::global()
-            .allocate::<[f32; 4], _>(out.len(), &crate::deep_color::storage::check)?;
+            .allocate_now::<[f32; 4], _>(out.len(), &crate::deep_color::storage::check)?;
         transposed
             .as_mut_slice()
             .par_chunks_mut(h as usize)
@@ -703,7 +703,7 @@ fn morphology(
     r: i32,
     grow: bool,
 ) -> Result<Allocation<[f32; 4]>, String> {
-    let mut out = crate::resources::global().copy(src, &crate::deep_color::storage::check)?;
+    let mut out = crate::resources::global().copy_now(src, &crate::deep_color::storage::check)?;
     // Separable square structuring element. Keep the winning pixel's RGB when growing.
     for vertical in [false, true] {
         let input = out;

@@ -106,9 +106,9 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                     "Mask grid differs from image; recreate its selection mask first".into(),
                 );
             }
-            let before = original.data.to_vec();
+            let before = original.data.clone();
             let original_pm = original.to_pixmap().ok_or("Invalid pixel data")?;
-            let mut pm = original_pm.clone();
+            let mut pm = original_pm.try_clone()?;
             let pts = points(&args["points"])?;
             if pts
                 .iter()
@@ -154,8 +154,7 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                 }
                 let before = original.clone();
                 let mut after = before.clone();
-                let mut overlay =
-                    tiny_skia::Pixmap::new(w, h).ok_or("Cannot allocate paint coverage")?;
+                let mut overlay = crate::deep_color::surface::Surface::new(w, h)?;
                 if operation == "fill" {
                     let region = paint::wand_mask_clipped(
                         &original_pm,
@@ -164,17 +163,17 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                         selection.as_deref(),
                     );
                     let c = before.paint_color(brush.color)?;
-                    let samples = (0..w as usize * h as usize)
-                        .flat_map(|i| {
+                    let samples = crate::deep_color::storage::collect(
+                        (0..w as usize * h as usize).flat_map(|i| {
                             crate::deep_color::blend_pixel(
                                 before.sample(i),
                                 c,
                                 crate::color::Blend::Normal,
                                 region[i] as f32 / 255. * brush.opacity,
                             )
-                        })
-                        .collect();
-                    after.set_samples(samples)?;
+                        }),
+                    )?;
+                    after.set_sample_allocation(samples)?;
                 } else {
                     let brush = if operation == "erase" {
                         paint::Brush {
@@ -192,8 +191,8 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                         paint::feather_overlay(&mut overlay, selection);
                     }
                     if operation == "erase" {
-                        let samples = (0..w as usize * h as usize)
-                            .flat_map(|i| {
+                        let samples = crate::deep_color::storage::collect(
+                            (0..w as usize * h as usize).flat_map(|i| {
                                 let p = before.sample(i);
                                 [
                                     p[0],
@@ -201,9 +200,9 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                                     p[2],
                                     p[3] * (1. - overlay.pixels()[i].alpha() as f32 / 255.),
                                 ]
-                            })
-                            .collect();
-                        after.set_samples(samples)?;
+                            }),
+                        )?;
+                        after.set_sample_allocation(samples)?;
                     } else {
                         after.paint_overlay(&Pixels::from_pixmap(&overlay)?, 1.)?;
                     }
@@ -267,7 +266,7 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
             if let Some(selection) = selection {
                 paint::feather_edit(&mut pm, &original_pm, &selection);
             }
-            let after = Pixels::from_pixmap(&pm)?.data.to_vec();
+            let after = Pixels::from_pixmap(&pm)?.data;
             studio.commit(Cmd::Batch(vec![Cmd::Pixels {
                 layer: li,
                 mask,
@@ -301,18 +300,29 @@ fn mask(studio: &mut Studio, li: usize, args: &Value) -> Result<(), String> {
             "remove" => None,
             "invert" => {
                 let mut p = s.mask.clone().ok_or("Object has no mask")?;
-                for v in p.bytes_mut().unwrap().chunks_exact_mut(4) {
-                    let amount = (v[0] as u32 * v[3] as u32 / 255) as u8;
-                    let a = 255 - amount;
-                    v.copy_from_slice(&[a, a, a, 255]);
+                if p.native.is_some() {
+                    let samples = crate::deep_color::storage::collect(
+                        (0..p.w as usize * p.h as usize).flat_map(|i| {
+                            let c = p.sample(i);
+                            let v = 1. - (c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722) * c[3];
+                            [v, v, v, 1.]
+                        }),
+                    )?;
+                    p.set_sample_allocation(samples)?;
+                } else {
+                    for v in p.bytes_mut()?.chunks_exact_mut(4) {
+                        let amount = (v[0] as u32 * v[3] as u32 / 255) as u8;
+                        let a = 255 - amount;
+                        v.copy_from_slice(&[a, a, a, 255]);
+                    }
                 }
                 p.touch();
                 Some(p)
             }
             "reveal" | "hide" => {
-                let mut p = Pixels::new(1, 1).unwrap();
+                let mut p = Pixels::new(1, 1)?;
                 let a = if operation == "reveal" { 255 } else { 0 };
-                p.bytes_mut().unwrap().copy_from_slice(&[a, a, a, 255]);
+                p.bytes_mut()?.copy_from_slice(&[a, a, a, 255]);
                 p.touch();
                 Some(p)
             }

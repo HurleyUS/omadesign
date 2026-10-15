@@ -156,7 +156,7 @@ pub fn show_asset_browser(ui: &mut egui::Ui, studio: &mut Studio) {
                             image: crate::photo::RgbaImage {
                                 w: pixels.w,
                                 h: pixels.h,
-                                data: pixels.data,
+                                data: pixels.data.to_vec(),
                             },
                         };
                         if let Err(error) =

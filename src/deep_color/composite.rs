@@ -131,7 +131,8 @@ pub fn composite(doc: &Document, scale: u32) -> Result<Pixels, String> {
     let w = (doc.width * scale as f32).round() as u32;
     let h = (doc.height * scale as f32).round() as u32;
     let count = super::storage::count(w, h, 4)?;
-    let mut out = crate::resources::global().allocate::<f32, _>(count, &super::storage::check)?;
+    let mut out =
+        crate::resources::global().allocate_now::<f32, _>(count, &super::storage::check)?;
     if !doc.transparent {
         out.as_mut_slice().fill(1.);
     }
@@ -177,10 +178,10 @@ fn render(
             }
             let pass = layer.pass_through;
             let mut temp = if pass {
-                crate::resources::global().copy(out, &super::storage::check)?
+                crate::resources::global().copy_now(out, &super::storage::check)?
             } else {
                 crate::resources::global()
-                    .allocate::<[f32; 4], _>(out.len(), &super::storage::check)?
+                    .allocate_now::<[f32; 4], _>(out.len(), &super::storage::check)?
             };
             render(
                 doc,

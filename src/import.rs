@@ -72,7 +72,12 @@ pub(crate) fn open_with_progress(
     if kind == "eps" {
         return import_eps(path, &name);
     }
-    let bytes = read_bounded(path)?;
+    let admitted;
+    let legacy;
+    let bytes: &[u8] = if matches!(kind, "psd" | "raster") {
+        admitted = crate::project::read_admitted(path)?;
+        &admitted
+    } else {legacy = read_bounded(path)?; &legacy};
     if kind == "svg" || looks_svg(&bytes) {
         stage("Reading SVG objects");
         let decoded;
@@ -145,7 +150,7 @@ pub(crate) fn open_with_progress(
             image: RgbaImage {
                 w: pixels.w,
                 h: pixels.h,
-                data: pixels.data,
+                data: {let allocation = std::sync::Arc::try_unwrap(pixels.data).map_err(|_| "Shared imported image storage")?;let (bytes, _memory) = allocation.into_parts(); bytes},
             },
         }),
         Err(error) if kind == "raster" => Err(error),

@@ -32,22 +32,36 @@ fn publish(
     }
     // Keep working buffers unfeathered so moving the pointer cannot repeatedly
     // attenuate earlier dabs. Only the displayed/committed result is blended.
-    let feathered = if !mask {
-        selection.as_ref().and_then(|selection| {
-            if !selection.iter().any(|v| *v > 0 && *v < 255) {
-                return None;
+    let feathered = if !mask
+        && selection
+            .as_ref()
+            .is_some_and(|m| m.iter().any(|v| *v > 0 && *v < 255))
+    {
+        let result = (|| {
+            let original = crate::deep_color::surface::Surface::from_rgba(
+                buffer.width(),
+                buffer.height(),
+                before,
+            )?;
+            let mut output = crate::deep_color::surface::Surface::from_pixmap(buffer)?;
+            paint::feather_edit(&mut output, &original, selection.as_ref().unwrap());
+            Ok::<_, String>(output)
+        })();
+        match result {
+            Ok(output) => Some(output),
+            Err(error) => {
+                studio.status = error;
+                return;
             }
-            let original =
-                Pixels::from_rgba(buffer.width(), buffer.height(), before.to_vec())?.to_pixmap()?;
-            let mut output = buffer.clone();
-            paint::feather_edit(&mut output, &original, &selection);
-            Some(output)
-        })
+        }
     } else {
         None
     };
     drop(selection);
-    let buffer = feathered.as_ref().unwrap_or(buffer);
+    let buffer = feathered
+        .as_ref()
+        .map(|surface| &**surface)
+        .unwrap_or(buffer);
     let Some(layer) = studio.doc.layers.get_mut(layer) else {
         return;
     };
@@ -57,7 +71,13 @@ fn publish(
         layer.kind.pixels_mut()
     };
     if let Some(target) = target {
-        match Pixels::from_pixmap(buffer) {Ok(pixels)=>*target=pixels,Err(error)=>{studio.status=error;return;}}
+        match Pixels::from_pixmap(buffer) {
+            Ok(pixels) => *target = pixels,
+            Err(error) => {
+                studio.status = error;
+                return;
+            }
+        }
         studio.mark();
     }
 }
@@ -81,7 +101,8 @@ fn publish_region(
     {
         return;
     }
-    let mut patch = Vec::with_capacity((region.x1 - region.x0) * (region.y1 - region.y0));
+    let result = (|| {
+    let mut patch = crate::deep_color::storage::Builder::new()?;
     for row in region.rows(buffer.width()) {
         for i in row {
             let pixel = buffer.pixels()[i];
@@ -104,10 +125,13 @@ fn publish_region(
                 )
                 .unwrap()
             };
-            patch.push(pixel);
+            patch.extend(&[pixel])?;
         }
     }
+    patch.finish()
+    })();
     drop(selection);
+    let patch = match result {Ok(patch) => patch, Err(error) => {studio.status = error; return;}};
     let Some(layer) = studio.doc.layers.get_mut(layer) else {
         return;
     };
@@ -121,21 +145,24 @@ fn publish_region(
     };
     // A stroke's initial full publish normalizes straight RGBA once; subsequent
     // region updates retain identical bytes and cached pixels outside the edit.
-    target.with_pm(|_| {});
-    target.version = target.version.wrapping_add(1);
-    target.cached_uniform.get_mut().take();
+    if target.with_pm(|_| {}).is_none() {
+        studio.status = "Not enough memory for the paint cache".into();
+        return;
+    }
     if let Err(error) =
         crate::deep_color::storage::make_mut(&mut target.data, &crate::deep_color::storage::check)
     {
         studio.status = error;
         return;
     }
+    target.version = target.version.wrapping_add(1);
+    target.cached_uniform.get_mut().take();
     let cache = target.cached_pm.get_mut().as_mut();
     let mut cache = cache.map(|(version, pm)| {
         *version = target.version;
         pm
     });
-    let mut patch = patch.into_iter();
+    let mut patch = patch.iter().copied();
     for row in region.rows(buffer.width()) {
         for i in row {
             let pixel = patch.next().unwrap();
@@ -193,7 +220,13 @@ pub(super) fn start(studio: &mut Studio, world: Pt) {
             return;
         }
         let before = pixels.clone();
-        let (coverage,memory)=match crate::deep_color::storage::pixmap(before.w,before.h) {Ok(value)=>value,Err(error)=>{studio.status=error;return;}};
+        let (coverage, memory) = match crate::deep_color::storage::pixmap(before.w, before.h) {
+            Ok(value) => value,
+            Err(error) => {
+                studio.status = error;
+                return;
+            }
+        };
         studio.op = Some(Op::NativeStroke {
             layer,
             mask,
@@ -206,14 +239,24 @@ pub(super) fn start(studio: &mut Studio, world: Pt) {
         native_drag(studio, world);
         return;
     }
-    let before = pixels.data.to_vec();
+    let before = pixels.data.clone();
     let Some(mut buf) = pixels.to_pixmap() else {
         return;
     };
     studio.brush_distance = studio.brush.spacing_distance();
     studio.brush_heading = 0.0;
     studio.brush.seed = crate::document::next_id();
-    let source = heal.then(|| buf.clone());
+    let source = if heal {
+        match buf.try_clone() {
+            Ok(source) => Some(source),
+            Err(error) => {
+                studio.status = error;
+                return;
+            }
+        }
+    } else {
+        None
+    };
     let offset = studio
         .clone_source
         .map_or(Pt::ZERO, |source| studio.mask_point(layer, source) - point);
@@ -288,9 +331,12 @@ fn clip_overlay(
     }
 }
 
-fn layer_pixels(studio: &Studio, layer: usize) -> Option<(u32, u32, Vec<u8>)> {
+fn layer_pixels(
+    studio: &Studio,
+    layer: usize,
+) -> Option<(u32, u32, std::sync::Arc<crate::resources::Allocation<u8>>)> {
     let pixels = studio.doc.layers.get(layer)?.kind.pixels()?;
-    Some((pixels.w, pixels.h, pixels.data.to_vec()))
+    Some((pixels.w, pixels.h, pixels.data.clone()))
 }
 
 pub(super) fn start_brush(studio: &mut Studio, world: Pt) {
@@ -303,8 +349,12 @@ pub(super) fn start_brush(studio: &mut Studio, world: Pt) {
     };
     let pixels = before.kind.pixels().unwrap();
     let (w, h) = (pixels.w, pixels.h);
-    let Some(mut buf) = tiny_skia::Pixmap::new(w, h) else {
-        return;
+    let mut buf = match crate::deep_color::surface::Surface::new(w, h) {
+        Ok(buf) => buf,
+        Err(error) => {
+            studio.status = error;
+            return;
+        }
     };
     let mut preview = None;
     if let Err(message) =
@@ -329,14 +379,16 @@ pub(super) fn start_brush(studio: &mut Studio, world: Pt) {
     }
     let region = paint::PixelRegion::stroke(w, h, point, point, &studio.brush);
     clip_overlay(studio, layer, &mut buf, region);
-    let preview = studio.cached_pixel_sel_mask(layer).and_then(|mask| {
-        if !mask.iter().any(|&coverage| coverage > 0 && coverage < 255) {
-            return None;
-        }
-        let mut preview = tiny_skia::Pixmap::new(w, h)?;
+    let preview = (|| {
+        let Some(mask) = studio.cached_pixel_sel_mask(layer) else {return Ok(None)};
+        if !mask.iter().any(|&coverage| coverage > 0 && coverage < 255) {return Ok(None);}
+        let mut preview = crate::deep_color::surface::Surface::new(w, h)?;
         paint::feather_overlay_region(&mut preview, &buf, &mask, region);
-        Some(preview)
-    });
+        Ok::<_,String>(Some(preview))
+    })();
+    let preview = match preview {Ok(preview) => preview, Err(error) => {
+        before.restore(&mut studio.doc.layers[layer]);studio.status = error;return;
+    }};
     studio.op = Some(Op::Brush {
         layer,
         erase: false,
@@ -572,8 +624,13 @@ pub(super) fn drag(studio: &mut Studio, world: Pt) {
     });
 }
 
-pub(super) fn finish(studio: &mut Studio, layer: usize, mask: bool, before: Vec<u8>) {
-    let Some(after) = pixels(studio, layer, mask).map(|pixels| pixels.data.to_vec()) else {
+pub(super) fn finish(
+    studio: &mut Studio,
+    layer: usize,
+    mask: bool,
+    before: std::sync::Arc<crate::resources::Allocation<u8>>,
+) {
+    let Some(after) = pixels(studio, layer, mask).map(|pixels| pixels.data.clone()) else {
         return;
     };
     if before != after {
@@ -614,8 +671,8 @@ pub(super) fn fill(studio: &mut Studio, world: Pt) {
         } else {
             studio.brush.color
         };
-        let samples = (0..before.w as usize * before.h as usize)
-            .flat_map(|i| {
+        let samples = crate::deep_color::storage::collect(
+            (0..before.w as usize * before.h as usize).flat_map(|i| {
                 crate::deep_color::blend_pixel(
                     before.sample(i),
                     [
@@ -627,10 +684,10 @@ pub(super) fn fill(studio: &mut Studio, world: Pt) {
                     crate::color::Blend::Normal,
                     region[i] as f32 / 255.,
                 )
-            })
-            .collect();
+            }),
+        );
         let mut after = before.clone();
-        if let Err(error) = after.set_samples(samples) {
+        if let Err(error) = samples.and_then(|samples| after.set_sample_allocation(samples)) {
             studio.status = error;
             return;
         }
@@ -642,7 +699,7 @@ pub(super) fn fill(studio: &mut Studio, world: Pt) {
         });
         return;
     }
-    let before = pixels.data.to_vec();
+    let before = pixels.data.clone();
     let Some(mut buffer) = pixels.to_pixmap() else {
         return;
     };
@@ -772,7 +829,10 @@ pub(super) fn brush_drag(studio: &mut Studio, world: Pt) {
             .is_some_and(|mask| mask.iter().any(|&v| v > 0 && v < 255));
         if soft {
             if preview.is_none() {
-                preview = tiny_skia::Pixmap::new(buf.width(), buf.height());
+                match crate::deep_color::surface::Surface::new(buf.width(), buf.height()) {
+                    Ok(surface) => preview = Some(surface),
+                    Err(error) => {before.restore(&mut studio.doc.layers[layer]);studio.status = error;studio.mark();return;}
+                }
             }
         } else {
             preview = None;
@@ -1247,7 +1307,8 @@ mod tests {
                         | Op::Retouch { buf, .. } => buf,
                         _ => unreachable!(),
                     };
-                    let mut reference = buffer.clone();
+                    let mut reference =
+                        crate::deep_color::surface::Surface::from_pixmap(buffer).unwrap();
                     if !mask && let Some(selection) = studio.cached_pixel_sel_mask(0) {
                         let original = Pixels::from_rgba(96, 80, before.clone())
                             .unwrap()
@@ -1302,7 +1363,7 @@ mod tests {
             else {
                 panic!("soft preview");
             };
-            let mut reference = buf.clone();
+            let mut reference = buf.try_clone().unwrap();
             paint::feather_overlay(&mut reference, &studio.cached_pixel_sel_mask(0).unwrap());
             assert_eq!(preview, &reference);
         }
@@ -1316,7 +1377,7 @@ mod tests {
         else {
             panic!("updated soft preview");
         };
-        let mut reference = buf.clone();
+        let mut reference = buf.try_clone().unwrap();
         paint::feather_overlay(&mut reference, &studio.cached_pixel_sel_mask(0).unwrap());
         assert_eq!(preview, &reference);
         studio.set_pixel_sel(None);
@@ -1519,7 +1580,10 @@ mod tests {
             assert!(studio.end_pixel_stroke(false));
             assert_eq!(studio.history.len(), 1);
             studio.undo();
-            assert_eq!(pixels(&studio, 0, true).unwrap().data.as_slice(), mask_before);
+            assert_eq!(
+                pixels(&studio, 0, true).unwrap().data.as_slice(),
+                mask_before
+            );
             assert_eq!(pixels(&studio, 0, false).unwrap().data.as_slice(), original);
             studio.redo();
             assert!(rgba(&studio, 18, 14, true)[0] < 10);
@@ -1630,7 +1694,10 @@ mod tests {
         let mask_before = pixels(&studio, 0, true).unwrap().data.to_vec();
         start(&mut studio, Pt::new(8.0, 8.0));
         studio.set_tool(Tool::Hand);
-        assert_eq!(pixels(&studio, 0, true).unwrap().data.as_slice(), mask_before);
+        assert_eq!(
+            pixels(&studio, 0, true).unwrap().data.as_slice(),
+            mask_before
+        );
         assert!(studio.op.is_none());
     }
 
@@ -1805,7 +1872,10 @@ mod tests {
             source_after
         );
         studio.undo();
-        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(), original);
+        assert_eq!(
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+            original
+        );
         for _ in 0..3 {
             studio.redo();
         }
@@ -1813,7 +1883,10 @@ mod tests {
             studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
             source_after
         );
-        assert_eq!(studio.doc.layers[1].kind.pixels().unwrap().data.as_slice(), painted);
+        assert_eq!(
+            studio.doc.layers[1].kind.pixels().unwrap().data.as_slice(),
+            painted
+        );
         assert_eq!(studio.pixel_sel, selection);
     }
 
@@ -1942,9 +2015,15 @@ mod brush_pack_tests {
             }
         }
         s.undo();
-        assert_eq!(s.doc.layers[0].kind.pixels().unwrap().data.as_slice(), before);
+        assert_eq!(
+            s.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+            before
+        );
         s.redo();
-        assert_eq!(s.doc.layers[0].kind.pixels().unwrap().data.as_slice(), painted);
+        assert_eq!(
+            s.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+            painted
+        );
         let root = std::env::current_dir()
             .unwrap()
             .join("artifacts/brush-tests")
@@ -1953,7 +2032,10 @@ mod brush_pack_tests {
         let path = root.join("paint.oma");
         crate::project::save_to(&s.doc, &path).unwrap();
         let restored = crate::project::load_from(&path).unwrap();
-        assert_eq!(restored.layers[0].kind.pixels().unwrap().data.as_slice(), painted);
+        assert_eq!(
+            restored.layers[0].kind.pixels().unwrap().data.as_slice(),
+            painted
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }
@@ -2318,6 +2400,13 @@ fn start_native_retouch(studio: &mut Studio, world: Pt, tool: Tool) -> bool {
 }
 
 pub(super) fn native_retouch_drag(studio: &mut Studio, world: Pt) {
+    native_retouch_drag_selected(studio, world, native_retouch_selection);
+}
+
+fn native_retouch_drag_selected(
+    studio: &mut Studio, world: Pt,
+    select: impl FnOnce(&Pixels, &Pixels, &[u8]) -> Result<Pixels, String>,
+) {
     let Some(Op::NativeRetouch {
         layer,
         before,
@@ -2331,39 +2420,36 @@ pub(super) fn native_retouch_drag(studio: &mut Studio, world: Pt) {
     };
     let from = studio.mask_point(layer, last);
     let to = studio.mask_point(layer, world);
-    let result = crate::deep_color::retouch::stroke(
-        &before,
-        &working,
-        from,
-        to,
-        offset,
-        tool,
-        &studio.brush,
-    );
-    let working = match result {
-        Ok(p) => p,
+    let result = (|| {
+        let edited = crate::deep_color::retouch::stroke(
+            &before,
+            &working,
+            from,
+            to,
+            offset,
+            tool,
+            &studio.brush,
+        )?;
+        let after = if let Some(selection) = studio.pixel_sel_mask(layer) {
+            select(&before, &edited, &selection)?
+        } else {edited.clone()};
+        Ok::<_, String>((edited, after))
+    })();
+    let (working, after) = match result {
+        Ok(value) => value,
         Err(error) => {
             studio.status = error;
-            working
+            studio.op = Some(Op::NativeRetouch {
+                layer,
+                before,
+                working,
+                last,
+                offset,
+                tool,
+            });
+            return;
         }
     };
-    let mut after = working.clone();
-    if let Some(selection) = studio.pixel_sel_mask(layer) {
-        let a = before.native.as_ref().unwrap().samples.clone();
-        let b = working.native.as_ref().unwrap().samples.clone();
-        let samples = crate::deep_color::storage::collect(
-            a.chunks_exact(4)
-                .zip(b.chunks_exact(4))
-                .zip(selection.iter())
-                .flat_map(|((a, b), &m)| {
-                    let t = m as f32 / 255.;
-                    crate::deep_color::retouch::mix(a.try_into().unwrap(), b.try_into().unwrap(), t)
-                }),
-        );
-        if let Err(error) = samples.and_then(|samples| after.set_sample_allocation(samples)) {
-            studio.status = error;
-        }
-    }
     if let Some(target) = studio.doc.layers[layer].kind.pixels_mut() {
         *target = after;
     }
@@ -2376,4 +2462,48 @@ pub(super) fn native_retouch_drag(studio: &mut Studio, world: Pt) {
         tool,
     });
     studio.mark_interaction();
+}
+
+fn native_retouch_selection(before: &Pixels, edited: &Pixels, selection: &[u8]) -> Result<Pixels, String> {
+    if selection.len() != before.data.len() / 4 {return Err("Selection dimensions do not match retouch pixels".into());}
+    let a = &before.native.as_ref().ok_or("Missing retouch source samples")?.samples;
+    let b = &edited.native.as_ref().ok_or("Missing retouch working samples")?.samples;
+    let samples = crate::deep_color::storage::collect(
+        a.chunks_exact(4).zip(b.chunks_exact(4)).zip(selection.iter()).flat_map(|((a,b), &m)| {
+            crate::deep_color::retouch::mix(a.try_into().unwrap(), b.try_into().unwrap(), m as f32 / 255.)
+        })
+    )?;
+    let mut after = edited.clone();after.set_sample_allocation(samples)?;Ok(after)
+}
+
+#[cfg(test)]
+mod native_admission_tests {
+    use super::*;
+    #[test]
+    fn native_selection_pressure_preserves_published_samples_and_gesture() {
+        use crate::{deep_color::Depth, document::{Document, Layer}, resources::{Budget, Allocation}};
+        use std::sync::Arc;
+        let values = (0..16 * 8).flat_map(|i| [if i % 16 < 8 {1.25} else {0.1234567}, -0.125, 0.2, 0.5]).collect();
+        let pixels = Pixels::from_samples(16, 8, Depth::F32, values).unwrap();
+        let original = pixels.clone();
+        let mut studio = Studio::default();studio.doc = Document::new("Retouch admission", 16., 8., 72.);
+        studio.doc.layers = vec![Layer::placed_raster("Paint", pixels, Pt::ZERO, Pt::new(16., 8.))];
+        studio.active_layer = Some(0);studio.persona = crate::tools::Persona::Pixel;
+        studio.brush.size = 4.;studio.brush.opacity = 1.;studio.brush.flow = 1.;
+        studio.set_pixel_sel(Some(vec![128; 16 * 8]));
+        let last = Pt::new(10., 4.);
+        studio.op = Some(Op::NativeRetouch {layer:0, before:original.clone(),working:original.clone(),last,offset:Pt::new(-8.,0.),tool:Tool::Clone});
+        let pool = Budget::new(4, false);let _full = pool.reserve_now(4, &crate::deep_color::storage::check).unwrap();
+        native_retouch_drag_selected(&mut studio, Pt::new(12.,4.), |_,_,_| {
+            let _: Allocation<f32> = pool.allocate_now::<f32,_>(4, &crate::deep_color::storage::check)?;
+            unreachable!("a full pool must refuse selection storage")
+        });
+        let published = studio.doc.layers[0].kind.pixels().unwrap();
+        assert!(Arc::ptr_eq(&published.native.as_ref().unwrap().samples, &original.native.as_ref().unwrap().samples));
+        let Some(Op::NativeRetouch {working,last:retained,..}) = &studio.op else {panic!("gesture must survive pressure")};
+        assert_eq!(*retained, last);
+        assert!(Arc::ptr_eq(&working.native.as_ref().unwrap().samples, &original.native.as_ref().unwrap().samples));
+        studio.end_pixel_stroke(true);
+        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().sample(0), original.sample(0));
+    }
 }

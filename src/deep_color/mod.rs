@@ -2,6 +2,7 @@
 mod composite;
 pub mod retouch;
 pub mod storage;
+pub mod surface;
 pub use composite::{blend_pixel, composite};
 
 use crate::document::Pixels;
@@ -77,7 +78,7 @@ impl Pixels {
         if samples.len() != count || samples.iter().any(|s| !s.is_finite()) {
             return Err("Invalid native pixel samples".into());
         }
-        let mut data = resources::global().allocate::<u8, _>(count, cancel)?;
+        let mut data = resources::global().allocate_now::<u8, _>(count, cancel)?;
         for (dst, src) in data
             .as_mut_slice()
             .chunks_mut(65536)
@@ -100,7 +101,7 @@ impl Pixels {
             return Ok(native.samples.clone());
         }
         let mut samples =
-            resources::global().allocate::<f32, _>(self.data.len(), &storage::check)?;
+            resources::global().allocate_now::<f32, _>(self.data.len(), &storage::check)?;
         for (dst, &src) in samples.as_mut_slice().iter_mut().zip(self.data.iter()) {
             *dst = src as f32 / 255.;
         }
@@ -112,7 +113,7 @@ impl Pixels {
         &self,
         cancel: &C,
     ) -> Result<Allocation<f32>, String> {
-        self.samples()?.try_clone(cancel)
+        self.samples()?.try_clone_now(cancel)
     }
 
     /// Read one authored pixel.
@@ -180,7 +181,8 @@ impl Pixels {
         let samples = self.samples()?;
         let source = samples.as_slice().as_chunks::<4>().0;
         let filtered = crate::raster::apply_float(source, self.w, self.h, settings, selection)?;
-        let mut output = resources::global().allocate::<f32, _>(samples.len(), &storage::check)?;
+        let mut output =
+            resources::global().allocate_now::<f32, _>(samples.len(), &storage::check)?;
         for (dst, src) in output
             .as_mut_slice()
             .as_chunks_mut::<4>()
@@ -206,7 +208,7 @@ pub(crate) fn byte(v: f32) -> u8 {
 mod sample_bytes {
     use super::*;
     use base64::Engine;
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserializer, Serializer};
     use std::io::{Read, Write};
     pub fn serialize<S: Serializer>(
         samples: &Arc<Allocation<f32>>,
@@ -235,7 +237,7 @@ mod sample_bytes {
             .and_then(|n| (n / 3).checked_mul(4))
             .ok_or_else(|| serde::ser::Error::custom("Encoded samples overflow"))?;
         let _memory = resources::global()
-            .reserve(length as u64, &storage::check)
+            .reserve_now(length as u64, &storage::check)
             .map_err(serde::ser::Error::custom)?;
         serializer
             .serialize_str(&base64::engine::general_purpose::STANDARD.encode(packed.as_slice()))
@@ -243,10 +245,19 @@ mod sample_bytes {
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Arc<Allocation<f32>>, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        let _encoded = resources::global()
-            .reserve(text.capacity() as u64, &storage::check)
-            .map_err(serde::de::Error::custom)?;
+        struct Samples;
+        impl<'de> serde::de::Visitor<'de> for Samples {
+            type Value = Arc<Allocation<f32>>;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a base64 sample string")
+            }
+            fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<Self::Value, E> {
+                decode(text)
+            }
+        }
+        deserializer.deserialize_str(Samples)
+    }
+    fn decode<E: serde::de::Error>(text: &str) -> Result<Arc<Allocation<f32>>, E> {
         let base64 = base64::read::DecoderReader::new(
             text.as_bytes(),
             &base64::engine::general_purpose::STANDARD,
@@ -254,7 +265,7 @@ mod sample_bytes {
         let mut decoder =
             zstd::stream::read::Decoder::new(base64).map_err(serde::de::Error::custom)?;
         let _window = resources::global()
-            .reserve(128 * 1024 * 1024, &storage::check)
+            .reserve_now(128 * 1024 * 1024, &storage::check)
             .map_err(serde::de::Error::custom)?;
         decoder
             .window_log_max(27)
@@ -302,7 +313,7 @@ impl Pixels {
             .checked_mul(h as usize)
             .and_then(|n| n.checked_mul(4))
             .ok_or("Native reframe exceeds working limit")?;
-        let mut out = resources::global().allocate::<f32, _>(count, &storage::check)?;
+        let mut out = resources::global().allocate_now::<f32, _>(count, &storage::check)?;
         for y in 0..self.h {
             let ny = y as i64 + dy;
             if ny < 0 || ny >= h as i64 {

@@ -114,7 +114,8 @@ fn dab(
     let right = (sx + extent + blur + 1).clamp(left, donor.w as i32);
     let bottom = (sy + extent + blur + 1).clamp(top, donor.h as i32);
     let width = (right - left + 1) as usize;
-    let mut sums = crate::resources::global().allocate::<[f64; 4], _>(0, &super::storage::check)?;
+    let mut sums =
+        crate::resources::global().allocate_now::<[f64; 4], _>(0, &super::storage::check)?;
     if tool == Tool::Heal {
         let mut equations = [[0_f64; 9]; 6];
         let stride = (extent / 24).max(1) as usize;
@@ -146,7 +147,8 @@ fn dab(
         let count = width
             .checked_mul((bottom - top + 1) as usize)
             .ok_or("Healing scratch overflows")?;
-        sums = crate::resources::global().allocate::<[f64; 4], _>(count, &super::storage::check)?;
+        sums = crate::resources::global()
+            .allocate_now::<[f64; 4], _>(count, &super::storage::check)?;
         for y in 1..=(bottom - top) as usize {
             let mut row = [0.; 4];
             for x in 1..width {
