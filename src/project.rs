@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 mod features;
 
-pub(crate) const VERSION: u32 = features::SVG_FILTER;
+pub(crate) const VERSION: u32 = features::PUBLISHING;
 
 #[derive(Serialize, Deserialize)]
 struct File {
@@ -31,7 +31,7 @@ pub fn encode(doc: &Document) -> Result<String, String> {
 
 pub fn decode(s: &str) -> Result<Document, String> {
     let file: File = serde_json::from_str(s).map_err(|e| e.to_string())?;
-    if !(1..=VERSION).contains(&file.version) {
+    if !features::supports_version(file.version) {
         return Err("Unsupported omadesign project version".into());
     }
     features::validate_version(&file.doc, file.version, !file.svg_sources.is_empty())?;
@@ -51,7 +51,7 @@ pub fn decode(s: &str) -> Result<Document, String> {
 
 /// Shared normalization after pixels have been decoded under the caller's budgets.
 pub(crate) fn normalize_decoded_document(mut doc: Document, version: u32) -> Result<Document, String> {
-    if !(1..=VERSION).contains(&version) {
+    if !features::supports_version(version) {
         return Err("Unsupported omadesign project version".into());
     }
     features::validate_version(&doc, version, false)?;
