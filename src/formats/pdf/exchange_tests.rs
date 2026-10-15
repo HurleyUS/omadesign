@@ -230,8 +230,13 @@ fn pdf_exchange_poppler_matches_vector_masks_gradients_and_native_reopen() {
         .sum::<u64>() as f64
         / (200. * 120. * 3.);
     expected.save_png(folder.join("native.png")).unwrap();
+    let samples = [24, 40, 62, 76].map(|x| {
+        let a = expected.pixel(x, 40).unwrap().demultiply();
+        let b = actual.get_pixel(x, 40).0;
+        ([a.red(), a.green(), a.blue()], b)
+    });
     eprintln!(
-        "vector exchange: {} bytes, 0 images, Poppler mean absolute channel difference {difference:.4}/255",
+        "vector exchange: {} bytes, 0 images, Poppler mean absolute channel difference {difference:.4}/255, alpha gradient samples {samples:?}",
         bytes.len()
     );
     if let Some(receipts) = std::env::var_os("OMA_PDF_EXCHANGE_RECEIPTS") {
@@ -240,6 +245,12 @@ fn pdf_exchange_poppler_matches_vector_masks_gradients_and_native_reopen() {
         for name in ["vectors.pdf", "source.oma", "native.png", "poppler.png"] {
             std::fs::copy(folder.join(name), receipts.join(name)).unwrap();
         }
+    }
+    for (native, pdf) in samples {
+        assert!(
+            native.iter().zip(pdf).all(|(a, b)| a.abs_diff(b) <= 3),
+            "PDF gradient color/alpha interpolation differs: native {native:?}, PDF {pdf:?}"
+        );
     }
     assert!(
         difference < 2.5,
