@@ -495,7 +495,7 @@ fn font_attributes(path: &str) -> String {
         font: path.into(),
         ..Default::default()
     };
-    let mut attrs = format!(" font-family=\"{}\"", escape(&family(path)));
+    let mut attrs = format!(" font-family=\"{}\"", escape(&css_family(path)));
     if let Some(bytes) = super::font_bytes_for(&probe)
         && let Ok(face) = rustybuzz::ttf_parser::Face::parse(&bytes, 0)
     {
@@ -506,6 +506,13 @@ fn font_attributes(path: &str) -> String {
         ));
     }
     attrs
+}
+
+fn css_family(path: &str) -> String {
+    format!(
+        "'{}'",
+        family(path).replace('\\', "\\\\").replace('\'', "\\'")
+    )
 }
 
 fn write_nodes(
@@ -616,7 +623,7 @@ fn write_nodes(
                         .as_ref()
                         .is_some_and(|svg| run.font != svg.base_font)
                 {
-                    family(&run.font)
+                    css_family(&run.font)
                 } else {
                     value.clone()
                 };
