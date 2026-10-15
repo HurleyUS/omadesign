@@ -286,3 +286,29 @@ fn admitted_save_and_cli_write_native_files_without_bare_vec_transfer() {
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn admitted_failed_temp_creation_preserves_existing_files_and_releases_only_its_owner() {
+    let root = directory();
+    let destination = root.join("accepted.psd");
+    let temporary = root.join("pre-existing.tmp");
+    std::fs::write(&destination, b"accepted destination").unwrap();
+    std::fs::write(&temporary, b"existing recovery evidence").unwrap();
+    let output = crate::formats::psd::encode_admitted(&document(Depth::F32), false)
+        .unwrap()
+        .bytes;
+    let lease = Arc::downgrade(output.lease());
+    assert!(write_atomic_temp(&destination, &temporary, output.as_slice(), &NoProgress).is_err());
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        b"accepted destination"
+    );
+    assert_eq!(
+        std::fs::read(&temporary).unwrap(),
+        b"existing recovery evidence"
+    );
+    assert!(lease.upgrade().is_some());
+    drop(output);
+    assert!(lease.upgrade().is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}

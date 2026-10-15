@@ -430,12 +430,23 @@ pub(crate) fn write_atomic(
         std::process::id(),
         crate::document::next_id()
     ));
+    write_atomic_temp(path, &temp, bytes, progress)
+}
+
+/// Commit an export using a temporary file owned by this operation.
+/// Args: destination, temporary path, bytes and progress. Returns without deleting any pre-existing file on creation failure.
+fn write_atomic_temp(
+    path: &Path,
+    temp: &Path,
+    bytes: &[u8],
+    progress: &dyn Progress,
+) -> Result<(), String> {
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(temp)
+        .map_err(|e| e.to_string())?;
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp)
-            .map_err(|e| e.to_string())?;
         for (i, chunk) in bytes.chunks(256 * 1024).enumerate() {
             progress.check()?;
             file.write_all(chunk).map_err(|e| e.to_string())?;
@@ -448,7 +459,7 @@ pub(crate) fn write_atomic(
         file.sync_all().map_err(|e| e.to_string())?;
         drop(file);
         progress.check()?;
-        std::fs::rename(&temp, path).map_err(|e| e.to_string())
+        std::fs::rename(temp, path).map_err(|e| e.to_string())
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(temp);
