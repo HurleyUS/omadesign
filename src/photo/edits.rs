@@ -175,7 +175,8 @@ pub fn validate(p: &DevelopParams) -> Result<(), String> {
         p.dehaze,
         p.split_balance,
     ];
-    let valid = within(p.exposure, -16.0, 16.0)
+    let valid = p.optics.valid()
+        && within(p.exposure, -16.0, 16.0)
         && within(p.temperature, -100.0, 100.0)
         && within(p.tint, -100.0, 100.0)
         && within(p.contrast, 0.0, 4.0)

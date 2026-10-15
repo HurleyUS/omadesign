@@ -13,6 +13,7 @@ pub struct Categories {
     pub split_tone: bool,
     pub crop: bool,
     pub rotation: bool,
+    pub optics: bool,
 }
 
 impl Default for Categories {
@@ -26,6 +27,7 @@ impl Default for Categories {
             split_tone: true,
             crop: false,
             rotation: false,
+            optics: false,
         }
     }
 }
@@ -40,6 +42,7 @@ impl Categories {
             || self.split_tone
             || self.crop
             || self.rotation
+            || self.optics
     }
 
     pub fn apply(self, source: &DevelopParams, target: &mut DevelopParams) {
@@ -77,6 +80,9 @@ impl Categories {
         }
         if self.crop {
             target.crop = source.crop;
+        }
+        if self.optics {
+            target.optics = source.optics.clone();
         }
         if self.rotation {
             target.rotate = source.rotate;
