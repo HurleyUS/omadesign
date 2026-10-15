@@ -600,7 +600,10 @@ pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
     };
     let scale = style.px.unwrap_or(run.px).max(1.) / font.units_per_em().unwrap_or(1000.);
     let curves = map_curves(&outline.curves, 0., 0., scale);
-    flatten_outline(&curves)
+    let [a, b, c, d, _, _] = run.transform.unwrap_or([1., 0., 0., 1., 0., 0.]);
+    let stretch = ((a * glyph.hscale).powi(2) + (b * glyph.hscale).powi(2)
+        + (c * glyph.vscale).powi(2) + (d * glyph.vscale).powi(2)).sqrt().max(1.);
+    flatten_outline(&curves, 1. / (64. * stretch))
         .into_iter()
         .map(|contour| {
             contour

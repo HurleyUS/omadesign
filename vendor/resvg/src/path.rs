@@ -57,12 +57,12 @@ pub fn fill_path(
         usvg::Paint::Pattern(pattern) => {
             let (patt_pix, patt_ts) = render_pattern_pixmap(pattern, ctx, transform)?;
 
-            pattern_pixmap = patt_pix;
+            pattern_pixmap = pattern_with_opacity(patt_pix, fill.opacity());
             paint.shader = tiny_skia::Pattern::new(
                 pattern_pixmap.as_ref(),
                 tiny_skia::SpreadMode::Repeat,
                 tiny_skia::FilterQuality::Bicubic,
-                fill.opacity().get(),
+                1.0,
                 patt_ts,
             );
         }
@@ -97,12 +97,12 @@ fn stroke_path(
         usvg::Paint::Pattern(pattern) => {
             let (patt_pix, patt_ts) = render_pattern_pixmap(pattern, ctx, transform)?;
 
-            pattern_pixmap = patt_pix;
+            pattern_pixmap = pattern_with_opacity(patt_pix, stroke.opacity());
             paint.shader = tiny_skia::Pattern::new(
                 pattern_pixmap.as_ref(),
                 tiny_skia::SpreadMode::Repeat,
                 tiny_skia::FilterQuality::Bicubic,
-                stroke.opacity().get(),
+                1.0,
                 patt_ts,
             );
         }
@@ -113,6 +113,18 @@ fn stroke_path(
     pixmap.stroke_path(path.data(), &paint, &stroke.to_tiny_skia(), transform, None);
 
     Some(())
+}
+
+/// Apply pattern paint opacity before antialias coverage.
+/// Args: rendered premultiplied tile and paint opacity. Returns the same tile allocation.
+fn pattern_with_opacity(mut tile: tiny_skia::Pixmap, opacity: usvg::Opacity) -> tiny_skia::Pixmap {
+    let opacity = opacity.get();
+    if opacity < 1.0 {
+        for component in tile.data_mut() {
+            *component = (*component as f32 * opacity).round() as u8;
+        }
+    }
+    tile
 }
 
 fn convert_linear_gradient(

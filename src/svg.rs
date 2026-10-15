@@ -1906,7 +1906,8 @@ mod tests {
         })));
         crate::text::fill_contours(&mut shape.geom);
         let native = crate::compositor::render_export(&doc, 1).unwrap();
-        assert!((101..=103).contains(&native.pixels().iter().map(|p| p.alpha()).max().unwrap()));
+        let maximum_alpha = native.pixels().iter().map(|p| p.alpha()).max().unwrap();
+        assert!((101..=103).contains(&maximum_alpha), "pattern maximum alpha={maximum_alpha}");
         assert!(native.pixels().iter().filter(|p| p.red() > 90 && p.green() == 0).count() > 100);
         let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
         assert_eq!(native.data(), crate::compositor::render_export(&reopened, 1).unwrap().data());
