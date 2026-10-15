@@ -529,7 +529,7 @@ fn pdf_effect_fallback_preserves_unaffected_vectors_and_hidden_layer_state() {
     assert!(
         notes
             .iter()
-            .any(|note| note.contains("complex group appearance"))
+            .any(|note| note.contains("unsupported filters"))
     );
     let (loaded, _) = read(&bytes, "effects.pdf").unwrap();
     assert!(

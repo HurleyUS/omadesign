@@ -93,6 +93,28 @@ impl Reader<'_> {
         let fill = if color0 == color1 && values(self.pdf, function, (start + end) * 0.5, 0)? == c0
         {
             Fill::Solid(color0)
+        } else if kind == 2
+            && dictionary(self.pdf, function)
+                .and_then(|d| d.get(b"FunctionType").ok())
+                .and_then(number_value)
+                == Some(2.)
+            && dictionary(self.pdf, function)
+                .and_then(|d| d.get(b"N").ok())
+                .and_then(number_value)
+                == Some(1.)
+        {
+            Fill::Linear {
+                from: [
+                    (from.x - bounds.min.x) / bounds.width(),
+                    (from.y - bounds.min.y) / bounds.height(),
+                ],
+                to: [
+                    (to.x - bounds.min.x) / bounds.width(),
+                    (to.y - bounds.min.y) / bounds.height(),
+                ],
+                c0: color0,
+                c1: color1,
+            }
         } else {
             let mut positions = vec![start, end];
             if let Some(dict) = dictionary(self.pdf, function) {

@@ -260,6 +260,18 @@ impl Writer {
         if !mask {
             op(&mut scene.ops, "EMC", &[]);
         }
+        if layer.is_group
+            && layer.pass_through
+            && layer.opacity >= 1.
+            && layer.fill_opacity >= 1.
+            && layer.mask.is_none()
+            && layer.artwork_masks.is_empty()
+            && layer.blend == Blend::Normal
+        {
+            out.ops.extend(scene.ops);
+            merge_resources(&mut out.resources, scene.resources);
+            return Ok(());
+        }
         let isolation = !layer.is_group || !layer.pass_through || !layer.artwork_masks.is_empty();
         let id = self.form(scene, bounds, isolation)?;
         let id = self.masks(
@@ -750,27 +762,6 @@ fn mark(operations: &mut Vec<Operation>, id: u64) {
             Object::Name(format!("L{id}").into_bytes()),
         ],
     ));
-}
-
-fn ancestors<'a>(document: &'a Document, layer: &Layer) -> Vec<&'a Layer> {
-    let mut out = Vec::new();
-    let mut parent = layer.parent;
-    for _ in 0..64 {
-        let Some(found) = parent.and_then(|id| {
-            document
-                .layers
-                .iter()
-                .find(|layer| layer.id == id && layer.is_group)
-        }) else {
-            break;
-        };
-        if out.iter().any(|layer: &&Layer| layer.id == found.id) {
-            break;
-        }
-        out.push(found);
-        parent = found.parent;
-    }
-    out
 }
 
 fn order(
