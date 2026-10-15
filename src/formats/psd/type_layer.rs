@@ -599,7 +599,7 @@ pub fn encode(
     ];
     if shape.rotation != 0. {
         let (s, c) = shape.rotation.sin_cos();
-        let center = shape.geom.bounds().center();
+        let center = shape.geom.bbox().center();
         let rotation = [
             c,
             s,
