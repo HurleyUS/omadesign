@@ -142,6 +142,7 @@ pub fn validate(doc: &Document) -> Result<(), String> {
             }
             if !ids.insert(comp.id)
                 || comp.id == 0
+                || comp.id >= u64::MAX - 200_000
                 || doc.layers.iter().any(|l| {
                     l.id == comp.id
                         || l.kind
@@ -174,6 +175,15 @@ pub fn validate(doc: &Document) -> Result<(), String> {
                 || !(0.0..=1.).contains(&comp.opacity)
             {
                 return Err("CompositionTransform: invalid timing, transform or opacity".into());
+            }
+            if comp.time_remap.windows(2).any(|p| p[0].t >= p[1].t)
+                || comp.time_remap.len() > 10_000
+                || comp
+                    .time_remap
+                    .iter()
+                    .any(|k| !k.t.is_finite() || !k.value.is_finite() || !k.ease.valid())
+            {
+                return Err("CompositionTime: invalid time-remap keys".into());
             }
             visit(&comp.document, depth + 1, count)?;
         }
@@ -217,7 +227,7 @@ pub(super) fn append_lottie(
     mut index: i32,
 ) -> Result<(), String> {
     use serde_json::json;
-    for comp in doc.motion.compositions.iter().rev().filter(|c| c.visible) {
+    for comp in doc.motion.compositions.iter().filter(|c| c.visible) {
         let mut child: serde_json::Value =
             serde_json::from_str(&super::export_lottie(&comp.document)?)
                 .map_err(|e| e.to_string())?;

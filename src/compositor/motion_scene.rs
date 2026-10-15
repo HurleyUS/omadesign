@@ -46,12 +46,18 @@ pub(super) fn draw(
             .copied()
             .unwrap_or_else(|| doc.motion.pose(comp.id, time));
         let local = Transform::from_translate(-comp.anchor.x, -comp.anchor.y)
-            .post_concat(Transform::from_scale(comp.scale.x, comp.scale.y))
-            .post_concat(Transform::from_rotate(comp.rotation.to_degrees()))
-            .post_concat(Transform::from_translate(comp.position.x, comp.position.y));
-        let placement = transform
-            .pre_concat(pose.to_skia(comp.position))
-            .pre_concat(local);
+            .post_concat(Transform::from_scale(
+                comp.scale.x * pose.scale * pose.width_scale,
+                comp.scale.y * pose.scale * pose.height_scale,
+            ))
+            .post_concat(Transform::from_rotate(
+                (comp.rotation + pose.rotation).to_degrees(),
+            ))
+            .post_concat(Transform::from_translate(
+                comp.position.x + pose.dx,
+                comp.position.y + pose.dy,
+            ));
+        let placement = transform.pre_concat(local);
         let sampling = (placement
             .sx
             .hypot(placement.ky)
@@ -71,6 +77,9 @@ pub(super) fn draw(
             .evaluate_frame(local_time, keep)
             .map_err(|e| e.to_string())?;
         let child_transform = Transform::from_scale(sampling, sampling);
+        if !comp.document.transparent {
+            draw_export_plates(&mut child, &comp.document, sampling);
+        }
         groups::draw(
             &mut child,
             &comp.document,

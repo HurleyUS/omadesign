@@ -1461,6 +1461,15 @@ fn import_lottie_value(
         tracks: vec![],
         ..Motion::default()
     };
+    let mut seen_artwork = false;
+    for layer in layers {
+        if layer["ty"] == 0 && seen_artwork {
+            return Err("CompositionUnsupported: interleaved vector and precomposition layers require a unified layer stack".into());
+        }
+        if layer["ty"] == 4 {
+            seen_artwork = true;
+        }
+    }
     let mut shapes = Vec::new();
     for layer in layers.iter().rev() {
         let ty = js_f32(&layer["ty"]).unwrap_or(-1.0) as i32;

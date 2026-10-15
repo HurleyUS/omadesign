@@ -256,6 +256,7 @@ pub(crate) fn render_export_preview(doc: &Document, max_edge: u32) -> Result<Pix
         None,
         None,
     );
+    motion_scene::draw(&mut pm,doc,Transform::from_scale(s,s),0.,0,&HashMap::new(),&mut || true,&mut motion_scene::Budget::default())?;
     Ok(pm)
 }
 

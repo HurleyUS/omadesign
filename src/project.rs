@@ -104,6 +104,7 @@ pub(crate) fn normalize_decoded_document(mut doc: Document, version: u32) -> Res
     }
     crate::text_geometry::reflow(&mut doc);
     crate::motion::compositions::validate(&doc)?;
+    for comp in &doc.motion.compositions {crate::document::bump_id(comp.id);}
     doc.ensure_ids()?;
     doc.validate_hierarchy()?;
     Ok(doc)
