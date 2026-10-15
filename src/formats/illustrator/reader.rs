@@ -498,12 +498,10 @@ impl Reader<'_> {
                         (pt.y - bounds.min.y) / size.y.max(0.0001),
                     ]
                 };
-                let gradient = Gradient {
-                    kind: *kind,
-                    from: norm(place.from),
-                    to: norm(place.to),
-                    stops: stops.clone(),
-                };
+                let mut gradient = Gradient::new(*kind, Rgba::BLACK, Rgba::WHITE);
+                gradient.from = norm(place.from);
+                gradient.to = norm(place.to);
+                gradient.stops = stops.clone();
                 if place.stroke {
                     if let Some(stroke) = shape.style.stroke.as_mut() {
                         stroke.gradient = Some(gradient);
