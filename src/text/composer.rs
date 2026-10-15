@@ -583,6 +583,8 @@ fn justify_glyphs(glyphs: &mut [LayoutGlyph], target: f32, style: &ParagraphStyl
     glyphs[count-1].x+glyphs[count-1].advance
 }
 
+/// Trace a glyph in the run's local type space.
+/// Args: text run and positioned glyph. Returns contours before the optional run matrix.
 pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
     let style = run.character_style(glyph.cluster);
     let mut face_run = run.clone();

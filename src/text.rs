@@ -556,8 +556,9 @@ pub fn caret_pt(run:&TypeRun,char_idx:usize)->Pt {
 /// Args: text run and character index. Returns top and bottom after all type transforms.
 pub fn caret_segment(run:&TypeRun,index:usize)->(Pt,Pt) {
     let point=caret_pt(run,index);let height=caret_height(run,index);
-    let tangent=crate::text_geometry::caret_frame(run,index).map_or(Pt::new(1.,0.),|(_,t)|t);
-    if run.transform.is_some(){let local=run.unmap_point(point);let tangent=(run.unmap_point(point+tangent)-local).normalized();return (run.map_point(local-tangent.perp()*height*0.9),run.map_point(local+tangent.perp()*height*0.2));}
+    let geometry=crate::text_geometry::caret_frame(run,index);
+    let tangent=geometry.map_or(Pt::new(1.,0.),|(_,t)|t);
+    if run.transform.is_some(){let local=run.unmap_point(point);let tangent=geometry.map_or(Pt::new(1.,0.),|(_,t)|(run.unmap_point(point+t)-local).normalized());return (run.map_point(local-tangent.perp()*height*0.9),run.map_point(local+tangent.perp()*height*0.2));}
     (point-tangent.perp()*height*0.9,point+tangent.perp()*height*0.2)
 }
 pub fn hit_char(run:&TypeRun,p:Pt)->usize {
