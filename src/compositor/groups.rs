@@ -1,4 +1,5 @@
 use super::*;
+use crate::artwork_mask::MaskSource;
 
 /// Build the hierarchy once per draw; documents without groups retain the flat fast path.
 pub(super) fn draw(
@@ -9,13 +10,20 @@ pub(super) fn draw(
     motion: Option<f32>,
     overrides: Option<&HashMap<u64, Pose>>,
 ) {
+    let sources = doc.mask_sources();
     if doc
         .layers
         .iter()
         .all(|layer| !layer.is_group && layer.parent.is_none())
     {
         for (index, layer) in doc.layers.iter().enumerate() {
-            if !layer.visible || layer.opacity <= 0.0 || is_paper_raster(layer) {
+            if sources.contains(&MaskSource {
+                layer: layer.id,
+                shape: None,
+            }) || !layer.visible
+                || layer.opacity <= 0.0
+                || is_paper_raster(layer)
+            {
                 continue;
             }
             let brush = draft
@@ -30,6 +38,7 @@ pub(super) fn draw(
                 motion,
                 doc,
                 overrides,
+                &sources,
             );
         }
         return;
@@ -45,6 +54,7 @@ pub(super) fn draw(
         motion,
         overrides,
         children,
+        sources,
     };
     context.draw_children(pm, None, 0);
 }
@@ -56,6 +66,7 @@ struct Context<'a, 'b> {
     motion: Option<f32>,
     overrides: Option<&'a HashMap<u64, Pose>>,
     children: HashMap<Option<u64>, Vec<usize>>,
+    sources: std::collections::HashSet<MaskSource>,
 }
 
 impl Context<'_, '_> {
@@ -67,125 +78,179 @@ impl Context<'_, '_> {
             return;
         };
         for &index in children {
-            let layer = &self.doc.layers[index];
-            if !layer.visible
-                || layer.opacity <= 0.0
-                || masked_outside_view(layer, self.transform, pm.width(), pm.height())
-            {
+            if self.sources.contains(&MaskSource {
+                layer: self.doc.layers[index].id,
+                shape: None,
+            }) {
                 continue;
             }
-            if !layer.is_group {
-                if is_paper_raster(layer) {
-                    continue;
-                }
-                let brush = self
-                    .draft
-                    .brush
-                    .and_then(|(i, p, f)| (i == index).then_some((p, f)));
-                draw_layer(
-                    pm,
-                    layer,
-                    self.transform,
-                    brush,
-                    self.draft.preview,
-                    self.motion,
-                    self.doc,
-                    self.overrides,
-                );
-                continue;
-            }
-            if layer.pass_through
-                && layer.opacity >= 1.0
-                && layer.fill_opacity >= 1.0
-                && layer.mask.is_none()
-                && !layer.filters.active()
-            {
-                self.draw_children(pm, Some(layer.id), depth + 1);
-                continue;
-            }
-            let passthrough = layer.pass_through && !layer.filters.active();
-            let Some(mut temp) = (if passthrough {
-                Some(pm.clone())
-            } else {
-                Pixmap::new(pm.width(), pm.height())
-            }) else {
-                continue;
-            };
-            self.draw_children(&mut temp, Some(layer.id), depth + 1);
-            let mask = layer.mask.as_ref().and_then(|pixels| {
-                let mut placed = Pixmap::new(pm.width(), pm.height())?;
-                pixels.with_pm(|mask| {
-                    placed.draw_pixmap(
-                        0,
-                        0,
-                        mask.as_ref(),
-                        &PixmapPaint::default(),
-                        self.transform.pre_concat(layer_pixel_transform(layer)),
-                        None,
-                    )
-                })?;
-                Some(tiny_skia::Mask::from_pixmap(
-                    placed.as_ref(),
-                    tiny_skia::MaskType::Luminance,
-                ))
-            });
-            if passthrough {
-                // Interpolate with the original backdrop so child blend modes still see it.
-                let opacity = (layer.opacity * layer.fill_opacity).clamp(0.0, 1.0);
-                for (i, (dst, src)) in pm
-                    .data_mut()
-                    .as_chunks_mut::<4>()
-                    .0
-                    .iter_mut()
-                    .zip(temp.data().as_chunks::<4>().0)
-                    .enumerate()
-                {
-                    let amount = opacity
-                        * mask
-                            .as_ref()
-                            .map(|m| m.data()[i] as f32 / 255.0)
-                            .unwrap_or(1.0);
-                    for c in 0..4 {
-                        dst[c] =
-                            (dst[c] as f32 * (1.0 - amount) + src[c] as f32 * amount).round() as u8;
-                    }
-                }
-            } else {
-                if let Some(mask) = mask {
-                    temp.apply_mask(&mask);
-                }
-                if layer.filters.independent() || layer.fill_opacity < 1. || layer.blend_interior {
-                    crate::filter::composite(
-                        pm,
-                        temp,
-                        &layer.filters,
-                        Transform::identity(),
-                        layer.blend.to_skia(),
-                        layer.opacity,
-                        layer.fill_opacity,
-                        layer.blend_interior,
-                        None,
-                    );
-                    continue;
-                }
-                if layer.filters.active() {
-                    crate::filter::apply(&mut temp, &layer.filters);
-                }
-                pm.draw_pixmap(
-                    0,
-                    0,
-                    temp.as_ref(),
-                    &PixmapPaint {
-                        opacity: layer.opacity.clamp(0.0, 1.0),
-                        blend_mode: layer.blend.to_skia(),
-                        ..Default::default()
-                    },
-                    Transform::identity(),
-                    None,
-                );
-            }
+            self.draw_layer(pm, index, depth);
         }
     }
+
+    fn draw_layer(&self, pm: &mut Pixmap, index: usize, depth: usize) {
+        if depth > 64 {
+            return;
+        }
+        let layer = &self.doc.layers[index];
+        let mut filters = layer.filters.clone();
+        crate::filter::scale(&mut filters, self.transform.get_scale().0);
+        if !layer.visible
+            || layer.opacity <= 0.0
+            || masked_outside_view(layer, self.transform, pm.width(), pm.height())
+        {
+            return;
+        }
+        if !layer.is_group {
+            if is_paper_raster(layer) {
+                return;
+            }
+            let brush = self
+                .draft
+                .brush
+                .and_then(|(i, p, f)| (i == index).then_some((p, f)));
+            draw_layer(
+                pm,
+                layer,
+                self.transform,
+                brush,
+                self.draft.preview,
+                self.motion,
+                self.doc,
+                self.overrides,
+                &self.sources,
+            );
+            return;
+        }
+        if layer.pass_through
+            && layer.opacity >= 1.0
+            && layer.fill_opacity >= 1.0
+            && layer.mask.is_none()
+            && layer.artwork_masks.is_empty()
+            && !layer.filters.active()
+        {
+            self.draw_children(pm, Some(layer.id), depth + 1);
+            return;
+        }
+        let passthrough =
+            layer.pass_through && layer.artwork_masks.is_empty() && !layer.filters.active();
+        let Some(mut temp) = (if passthrough {
+            Some(pm.clone())
+        } else {
+            Pixmap::new(pm.width(), pm.height())
+        }) else {
+            return;
+        };
+        self.draw_children(&mut temp, Some(layer.id), depth + 1);
+        let mask = layer.mask.as_ref().and_then(|pixels| {
+            let mut placed = Pixmap::new(pm.width(), pm.height())?;
+            pixels.with_pm(|mask| {
+                placed.draw_pixmap(
+                    0,
+                    0,
+                    mask.as_ref(),
+                    &PixmapPaint::default(),
+                    self.transform.pre_concat(layer_pixel_transform(layer)),
+                    None,
+                )
+            })?;
+            Some(tiny_skia::Mask::from_pixmap(
+                placed.as_ref(),
+                tiny_skia::MaskType::Luminance,
+            ))
+        });
+        let live = artwork_masks::render(
+            &layer.artwork_masks,
+            self.doc,
+            self.transform,
+            pm.width(),
+            pm.height(),
+            self.motion,
+            self.overrides,
+        );
+        if passthrough {
+            // Interpolate with the original backdrop so child blend modes still see it.
+            let opacity = (layer.opacity * layer.fill_opacity).clamp(0.0, 1.0);
+            for (i, (dst, src)) in pm
+                .data_mut()
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(temp.data().as_chunks::<4>().0)
+                .enumerate()
+            {
+                let amount = opacity
+                    * mask
+                        .as_ref()
+                        .map(|m| m.data()[i] as f32 / 255.0)
+                        .unwrap_or(1.0);
+                for c in 0..4 {
+                    dst[c] =
+                        (dst[c] as f32 * (1.0 - amount) + src[c] as f32 * amount).round() as u8;
+                }
+            }
+        } else {
+            if let Some(mask) = mask {
+                temp.apply_mask(&mask);
+            }
+            if filters.independent() || layer.fill_opacity < 1. || layer.blend_interior {
+                crate::filter::composite(
+                    pm,
+                    temp,
+                    &filters,
+                    Transform::identity(),
+                    layer.blend.to_skia(),
+                    layer.opacity,
+                    layer.fill_opacity,
+                    layer.blend_interior,
+                    live.as_ref(),
+                );
+                return;
+            }
+            if layer.filters.active() {
+                crate::filter::apply(&mut temp, &filters);
+            }
+            if let Some(mask) = &live {
+                temp.apply_mask(mask);
+            }
+            pm.draw_pixmap(
+                0,
+                0,
+                temp.as_ref(),
+                &PixmapPaint {
+                    opacity: layer.opacity.clamp(0.0, 1.0),
+                    blend_mode: layer.blend.to_skia(),
+                    ..Default::default()
+                },
+                Transform::identity(),
+                None,
+            );
+        }
+    }
+}
+
+pub(super) fn draw_item(
+    pm: &mut Pixmap,
+    doc: &Document,
+    index: usize,
+    transform: Transform,
+    motion: Option<f32>,
+    overrides: Option<&HashMap<u64, Pose>>,
+) {
+    let mut children: HashMap<Option<u64>, Vec<usize>> = HashMap::new();
+    for (i, layer) in doc.layers.iter().enumerate() {
+        children.entry(layer.parent).or_default().push(i);
+    }
+    Context {
+        doc,
+        transform,
+        draft: &Draft::none(),
+        motion,
+        overrides,
+        children,
+        sources: doc.mask_sources(),
+    }
+    .draw_layer(pm, index, 0);
 }
 
 #[cfg(test)]

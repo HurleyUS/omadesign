@@ -12,19 +12,56 @@ pub(super) fn draw(
     motion: Option<f32>,
     doc: &Document,
     overrides: Option<&HashMap<u64, Pose>>,
+    sources: &HashSet<crate::artwork_mask::MaskSource>,
 ) {
+    draw_with_source(
+        pm, shapes, transform, opacity, blend, motion, doc, overrides, None, transform, sources,
+    );
+}
+
+fn draw_with_source(
+    pm: &mut Pixmap,
+    shapes: &[Shape],
+    transform: Transform,
+    opacity: f32,
+    blend: tiny_skia::BlendMode,
+    motion: Option<f32>,
+    doc: &Document,
+    overrides: Option<&HashMap<u64, Pose>>,
+    source: Option<u64>,
+    view: Transform,
+    sources: &HashSet<crate::artwork_mask::MaskSource>,
+) {
+    let sources: HashSet<_> = sources
+        .iter()
+        .filter_map(|s| s.shape)
+        .filter(|id| Some(*id) != source)
+        .collect();
     if shapes
         .iter()
         .all(|shape| !shape.layout.frame && shape.layout.parent.is_none())
     {
-        for shape in shapes.iter().filter(|s| s.visible && !s.guide) {
-            draw_shape(
+        for shape in shapes
+            .iter()
+            .filter(|s| s.visible && !s.guide && !sources.contains(&s.id))
+        {
+            let live = artwork_masks::render(
+                &shape.artwork_masks,
+                doc,
+                view,
+                pm.width(),
+                pm.height(),
+                motion,
+                overrides,
+            );
+            draw_shape_masked(
                 pm,
                 shape,
                 transform,
                 opacity,
                 blend,
                 pose_of(shape.id, motion, doc, overrides),
+                live.as_ref(),
             );
         }
         return;
@@ -66,6 +103,8 @@ pub(super) fn draw(
         motion,
         doc,
         overrides,
+        view,
+        sources,
     }
     .draw_children(pm, None, transform, opacity, blend, None, 0);
 }
@@ -73,6 +112,8 @@ pub(super) fn draw(
 struct Context<'a> {
     children: HashMap<Option<u64>, Vec<&'a Shape>>,
     blended_descendants: HashSet<u64>,
+    view: Transform,
+    sources: HashSet<u64>,
     motion: Option<f32>,
     doc: &'a Document,
     overrides: Option<&'a HashMap<u64, Pose>>,
@@ -93,9 +134,22 @@ impl Context<'_> {
             return;
         }
         for shape in self.children.get(&parent).into_iter().flatten() {
-            if !shape.visible || shape.guide {
+            if !shape.visible || shape.guide || self.sources.contains(&shape.id) {
                 continue;
             }
+            let mut live = artwork_masks::render(
+                &shape.artwork_masks,
+                self.doc,
+                self.view,
+                pm.width(),
+                pm.height(),
+                self.motion,
+                self.overrides,
+            );
+            if let (Some(live), Some(parent)) = (&mut live, mask) {
+                artwork_masks::multiply(live, parent);
+            }
+            let mask = live.as_ref().or(mask);
             let pose = pose_of(shape.id, self.motion, self.doc, self.overrides);
             if !shape.layout.frame {
                 draw_shape_masked(pm, shape, transform, opacity, blend, pose, mask);
@@ -126,7 +180,8 @@ impl Context<'_> {
             if alpha <= 0.0 {
                 continue;
             }
-            if shape.fill_opacity < 1.
+            if mask.is_some()
+                || shape.fill_opacity < 1.
                 || alpha < 1.0
                 || shape.filters.active()
                 || shape.blend != crate::color::Blend::Normal
@@ -238,6 +293,48 @@ impl Context<'_> {
             depth + 1,
         );
     }
+}
+
+pub(super) fn draw_item(
+    pm: &mut Pixmap,
+    doc: &Document,
+    index: usize,
+    id: u64,
+    transform: Transform,
+    motion: Option<f32>,
+    overrides: Option<&HashMap<u64, Pose>>,
+) {
+    let Some(root) = doc.find_shape(index, id) else {
+        return;
+    };
+    let descendants = crate::layout::descendants(doc, index, id);
+    let shapes: Vec<_> = doc.layers[index]
+        .kind
+        .shapes()
+        .unwrap_or(&[])
+        .iter()
+        .filter(|s| s.id == id || descendants.contains(&s.id))
+        .map(|s| {
+            let mut s = s.clone();
+            if s.id == id {
+                s.layout.parent = None;
+            }
+            s
+        })
+        .collect();
+    draw_with_source(
+        pm,
+        &shapes,
+        transform.pre_concat(shape_parent_transform(doc, index, id)),
+        1.,
+        tiny_skia::BlendMode::SourceOver,
+        motion,
+        doc,
+        overrides,
+        Some(root.id),
+        transform,
+        &doc.mask_sources(),
+    );
 }
 
 #[cfg(test)]

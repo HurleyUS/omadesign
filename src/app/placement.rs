@@ -388,6 +388,33 @@ impl Studio {
             }
             tokens.push(token);
         }
+        let frame = self
+            .doc
+            .find_shape(layer, parent)
+            .ok_or("Missing destination frame")?;
+        let center = frame.geom.bbox().center();
+        let placement = crate::compositor::shape_parent_transform(&self.doc, layer, parent)
+            .pre_concat(tiny_skia::Transform::from_rotate_at(
+                frame.rotation.to_degrees(),
+                center.x,
+                center.y,
+            ))
+            .pre_translate(dest.min.x, dest.min.y)
+            .pre_scale(scale, scale)
+            .pre_translate(-src.min.x, -src.min.y);
+        let remap_masks = |masks: &mut Vec<crate::artwork_mask::ArtworkMask>| {
+            for mask in masks {
+                let old = mask.source;
+                mask.remap(&layer_ids, &ids, placement);
+                mask.source = crate::artwork_mask::MaskSource {
+                    layer: self.doc.layers[layer].id,
+                    shape: Some(
+                        old.shape
+                            .map_or_else(|| layer_ids[&old.layer], |id| ids[&id]),
+                    ),
+                };
+            }
+        };
         for mut imported_layer in source.layers {
             let mut wrapper = asset_wrapper(&imported_layer.name, dest);
             wrapper.id = layer_ids[&imported_layer.id];
@@ -401,6 +428,8 @@ impl Studio {
             wrapper.locked = imported_layer.locked;
             wrapper.opacity = imported_layer.opacity;
             wrapper.filters = imported_layer.filters;
+            wrapper.artwork_masks = imported_layer.artwork_masks;
+            remap_masks(&mut wrapper.artwork_masks);
             super::brand_assets::scale_filters(&mut wrapper.filters, scale);
             let container = wrapper.id;
             shapes.push(wrapper);
@@ -408,6 +437,7 @@ impl Studio {
                 LayerKind::Vector { shapes: items } => {
                     for mut shape in std::mem::take(items) {
                         let old = shape.id;
+                        remap_masks(&mut shape.artwork_masks);
                         shape.id = ids[&old];
                         crate::layout_components::remap_duplicate(&mut shape, &ids);
                         shape.layout.parent = Some(

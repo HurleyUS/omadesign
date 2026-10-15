@@ -228,6 +228,8 @@ pub struct Shape {
     /// Mask pixels mapped to the object's local geometry bounds, following transforms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<Pixels>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artwork_masks: Vec<crate::artwork_mask::ArtworkMask>,
     #[serde(default, skip_serializing_if = "FrameLayout::is_empty")]
     pub layout: FrameLayout,
     #[serde(default, skip_serializing_if = "crate::text_geometry::TextWrap::is_none")]
@@ -264,6 +266,7 @@ impl PartialEq for Shape {
             && self.corners == other.corners
             && self.mask.as_ref().map(|p| (p.w, p.h, &p.data))
                 == other.mask.as_ref().map(|p| (p.w, p.h, &p.data))
+            && self.artwork_masks == other.artwork_masks
             && self.layout == other.layout
             && self.text_wrap == other.text_wrap
     }
@@ -288,6 +291,7 @@ impl Shape {
             filters: crate::filter::FilterStack::default(),
             corners: [0.0; 4],
             mask: None,
+            artwork_masks: Vec::new(),
             layout: FrameLayout::default(),
             text_wrap: Default::default(),
             cached_path: RefCell::new(None),
@@ -761,6 +765,8 @@ pub struct Layer {
     pub blend_interior: bool,
     pub blend: Blend,
     pub mask: Option<Pixels>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artwork_masks: Vec<crate::artwork_mask::ArtworkMask>,
     /// Optional placed mask geometry for vector layers and groups.
     #[serde(default)]
     pub mask_origin: Pt,
@@ -803,6 +809,7 @@ impl Layer {
             pass_through: false,
             text_wrap: Default::default(),
             mask: None,
+            artwork_masks: Vec::new(),
             mask_origin: Pt::ZERO,
             mask_size: Pt::ZERO,
             kind: LayerKind::Vector { shapes: vec![] },
@@ -825,6 +832,7 @@ impl Layer {
             pass_through: false,
             text_wrap: Default::default(),
             mask: None,
+            artwork_masks: Vec::new(),
             mask_origin: Pt::ZERO,
             mask_size: Pt::ZERO,
             kind: LayerKind::Raster {
@@ -853,6 +861,7 @@ impl Layer {
             pass_through: false,
             text_wrap: Default::default(),
             mask: None,
+            artwork_masks: Vec::new(),
             mask_origin: Pt::ZERO,
             mask_size: Pt::ZERO,
             kind: LayerKind::Raster {
@@ -1286,6 +1295,7 @@ impl Document {
                 parent = target.parent;
             }
         }
+        self.validate_artwork_masks()?;
         crate::layout::validate_hierarchy(self)?;
         crate::layout_tokens::validate_tokens(self)
     }
@@ -1508,14 +1518,15 @@ impl Document {
     }
 
     pub fn hit_test(&self, p: Pt, stroke_slack: f32) -> Option<(usize, u64)> {
+        let mask_sources = self.mask_sources();
         for (li, layer) in self.layers.iter().enumerate().rev() {
-            if !self.layer_editable(li) {
+            if !self.layer_editable(li) || self.mask_source_member(li,None,&mask_sources) {
                 continue;
             }
             if let Some(shapes) = layer.kind.shapes() {
                 for index in self.layout_paint_order(li).into_iter().rev() {
                     let shape = &shapes[index];
-                    if !shape.visible
+                    if self.mask_source_member(li,Some(shape.id),&mask_sources) || !shape.visible
                         || shape.locked
                         || (shape.guide && (!self.ruler.guides_visible || self.ruler.guides_locked))
                     {
@@ -1539,14 +1550,15 @@ impl Document {
     }
 
     pub fn hits_in_rect(&self, r: Bounds) -> Vec<(usize, u64)> {
+        let mask_sources = self.mask_sources();
         let mut out = vec![];
         for (li, layer) in self.layers.iter().enumerate() {
-            if !self.layer_editable(li) {
+            if !self.layer_editable(li) || self.mask_source_member(li,None,&mask_sources) {
                 continue;
             }
             if let Some(shapes) = layer.kind.shapes() {
                 for shape in shapes {
-                    if !shape.visible
+                    if self.mask_source_member(li,Some(shape.id),&mask_sources) || !shape.visible
                         || shape.locked
                         || (shape.guide && (!self.ruler.guides_visible || self.ruler.guides_locked))
                     {
@@ -1634,6 +1646,12 @@ pub enum Cmd {
         after: bool,
     },
     Batch(Vec<Cmd>),
+    SetArtworkMasks {
+        layer: usize,
+        id: Option<u64>,
+        before: Vec<crate::artwork_mask::ArtworkMask>,
+        after: Vec<crate::artwork_mask::ArtworkMask>,
+    },
     SetShapeMask {
         layer: usize,
         id: u64,
@@ -2108,6 +2126,7 @@ fn invert_cmd(cmd: Cmd) -> Cmd {
             before: after,
             after: before,
         },
+        Cmd::SetArtworkMasks { layer, id, before, after } => Cmd::SetArtworkMasks { layer, id, before: after, after: before },
         Cmd::SetShapeMask {
             layer,
             id,
@@ -2412,6 +2431,11 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
                 shape.guide = *after;
             }
         }
+        Cmd::SetArtworkMasks { layer, id, after, .. } => {
+            if let Some(id) = id {
+                if let Some(shape) = doc.find_shape_mut(*layer, *id) { shape.artwork_masks = after.clone(); }
+            } else if let Some(layer) = doc.layers.get_mut(*layer) { layer.artwork_masks = after.clone(); }
+        }
         Cmd::SetShapeMask {
             layer, id, after, ..
         } => {
@@ -2548,9 +2572,16 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
                 }
                 return;
             };
+            let moved_ids: std::collections::HashSet<_> = moved.iter().map(|s| s.id).collect();
             let at = (*to_index).min(dest.len());
             for (offset, shape) in moved.into_iter().enumerate() {
                 dest.insert(at + offset, shape);
+            }
+            let destination = doc.layers[*to_layer].id;
+            for layer in &mut doc.layers {
+                for mask in layer.artwork_masks.iter_mut().chain(layer.kind.shapes_mut().into_iter().flatten().flat_map(|s| &mut s.artwork_masks)) {
+                    if mask.source.shape.is_some_and(|id| moved_ids.contains(&id)) { mask.source.layer = destination; }
+                }
             }
         }
         Cmd::SetGeoms { items } => {

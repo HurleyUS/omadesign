@@ -1,4 +1,5 @@
 //! One geometry, two outputs: the live canvas and PNG export.
+mod artwork_masks;
 
 #[cfg(test)]
 mod appearance_tests;
@@ -323,11 +324,14 @@ fn draw_layer(
     motion_t: Option<f32>,
     doc: &Document,
     overrides: Option<&HashMap<u64, Pose>>,
+    sources: &std::collections::HashSet<crate::artwork_mask::MaskSource>,
 ) {
     if masked_outside_view(layer, t, pm.width(), pm.height()) {
         return;
     }
-    let filtered = layer.filters.active();
+    let mut filters = layer.filters.clone();
+    crate::filter::scale(&mut filters,t.get_scale().0);
+    let filtered = filters.active();
     // A regular layer is an isolated compositing container, including at 100%.
     // Without this, lowering opacity would change a child's blend backdrop.
     let blended_content = layer.kind.shapes().is_some_and(|shapes| {
@@ -337,6 +341,7 @@ fn draw_layer(
     });
     if blended_content
         || layer.mask.is_some()
+        || !layer.artwork_masks.is_empty()
         || filtered
         || layer.fill_opacity < 1.0
         || layer.opacity < 1.0
@@ -356,6 +361,7 @@ fn draw_layer(
             motion_t,
             doc,
             overrides,
+            sources,
         );
         if let Some(mask) = &layer.mask {
             let _ = mask.with_pm(|mask_pm| {
@@ -378,23 +384,25 @@ fn draw_layer(
                 temp.apply_mask(&m);
             });
         }
-        if layer.filters.independent() || layer.fill_opacity < 1. || layer.blend_interior {
+        let live = artwork_masks::render(&layer.artwork_masks, doc, t, pm.width(), pm.height(), motion_t, overrides);
+        if filters.independent() || layer.fill_opacity < 1. || layer.blend_interior {
             crate::filter::composite(
                 pm,
                 temp,
-                &layer.filters,
+                &filters,
                 Transform::identity(),
                 layer.blend.to_skia(),
                 layer.opacity,
                 layer.fill_opacity,
                 layer.blend_interior,
-                None,
+                live.as_ref(),
             );
             return;
         }
         if filtered {
-            crate::filter::apply(&mut temp, &layer.filters);
+            crate::filter::apply(&mut temp, &filters);
         }
+        if let Some(mask) = &live { temp.apply_mask(mask); }
         pm.draw_pixmap(
             0,
             0,
@@ -419,6 +427,7 @@ fn draw_layer(
             motion_t,
             doc,
             overrides,
+            sources,
         );
     }
 }
@@ -502,10 +511,11 @@ fn draw_content(
     motion_t: Option<f32>,
     doc: &Document,
     overrides: Option<&HashMap<u64, Pose>>,
+    sources: &std::collections::HashSet<crate::artwork_mask::MaskSource>,
 ) {
     match &layer.kind {
         LayerKind::Vector { shapes } => {
-            frames::draw(pm, shapes, t, opacity, blend, motion_t, doc, overrides);
+            frames::draw(pm, shapes, t, opacity, blend, motion_t, doc, overrides, sources);
             if let Some(p) = preview
                 && p.visible
                 && !p.guide
@@ -642,40 +652,13 @@ pub(crate) fn item_alpha(
     w: u32,
     h: u32,
 ) -> Option<Vec<u8>> {
-    let mut source = doc.clone();
-    let selected_layer = source.layers.get(index)?.id;
-    let descendants = id
-        .map(|id| crate::layout::descendants(doc, index, id))
-        .unwrap_or_default();
-    let root_transform = id.map_or(transform, |id| {
-        transform.pre_concat(shape_parent_transform(doc, index, id))
-    });
-    let indices: std::collections::HashSet<_> = (0..source.layers.len())
-        .filter(|&i| i == index || source.layer_ancestors(i).contains(&index))
-        .collect();
-    source.layers = source
-        .layers
-        .into_iter()
-        .enumerate()
-        .filter(|(i, _)| indices.contains(i))
-        .map(|(_, mut layer)| {
-            if layer.id == selected_layer {
-                layer.parent = None;
-                layer.visible = true;
-                if let (Some(id), Some(shapes)) = (id, layer.kind.shapes_mut()) {
-                    shapes.retain(|s| s.id == id || descendants.contains(&s.id));
-                    if let Some(s) = shapes.iter_mut().find(|s| s.id == id) {
-                        s.layout.parent = None;
-                        s.visible = true;
-                    }
-                }
-            }
-            layer
-        })
-        .collect();
-    let mut pm = Pixmap::new(w, h)?;
-    groups::draw(&mut pm, &source, root_transform, &Draft::none(), None, None);
-    Some(pm.pixels().iter().map(|p| p.alpha()).collect())
+    let mut pm = Pixmap::new(w,h)?;
+    if let Some(id) = id {
+        frames::draw_item(&mut pm,doc,index,id,transform,None,None);
+    } else {
+        groups::draw_item(&mut pm,doc,index,transform,None,None);
+    }
+    Some(pm.pixels().iter().map(|p|p.alpha()).collect())
 }
 
 /// Paint the keyed fill, stroke width, and gradient angle onto a copy of the design.
@@ -770,7 +753,7 @@ fn draw_shape_masked(
         shape.blend.to_skia()
     };
     if !shape.filters.active()
-        && (alpha * shape.fill_opacity < 1.0 || shape.blend != crate::color::Blend::Normal)
+        && (mask.is_some() || alpha * shape.fill_opacity < 1.0 || shape.blend != crate::color::Blend::Normal)
     {
         // Composite the complete fill/image/stroke once, using a bounded temporary.
         let pad = shape
@@ -1111,7 +1094,7 @@ fn fill_paint<'a>(
 }
 
 pub(crate) fn is_paper_raster(layer: &Layer) -> bool {
-    if layer.mask.is_some() || layer.parent.is_some() || layer.name != "Background" {
+    if layer.mask.is_some() || !layer.artwork_masks.is_empty() || layer.parent.is_some() || layer.name != "Background" {
         return false;
     }
     let LayerKind::Raster { pixels, size, .. } = &layer.kind else {

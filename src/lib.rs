@@ -2,6 +2,7 @@ pub mod agent;
 pub mod align;
 pub mod anim_export;
 pub mod app;
+pub mod artwork_mask;
 pub mod asset_browser;
 pub mod boolean;
 pub mod brand;

@@ -1293,3 +1293,55 @@ mod tests {
         assert_eq!(px(&pm, 240, 160), [200, 10, 20, 255]);
     }
 }
+
+/// Scale effect distances for placement or rendering.
+/// `stack` is updated in place; `scale` is the document-to-output size ratio. Returns no value.
+pub fn scale(stack: &mut crate::filter::FilterStack, scale: f32) {
+    use crate::filter::Fx;
+    for effect in &mut stack.items {
+        match effect {
+            Fx::Blur { std } => *std *= scale,
+            Fx::Shadow {
+                dx,
+                dy,
+                blur,
+                spread: extent,
+                ..
+            }
+            | Fx::InnerShadow {
+                dx,
+                dy,
+                blur,
+                choke: extent,
+                ..
+            } => {
+                *extent *= scale;
+                *dx *= scale;
+                *dy *= scale;
+                *blur *= scale;
+            }
+            Fx::OuterGlow { blur, spread, .. }
+            | Fx::InnerGlow {
+                blur,
+                choke: spread,
+                ..
+            } => {
+                *blur *= scale;
+                *spread *= scale;
+            }
+            Fx::Offset { dx, dy } => {
+                *dx *= scale;
+                *dy *= scale;
+            }
+            Fx::Morphology { radius, .. } => *radius *= scale,
+            Fx::Displacement { scale: amount, .. } => *amount *= scale,
+            Fx::AppleGlass(glass) => {
+                glass.edge_width *= scale;
+                glass.blur *= scale;
+                glass.falloff *= scale;
+            }
+            Fx::Turbulence { base, .. } => *base /= scale,
+            _ => {}
+        }
+    }
+}

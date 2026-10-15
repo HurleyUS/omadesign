@@ -204,6 +204,11 @@ impl Studio {
         let layer_ids: HashMap<_, _> = layers.iter().map(|layer| (layer.id, next_id())).collect();
         for (position, mut layer) in layers.into_iter().enumerate() {
             let index = self.doc.layers.len() + position;
+            let placement =
+                tiny_skia::Transform::from_translate(offset.x, offset.y).pre_scale(scale, scale);
+            for mask in &mut layer.artwork_masks {
+                mask.remap(&layer_ids, &ids, placement);
+            }
             layer.id = layer_ids[&layer.id];
             layer.parent = layer.parent.and_then(|id| layer_ids.get(&id).copied());
             match &mut layer.kind {
@@ -221,6 +226,9 @@ impl Studio {
                         )?);
                     }
                     for shape in shapes {
+                        for mask in &mut shape.artwork_masks {
+                            mask.remap(&layer_ids, &ids, placement);
+                        }
                         shape.id = ids[&shape.id];
                         crate::layout_components::remap_duplicate(shape, &ids);
                         shape.layout.parent =
@@ -329,6 +337,11 @@ impl Studio {
         self.commit_type_edit();
         self.commit(Cmd::Batch(commands));
         selected.retain(|(index, _)| self.doc.layer_editable(*index));
+        selected.retain(|(li, id)| {
+            !self
+                .doc
+                .is_mask_source(*li, (*id != RASTER_ID).then_some(*id))
+        });
         self.selection = selected;
         self.active_layer = self
             .selection
@@ -419,53 +432,7 @@ fn map_mask(
 }
 
 pub(super) fn scale_filters(stack: &mut crate::filter::FilterStack, scale: f32) {
-    use crate::filter::Fx;
-    for effect in &mut stack.items {
-        match effect {
-            Fx::Blur { std } => *std *= scale,
-            Fx::Shadow {
-                dx,
-                dy,
-                blur,
-                spread: extent,
-                ..
-            }
-            | Fx::InnerShadow {
-                dx,
-                dy,
-                blur,
-                choke: extent,
-                ..
-            } => {
-                *extent *= scale;
-                *dx *= scale;
-                *dy *= scale;
-                *blur *= scale;
-            }
-            Fx::OuterGlow { blur, spread, .. }
-            | Fx::InnerGlow {
-                blur,
-                choke: spread,
-                ..
-            } => {
-                *blur *= scale;
-                *spread *= scale;
-            }
-            Fx::Offset { dx, dy } => {
-                *dx *= scale;
-                *dy *= scale;
-            }
-            Fx::Morphology { radius, .. } => *radius *= scale,
-            Fx::Displacement { scale: amount, .. } => *amount *= scale,
-            Fx::AppleGlass(glass) => {
-                glass.edge_width *= scale;
-                glass.blur *= scale;
-                glass.falloff *= scale;
-            }
-            Fx::Turbulence { base, .. } => *base /= scale,
-            _ => {}
-        }
-    }
+    crate::filter::scale(stack, scale);
 }
 
 #[cfg(test)]

@@ -1,8 +1,93 @@
 use super::theme::{fg, fg_weak};
 use crate::app::Studio;
+use crate::artwork_mask::{MaskMode, MaskSource};
 use crate::color::Rgba;
 use crate::tools::Tool;
 use eframe::egui::{Button, RichText, Ui};
+
+#[derive(Clone, Copy)]
+pub enum ArtworkAction {
+    Source(MaskSource),
+    Mode(MaskMode),
+    Release,
+}
+
+impl ArtworkAction {
+    pub fn run(self, studio: &mut Studio, layer: usize, id: Option<u64>) {
+        match self {
+            Self::Source(source) => studio.select_mask_source(source),
+            Self::Mode(mode) => studio.set_artwork_mask_mode(layer, id, mode),
+            Self::Release => studio.remove_artwork_masks(layer, id),
+        }
+    }
+}
+
+pub fn artwork_menu(
+    ui: &mut Ui,
+    studio: &Studio,
+    layer: usize,
+    id: Option<u64>,
+) -> Option<ArtworkAction> {
+    let masks = if let Some(id) = id {
+        &studio.doc.find_shape(layer, id)?.artwork_masks
+    } else {
+        &studio.doc.layers.get(layer)?.artwork_masks
+    };
+    if masks.is_empty() {
+        return None;
+    }
+    let mut action = None;
+    ui.separator();
+    ui.label("Live artwork mask");
+    for (index, mask) in masks.iter().enumerate() {
+        let name = studio
+            .doc
+            .layers
+            .iter()
+            .find(|l| l.id == mask.source.layer)
+            .map(|l| {
+                mask.source
+                    .shape
+                    .and_then(|id| {
+                        l.kind
+                            .shapes()?
+                            .iter()
+                            .find(|s| s.id == id)
+                            .map(|s| s.name.as_str())
+                    })
+                    .unwrap_or(&l.name)
+            })
+            .unwrap_or("Missing source");
+        if ui.button(format!("Edit mask source: {name}")).clicked() {
+            action = Some(ArtworkAction::Source(mask.source));
+        }
+        if index == 0 {
+            ui.add_enabled_ui(
+                studio.layer_unlocked(layer)
+                    && id.is_none_or(|id| {
+                        studio.doc.find_shape(layer, id).is_some_and(|s| !s.locked)
+                    }),
+                |ui| {
+                    for (mode, label) in [
+                        (MaskMode::Alpha, "Use transparency"),
+                        (MaskMode::Luminance, "Use luminance"),
+                    ] {
+                        if ui.selectable_label(mask.mode == mode, label).clicked() {
+                            action = Some(ArtworkAction::Mode(mode));
+                        }
+                    }
+                    if ui.button("Release artwork mask").clicked() {
+                        action = Some(ArtworkAction::Release);
+                    }
+                },
+            );
+        }
+    }
+    if action.is_some() {
+        ui.close();
+    }
+    action
+}
 
 #[derive(Clone, Copy)]
 pub enum Action {
