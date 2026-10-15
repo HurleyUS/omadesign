@@ -20,7 +20,7 @@ pub struct FieldResponse {
 /// Returns the focus, change, commit and cancel signals; the caller owns document edits.
 pub fn number<N: egui::emath::Numeric>(
     ui: &mut Ui,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     label: &str,
     value: &mut N,
     range: std::ops::RangeInclusive<N>,
