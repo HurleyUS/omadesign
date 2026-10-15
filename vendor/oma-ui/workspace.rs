@@ -301,6 +301,10 @@ impl Workspace {
                     .constrain_to(viewport)
                     .current_pos(rect.min)
                     .default_size(rect.size())
+                    .min_width(0.0)
+                    .min_height(0.0)
+                    .max_size(viewport.size())
+                    .vscroll(true)
                     .show(ui.ctx(), |ui| content(ui))
                 {
                     group.rect = [
@@ -375,6 +379,10 @@ impl Workspace {
                         group.extent = (extent + sign * if horizontal { delta.x } else { delta.y })
                             .clamp(80.0, 1200.0);
                     }
+                } else {
+                    group.place = Place::Floating;
+                    let safe = safe_rect(group.rect, viewport);
+                    group.rect = [safe.min.x, safe.min.y, safe.width(), safe.height()];
                 }
             }
             if let Some(actual) = self.groups.iter_mut().find(|g| g.panels == saved.panels) {
@@ -501,7 +509,7 @@ impl Book {
 mod tests {
     use super::*;
     #[test]
-    fn workspace_move_tab_close_restore_and_scale_safety() {
+    fn shared_workspace_move_tab_close_restore_and_scale_safety() {
         let mut layout = Workspace::preset(&[("inspector", Place::Right), ("layers", Place::Left)]);
         layout.move_panel("inspector", Place::Floating);
         assert!(layout.tab_with("layers", "inspector"));
@@ -518,7 +526,7 @@ mod tests {
         assert_eq!(layout, serde_json::from_slice(&bytes).unwrap());
     }
     #[test]
-    fn workspace_rejects_unknown_duplicate_and_nonfinite_geometry() {
+    fn shared_workspace_rejects_unknown_duplicate_and_nonfinite_geometry() {
         let mut layout = Workspace::preset(&[("a", Place::Right)]);
         layout.groups.push(layout.groups[0].clone());
         layout.groups[0].extent = f32::NAN;

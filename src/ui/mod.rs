@@ -377,3 +377,6 @@ fn egui_shortcuts(ui: &mut Ui, studio: &mut Studio) {
             }
         });
 }
+
+#[cfg(test)]
+mod shared_fields_tests;

@@ -1,6 +1,6 @@
 {
   "contract": 1,
-  "canonical": "https://github.com/michaelmonetized/omadesign/tree/craft/shared-ui-primitives/vendor/oma-ui",
+  "canonical": "https://github.com/michaelmonetized/omadesign",
   "license": "MIT",
   "source": "Original Oma implementation; pinned Craft MIT source read as design reference only",
   "egui": [
@@ -8,7 +8,8 @@
     "0.36"
   ],
   "sha256": {
-    "fields.rs": "6ec8798d70b33dcf7fbd5f644b54e50b09672d624cc3074c261b4fd5d5debe08",
-    "workspace.rs": "f0ae94f0daeb65a805ded140419c83ed7652b29e540bf8ea5c8a830e8434a98b"
-  }
+    "fields.rs": "6d06749bd058f62ee75045b698761239004999451d36e119e6ca0c7d01d8f441",
+    "workspace.rs": "99ab81c8bf718be7563605aa550c6a9d7ee786bcfbfcd12c815cfeb8c00f31fe"
+  },
+  "directory": "vendor/oma-ui"
 }
