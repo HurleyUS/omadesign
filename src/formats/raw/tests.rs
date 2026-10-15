@@ -141,6 +141,28 @@ fn real_camera_active_cancel_keeps_edits_and_immediately_opens_next() {
     let expected = std::env::var("OMA_RAW_SOURCE_SHA256").expect("OMA_RAW_SOURCE_SHA256");
     assert_eq!(expected.len(), 64);
     assert_eq!(hash(&source), expected);
+    struct NextSource(std::path::PathBuf, std::path::PathBuf);
+    impl Drop for NextSource {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.1);
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".qa-runs")
+        .join(format!(
+            "raw-cancel-next-{}-{}",
+            std::process::id(),
+            crate::document::next_id()
+        ));
+    std::fs::create_dir_all(directory.parent().unwrap()).unwrap();
+    std::fs::create_dir(&directory).unwrap();
+    let next_source = NextSource(
+        directory.clone(),
+        directory.join(source.file_name().unwrap()),
+    );
+    std::fs::copy(&source, &next_source.1).unwrap();
+    assert_eq!(hash(&next_source.1), expected);
     let photo = crate::photo::PhotoImage::load(&source).unwrap();
     let metadata = photo.raw.as_ref().unwrap().metadata.clone();
     let original = photo.raw.as_ref().unwrap().pixels.clone();
@@ -161,16 +183,18 @@ fn real_camera_active_cancel_keeps_edits_and_immediately_opens_next() {
     let cancelled = Instant::now();
     session.cancel_imports();
     let cleared = !session.is_loading();
-    session.import_file(&source);
+    session.import_file(&next_source.1);
     let next = session
-        .import_token(&source)
+        .import_token(&next_source.1)
         .expect("next import starts immediately");
-    while first.native_active() {
+    let mut next_live_until_completion = !next.is_cancelled();
+    while first.native_active() && cancelled.elapsed() < Duration::from_secs(5) {
         std::thread::sleep(Duration::from_millis(1));
     }
     let native_stop = cancelled.elapsed();
     let ctx = eframe::egui::Context::default();
     while session.is_loading() && cancelled.elapsed() < Duration::from_secs(60) {
+        next_live_until_completion &= !next.is_cancelled();
         session.poll(&ctx);
         std::thread::sleep(Duration::from_millis(2));
     }
@@ -179,7 +203,11 @@ fn real_camera_active_cancel_keeps_edits_and_immediately_opens_next() {
     let source_kept =
         std::sync::Arc::ptr_eq(&session.images[0].raw.as_ref().unwrap().pixels, &original);
     let kept = session.images[0].develop == current && source_kept;
-    let result = serde_json::json!({"source_before_sha256":expected,"source_after_sha256":source_after,"metadata":metadata,"native_active_at_cancel":active,"native_progress_at_cancel":stage,"native_stop_ms":native_stop.as_secs_f64()*1000.,"next_open_ms":next_open.as_secs_f64()*1000.,"current_edits_and_source_kept":kept,"slots_cleared_immediately":cleared,"next_job_not_cancelled":!next.is_cancelled(),"loaded_photos":session.images.len(),"errors":session.import_errors(),"proof":"headless actual PhotoSession import/cancel/next-open; no native window/device/physical proof"});
+    let next_accepted = session.images.len() == 2
+        && session.images[1].source.as_ref() == Some(&next_source.1.canonicalize().unwrap())
+        && session.images[1].dimensions() == session.images[0].dimensions()
+        && session.images[1].develop.is_default();
+    let result = serde_json::json!({"source_before_sha256":expected,"source_after_sha256":source_after,"metadata":metadata,"native_active_at_cancel":active,"native_progress_at_cancel":stage,"native_stop_ms":native_stop.as_secs_f64()*1000.,"next_open_ms":next_open.as_secs_f64()*1000.,"current_edits_and_source_kept":kept,"slots_cleared_immediately":cleared,"next_live_until_completion":next_live_until_completion,"next_native_progress":next.native_progress(),"next_distinct_source_accepted":next_accepted,"completed_owner_cleanup_signalled":next.is_cancelled(),"loaded_photos":session.images.len(),"errors":session.import_errors(),"proof":"headless actual PhotoSession import/cancel/distinct-path next-open; completed ImportJob drop defensively cancels its token after accepting its result; no native window/device/physical proof"});
     if let Some(path) = std::env::var_os("OMA_RAW_CANCEL_RECEIPT") {
         use std::io::Write;
         let path = std::path::PathBuf::from(path);
@@ -197,7 +225,8 @@ fn real_camera_active_cancel_keeps_edits_and_immediately_opens_next() {
         native_stop < Duration::from_millis(500),
         "active native stop took {native_stop:?}"
     );
-    assert!(cleared && kept && !next.is_cancelled());
+    assert!(cleared && kept && next_live_until_completion);
+    assert!(next_accepted && next.native_progress() > 0);
     assert!(!session.is_loading());
     assert_eq!(session.images.len(), 2, "stale result must never publish");
     assert!(session.import_errors().is_empty());
