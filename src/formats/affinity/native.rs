@@ -59,6 +59,15 @@ pub fn read(bytes: &[u8], name: &str) -> Result<(crate::document::Document, Vec<
         builder.defs
     );
     let (mut doc, svg_notes) = crate::formats::svg::read(&svg, name)?;
+    for layer in &mut doc.layers {
+        if let Some((name, effects)) = builder.nodes.get(&layer.name) {
+            layer.name.clone_from(name);
+            layer.filters.items = effects.clone();
+            if !effects.is_empty() {
+                layer.pass_through = false;
+            }
+        }
+    }
     doc.dpi = native.dpi as f32;
     doc.artboards = boards;
     doc.transparent = native.spreads.first().is_some_and(|s| s.transparent);
@@ -100,6 +109,7 @@ struct Builder {
     defs: String,
     next: usize,
     notes: Vec<String>,
+    nodes: std::collections::HashMap<String, (String, Vec<crate::filter::Fx>)>,
 }
 
 impl Builder {
@@ -121,7 +131,14 @@ impl Builder {
         boards: &mut Vec<crate::document::Artboard>,
     ) -> Result<(), String> {
         let id = self.id();
-        write!(out,"<g id=\"{id}\" inkscape:label=\"{}\" sodipodi:insensitive=\"{}\" opacity=\"{}\" style=\"{}mix-blend-mode:{};isolation:{}\">", escape(&n.name), n.locked, n.opacity, if n.visible { "" } else { "display:none;" }, blend(n.blend), if matches!(n.blend,af::Blend::PassThrough) { "auto" } else { "isolate" }).unwrap();
+        self.nodes.insert(
+            id.clone(),
+            (
+                n.name.clone(),
+                n.effects.iter().filter_map(effect).collect(),
+            ),
+        );
+        write!(out,"<g id=\"{id}\" inkscape:label=\"{id}\" sodipodi:insensitive=\"{}\" opacity=\"{}\" style=\"{}mix-blend-mode:{};isolation:{}\">", n.locked, n.opacity, if n.visible { "" } else { "display:none;" }, blend(n.blend), if matches!(n.blend,af::Blend::PassThrough) { "auto" } else { "isolate" }).unwrap();
         if let Some(mask) = &n.mask {
             let id = self.clip(mask, false);
             write!(out, "<g clip-path=\"url(#{id})\">").unwrap();
@@ -436,6 +453,67 @@ fn rgba(c: ap::Color) -> String {
         (b.clamp(0., 1.) * 255.).round() as u8,
         a.clamp(0., 1.)
     )
+}
+
+fn effect(e: &af::LayerEffect) -> Option<crate::filter::Fx> {
+    use crate::{
+        color::{Blend, Rgba},
+        filter::Fx,
+    };
+    let mode = match e.blend {
+        af::Blend::Multiply => Blend::Multiply,
+        af::Blend::Screen => Blend::Screen,
+        af::Blend::Overlay => Blend::Overlay,
+        af::Blend::Darken => Blend::Darken,
+        af::Blend::Lighten => Blend::Lighten,
+        af::Blend::ColorDodge => Blend::ColorDodge,
+        af::Blend::ColorBurn => Blend::ColorBurn,
+        af::Blend::HardLight => Blend::HardLight,
+        af::Blend::SoftLight => Blend::SoftLight,
+        af::Blend::Difference => Blend::Difference,
+        af::Blend::Exclusion => Blend::Exclusion,
+        af::Blend::Hue => Blend::Hue,
+        af::Blend::Saturation => Blend::Saturation,
+        af::Blend::Color => Blend::Color,
+        af::Blend::Luminosity => Blend::Luminosity,
+        _ => Blend::Normal,
+    };
+    let color = e.color.map(channels).map(|c| {
+        Rgba::new(
+            (c[0].clamp(0., 1.) * 255.).round() as u8,
+            (c[1].clamp(0., 1.) * 255.).round() as u8,
+            (c[2].clamp(0., 1.) * 255.).round() as u8,
+            (c[3].clamp(0., 1.) * 255.).round() as u8,
+        )
+    });
+    match &e.kind.0.to_be_bytes() {
+        b"Gaus" => Some(Fx::Blur {
+            std: e.radius as f32,
+        }),
+        b"Shad" => Some(Fx::Shadow {
+            blend: mode,
+            opacity: e.opacity as f32,
+            knockout: e.knockout,
+            spread: 0.,
+            dx: (e.offset * e.angle.cos()) as f32,
+            dy: (e.offset * e.angle.sin()) as f32,
+            blur: e.radius as f32,
+            color: color?,
+        }),
+        b"ColO" => Some(Fx::ColorOverlay {
+            blend: mode,
+            opacity: e.opacity as f32,
+            color: color?,
+        }),
+        b"OutG" => Some(Fx::OuterGlow {
+            blend: mode,
+            opacity: e.opacity as f32,
+            blur: e.radius as f32,
+            spread: 0.,
+            color: color?,
+        }),
+        _ => None,
+    }
 }
 fn mix(a: ap::Color, b: ap::Color) -> ap::Color {
     let a = channels(a);
