@@ -3,6 +3,7 @@ use crate::color::Rgba;
 use crate::document::Fill;
 use crate::geom::Geom;
 use lopdf::{Object, Stream, dictionary};
+use sha2::{Digest, Sha256};
 use std::io::Write;
 
 fn program(art: &str) -> Vec<u8> {
@@ -321,7 +322,7 @@ fn illustrator_independent_font_template_without_pdf_preview_and_oma_reopen() {
 #[test]
 #[ignore = "Requires the independent real AI fixture directory through OMADESIGN_ILLUSTRATOR_FIXTURE"]
 fn illustrator_independent_reuters_without_pdf_preview_and_oma_reopen() {
-    independent_fixture("reuters-dynamicText.ai", 1, true);
+    independent_fixture("reuters-dynamicText.ai", 5, true);
 }
 
 fn independent_fixture(file: &str, expected_boards: usize, needs_type: bool) {
@@ -336,6 +337,20 @@ fn independent_fixture(file: &str, expected_boards: usize, needs_type: bool) {
     };
     let path = directory.join(file);
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{file}: {e}"));
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    assert_eq!(
+        sha256,
+        match file {
+            "Test-Inkscape-LineIssue.ai" =>
+                "eb63800d64794a0e77dedc9ab83a371111595e8caa3ad0aecfa814c06385d867",
+            "font_template.ai" =>
+                "72e84d9aa84960d57fde0e6fe296da0fa93977c1a35627d837258f1aeb0d4cb9",
+            "reuters-dynamicText.ai" =>
+                "42d18b9f6bd525739e6d30b3e74ae56e841b9f589fbd0edc219d6c54935407e5",
+            _ => unreachable!(),
+        },
+        "{file}: independent source identity"
+    );
     let data = editing_data(&bytes).unwrap();
     let expected_stories = String::from_utf8_lossy(&data)
         .matches("/StoryIndex")
@@ -347,6 +362,26 @@ fn independent_fixture(file: &str, expected_boards: usize, needs_type: bool) {
         expected_boards,
         "{file}: real artboard count"
     );
+    if file == "reuters-dynamicText.ai" {
+        for (board, (name, bounds)) in doc.artboards.iter().zip([
+            ("xs", [0., 0., 330., 749.26886]),
+            ("sm", [1085.4232, 0., 510., 882.26886]),
+            ("md", [2390.8464, 0., 660., 846.26886]),
+            ("lg", [4009.2697, 0., 930., 659.26886]),
+            ("xl", [5138.693, 0., 1200., 819.]),
+        ]) {
+            assert_eq!(board.name, name, "Reuters live artboard name");
+            for (actual, expected) in [board.origin.x, board.origin.y, board.size.x, board.size.y]
+                .iter()
+                .zip(bounds)
+            {
+                assert!(
+                    (actual - expected).abs() < 0.001,
+                    "Reuters source artboard geometry: {actual} vs {expected}"
+                );
+            }
+        }
+    }
     let mut without = lopdf::Document::load_mem(&bytes).unwrap();
     for id in without.get_pages().values() {
         without.get_dictionary_mut(*id).unwrap().remove(b"Contents");
@@ -470,6 +505,11 @@ fn independent_fixture(file: &str, expected_boards: usize, needs_type: bool) {
     assert_eq!(doc.import_notes, reopened.import_notes);
     if !needs_type {
         let svg = std::fs::read_to_string(directory.join("Test-Inkscape-LineIssue.svg")).unwrap();
+        assert_eq!(
+            format!("{:x}", Sha256::digest(svg.as_bytes())),
+            "268749a71ee81813902185793bf5bda4d17acf12ca71fe62d2a2fd1237a80f52",
+            "independent author SVG identity"
+        );
         let reference = usvg::Tree::from_str(&svg, &usvg::Options::default()).unwrap();
         let marks = |doc: &Document| {
             let mut marks: Vec<_> = doc
@@ -522,14 +562,17 @@ fn independent_fixture(file: &str, expected_boards: usize, needs_type: bool) {
             expected.len(),
             "author's SVG stroke object count"
         );
+        let mut max_error = 0.0f32;
         for (a, b) in actual.iter().zip(&expected) {
             for (a, b) in a.iter().zip(b) {
+                max_error = max_error.max((a - b).abs());
                 assert!(
                     (a - b).abs() < 0.025,
                     "AI vs author's SVG paint/placement: {a} vs {b}"
                 );
             }
         }
+        std::fs::write(path.with_extension("native-stroke-qualification.json"), serde_json::to_string_pretty(&serde_json::json!({"file":file,"sha256":sha256,"native_strokes":actual.len(),"independent_svg_strokes":expected.len(),"max_bounds_or_width_error":max_error,"tolerance":0.025,"source_identity_preview_removal_and_oma_reopen":"passed"})).unwrap()).unwrap();
     }
     eprintln!(
         "Independent AI {file}: {} bytes, {} artboards, {} layers, {} native objects, {} editable text from {expected_stories} real story slots; {} notes",
