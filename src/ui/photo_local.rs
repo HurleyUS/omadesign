@@ -278,3 +278,89 @@ pub(super) fn viewer(
     write(ui, state);
     painting
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{Context, Event, Modifiers, PointerButton, RawInput, Vec2};
+
+    #[test]
+    fn painting_records_editable_strokes_and_undo_redo() {
+        let ctx = Context::default();
+        let mut studio = Studio::new();
+        studio.photo.import_image(
+            "mask.png".into(),
+            crate::photo::RgbaImage::new(80, 60, [80, 100, 120, 255].repeat(4800)).unwrap(),
+        );
+        studio.photo.images[0]
+            .develop
+            .local_adjustments
+            .push(LocalAdjustment {
+                mask: LocalMask::Brush { strokes: vec![] },
+                exposure: 1.,
+                ..Default::default()
+            });
+        let frame = |studio: &mut Studio, events: Vec<Event>| {
+            let mut output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0., 0.), Vec2::new(400., 300.))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let dest = Rect::from_min_max(pos2(20., 20.), pos2(380., 280.));
+                    let response = ui.interact(
+                        dest,
+                        Id::new("test-local-paint"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    let mut state = read(ui);
+                    state.paint = true;
+                    state.overlay = false;
+                    write(ui, state);
+                    viewer(ui, studio, dest, &response, false);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        frame(&mut studio, vec![]);
+        frame(
+            &mut studio,
+            vec![
+                Event::PointerMoved(pos2(150., 140.)),
+                Event::PointerButton {
+                    pos: pos2(150., 140.),
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+        frame(&mut studio, vec![Event::PointerMoved(pos2(250., 160.))]);
+        frame(
+            &mut studio,
+            vec![Event::PointerButton {
+                pos: pos2(250., 160.),
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        studio.photo.finish_edit();
+        let painted = studio.photo.images[0].develop.clone();
+        let LocalMask::Brush { strokes } = &painted.local_adjustments[0].mask else {
+            panic!("brush")
+        };
+        assert_eq!(strokes.len(), 1);
+        assert!(strokes[0].points.len() >= 2);
+        studio.photo.undo();
+        let LocalMask::Brush { strokes } =
+            &studio.photo.images[0].develop.local_adjustments[0].mask
+        else {
+            panic!("brush")
+        };
+        assert!(strokes.is_empty());
+        studio.photo.redo();
+        assert_eq!(studio.photo.images[0].develop, painted);
+    }
+}

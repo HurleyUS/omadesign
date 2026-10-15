@@ -297,7 +297,7 @@ mod tests {
             });
         }
         assert_eq!(brush.coverage([0.5, 0.5], 2.), 0.);
-        assert_eq!(
+        assert!(
             source_uv(
                 [0.5, 0.25],
                 &DevelopParams {
@@ -305,8 +305,10 @@ mod tests {
                     crop: Some([0.2, 0.1, 0.8, 0.9]),
                     ..Default::default()
                 }
-            ),
-            [0.3, 0.5]
+            )
+            .iter()
+            .zip([0.3, 0.5])
+            .all(|(a, b)| (a - b).abs() < 1e-6)
         );
     }
 
