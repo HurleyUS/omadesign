@@ -417,7 +417,7 @@ pub fn reflow(doc: &mut Document) {
 
 pub fn release(run: &mut TypeRun) {
     if let Some((point, _)) = caret_frame(run, 0) {
-        run.origin = point;
+        run.origin = run.unmap_point(point);
     }
     run.on_path = None;
     run.layout = None;

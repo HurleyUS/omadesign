@@ -596,4 +596,10 @@ mod svg_type_native_acceptance {
         story.frame=None;story.layout=None;story.on_path=Some(TextOnPath{cache:Some(ArcPath::new(vec![[Pt::new(10.,100.),Pt::new(110.,100.),Pt::new(210.,100.),Pt::new(310.,100.)]],false)),..Default::default()});let path=crate::text_geometry::layout_on_path(&story);assert!(path.caret_heights.iter().any(|(i,h)|*i==0&&*h>95.));assert!(crate::text::paint_groups(&story,&Fill::None).iter().any(|(f,c)|*f==red&&!c.is_empty()));let doc=document(story);assert!(compare(&crate::svg::export(&doc).unwrap(),&doc)<0.1);
     }
 
+    #[test]
+    fn native_type_clipped_paint_ranges_and_affine_path_release(){
+        let mut run=sample("MMMMM");run.frame=Some(crate::text_geometry::TextFrame{size:Pt::new(20.,100.),..Default::default()});run.set_character_style(0,1,|s|s.fill=Some(Fill::Solid(Rgba::rgb(220,20,40))));let layout=crate::text_geometry::layout_frame(&run,&run,0,&[],false);assert!(layout.paint_ranges.iter().all(|(_,r)|r.end<=layout.contours.len()));let _=crate::text::paint_groups(&run,&Fill::None);let doc=document(run);crate::compositor::render_export(&doc,1).unwrap();
+        let mut run=sample("Release");run.on_path=Some(crate::text_geometry::TextOnPath{cache:Some(crate::text_geometry::ArcPath::new(vec![[Pt::new(20.,70.),Pt::new(110.,70.),Pt::new(210.,70.),Pt::new(300.,70.)]],false)),..Default::default()});run.transform=Some([1.,0.,0.,1.,100.,0.]);let before=crate::text::caret_pt(&run,0);crate::text_geometry::release(&mut run);assert!((crate::text::caret_pt(&run,0)-before).length()<0.01);
+    }
+
 }

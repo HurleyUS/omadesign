@@ -789,12 +789,8 @@ fn layout_frame_pass(
         }
     }
     if mode != Overflow::Visible {
-        layout.contours = layout
-            .contours
-            .into_iter()
-            .map(|contour| clip_contour(contour, bounds))
-            .filter(|c| c.len() >= 3)
-            .collect();
+        let contours=std::mem::take(&mut layout.contours);
+        for (_,range) in &mut layout.paint_ranges{let start=layout.contours.len();layout.contours.extend(contours[range.clone()].iter().cloned().map(|c|clip_contour(c,bounds)).filter(|c|c.len()>=3));*range=start..layout.contours.len();}
     }
     if layout.carets.is_empty() {
         layout.carets.push((
