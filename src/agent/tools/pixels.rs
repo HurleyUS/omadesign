@@ -148,6 +148,76 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                 );
             }
             let selection = studio.pixel_sel_mask(li).map(|m| m.into_owned());
+            if original.native.is_some() {
+                if !["paint", "erase", "fill"].contains(&operation.as_str()) {
+                    return Err("High-depth retouch requires an explicit copy; paint, erase and fill retain native precision".into());
+                }
+                let before = original.clone();
+                let mut after = before.clone();
+                let mut overlay =
+                    tiny_skia::Pixmap::new(w, h).ok_or("Cannot allocate paint coverage")?;
+                if operation == "fill" {
+                    let region = paint::wand_mask_clipped(
+                        &original_pm,
+                        pts[0],
+                        number(args, "tolerance", 32.)?.clamp(0., 510.),
+                        selection.as_deref(),
+                    );
+                    let c = before.paint_color(brush.color)?;
+                    let samples = (0..w as usize * h as usize)
+                        .flat_map(|i| {
+                            crate::deep_color::blend_pixel(
+                                before.sample(i),
+                                c,
+                                crate::color::Blend::Normal,
+                                region[i] as f32 / 255. * brush.opacity,
+                            )
+                        })
+                        .collect();
+                    after.set_samples(samples)?;
+                } else {
+                    let brush = if operation == "erase" {
+                        paint::Brush {
+                            color: crate::color::Rgba::WHITE,
+                            ..brush
+                        }
+                    } else {
+                        brush
+                    };
+                    paint::stamp(&mut overlay, pts[0], &brush, false);
+                    for pair in pts.windows(2) {
+                        paint::stroke_to(&mut overlay, pair[0], pair[1], &brush, false);
+                    }
+                    if let Some(selection) = &selection {
+                        paint::feather_overlay(&mut overlay, selection);
+                    }
+                    if operation == "erase" {
+                        let samples = (0..w as usize * h as usize)
+                            .flat_map(|i| {
+                                let p = before.sample(i);
+                                [
+                                    p[0],
+                                    p[1],
+                                    p[2],
+                                    p[3] * (1. - overlay.pixels()[i].alpha() as f32 / 255.),
+                                ]
+                            })
+                            .collect();
+                        after.set_samples(samples)?;
+                    } else {
+                        after.paint_overlay(&Pixels::from_pixmap(&overlay), 1.)?;
+                    }
+                }
+                studio.commit(Cmd::NativePixels {
+                    layer: li,
+                    mask,
+                    before,
+                    after,
+                });
+                return Ok(
+                    json!({"revision":studio.canvas_gen,"layer":li,"native_precision":true}),
+                );
+            }
             match operation.as_str() {
                 "fill" => paint::flood_fill_clipped(
                     &mut pm,

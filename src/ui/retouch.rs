@@ -620,16 +620,18 @@ pub(super) fn fill(studio: &mut Studio, world: Pt) {
         } else {
             studio.brush.color
         };
+        let c = match before.paint_color(c) {
+            Ok(color) => color,
+            Err(error) => {
+                studio.status = error;
+                return;
+            }
+        };
         let samples = (0..before.w as usize * before.h as usize)
             .flat_map(|i| {
                 crate::deep_color::blend_pixel(
                     before.sample(i),
-                    [
-                        c.r as f32 / 255.,
-                        c.g as f32 / 255.,
-                        c.b as f32 / 255.,
-                        c.a as f32 / 255.,
-                    ],
+                    c,
                     crate::color::Blend::Normal,
                     region[i] as f32 / 255.,
                 )
@@ -1984,6 +1986,13 @@ pub(super) fn native_drag(studio: &mut Studio, world: Pt) {
     } else {
         studio.pixel_sel_mask(layer).map(|m| m.into_owned())
     };
+    let color = match before.paint_color(brush.color) {
+        Ok(color) => color,
+        Err(error) => {
+            studio.status = error;
+            return;
+        }
+    };
     let samples = before
         .samples()
         .chunks_exact(4)
@@ -1995,18 +2004,8 @@ pub(super) fn native_drag(studio: &mut Studio, world: Pt) {
             if erase && !mask {
                 [p[0], p[1], p[2], p[3] * (1. - amount)]
             } else {
-                let c = brush.color;
-                crate::deep_color::blend_pixel(
-                    p,
-                    [
-                        c.r as f32 / 255.,
-                        c.g as f32 / 255.,
-                        c.b as f32 / 255.,
-                        c.a as f32 / 255.,
-                    ],
-                    crate::color::Blend::Normal,
-                    amount,
-                )
+                let c = color;
+                crate::deep_color::blend_pixel(p, c, crate::color::Blend::Normal, amount)
             }
         })
         .collect();

@@ -191,7 +191,8 @@ fn render(
                     *dst = blend_pixel(*dst, src, layer.blend, amount);
                 }
             }
-        } else if let Some(pixels) = layer.kind.pixels() {
+        } else if let Some(source) = layer.kind.pixels() {
+            let pixels = source.in_document_color(&doc.color)?;
             if layer.filters.active() {
                 return Err("Apply pixel effects before high-depth export; native layer effect rendering is not yet supported".into());
             }
@@ -205,7 +206,7 @@ fn render(
                 );
                 let mut local = tiny_skia::Point::from_xy(p.x, p.y);
                 inv.map_point(&mut local);
-                let src = sample(pixels, local.x, local.y);
+                let src = sample(&pixels, local.x, local.y);
                 *dst = blend_pixel(
                     *dst,
                     src,
@@ -225,7 +226,7 @@ fn render(
             vector.blend = Blend::Normal;
             single.layers = vec![vector];
             let pm = crate::compositor::render_export(&single, scale)?;
-            let pixels = Pixels::from_pixmap(&pm);
+            let pixels = Pixels::from_pixmap(&pm).in_document_color(&doc.color)?;
             for (i, dst) in out.iter_mut().enumerate() {
                 *dst = blend_pixel(*dst, pixels.sample(i), layer.blend, layer.opacity);
             }
@@ -233,7 +234,7 @@ fn render(
     }
     Ok(())
 }
-fn sample(pixels: &Pixels, x: f32, y: f32) -> [f32; 4] {
+pub(super) fn sample(pixels: &Pixels, x: f32, y: f32) -> [f32; 4] {
     if x < 0. || y < 0. || x >= pixels.w as f32 || y >= pixels.h as f32 {
         return [0.; 4];
     }

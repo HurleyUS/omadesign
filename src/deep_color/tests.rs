@@ -237,3 +237,65 @@ fn cmyk_tiff_keeps_ink_alpha_profile_and_depth() {
         }
     }
 }
+
+#[test]
+fn authoritative_sample_validation_rejects_malformed_project_inks() {
+    let pixels = Pixels::from_cmyk(
+        1,
+        1,
+        Depth::U16,
+        vec![0.1, 0.2, 0.3, 0.4, 1.],
+        Vec::new(),
+        1,
+    )
+    .unwrap();
+    let mut doc = Document::new("Malformed", 1., 1., 72.);
+    doc.layers = vec![Layer::placed_raster(
+        "Ink",
+        pixels,
+        Pt::ZERO,
+        Pt::new(1., 1.),
+    )];
+    let mut value: serde_json::Value =
+        serde_json::from_str(&crate::project::encode(&doc).unwrap()).unwrap();
+    value["doc"]["layers"][0]["kind"]["Raster"]["pixels"]["native"]["cmyk"] = serde_json::json!([]);
+    assert!(crate::project::decode(&value.to_string()).is_err());
+    assert_eq!(cms::runtime_probe().unwrap(), 2190);
+}
+
+#[test]
+fn native_brush_growth_and_group_mask_resize_preserve_sub_byte_values() {
+    let pixels = Pixels::from_cmyk(
+        1,
+        1,
+        Depth::U16,
+        vec![0.123456, 0.2, 0.3, 0.4, 0.5],
+        Vec::new(),
+        1,
+    )
+    .unwrap();
+    let grown = pixels.reframed(3, 3, 1, 1).unwrap();
+    assert_eq!(
+        grown.native.as_ref().unwrap().cmyk.as_ref().unwrap()[20..25],
+        [0.123456, 0.2, 0.3, 0.4, 0.5]
+    );
+    let mask = Pixels::from_samples(
+        2,
+        1,
+        Depth::U16,
+        vec![
+            1001. / 65535.,
+            1001. / 65535.,
+            1001. / 65535.,
+            1.,
+            1002. / 65535.,
+            1002. / 65535.,
+            1002. / 65535.,
+            1.,
+        ],
+    )
+    .unwrap();
+    let resized = mask.resized(4, 1).unwrap();
+    assert!(resized.sample(1)[0] > mask.sample(0)[0]);
+    assert!(resized.sample(1)[0] < mask.sample(1)[0]);
+}

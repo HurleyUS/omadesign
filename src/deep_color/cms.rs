@@ -150,7 +150,6 @@ pub fn transform(
 
 type Handle = *mut c_void;
 struct Api {
-    _library: libloading::Library,
     open: unsafe extern "C" fn(*const c_void, u32) -> Handle,
     srgb: unsafe extern "C" fn() -> Handle,
     close: unsafe extern "C" fn(Handle) -> i32,
@@ -158,44 +157,45 @@ struct Api {
     apply: unsafe extern "C" fn(Handle, *const c_void, *mut c_void, u32),
     delete: unsafe extern "C" fn(Handle),
 }
+unsafe extern "C" {
+    fn cmsOpenProfileFromMem(bytes: *const c_void, size: u32) -> Handle;
+    fn cmsCreate_sRGBProfile() -> Handle;
+    fn cmsCloseProfile(profile: Handle) -> i32;
+    fn cmsCreateTransform(
+        src: Handle,
+        input: u32,
+        dst: Handle,
+        output: u32,
+        intent: u32,
+        flags: u32,
+    ) -> Handle;
+    fn cmsDoTransform(transform: Handle, input: *const c_void, output: *mut c_void, count: u32);
+    fn cmsDeleteTransform(transform: Handle);
+    fn cmsGetEncodedCMMversion() -> i32;
+}
+
+/// Check the statically packaged color engine.
+/// Args: none. Returns its encoded version or an actionable package-integrity error.
+pub fn runtime_probe() -> Result<i32, String> {
+    let version = unsafe { cmsGetEncodedCMMversion() };
+    if version != 2190 {
+        return Err(format!(
+            "Built-in Little CMS version {version} differs from pinned 2190. Reinstall the complete Omadesign package or rebuild from the pinned vendor sources."
+        ));
+    }
+    Ok(version)
+}
 impl Api {
     fn load() -> Result<Self, String> {
-        let mut loaded = None;
-        for name in [
-            "liblcms2.so.2",
-            "liblcms2.so",
-            "liblcms2.2.dylib",
-            "lcms2.dll",
-        ] {
-            if let Ok(library) = unsafe { libloading::Library::new(name) } {
-                loaded = Some(library);
-                break;
-            }
-        }
-        let library=loaded.ok_or("Color conversion needs Little CMS 2 (lcms2). Original samples and profile remain preserved in the source file.")?;
-        unsafe {
-            Ok(Self {
-                open: *library
-                    .get(b"cmsOpenProfileFromMem\0")
-                    .map_err(|e| e.to_string())?,
-                srgb: *library
-                    .get(b"cmsCreate_sRGBProfile\0")
-                    .map_err(|e| e.to_string())?,
-                close: *library
-                    .get(b"cmsCloseProfile\0")
-                    .map_err(|e| e.to_string())?,
-                create: *library
-                    .get(b"cmsCreateTransform\0")
-                    .map_err(|e| e.to_string())?,
-                apply: *library
-                    .get(b"cmsDoTransform\0")
-                    .map_err(|e| e.to_string())?,
-                delete: *library
-                    .get(b"cmsDeleteTransform\0")
-                    .map_err(|e| e.to_string())?,
-                _library: library,
-            })
-        }
+        runtime_probe()?;
+        Ok(Self {
+            open: cmsOpenProfileFromMem,
+            srgb: cmsCreate_sRGBProfile,
+            close: cmsCloseProfile,
+            create: cmsCreateTransform,
+            apply: cmsDoTransform,
+            delete: cmsDeleteTransform,
+        })
     }
 }
 

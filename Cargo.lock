@@ -2948,7 +2948,6 @@ dependencies = [
  "geo",
  "hyphenation",
  "image",
- "libloading 0.8.9",
  "libz-sys",
  "lopdf",
  "mlua",

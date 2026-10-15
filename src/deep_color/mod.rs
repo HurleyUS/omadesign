@@ -174,12 +174,9 @@ impl Pixels {
             .into_iter()
             .flatten()
             .collect();
-        Self::from_samples(
-            self.w,
-            self.h,
-            self.native.as_ref().map_or(Depth::F32, |n| n.depth),
-            samples,
-        )
+        let mut out = self.clone();
+        out.set_samples(samples)?;
+        Ok(out)
     }
 }
 
@@ -253,12 +250,46 @@ impl Pixels {
                     .copy_from_slice(&self.sample(y as usize * self.w as usize + x as usize));
             }
         }
-        Self::from_samples(
+        if let Some(native) = &self.native {
+            if let Some(inks) = &native.cmyk {
+                let mut reframed = vec![0.; w as usize * h as usize * 5];
+                for y in 0..self.h {
+                    let ny = y as i64 + dy;
+                    if ny < 0 || ny >= h as i64 {
+                        continue;
+                    }
+                    for x in 0..self.w {
+                        let nx = x as i64 + dx;
+                        if nx < 0 || nx >= w as i64 {
+                            continue;
+                        }
+                        let i = (ny as usize * w as usize + nx as usize) * 5;
+                        let old = (y as usize * self.w as usize + x as usize) * 5;
+                        reframed[i..i + 5].copy_from_slice(&inks[old..old + 5]);
+                    }
+                }
+                return Self::from_cmyk(
+                    w,
+                    h,
+                    native.depth,
+                    reframed,
+                    native.icc_profile.clone(),
+                    1,
+                );
+            }
+        }
+        let mut pixels = Self::from_samples(
             w,
             h,
             self.native.as_ref().map_or(Depth::U8, |n| n.depth),
             out,
-        )
+        )?;
+        if let Some(n) = &self.native
+            && !n.icc_profile.is_empty()
+        {
+            pixels.assign_rgb_profile(n.icc_profile.clone(), 1)?;
+        }
+        Ok(pixels)
     }
 
     /// Paint an overlay into authored samples.
@@ -266,6 +297,24 @@ impl Pixels {
     pub fn paint_overlay(&mut self, overlay: &Pixels, opacity: f32) -> Result<(), String> {
         if (self.w, self.h) != (overlay.w, overlay.h) {
             return Err("Paint overlay dimensions mismatch".into());
+        }
+        let mut overlay = overlay.clone();
+        if let Some(n) = &self.native
+            && n.cmyk.is_none()
+            && !n.icc_profile.is_empty()
+        {
+            let rgb: Vec<f32> = overlay
+                .samples()
+                .chunks_exact(4)
+                .flat_map(|p| p[..3].iter().copied())
+                .collect();
+            let rgb = cms::transform(&rgb, cms::Model::Rgb, &n.icc_profile, false, 1)?;
+            let samples = rgb
+                .chunks_exact(3)
+                .enumerate()
+                .flat_map(|(i, p)| [p[0], p[1], p[2], overlay.sample(i)[3]])
+                .collect();
+            overlay = Self::from_samples(overlay.w, overlay.h, Depth::F32, samples)?;
         }
         let samples = (0..self.w as usize * self.h as usize)
             .flat_map(|i| {
@@ -293,7 +342,12 @@ impl Pixels {
         profile: Vec<u8>,
         intent: u32,
     ) -> Result<Self, String> {
-        if inks.len() != w as usize * h as usize * 5 || inks.iter().any(|v| !v.is_finite()) {
+        let count = (w as usize)
+            .checked_mul(h as usize)
+            .and_then(|n| n.checked_mul(5))
+            .filter(|n| *n <= 128 * 1024 * 1024)
+            .ok_or("CMYK samples exceed working limit")?;
+        if inks.len() != count || inks.iter().any(|v| !v.is_finite()) {
             return Err("Invalid CMYK sample dimensions".into());
         }
         let colors: Vec<f32> = inks
@@ -395,5 +449,109 @@ impl Pixels {
             out.assign_rgb_profile(color.icc_profile.clone(), color.intent)?;
             Ok(out)
         }
+    }
+}
+
+impl Pixels {
+    /// Validate an authoritative buffer after deserialization.
+    /// Args: self. Returns an error for inconsistent dimensions, ink data, profiles or nonfinite samples.
+    pub fn validate_native(&self) -> Result<(), String> {
+        let Some(native) = &self.native else {
+            return Ok(());
+        };
+        let count = (self.w as usize)
+            .checked_mul(self.h as usize)
+            .filter(|&n| n > 0 && n <= 32 * 1024 * 1024)
+            .ok_or("Invalid native pixel dimensions")?;
+        if native.samples.len() != count * 4
+            || native.samples.iter().any(|s| !s.is_finite())
+            || native
+                .cmyk
+                .as_ref()
+                .is_some_and(|inks| inks.len() != count * 5 || inks.iter().any(|s| !s.is_finite()))
+        {
+            return Err("Invalid native sample dimensions or values".into());
+        }
+        cms::validate_profile(
+            &native.icc_profile,
+            if native.cmyk.is_some() {
+                cms::Model::Cmyk
+            } else {
+                cms::Model::Rgb
+            },
+        )
+    }
+}
+
+impl Pixels {
+    /// Convert a display paint color into this buffer's working RGB space.
+    /// Args: sRGB brush color. Returns straight RGBA in the authored profile (or CMYK display working RGB).
+    pub fn paint_color(&self, color: crate::color::Rgba) -> Result<[f32; 4], String> {
+        let rgb = [
+            color.r as f32 / 255.,
+            color.g as f32 / 255.,
+            color.b as f32 / 255.,
+        ];
+        let rgb = if let Some(n) = &self.native
+            && n.cmyk.is_none()
+        {
+            cms::transform(&rgb, cms::Model::Rgb, &n.icc_profile, false, 1)?
+        } else {
+            rgb.to_vec()
+        };
+        Ok([rgb[0], rgb[1], rgb[2], color.a as f32 / 255.])
+    }
+
+    /// Resample straight native colors using premultiplied interpolation.
+    /// Args: output dimensions. Returns the resized samples and retained color metadata.
+    pub fn resized(&self, w: u32, h: u32) -> Result<Self, String> {
+        let count = (w as usize)
+            .checked_mul(h as usize)
+            .filter(|&n| n > 0 && n <= 32 * 1024 * 1024)
+            .ok_or("Resampled pixels exceed working limit")?;
+        let samples = (0..count)
+            .flat_map(|i| {
+                composite::sample(
+                    self,
+                    ((i % w as usize) as f32 + 0.5) * self.w as f32 / w as f32,
+                    ((i / w as usize) as f32 + 0.5) * self.h as f32 / h as f32,
+                )
+            })
+            .collect();
+        let mut out = Self::from_samples(
+            w,
+            h,
+            self.native.as_ref().map_or(Depth::U8, |n| n.depth),
+            samples,
+        )?;
+        if let Some(n) = &self.native {
+            if let Some(inks) = &n.cmyk {
+                let mut resized = vec![0.; count * 5];
+                for channel in 0..4 {
+                    let plane = Self::from_samples(
+                        self.w,
+                        self.h,
+                        Depth::F32,
+                        inks.chunks_exact(5)
+                            .flat_map(|p| [p[channel], p[channel], p[channel], p[4]])
+                            .collect(),
+                    )?;
+                    for (i, p) in resized.chunks_exact_mut(5).enumerate() {
+                        let sample = composite::sample(
+                            &plane,
+                            ((i % w as usize) as f32 + 0.5) * self.w as f32 / w as f32,
+                            ((i / w as usize) as f32 + 0.5) * self.h as f32 / h as f32,
+                        );
+                        p[channel] = sample[0];
+                        p[4] = sample[3];
+                    }
+                }
+                return Self::from_cmyk(w, h, n.depth, resized, n.icc_profile.clone(), 1);
+            }
+            if !n.icc_profile.is_empty() {
+                out.assign_rgb_profile(n.icc_profile.clone(), 1)?;
+            }
+        }
+        Ok(out)
     }
 }

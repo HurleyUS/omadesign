@@ -662,6 +662,9 @@ impl Studio {
         else {
             return false;
         };
+        if pixels.native.is_some() {
+            let before=pixels.clone();let samples=(0..pixels.w as usize*pixels.h as usize).flat_map(|i|if mask[i]>0 {[0.;4]}else {pixels.sample(i)}).collect();let mut after=before.clone();match after.set_samples(samples){Ok(())=>self.commit(Cmd::NativePixels{layer,mask:false,before,after}),Err(error)=>self.status=error};return true;
+        }
         let before = pixels.data.clone();
         let mut after = before.clone();
         for (index, &selected) in mask.iter().enumerate() {
