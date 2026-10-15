@@ -1,5 +1,18 @@
 use super::fields::*;
 use eframe::egui;
+
+/// Run a headless UI frame and consume its texture updates.
+/// Args: context, input and UI body. Returns frame output without pending renderer work.
+pub(super) fn headless(
+    ctx: &egui::Context,
+    input: egui::RawInput,
+    body: impl FnMut(&mut egui::Ui),
+) -> egui::FullOutput {
+    let mut output = ctx.run_ui(input, body);
+    output.textures_delta.clear();
+    output
+}
+
 mod tests {
     use super::*;
     #[test]
@@ -30,7 +43,7 @@ mod tests {
                     ..Default::default()
                 };
                 let mut value = 50.0;
-                let _ = ctx.run_ui(input, |ui| {
+                let _ = headless(&ctx, input, |ui| {
                     let rect = ui.max_rect();
                     let result = number(
                         ui,
@@ -61,7 +74,8 @@ fn shared_field_drag_reports_preview_then_final_commit() {
         time += 0.02;
         let mut rect = egui::Rect::NOTHING;
         let mut flags = [false; 3];
-        let _ = ctx.run_ui(
+        let _ = headless(
+            &ctx,
             egui::RawInput {
                 time: Some(time),
                 events,
@@ -138,7 +152,7 @@ fn shared_fields_never_clamp_existing_large_or_locked_mixed_values_on_render() {
             let ctx = egui::Context::default();
             let mut value = original;
             for _ in 0..3 {
-                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let _ = headless(&ctx, egui::RawInput::default(), |ui| {
                     let result = number(
                         ui,
                         "large-existing",
