@@ -20,6 +20,7 @@ struct Record {
     overlay: Option<super::effects::Overlay>,
     type_data: Option<Vec<u8>>,
     smart_data: Option<Vec<u8>>,
+    smart_blocks: Vec<([u8; 4], Vec<u8>)>,
 }
 
 fn u16(out: &mut impl Write, value: u16) -> Result<(), String> {out.write_all(&value.to_be_bytes()).map_err(|e| e.to_string())}
@@ -159,6 +160,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             overlay: None,
             type_data: None,
             smart_data: None,
+            smart_blocks: Vec::new(),
         };
         add_pixels(
             &mut record,
@@ -203,6 +205,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             overlay: None,
             type_data: None,
             smart_data: None,
+            smart_blocks: Vec::new(),
         });
     }
     let mut layer_info = storage::Builder::new()?;
@@ -309,6 +312,7 @@ fn collect(
                 overlay: None,
                 type_data: None,
                 smart_data: None,
+                smart_blocks: Vec::new(),
             });
             collect(
                 doc,
@@ -345,6 +349,7 @@ fn collect(
             overlay: super::effects::overlay(&layer.filters),
             type_data: None,
             smart_data: None,
+            smart_blocks: Vec::new(),
         };
         if let Some(shape) = layer
             .kind
@@ -363,6 +368,7 @@ fn collect(
         }
         if layer.psd_smart.is_some() {
             record.smart_data = Some(super::smart::encode(layer)?);
+            record.smart_blocks = layer.psd_smart.as_ref().unwrap().retained_blocks.clone();
         }
         if layer.is_group {
             if layer.filters.active() && record.overlay.is_none() {
@@ -678,5 +684,6 @@ fn write_record(out: &mut impl Write, record: &Record, large: bool) -> Result<()
     if let Some(data) = &record.smart_data {
         tagged(&mut extra, b"SoLd", data)?;
     }
+    for (key, data) in &record.smart_blocks { tagged(&mut extra, key, data)?; }
     section(out, &extra, false)
 }

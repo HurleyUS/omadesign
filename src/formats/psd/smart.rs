@@ -22,6 +22,8 @@ pub struct SmartObject {
     pub external_link: Option<Descriptor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edit_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retained_blocks: Vec<([u8; 4], Vec<u8>)>,
 }
 
 pub(super) struct LinkedFile {
@@ -251,6 +253,7 @@ pub fn decode(
         preview_transform: matrix(layer),
         external_link: None,
         edit_path: None,
+        retained_blocks: Vec::new(),
     };
     for filter in smart.filters() {
         if filter.settings.is_none() {
@@ -359,7 +362,22 @@ impl SmartObject {
                     "Scrn" => Blend::Screen,
                     "Ovrl" => Blend::Overlay,
                     "Dfrn" => Blend::Difference,
-                    _ => Blend::Normal,
+                    "Drkn" => Blend::Darken,
+                    "Lghn" => Blend::Lighten,
+                    "CDdg" => Blend::ColorDodge,
+                    "CBrn" => Blend::ColorBurn,
+                    "HrdL" => Blend::HardLight,
+                    "SftL" => Blend::SoftLight,
+                    "Xclu" => Blend::Exclusion,
+                    "H   " => Blend::Hue,
+                    "Strt" => Blend::Saturation,
+                    "Clr " => Blend::Color,
+                    "Lmns" => Blend::Luminosity,
+                    "Nrml" | "normal" => Blend::Normal,
+                    _ => {
+                        settings = None;
+                        Blend::Normal
+                    }
                 };
                 Some(SmartFilter {
                     index,
@@ -418,7 +436,7 @@ impl SmartObject {
             filter.set(
                 key,
                 if key == "Brgh" {
-                    D::Double(parameter as f64)
+                    D::Double((parameter.clamp(-1., 1.) * 100.) as f64)
                 } else {
                     D::Unit {
                         unit: *b"#Pxl",
@@ -502,6 +520,9 @@ pub fn source_document(doc: &Document, index: usize) -> Result<Document, String>
 fn apply_filters(mut source: Pixels, smart: &SmartObject) -> Result<Pixels, String> {
     if smart.has_warp() {
         return Err("This retained Photoshop warp cannot be recomputed natively; original source and saved preview remain intact".into());
+    }
+    if !smart.retained_blocks.is_empty() && smart.filters().iter().any(|f| f.enabled) {
+        return Err("Photoshop smart-filter masks are retained with the saved preview. Disable the filters before native recomputation; export PSD to keep their original mask data.".into());
     }
     for filter in smart.filters().into_iter().filter(|f| f.enabled) {
         let settings=filter.settings.ok_or_else(||format!("Smart filter '{}' has no native renderer. Disable it to recompute; its original descriptor remains retained.",filter.name))?;
@@ -652,6 +673,34 @@ pub fn refresh(doc: &Document, index: usize, mut smart: SmartObject) -> Result<C
     let pixels = apply_filters(pixels, &smart)?;
     let (pixels, origin) = placed_pixels(&pixels, quad)?;
     let mut after = before.clone();
+    if let Some(mask) = &before.mask {
+        let inverse = inverse(matrix(before))?;
+        let original = before
+            .kind
+            .pixels()
+            .ok_or("Smart-object preview pixels are missing")?;
+        let mut samples = Vec::with_capacity(pixels.w as usize * pixels.h as usize * 4);
+        for y in 0..pixels.h {
+            for x in 0..pixels.w {
+                let (x, y) = transform(
+                    inverse,
+                    origin.x as f64 + x as f64 + 0.5,
+                    origin.y as f64 + y as f64 + 0.5,
+                );
+                let value = crate::deep_color::sample_at(
+                    mask,
+                    (x * mask.w as f64 / original.w as f64) as f32,
+                    (y * mask.h as f64 / original.h as f64) as f32,
+                );
+                samples.extend_from_slice(&value);
+            }
+        }
+        let mut remapped = mask.clone();
+        remapped.w = pixels.w;
+        remapped.h = pixels.h;
+        remapped.set_samples(samples)?;
+        after.mask = Some(remapped);
+    }
     let size = Pt::new(pixels.w as f32, pixels.h as f32);
     after.kind = LayerKind::Raster {
         pixels,
@@ -951,6 +1000,7 @@ pub fn make_smart(doc: &Document, index: usize) -> Result<Cmd, String> {
         preview_transform: m,
         external_link: None,
         edit_path: None,
+        retained_blocks: Vec::new(),
     });
     Ok(Cmd::Batch(vec![
         Cmd::SetSources {
