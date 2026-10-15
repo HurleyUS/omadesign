@@ -1369,8 +1369,13 @@ impl Document {
         } else {
             page_w
         };
-        let w = total_w.round().max(1.0) as u32;
-        let h = page_h.round().max(1.0) as u32;
+        let mut background = Layer::vector("Background");
+        if !transparent {
+            background.kind.shapes_mut().unwrap().push(Shape::new(
+                Geom::Rect { origin: Pt::ZERO, size: Pt::new(total_w, page_h), radius: 0.0 },
+                Style { fill: Fill::Solid(Rgba::WHITE), stroke: None },
+            ));
+        }
         let mut doc = Self {
             text_wrap_above_only: false,
             name: name.into(),
@@ -1378,7 +1383,7 @@ impl Document {
             width: total_w,
             height: page_h,
             dpi,
-            layers: vec![Layer::raster("Background", w, h), Layer::vector("Layer 1")],
+            layers: vec![background, Layer::vector("Layer 1")],
             import_notes: vec![],
             guides: vec![],
             ruler: RulerSettings::default(),
@@ -1394,17 +1399,6 @@ impl Document {
             comments: vec![],
             layout_tokens: vec![],
         };
-        // Fill background white when not transparent
-        if !transparent && let Some(px) = doc.layers[0].kind.pixels_mut() {
-            let white = crate::color::Rgba::WHITE;
-            for chunk in px.data.chunks_mut(4) {
-                chunk[0] = white.r;
-                chunk[1] = white.g;
-                chunk[2] = white.b;
-                chunk[3] = 255;
-            }
-            px.touch();
-        }
         if show_bleed {
             // Outer bleed rect guides
             let b = doc.bleed;
@@ -3235,5 +3229,27 @@ mod id_migration_regression {
         doc.layers[1].kind.shapes_mut().unwrap().push(shape);
         doc.ensure_ids().unwrap();
         assert_ne!(doc.artboards[0].id, loaded_id);
+    }
+}
+
+#[cfg(test)]
+mod canvas_storage_tests {
+    use super::*;
+    #[test]
+    fn large_vector_canvas_retains_geometry_without_a_pixel_background() {
+        for transparent in [false, true] {
+            let doc = Document::new_with_options("Large", 3_000_000., 2_000_000., 72., transparent, 1, false, false);
+            assert_eq!((doc.width, doc.height), (3_000_000., 2_000_000.));
+            assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+            let shapes = doc.layers[0].kind.shapes().unwrap();
+            assert_eq!(shapes.len(), usize::from(!transparent));
+            if let Some(shape) = shapes.first() {
+                assert_eq!(shape.geom.bbox().size(), Pt::new(3_000_000., 2_000_000.));
+            }
+            let encoded = crate::project::encode(&doc).unwrap();
+            assert!(encoded.len() < 16_384);
+            let reopened = crate::project::decode(&encoded).unwrap();
+            assert_eq!(reopened.width, doc.width);
+        }
     }
 }
