@@ -25,14 +25,19 @@ pub(super) fn render(
             if !ids.contains(&layer.id) {
                 continue;
             }
-            for mask in layer.artwork_masks.iter().chain(
-                layer
-                    .kind
-                    .shapes()
-                    .into_iter()
-                    .flatten()
-                    .flat_map(|s| &s.artwork_masks),
-            ) {
+            for mask in layer
+                .artwork_masks
+                .iter()
+                .filter(|_| layer.id != group.id)
+                .chain(
+                    layer
+                        .kind
+                        .shapes()
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|s| &s.artwork_masks),
+                )
+            {
                 if let Some((index, _)) = mask.source.resolve(doc) {
                     ids.insert(doc.layers[index].id);
                 }
@@ -185,6 +190,25 @@ mod tests {
             assert!(maximum <= 3 && mean < 0.1, "max={maximum} mean={mean}");
         }
         assert!(crate::project::encode(&doc).unwrap().len() < 30_000);
+    }
+
+    #[test]
+    fn svg_graph_applies_root_clips_after_effect_without_painting_clip_sources() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="140"><defs><filter id="fx"><feGaussianBlur stdDeviation="2"/><feOffset dx="3"/></filter><clipPath id="clip"><g><path d="M20 20H100V90H20Z"/></g></clipPath></defs><g filter="url(#fx)" clip-path="url(#clip)"><rect x="10" y="10" width="110" height="90" fill="#c52"/></g></svg>"##;
+        let (doc, notes) = crate::formats::svg::read(source, "Root clip graph").unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(
+            doc.layers
+                .iter()
+                .any(|l| l.svg_filter.is_some() && !l.artwork_masks.is_empty())
+        );
+        let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        let tree = usvg::Tree::from_str(source, &crate::svg_source::options()).unwrap();
+        let mut expected = Pixmap::new(180, 140).unwrap();
+        resvg::render(&tree, Transform::identity(), &mut expected.as_mut());
+        let actual = crate::compositor::render_export_at(&reopened, 1., 0., true).unwrap();
+        let (maximum, mean) = difference(&actual, &expected);
+        assert!(maximum <= 3 && mean < 0.1, "max={maximum} mean={mean}");
     }
 
     #[test]
