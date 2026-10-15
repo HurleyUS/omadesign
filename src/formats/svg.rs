@@ -1,4 +1,5 @@
 //! SVG object import after standards-based CSS, transform and path normalization.
+use crate::artwork_mask::{ArtworkMask, MaskMode, MaskSource};
 use crate::color::{Blend, Rgba};
 use crate::document::{Cap, Document, Fill, Join, Layer, Pixels, Shape, Stroke, Style};
 use crate::geom::{Anchor, Geom, Pt, TypeRun};
@@ -363,6 +364,7 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
         metadata,
         tree: &tree,
         pixel_bytes: 0,
+        mask_sources: HashMap::new(),
     };
     reader.children(tree.root(), None, 0)?;
     if reader.doc.layers.is_empty() {
@@ -378,6 +380,7 @@ struct Reader<'a> {
     metadata: HashMap<String, Metadata>,
     tree: &'a usvg::Tree,
     pixel_bytes: u64,
+    mask_sources: HashMap<usize, MaskSource>,
 }
 impl Reader<'_> {
     fn reserve(&mut self, w: u32, h: u32) -> Result<(), String> {
@@ -440,12 +443,22 @@ impl Reader<'_> {
                         && g.blend_mode() == usvg::BlendMode::Normal;
                     self.meta(&mut layer, g.id());
                     layer.filters = filters.unwrap();
-                    if g.clip_path().is_some() || g.mask().is_some() {
-                        let (w, h) = (self.doc.width.ceil() as u32, self.doc.height.ceil() as u32);
-                        self.reserve(w, h)?;
-                        layer.mask = Some(group_mask(g, w, h)?);
+                    if let Some(clip) = g.clip_path() {
+                        layer.artwork_masks.extend(self.clip_masks(
+                            clip,
+                            g.abs_transform(),
+                            depth + 1,
+                        )?);
+                    }
+                    if let Some(mask) = g.mask() {
+                        layer.artwork_masks.extend(self.svg_masks(
+                            mask,
+                            g.abs_transform(),
+                            depth + 1,
+                        )?);
+                    }
+                    if !layer.artwork_masks.is_empty() {
                         layer.pass_through = false;
-                        warn(&mut self.warnings,"SVG vector clips and masks converted to editable pixel masks; child artwork remains editable.".into());
                     }
                     self.children(g, Some(layer.id), depth + 1)?;
                     self.doc.layers.push(layer);
@@ -469,6 +482,79 @@ impl Reader<'_> {
             }
         }
         Ok(())
+    }
+    fn mask_source(
+        &mut self,
+        root: &usvg::Group,
+        name: &str,
+        depth: usize,
+    ) -> Result<MaskSource, String> {
+        let key = root as *const usvg::Group as usize;
+        if let Some(source) = self.mask_sources.get(&key) {
+            return Ok(*source);
+        }
+        let mut layer = Layer::group(name);
+        layer.pass_through = false;
+        self.children(root, Some(layer.id), depth + 1)?;
+        let source = MaskSource {
+            layer: layer.id,
+            shape: None,
+        };
+        self.doc.layers.push(layer);
+        self.mask_sources.insert(key, source);
+        Ok(source)
+    }
+    fn clip_masks(
+        &mut self,
+        clip: &usvg::ClipPath,
+        transform: Transform,
+        depth: usize,
+    ) -> Result<Vec<ArtworkMask>, String> {
+        if depth > 64 {
+            return Err("SVG clip nesting exceeds 64 levels".into());
+        }
+        let mut mask = ArtworkMask::new(self.mask_source(
+            clip.root(),
+            &self.name(clip.id(), "Clip"),
+            depth,
+        )?);
+        mask.transform = matrix(transform.pre_concat(clip.transform()));
+        let mut masks = vec![mask];
+        if let Some(other) = clip.clip_path() {
+            masks.extend(self.clip_masks(other, transform, depth + 1)?);
+        }
+        Ok(masks)
+    }
+    fn svg_masks(
+        &mut self,
+        source: &usvg::Mask,
+        transform: Transform,
+        depth: usize,
+    ) -> Result<Vec<ArtworkMask>, String> {
+        if depth > 64 {
+            return Err("SVG mask nesting exceeds 64 levels".into());
+        }
+        let mut mask = ArtworkMask::new(self.mask_source(
+            source.root(),
+            &self.name(source.id(), "Mask"),
+            depth,
+        )?);
+        mask.mode = if source.kind() == usvg::MaskType::Alpha {
+            MaskMode::Alpha
+        } else {
+            MaskMode::Luminance
+        };
+        mask.transform = matrix(transform);
+        let r = source.rect();
+        mask.region = Some(crate::geom::Bounds::from_min_size(
+            Pt::new(r.x(), r.y()),
+            Pt::new(r.width(), r.height()),
+        ));
+        let mut masks = vec![mask];
+        if let Some(other) = source.mask() {
+            masks.extend(self.svg_masks(other, transform, depth + 1)?);
+        }
+        Ok(masks)
     }
     fn path(&mut self, path: &usvg::Path, parent: Option<u64>) -> Result<bool, String> {
         if path.paint_order() == usvg::PaintOrder::StrokeAndFill
@@ -738,101 +824,8 @@ fn native_filters(g: &usvg::Group) -> Option<crate::filter::FilterStack> {
     }
     Some(stack)
 }
-fn render_mask_group(
-    root: &usvg::Group,
-    transform: Transform,
-    w: u32,
-    h: u32,
-    alpha: bool,
-) -> Result<Vec<u8>, String> {
-    let node = usvg::Node::Group(Box::new(root.clone()));
-    let mut pm = tiny_skia::Pixmap::new(w, h).ok_or("Could not allocate SVG mask")?;
-    if let Some(b) = node.abs_layer_bounding_box() {
-        resvg::render_node(
-            &node,
-            transform.pre_translate(b.x(), b.y()),
-            &mut pm.as_mut(),
-        );
-    }
-    Ok(pm
-        .pixels()
-        .iter()
-        .map(|p| {
-            if alpha {
-                p.alpha()
-            } else {
-                (0.2126 * p.red() as f32 + 0.7152 * p.green() as f32 + 0.0722 * p.blue() as f32)
-                    .round() as u8
-            }
-        })
-        .collect())
-}
-fn clip_mask(
-    clip: &usvg::ClipPath,
-    t: Transform,
-    w: u32,
-    h: u32,
-    depth: usize,
-) -> Result<Vec<u8>, String> {
-    if depth > 64 {
-        return Err("SVG clip nesting exceeds 64 levels".into());
-    }
-    let mut mask = render_mask_group(clip.root(), t.pre_concat(clip.transform()), w, h, true)?;
-    if let Some(other) = clip.clip_path() {
-        let other = clip_mask(other, t, w, h, depth + 1)?;
-        for (a, b) in mask.iter_mut().zip(other) {
-            *a = (u16::from(*a) * u16::from(b) / 255) as u8;
-        }
-    }
-    Ok(mask)
-}
-fn svg_mask(
-    mask: &usvg::Mask,
-    t: Transform,
-    w: u32,
-    h: u32,
-    depth: usize,
-) -> Result<Vec<u8>, String> {
-    if depth > 64 {
-        return Err("SVG mask nesting exceeds 64 levels".into());
-    }
-    let mut out = render_mask_group(mask.root(), t, w, h, mask.kind() == usvg::MaskType::Alpha)?;
-    // The SVG mask region clips mask content, independently of its children.
-    let rect = mask.rect();
-    let mut region = tiny_skia::Pixmap::new(w, h).ok_or("Could not allocate mask region")?;
-    let mut white = tiny_skia::Paint::default();
-    white.set_color_rgba8(255, 255, 255, 255);
-    region.fill_rect(
-        tiny_skia::Rect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height())
-            .ok_or("Invalid mask region")?,
-        &white,
-        t,
-        None,
-    );
-    for (a, p) in out.iter_mut().zip(region.pixels()) {
-        *a = (u16::from(*a) * u16::from(p.alpha()) / 255) as u8;
-    }
-    if let Some(other) = mask.mask() {
-        let other = svg_mask(other, t, w, h, depth + 1)?;
-        for (a, b) in out.iter_mut().zip(other) {
-            *a = (u16::from(*a) * u16::from(b) / 255) as u8;
-        }
-    }
-    Ok(out)
-}
-fn group_mask(group: &usvg::Group, w: u32, h: u32) -> Result<Pixels, String> {
-    let mut values = vec![255u8; w as usize * h as usize];
-    if let Some(clip) = group.clip_path() {
-        values = clip_mask(clip, group.abs_transform(), w, h, 0)?;
-    }
-    if let Some(mask) = group.mask() {
-        let mask = svg_mask(mask, group.abs_transform(), w, h, 0)?;
-        for (a, b) in values.iter_mut().zip(mask) {
-            *a = (u16::from(*a) * u16::from(b) / 255) as u8;
-        }
-    }
-    let rgba = values.into_iter().flat_map(|v| [v, v, v, 255]).collect();
-    Pixels::from_rgba(w, h, rgba).ok_or("Invalid SVG mask".into())
+fn matrix(t: Transform) -> [f32; 6] {
+    [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]
 }
 
 fn color(c: usvg::Color, a: f32) -> Rgba {
@@ -1195,9 +1188,14 @@ mod tests {
     fn vector_clips_keep_child_geometry_and_match_svg_pixels() {
         let source = r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><defs><clipPath id="clip"><rect x="3" y="2" width="12" height="10"/></clipPath></defs><g transform="translate(6 4)" clip-path="url(#clip)"><rect width="30" height="25" fill="red"/></g></svg>"#;
         let (doc, notes) = read(source, "clip").unwrap();
-        assert!(notes.iter().any(|s| s.contains("pixel masks")));
-        assert!(doc.layers.iter().any(|l| l.is_group && l.mask.is_some()));
-        assert_eq!(doc.layers.iter().filter(|l| !l.is_group).count(), 1);
+        assert!(!notes.iter().any(|s| s.contains("pixel masks")));
+        assert!(
+            doc.layers
+                .iter()
+                .any(|l| l.is_group && !l.artwork_masks.is_empty())
+        );
+        assert!(doc.layers.iter().all(|l| l.mask.is_none()));
+        assert_eq!(doc.layers.iter().filter(|l| !l.is_group).count(), 2);
         let actual =
             super::super::decode_image(&crate::compositor::export_png(&doc, 1).unwrap()).unwrap();
         let tree = usvg::Tree::from_str(source, &usvg::Options::default()).unwrap();
@@ -1208,7 +1206,11 @@ mod tests {
         let exported = crate::svg::export(&doc).unwrap();
         let (roundtrip, _) = read(&exported, "again").unwrap();
         assert_eq!(
-            roundtrip.layers.iter().filter(|l| l.mask.is_some()).count(),
+            roundtrip
+                .layers
+                .iter()
+                .filter(|l| !l.artwork_masks.is_empty())
+                .count(),
             1
         );
     }

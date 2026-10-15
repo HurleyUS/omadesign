@@ -2,7 +2,7 @@
 use super::theme::{accent, bg_panel, fg_weak};
 use crate::app::Studio;
 use crate::document::Cmd;
-use crate::geom::{Geom};
+use crate::geom::Geom;
 use crate::layout::{
     AutoStack, Constraint, Sizing, StackAlign, StackAxis, StackFlow, StackJustify,
 };
@@ -432,7 +432,9 @@ pub fn inspector(ui: &mut Ui, studio: &mut Studio) {
         copy_changed!(width,height,min_width,max_width,min_height,max_height,clip,absolute,constraint_x,constraint_y,stack,breakpoints,text_size,aspect_ratio,image);
     });
     }
-    if matches!(shape.geom, Geom::Text(_)) { super::paragraph::show(ui, studio); }
+    if matches!(shape.geom, Geom::Text(_)) {
+        super::paragraph::show(ui, studio);
+    }
     super::layout_preview::interaction_editor(ui, studio);
     super::layout_preview::component_editor(ui, studio);
     variables(ui, studio);
@@ -679,7 +681,10 @@ fn layer_row(
         }
     }
     row.context_menu(|ui| {
-        if ui.button("Mask from item…").clicked() {
+        if let Some(action) = super::masking::artwork_menu(ui, studio, li, None) {
+            action.run(studio, li, None);
+        }
+        if ui.button("Use as mask…").clicked() {
             studio.begin_item_mask(li, None);
             ui.close();
         }
@@ -827,7 +832,10 @@ fn tree_row(
             studio.duplicate_selection();
             ui.close();
         }
-        if ui.button("Mask from item…").clicked() {
+        if let Some(action) = super::masking::artwork_menu(ui, studio, li, Some(id)) {
+            action.run(studio, li, Some(id));
+        }
+        if ui.button("Use as mask…").clicked() {
             studio.begin_item_mask(li, Some(id));
             ui.close();
         }

@@ -306,6 +306,10 @@ Rendering, downloads, AI inference and encoding run in background jobs. Progress
 
 ### Masks
 
+Right-click an object, image, frame, group, or layer in **Layers**, choose **Use as mask…**, then click the target object or layer. The source stays editable and supplies its transparency as a live mask. On the target, use **Edit mask source**, **Use transparency**, **Use luminance**, or **Release artwork mask**. Releasing restores the source to normal artwork. Undo restores the previous binding.
+
+SVG clipping paths and alpha/luminance masks import as editable source artwork. Nested masks, source transforms, bounding-box units, and mask regions are retained. Saving `.oma` preserves the live references; SVG export preserves vector source geometry. Projects containing live artwork masks require a reader that supports project version 13.
+
 Use the layer context menu's **Mask** submenu, or **Add layer mask** in Pixel, to reveal all, hide all, or start from the current pixel selection. Switch between Pixels/Artwork and Mask in the inspector. Black hides; white reveals. The Eraser hides on a mask, and Fill works on the current paint target.
 
 Masks work on pixel and vector layers and remain editable in the project. Invert flips the mask; Remove reveals the untouched layer. Apply to Pixels bakes the result into a raster layer, with one undo restoring both pixels and mask. Placed image masks follow the image's position, scale, and rotation. Choose Pixels before using the healing or clone brush.

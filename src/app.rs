@@ -354,7 +354,7 @@ pub struct Studio {
     pub pixel_sel_gen: u64,
     pixel_sel_cache: masking::SelectionCache,
     pub paint_mask: bool,
-    pub pending_item_mask: Option<masking::ItemMask>,
+    pub pending_item_mask: Option<crate::artwork_mask::MaskSource>,
     pub snap: SnapSettings,
     pub snap_scene: Option<snap::Scene>,
     pub(crate) snap_points: Option<snapping::PointCache>,
@@ -1896,6 +1896,7 @@ impl Studio {
             for &i in &tree {
                 let mut layer = self.doc.layers[i].clone();
                 let index = self.doc.layers.len() + new_layers;
+                for mask in &mut layer.artwork_masks {mask.remap(&layer_ids,&shape_ids,tiny_skia::Transform::from_translate(delta.x,delta.y));}
                 layer.id = layer_ids[&layer.id];
                 if i != group {
                     layer.parent = layer.parent.and_then(|p| layer_ids.get(&p).copied());
@@ -1907,6 +1908,7 @@ impl Studio {
                 if let Some(shapes) = layer.kind.shapes_mut() {
                     for shape in shapes {
                         let old = shape.id;
+                        for mask in &mut shape.artwork_masks {mask.remap(&layer_ids,&shape_ids,tiny_skia::Transform::from_translate(delta.x,delta.y));}
                         shape.id = shape_ids[&old];
                         crate::layout_components::remap_duplicate(shape, &shape_ids);
                         crate::text_geometry::remap_copy_in_document(&self.doc, shape, &shape_ids);
@@ -1994,6 +1996,7 @@ impl Studio {
                     selected.push((index, RASTER_ID));
                 }
             } else if let Some(mut shape) = self.doc.find_shape(li, id).cloned() {
+                for mask in &mut shape.artwork_masks {mask.remap(&HashMap::new(),&remap,tiny_skia::Transform::from_translate(delta.x,delta.y));}
                 shape.id = remap[&id];
                 crate::layout_components::remap_duplicate(&mut shape, &remap);
                 crate::text_geometry::remap_copy_in_document(&self.doc, &mut shape, &remap);

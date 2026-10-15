@@ -38,6 +38,7 @@ impl Cache {
         draft: Draft<'_>,
         changed: &[(usize, u64)],
     ) -> Option<Pixmap> {
+        if !doc.mask_sources().is_empty() { self.clear(); return render_view(doc,view,width,height,draft); }
         let viewport = [
             width,
             height,
@@ -124,7 +125,7 @@ fn draw_complete_layer(
     doc: &Document,
 ) {
     if layer.visible && layer.opacity > 0. && !is_paper_raster(layer) {
-        draw_layer(pm, layer, transform, brush, None, None, doc, None);
+        draw_layer(pm, layer, transform, brush, None, None, doc, None, &doc.mask_sources());
     }
 }
 

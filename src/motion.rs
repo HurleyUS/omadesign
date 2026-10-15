@@ -750,6 +750,7 @@ pub fn hits_in_rect(
 /// Lottie shape export. Unsupported raster masks/effects fail explicitly;
 /// animated SVG remains the complete document export for those compositions.
 pub fn export_lottie(doc: &Document) -> Result<String, String> {
+    if !doc.mask_sources().is_empty() {return Err("Lottie cannot preserve live artwork masks here. Export animated SVG to keep them.".into());}
     let fps = doc.motion.fps.clamp(1.0, 120.0);
     let op = (doc.motion.duration * fps).max(1.0);
     let mut layers = Vec::new();
@@ -772,7 +773,7 @@ pub fn export_lottie(doc: &Document) -> Result<String, String> {
         if !shapes.iter().any(|shape| shape.visible && !shape.guide) {
             continue;
         }
-        if layer.mask.is_some() || layer.filters.active() {
+        if layer.mask.is_some() || !layer.artwork_masks.is_empty() || layer.filters.active() {
             return Err("Lottie cannot preserve layer masks or effects here. Export animated SVG to keep them.".into());
         }
         let mut parts = Vec::new();
@@ -783,6 +784,7 @@ pub fn export_lottie(doc: &Document) -> Result<String, String> {
         {
             if shape.filters.active()
                 || shape.mask.is_some()
+                || !shape.artwork_masks.is_empty()
                 || shape
                     .style
                     .stroke

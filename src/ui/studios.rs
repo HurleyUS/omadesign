@@ -2291,6 +2291,7 @@ pub(super) fn layers_studio(ui: &mut Ui, studio: &mut Studio) {
         }
     }
     let mut delete_item = None;
+    let mut artwork_action = None;
     let mut mask_item = None;
     let mut selection_mask_item = None;
     let mut remove_mask_item = None;
@@ -2490,7 +2491,8 @@ pub(super) fn layers_studio(ui: &mut Ui, studio: &mut Studio) {
                                     if ui.add_enabled(studio.layer_unlocked(i), eframe::egui::Button::new("Delete layer")).clicked() {
                                         delete_item=Some((i,None)); ui.close();
                                     }
-                                    if ui.button("Mask from item…").clicked() { mask_item=Some((i,None)); ui.close(); }
+                                    if let Some(action) = super::masking::artwork_menu(ui,studio,i,None) { artwork_action=Some((i,None,action)); }
+                                    if ui.button("Use as mask…").clicked() { mask_item=Some((i,None)); ui.close(); }
                                     ui.separator();
                                     if ui
                                         .add_enabled(
@@ -2697,7 +2699,8 @@ pub(super) fn layers_studio(ui: &mut Ui, studio: &mut Studio) {
                                                     if ui.add_enabled(objects_editable && !shape.locked, eframe::egui::Button::new("Delete object")).clicked() {
                                                         delete_item=Some((i,Some(shape.id))); ui.close();
                                                     }
-                                                    if ui.button("Mask from item…").clicked() { mask_item=Some((i,Some(shape.id))); ui.close(); }
+                                                    if let Some(action) = super::masking::artwork_menu(ui,studio,i,Some(shape.id)) { artwork_action=Some((i,Some(shape.id),action)); }
+                                                    if ui.button("Use as mask…").clicked() { mask_item=Some((i,Some(shape.id))); ui.close(); }
                                                     if ui.add_enabled(objects_editable && !shape.locked && studio.pixel_sel.is_some(), eframe::egui::Button::new("Mask from selection")).clicked() {
                                                         selection_mask_item=Some((i,shape.id)); ui.close();
                                                     }
@@ -2984,6 +2987,7 @@ pub(super) fn layers_studio(ui: &mut Ui, studio: &mut Studio) {
     if let Some((index, action)) = mask_action {
         action.run(studio, index);
     }
+    if let Some((li,id,action)) = artwork_action { action.run(studio,li,id); }
     if let Some((li, id)) = mask_item {
         studio.begin_item_mask(li, id);
     }
