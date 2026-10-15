@@ -114,7 +114,14 @@ pub(crate) fn open_with_progress(path: &Path, stage: impl Fn(&'static str)) -> R
             }
         } else { None };
         if bytes.starts_with(b"%!") {
-            return import_eps(path, &name);
+            let imported = import_eps(path, &name)?;
+            if let Imported::Document(mut doc) = imported {
+                let id = doc.retain_source(crate::source_attachment::SourceAttachment::new(&name, "illustrator", bytes)?);
+                for layer in &mut doc.layers { if layer.source_attachment.is_none() { layer.source_attachment = Some(id.clone()); } }
+                doc.import_notes.insert(0, format!("Illustrator editing data could not be reconstructed: {}. Opened converted PostScript artwork; unsupported live structures are not editable. Original source bytes are retained.", editing_error.unwrap_or_default()));
+                return Ok(Imported::Document(doc));
+            }
+            return Ok(imported);
         }
         let (mut doc, mut notes) = crate::formats::pdf::read(&bytes, &name)?;
         if kind == "ai" {
