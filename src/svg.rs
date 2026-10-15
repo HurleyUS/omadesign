@@ -555,6 +555,7 @@ fn xml_escape(s: &str) -> String {
 }
 
 pub fn export(doc: &Document) -> Result<String, String> {
+    if !doc.motion.compositions.is_empty() || doc.motion.scene3d.is_some() {return Err("CompositionUnsupported: SVG cannot preserve nested composition timing; use Lottie, motion project or raster animation".into());}
     export_inner(doc, false, false)
 }
 
@@ -588,6 +589,7 @@ pub struct SvgExport {
 /// Apple glass, turbulence, displacement, color matrix, and a pixel layer that
 /// is flattened into the file. A rotating linear or radial gradient is not a warning.
 pub fn animated_export(doc: &Document) -> Result<SvgExport, String> {
+    if !doc.motion.compositions.is_empty() {return Err("CompositionUnsupported: SVG cannot preserve nested composition timing; use Lottie, motion project or raster animation".into());}
     Ok(SvgExport {
         svg: export_inner(doc, true, true)?,
         warnings: export_warnings(doc),
