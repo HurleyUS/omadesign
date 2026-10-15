@@ -210,13 +210,16 @@ fn actual_grid_track_is_tab_reachable_and_accepts_keyboard_entry() {
         reached,
         "Grid numeric control must participate in Tab navigation"
     );
-    seat.frame(&mut studio, vec![key(Key::Enter, Modifiers::NONE)], false);
+    let field = seat.ctx.memory(|memory| memory.focused());
     seat.frame(
         &mut studio,
         vec![key(Key::A, Modifiers::CTRL), Event::Text("96".into())],
         false,
     );
+    assert_eq!(seat.ctx.memory(|memory| memory.focused()), field);
+    assert_eq!(track(&studio, id), 96.);
     seat.frame(&mut studio, vec![key(Key::Enter, Modifiers::NONE)], false);
+    assert_ne!(seat.ctx.memory(|memory| memory.focused()), field);
     assert_eq!(track(&studio, id), 96.);
     assert_eq!(studio.history.len(), 1);
     studio.undo();
