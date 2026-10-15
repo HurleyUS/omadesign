@@ -218,12 +218,15 @@ fn render(
             let mut vector = layer.clone();
             vector.parent = None;
             vector.opacity = 1.;
+            vector.fill_opacity = 1.;
+            vector.mask = None;
             vector.blend = Blend::Normal;
             single.layers = vec![vector];
             let pm = crate::compositor::render_export(&single, scale)?;
             let pixels = Pixels::from_pixmap(&pm);
             for (i, dst) in out.iter_mut().enumerate() {
-                *dst = blend_pixel(*dst, pixels.sample(i), layer.blend, layer.opacity);
+                let p=Pt::new(((i%w as usize) as f32+0.5)/scale as f32,((i/w as usize) as f32+0.5)/scale as f32);
+                *dst = blend_pixel(*dst, pixels.sample(i), layer.blend, layer.opacity*layer.fill_opacity*mask(layer,p,None));
             }
         }
     }

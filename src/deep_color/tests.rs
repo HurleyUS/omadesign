@@ -235,3 +235,28 @@ fn raster_export_preserves_native_color_and_float_mask_precision() {
     assert!(crate::formats::pdf::write(&doc).is_err());
     assert!(crate::formats::openraster::write(&doc).is_err());
 }
+
+#[test]
+fn native_mask_on_vector_layer_keeps_float_coverage() {
+    let mut doc = Document::new("Vector mask", 2., 2., 72.);
+    doc.transparent = true;
+    let mut layer = Layer::vector("Vector");
+    layer
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .push(crate::document::Shape::new(
+            crate::geom::Geom::Rect {
+                origin: Pt::ZERO,
+                size: Pt::new(2., 2.),
+                radius: 0.,
+            },
+            crate::document::Style::default(),
+        ));
+    layer.mask = Some(
+        Pixels::from_samples(2, 2, Depth::F32, [0.50001, 0.50001, 0.50001, 1.].repeat(4)).unwrap(),
+    );
+    doc.layers = vec![layer];
+    let out = composite(&doc, 1).unwrap();
+    assert!((out.sample(0)[3] - 0.50001).abs() < 1e-7);
+}
