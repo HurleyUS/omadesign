@@ -690,7 +690,8 @@ fn pdf_exchange_text_poppler_and_fresh_process_native_reopen() {
         let run = doc
             .layers
             .iter_mut()
-            .flat_map(|l| l.kind.shapes_mut().unwrap_or(&mut []))
+            .filter_map(|l| l.kind.shapes_mut())
+            .flat_map(|shapes| shapes.iter_mut())
             .find_map(|s| {
                 if let Geom::Text(run) = &mut s.geom {
                     Some(run)
