@@ -159,3 +159,79 @@ fn native_clipping_uses_authoritative_alpha_and_mask_samples() {
             < 1e-7
     );
 }
+
+#[test]
+fn raster_export_preserves_native_color_and_float_mask_precision() {
+    use crate::export::{self, Format, Settings, Source};
+    let mut doc = Document::new("Export", 2., 1., 72.);
+    doc.transparent = true;
+    doc.layers = vec![Layer::placed_raster(
+        "Native",
+        Pixels::from_samples(
+            2,
+            1,
+            Depth::U16,
+            vec![1000. / 65535., 0.25, 0.5, 1., 1001. / 65535., 0.5, 0.75, 1.],
+        )
+        .unwrap(),
+        Pt::ZERO,
+        Pt::new(2., 1.),
+    )];
+    for format in [Format::Png, Format::Tiff] {
+        let (bytes, _) = export::encode(
+            &Source::Document(doc.clone()),
+            Settings {
+                format,
+                scale: 1,
+                ai: None,
+            },
+            &crate::ml::NoProgress,
+        )
+        .unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(decoded.color(), image::ColorType::Rgba16);
+        let pixels = decoded.to_rgba16();
+        assert_eq!(pixels.get_pixel(0, 0)[0], 1000);
+        assert_eq!(pixels.get_pixel(1, 0)[0], 1001);
+        if format == Format::Png
+            && let Ok(dir) = std::env::var("OMADESIGN_DEEP_QA_DIR")
+        {
+            std::fs::write(std::path::Path::new(&dir).join("native-16.png"), bytes).unwrap();
+        }
+    }
+    doc.layers[0].mask = Some(
+        Pixels::from_samples(
+            2,
+            1,
+            Depth::F32,
+            vec![
+                0.333333, 0.333333, 0.333333, 1., 0.777777, 0.777777, 0.777777, 1.,
+            ],
+        )
+        .unwrap(),
+    );
+    let (bytes, _) = export::encode(
+        &Source::Document(doc.clone()),
+        Settings {
+            format: Format::Tiff,
+            scale: 1,
+            ai: None,
+        },
+        &crate::ml::NoProgress,
+    )
+    .unwrap();
+    let decoded = image::load_from_memory(&bytes).unwrap();
+    assert_eq!(decoded.color(), image::ColorType::Rgba32F);
+    assert!((decoded.to_rgba32f().get_pixel(0, 0)[3] - 0.333333).abs() < 1e-7);
+    if let Ok(dir) = std::env::var("OMADESIGN_DEEP_QA_DIR") {
+        std::fs::write(
+            std::path::Path::new(&dir).join("native-float-mask.tif"),
+            bytes,
+        )
+        .unwrap();
+    }
+    assert!(crate::compositor::export_png(&doc, 1).is_err());
+    assert!(crate::svg::export(&doc).is_err());
+    assert!(crate::formats::pdf::write(&doc).is_err());
+    assert!(crate::formats::openraster::write(&doc).is_err());
+}

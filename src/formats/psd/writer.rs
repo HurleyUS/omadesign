@@ -102,13 +102,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
     if doc.layers.len() > MAX_LAYERS {
         return Err("Photoshop export exceeds the 8192 layer limit".into());
     }
-    let depth = doc
-        .layers
-        .iter()
-        .flat_map(|l| l.kind.pixels().into_iter().chain(l.mask.iter()))
-        .filter_map(|p| p.native.as_ref().map(|n| n.depth.bits()))
-        .max()
-        .unwrap_or(8);
+    let depth = crate::deep_color::document_depth(doc).bits();
     let mut warnings = Vec::new();
     if doc.layers.iter().any(|l| {
         l.filters.independent()

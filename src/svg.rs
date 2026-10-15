@@ -495,6 +495,7 @@ fn xml_escape(s: &str) -> String {
 }
 
 pub fn export(doc: &Document) -> Result<String, String> {
+    if crate::deep_color::has_native(doc) { return Err("This exchange writer cannot preserve native pixel or mask samples. Export PSD, PSB, TIFF or an explicit 8-bit document copy.".into()); }
     export_inner(doc, false, false)
 }
 

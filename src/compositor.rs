@@ -285,7 +285,7 @@ pub fn render_export_at(
 }
 
 pub fn export_png(doc: &Document, scale: u32) -> Result<Vec<u8>, String> {
-    if doc.layers.iter().any(|l|l.kind.pixels().is_some_and(|p|p.native.is_some())||l.mask.as_ref().is_some_and(|p|p.native.is_some())) {return crate::export::encode(&crate::export::Source::Document(doc.clone()),crate::export::Settings {format:crate::export::Format::Png,scale,ai:None},&crate::ml::NoProgress).map(|out|out.0);}
+    if crate::deep_color::has_native(doc) {return crate::export::encode(&crate::export::Source::Document(doc.clone()),crate::export::Settings {format:crate::export::Format::Png,scale,ai:None},&crate::ml::NoProgress).map(|out|out.0);}
     render_export(doc, scale)?
         .encode_png()
         .map_err(|e| e.to_string())

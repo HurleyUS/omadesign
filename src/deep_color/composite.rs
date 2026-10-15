@@ -118,6 +118,9 @@ fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
 /// Args: document and integer export scale. Returns an authoritative float RGBA buffer.
 pub fn composite(doc: &Document, scale: u32) -> Result<Pixels, String> {
     doc.validate_hierarchy()?;
+    if doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().any(|s|s.mask.as_ref().is_some_and(|m|m.native.is_some())) {
+        return Err("Native vector-shape masks need a precise coverage renderer; save .oma to preserve their original samples.".into());
+    }
     let scale = scale.clamp(1, 8);
     let w = (doc.width * scale as f32).round() as u32;
     let h = (doc.height * scale as f32).round() as u32;

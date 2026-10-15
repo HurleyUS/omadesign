@@ -293,3 +293,22 @@ impl Pixels {
 pub fn sample_at(pixels: &Pixels, x: f32, y: f32) -> [f32; 4] {
     composite::sample(pixels, x, y)
 }
+
+/// Visit every authored raster or mask in the document.
+/// Args: document. Returns layer pixels, layer masks and shape masks without copying them.
+pub fn buffers(doc: &crate::document::Document) -> impl Iterator<Item = &Pixels> {
+    doc.layers.iter().flat_map(|l| l.kind.pixels().into_iter().chain(l.mask.iter())
+        .chain(l.kind.shapes().into_iter().flatten().filter_map(|s| s.mask.as_ref())))
+}
+
+/// Check whether an export needs the precise rendering route.
+/// Args: document. Returns true when any authored pixel or mask has native samples.
+pub fn has_native(doc: &crate::document::Document) -> bool {
+    buffers(doc).any(|p| p.native.is_some())
+}
+
+/// Find the greatest authored sample width, including masks.
+/// Args: document. Returns eight, sixteen or floating-point depth.
+pub fn document_depth(doc: &crate::document::Document) -> Depth {
+    buffers(doc).filter_map(|p| p.native.as_ref().map(|n| n.depth)).max_by_key(|d| d.bits()).unwrap_or_default()
+}
