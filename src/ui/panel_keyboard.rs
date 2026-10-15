@@ -720,6 +720,7 @@ mod tests {
         ] {
             let mut draft = Dialog::new(&book, REGISTRY, &ctx).unwrap();
             draft.panel = "properties".into();
+            draft.tab = "layers".into();
             draft.geometry = group(&draft.baseline, &draft.panel)
                 .cloned()
                 .unwrap_or_default();
