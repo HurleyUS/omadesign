@@ -102,3 +102,32 @@ fn independent_raw_depth_fixtures_keep_adjacent_samples_and_hdr() {
         }
     }
 }
+
+#[test]
+fn native_mask_resize_and_tiny_alpha_keep_authored_values() {
+    let pixels =
+        Pixels::from_samples(1, 1, Depth::F32, vec![1.25, 0.1234567, -0.125, 0.00001]).unwrap();
+    assert!(!pixels.is_invisible());
+    let mask = Pixels::from_samples(
+        2,
+        1,
+        Depth::U16,
+        vec![
+            1001. / 65535.,
+            1001. / 65535.,
+            1001. / 65535.,
+            1.,
+            1002. / 65535.,
+            1002. / 65535.,
+            1002. / 65535.,
+            1.,
+        ],
+    )
+    .unwrap();
+    let resized = mask.resized(4, 1).unwrap();
+    assert!(resized.sample(1)[0] > mask.sample(0)[0]);
+    assert!(resized.sample(1)[0] < mask.sample(1)[0]);
+    let mut invalid = pixels;
+    invalid.native.as_mut().unwrap().samples.clear();
+    assert!(invalid.validate_native().is_err());
+}

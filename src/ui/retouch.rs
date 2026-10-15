@@ -2030,3 +2030,71 @@ pub(super) fn native_drag(studio: &mut Studio, world: Pt) {
     });
     studio.mark_interaction();
 }
+
+#[cfg(test)]
+mod deep_color {
+    use super::*;
+    use crate::{
+        deep_color::Depth,
+        document::{Document, Layer},
+    };
+    #[test]
+    fn native_brush_and_mask_gestures_undo_and_reopen_authoritative_samples() {
+        let values: Vec<f32> = (0..64)
+            .flat_map(|i| [0.1234567 + i as f32 / 65535., 0.3212345, 0.6789123, 0.75])
+            .collect();
+        let pixels = Pixels::from_samples(8, 8, Depth::F32, values.clone()).unwrap();
+        let mut studio = Studio::default();
+        studio.doc = Document::new("Native paint", 8., 8., 72.);
+        studio.doc.transparent = true;
+        studio.doc.layers = vec![Layer::placed_raster(
+            "Paint",
+            pixels,
+            Pt::ZERO,
+            Pt::new(8., 8.),
+        )];
+        studio.active_layer = Some(0);
+        studio.persona = crate::tools::Persona::Pixel;
+        studio.tool = Tool::Brush;
+        studio.brush.size = 2.;
+        studio.brush.hardness = 1.;
+        studio.brush.opacity = 0.5;
+        studio.brush.color = crate::color::Rgba::rgb(220, 20, 50);
+        start_brush(&mut studio, Pt::new(4., 4.));
+        studio.end_pixel_stroke(false);
+        let painted = studio.doc.layers[0].kind.pixels().unwrap().samples();
+        assert_ne!(painted, values);
+        assert!(studio.doc.layers[0].kind.pixels().unwrap().native.is_some());
+        studio.undo();
+        assert_eq!(
+            studio.doc.layers[0].kind.pixels().unwrap().samples(),
+            values
+        );
+        studio.redo();
+        assert_eq!(
+            studio.doc.layers[0].kind.pixels().unwrap().samples(),
+            painted
+        );
+        let saved = crate::project::decode(&crate::project::encode(&studio.doc).unwrap()).unwrap();
+        assert_eq!(saved.layers[0].kind.pixels().unwrap().samples(), painted);
+        let mask_values: Vec<f32> = (0..64)
+            .flat_map(|_| [0.50001, 0.50001, 0.50001, 1.])
+            .collect();
+        studio.doc.layers[0].mask =
+            Some(Pixels::from_samples(8, 8, Depth::U16, mask_values.clone()).unwrap());
+        studio.paint_mask = true;
+        studio.brush.color = crate::color::Rgba::BLACK;
+        start(&mut studio, Pt::new(4., 4.));
+        assert!(matches!(studio.op, Some(Op::NativeStroke { .. })));
+        studio.end_pixel_stroke(false);
+        assert_ne!(
+            studio.doc.layers[0].mask.as_ref().unwrap().samples(),
+            mask_values
+        );
+        studio.undo();
+        assert_eq!(
+            studio.doc.layers[0].mask.as_ref().unwrap().samples(),
+            mask_values
+        );
+    }
+}

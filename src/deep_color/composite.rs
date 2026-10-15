@@ -226,7 +226,7 @@ fn render(
     }
     Ok(())
 }
-fn sample(pixels: &Pixels, x: f32, y: f32) -> [f32; 4] {
+pub(super) fn sample(pixels: &Pixels, x: f32, y: f32) -> [f32; 4] {
     if x < 0. || y < 0. || x >= pixels.w as f32 || y >= pixels.h as f32 {
         return [0.; 4];
     }

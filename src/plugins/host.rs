@@ -67,6 +67,7 @@ impl State {
                 .map(|v| v.len())
                 .unwrap_or(usize::MAX)
         };
+        if let Cmd::Pixels{layer,mask,..}=&command && self.doc.layers.get(*layer).and_then(|l|if *mask{l.mask.as_ref()}else{l.kind.pixels()}).is_some_and(|p|p.native.is_some()){return Err(Error::runtime("This plugin pixel API accepts RGBA8. Native samples were preserved; convert an explicit copy before applying it."));}
         let bytes = match &command {
             Cmd::NativePixels {before,after,..} => before.data.len().max(after.data.len())*5,
             Cmd::Pixels { before, after, .. } => before.len().max(after.len()),

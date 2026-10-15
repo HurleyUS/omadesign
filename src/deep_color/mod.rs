@@ -236,3 +236,60 @@ impl Pixels {
         self.set_samples(samples)
     }
 }
+
+impl Pixels {
+    /// Validate authoritative samples after project loading.
+    /// Args: self. Returns an error for inconsistent dimensions, excessive buffers or nonfinite values.
+    pub fn validate_native(&self) -> Result<(), String> {
+        let Some(native) = &self.native else {
+            return Ok(());
+        };
+        let count = (self.w as usize)
+            .checked_mul(self.h as usize)
+            .filter(|&n| n > 0 && n <= 32 * 1024 * 1024)
+            .ok_or("Invalid native dimensions")?;
+        if native.samples.len() != count * 4 || native.samples.iter().any(|s| !s.is_finite()) {
+            return Err("Invalid native sample dimensions or values".into());
+        }
+        Ok(())
+    }
+    /// Read a display paint color in the untagged RGB working space.
+    /// Args: brush color. Returns straight floating-point RGBA.
+    pub fn paint_color(&self, color: crate::color::Rgba) -> Result<[f32; 4], String> {
+        Ok([
+            color.r as f32 / 255.,
+            color.g as f32 / 255.,
+            color.b as f32 / 255.,
+            color.a as f32 / 255.,
+        ])
+    }
+    /// Resample authored samples with premultiplied bilinear interpolation.
+    /// Args: output dimensions. Returns native samples without an RGBA8 intermediate.
+    pub fn resized(&self, w: u32, h: u32) -> Result<Self, String> {
+        let count = (w as usize)
+            .checked_mul(h as usize)
+            .filter(|&n| n > 0 && n <= 32 * 1024 * 1024)
+            .ok_or("Resampled pixels exceed working limit")?;
+        let samples = (0..count)
+            .flat_map(|i| {
+                composite::sample(
+                    self,
+                    ((i % w as usize) as f32 + 0.5) * self.w as f32 / w as f32,
+                    ((i / w as usize) as f32 + 0.5) * self.h as f32 / h as f32,
+                )
+            })
+            .collect();
+        Self::from_samples(
+            w,
+            h,
+            self.native.as_ref().map_or(Depth::U8, |n| n.depth),
+            samples,
+        )
+    }
+}
+
+/// Sample authored pixels with premultiplied bilinear interpolation.
+/// Args: pixels and source-grid coordinates. Returns straight RGBA.
+pub fn sample_at(pixels: &Pixels, x: f32, y: f32) -> [f32; 4] {
+    composite::sample(pixels, x, y)
+}

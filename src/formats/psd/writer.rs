@@ -75,6 +75,12 @@ fn zip_channel(data: &[u8]) -> Result<Vec<u8>, String> {
 /// Vectors and native filters are rendered per layer; groups and pixel masks stay separate.
 pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
     if !doc.mask_sources().is_empty() {
+        if doc.layers.iter().any(|l| {
+            l.kind.pixels().is_some_and(|p| p.native.is_some())
+                || l.mask.as_ref().is_some_and(|p| p.native.is_some())
+        }) {
+            return Err("High-depth artwork masks cannot be flattened by the 8-bit compatibility renderer. Export .oma to retain original samples and editable artwork masks.".into());
+        }
         let prepared = crate::compositor::raster_export_document(doc)?;
         let mut result = encode(&prepared, large)?;
         result.warnings.push("Live artwork masks were rendered into their affected layers or groups. Save .oma or export SVG to retain editable mask sources.".into());
@@ -442,6 +448,8 @@ fn placed_group_mask(
     }
     let pixels = if (mask.w, mask.h) == (w, h) {
         mask.clone()
+    } else if mask.native.is_some() {
+        mask.resized(w, h)?
     } else {
         let image = image::RgbaImage::from_raw(mask.w, mask.h, mask.data.clone())
             .ok_or("Invalid native group mask")?;

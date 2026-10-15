@@ -582,6 +582,7 @@ impl Pixels {
 
     /// Every pixel has alpha 0.
     pub fn is_invisible(&self) -> bool {
+        if let Some(native)=&self.native {return native.samples.chunks_exact(4).all(|p|p[3]<=0.);}
         self.data.is_empty() || self.data.chunks_exact(4).all(|p| p[3] == 0)
     }
 

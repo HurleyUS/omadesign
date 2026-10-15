@@ -282,6 +282,7 @@ fn commit(studio: &mut Studio, s: &Session) -> Result<(), String> {
     let pixels = Pixels::from_rgba(result.w, result.h, mask.as_ref().clone())
         .ok_or("Invalid mask dimensions")?;
     if result.w != s.source.w || result.h != s.source.h || result.rgba != s.source.rgba {
+        if layer.kind.pixels().is_some_and(|p|p.native.is_some()) {return Err("AI upscaling produces 8-bit pixels. Use the editable mask-only workflow to preserve this layer’s native precision, or convert an explicit copy to 8-bit first.".into());}
         let after = Pixels::from_rgba(result.w, result.h, result.rgba.as_ref().clone())
             .ok_or("Invalid upscaled pixels")?;
         let kind = &studio.doc.layers[i].kind;

@@ -162,6 +162,7 @@ fn decompress_pixels(px: &Pixels) -> Result<Pixels, String> {
         .and_then(|count| count.checked_mul(4))
         && px.data.len() == expected
     {
+        px.validate_native()?;
         return Ok(px.clone());
     }
     let b64 = std::str::from_utf8(&px.data).map_err(|e| e.to_string())?;
@@ -172,6 +173,7 @@ fn decompress_pixels(px: &Pixels) -> Result<Pixels, String> {
     let rgba = img.to_rgba8();
     let mut out = Pixels::from_rgba(rgba.width(), rgba.height(), rgba.into_raw()).ok_or("size")?;
     out.native = px.native.clone();
+    out.validate_native()?;
     if out.native.as_ref().is_some_and(|n|n.samples.len()!=out.data.len()) {return Err("Native sample dimensions mismatch".into());}
     Ok(out)
 }

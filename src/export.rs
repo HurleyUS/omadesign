@@ -117,6 +117,7 @@ pub fn encode(
     progress.check()?;
     progress.report("Rendering export", 0, 1);
     if !settings.format.raster() {
+        if let Source::Document(doc)=source && matches!(settings.format,Format::Svg|Format::Pdf|Format::Ora) && doc.layers.iter().any(|l|l.kind.pixels().is_some_and(|p|p.native.is_some())||l.mask.as_ref().is_some_and(|p|p.native.is_some())) {return Err("This exchange route cannot preserve native sample precision yet. Export .oma, PSD, PSB, TIFF or 16-bit RGB PNG, or convert an explicit document copy to 8-bit.".into());}
         if settings.ai.is_some() {
             return Err("AI upscaling is available for PNG, TIFF and JPEG".into());
         }
@@ -164,7 +165,7 @@ pub fn encode(
                 raster
             }
         }
-        Source::Document(doc) if doc.layers.iter().any(|l|l.kind.pixels().is_some_and(|p|p.native.is_some())) => {
+        Source::Document(doc) if doc.layers.iter().any(|l|l.kind.pixels().is_some_and(|p|p.native.is_some())||l.mask.as_ref().is_some_and(|p|p.native.is_some())) => {
             if settings.ai.is_some() || settings.format == Format::Jpeg {return Err("This export would reduce native document precision. Export PNG, TIFF or PSD without AI upscaling.".into());}
             let pixels=crate::deep_color::composite(doc,settings.scale)?;
             let data:Vec<u16> = pixels.samples().into_iter().map(|v|(v.clamp(0.,1.)*65535.).round() as u16).collect();
