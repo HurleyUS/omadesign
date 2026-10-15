@@ -54,6 +54,10 @@ pub struct Replica {
     #[serde(default)]
     pub cursor: u64,
     #[serde(default)]
+    pub device: String,
+    #[serde(default)]
+    pub paused: bool,
+    #[serde(default)]
     undo: Vec<Id>,
     #[serde(default)]
     redo: Vec<Id>,
@@ -216,6 +220,8 @@ impl Replica {
             changes: Vec::new(),
             pending: BTreeSet::new(),
             cursor: 0,
+            device: String::new(),
+            paused: false,
             undo: Vec::new(),
             redo: Vec::new(),
         }
@@ -300,6 +306,20 @@ impl Replica {
         !self.redo.is_empty()
     }
 
+    /// Fork a saved session for another independently active client.
+    /// Args: new actor, device fingerprint, current local artwork. Returns preserved offline edits.
+    pub fn fork(&mut self, actor: String, device: String, local: &Document) -> Result<(), String> {
+        self.changes
+            .retain(|change| !self.pending.contains(&change.id));
+        self.pending.clear();
+        self.actor = actor;
+        self.device = device;
+        self.undo.clear();
+        self.redo.clear();
+        self.record(local)?;
+        Ok(())
+    }
+
     /// Undo this client's latest transaction by withdrawing its writes.
     /// Args: none. Returns whether local history changed; remote winners remain intact.
     pub fn undo(&mut self) -> bool {
@@ -372,6 +392,9 @@ impl Replica {
             serde_json::from_value(value).map_err(|e| format!("Invalid live document: {e}"))?;
         doc.cloud = local.cloud.clone();
         doc.workspace = local.workspace;
+        if doc.artboards.is_empty() {
+            doc.artboardless = true;
+        }
         let mut present: BTreeSet<u64> = doc
             .layers
             .iter()
@@ -675,5 +698,159 @@ mod tests {
         changed.clock += 1;
         assert!(b.receive([changed]).is_err());
         assert_eq!(b.changes.len(), 1);
+    }
+    #[test]
+    fn moves_and_distinct_properties_keep_one_shared_identity() {
+        let (mut doc, mut a, mut b) = pair();
+        let shared = shape("Shared");
+        let id = shared.id;
+        doc.layers[1].kind.shapes_mut().unwrap().push(shared);
+        doc.layers.push(crate::document::Layer::vector("Second"));
+        doc.layers.push(crate::document::Layer::vector("Third"));
+        a.base = snapshot(&doc).unwrap();
+        b.base = a.base.clone();
+        let mut left = doc.clone();
+        let mut right = doc.clone();
+        let moved = left.layers[1].kind.shapes_mut().unwrap().remove(0);
+        left.layers[2].kind.shapes_mut().unwrap().push(moved);
+        let mut moved = right.layers[1].kind.shapes_mut().unwrap().remove(0);
+        moved.name = "Renamed".into();
+        right.layers[3].kind.shapes_mut().unwrap().push(moved);
+        a.record(&left).unwrap();
+        b.record(&right).unwrap();
+        exchange(&mut a, &mut b);
+        let merged = a.document(&doc).unwrap();
+        let copies: Vec<_> = merged
+            .layers
+            .iter()
+            .flat_map(|l| l.kind.shapes().unwrap_or_default())
+            .filter(|s| s.id == id)
+            .collect();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(copies[0].name, "Renamed");
+        assert!(!a.record(&merged).unwrap());
+        assert_eq!(
+            snapshot(&merged).unwrap(),
+            snapshot(&b.document(&doc).unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn enum_conflicts_and_previously_omitted_layout_defaults_remain_valid() {
+        let (mut doc, mut a, mut b) = pair();
+        doc.layers[1]
+            .kind
+            .shapes_mut()
+            .unwrap()
+            .push(shape("Shared"));
+        a.base = snapshot(&doc).unwrap();
+        b.base = a.base.clone();
+        let mut left = doc.clone();
+        let mut right = doc.clone();
+        let left_shape = &mut left.layers[1].kind.shapes_mut().unwrap()[0];
+        left_shape.layout.constraint_x = crate::layout::Constraint::End;
+        left_shape.style.fill = crate::document::Fill::Linear {
+            from: [0., 0.],
+            to: [1., 1.],
+            c0: crate::color::Rgba::WHITE,
+            c1: crate::color::Rgba::BLACK,
+        };
+        let right_shape = &mut right.layers[1].kind.shapes_mut().unwrap()[0];
+        right_shape.layout.constraint_y = crate::layout::Constraint::End;
+        right_shape.style.fill = crate::document::Fill::Radial {
+            c0: crate::color::Rgba::WHITE,
+            c1: crate::color::Rgba::BLACK,
+        };
+        a.record(&left).unwrap();
+        b.record(&right).unwrap();
+        exchange(&mut a, &mut b);
+        let merged = a.document(&doc).unwrap();
+        let result = &merged.layers[1].kind.shapes().unwrap()[0];
+        assert_eq!(result.layout.constraint_x, crate::layout::Constraint::End);
+        assert_eq!(result.layout.constraint_y, crate::layout::Constraint::End);
+        assert!(matches!(
+            result.style.fill,
+            crate::document::Fill::Radial { .. }
+        ));
+        assert!(!a.record(&merged).unwrap());
+        crate::project::decode(&crate::project::encode(&merged).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn deleted_container_recovers_remote_additions_and_reports_the_conflict() {
+        let (doc, mut a, mut b) = pair();
+        let mut left = doc.clone();
+        left.layers.remove(1);
+        let mut right = doc.clone();
+        right.layers[1]
+            .kind
+            .shapes_mut()
+            .unwrap()
+            .push(shape("Remote child"));
+        a.record(&left).unwrap();
+        b.record(&right).unwrap();
+        exchange(&mut a, &mut b);
+        let merged = a.document(&doc).unwrap();
+        assert!(
+            merged
+                .layers
+                .iter()
+                .flat_map(|l| l.kind.shapes().unwrap_or_default())
+                .any(|s| s.name == "Remote child")
+        );
+        assert!(!a.conflicts().is_empty());
+        assert_eq!(
+            snapshot(&merged).unwrap(),
+            snapshot(&b.document(&doc).unwrap()).unwrap()
+        );
+        assert!(!a.record(&merged).unwrap());
+    }
+
+    #[test]
+    fn concurrent_group_cycles_are_detached_without_losing_layers() {
+        let (mut doc, mut a, mut b) = pair();
+        let first = crate::document::Layer::group("A");
+        let second = crate::document::Layer::group("B");
+        let (first_id, second_id) = (first.id, second.id);
+        doc.layers.extend([first, second]);
+        a.base = snapshot(&doc).unwrap();
+        b.base = a.base.clone();
+        let mut left = doc.clone();
+        left.layers[2].parent = Some(second_id);
+        let mut right = doc.clone();
+        right.layers[3].parent = Some(first_id);
+        a.record(&left).unwrap();
+        b.record(&right).unwrap();
+        exchange(&mut a, &mut b);
+        let merged = a.document(&doc).unwrap();
+        merged.validate_hierarchy().unwrap();
+        assert_eq!(merged.layers.len(), 4);
+        assert_eq!(
+            snapshot(&merged).unwrap(),
+            snapshot(&b.document(&doc).unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn sibling_merges_are_stable_and_forked_files_have_distinct_authors() {
+        let (mut doc, mut a, mut b) = pair();
+        let mut left = doc.clone();
+        left.layers[1].kind.shapes_mut().unwrap().push(shape("A"));
+        let mut right = doc.clone();
+        right.layers[1].kind.shapes_mut().unwrap().push(shape("B"));
+        a.record(&left).unwrap();
+        b.record(&right).unwrap();
+        exchange(&mut a, &mut b);
+        doc = a.document(&doc).unwrap();
+        assert!(!a.record(&doc).unwrap());
+        a.fork("c".repeat(64), "another device".into(), &doc)
+            .unwrap();
+        assert!(
+            a.changes
+                .iter()
+                .filter(|c| a.pending.contains(&c.id))
+                .all(|c| c.id.actor == a.actor)
+        );
+        assert_eq!(names(&a.document(&doc).unwrap()).len(), 2);
     }
 }
