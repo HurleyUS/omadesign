@@ -12,7 +12,7 @@ Cursors, editor names and selected objects appear while the editor is connected.
 
 Conflicting parent cycles are detached. Children added to a deleted layer are recovered into a surviving vector layer or a deterministic recovery layer. Missing design-variable bindings are detached while retaining their appearance. Cyclic or missing artwork-mask references are detached while retaining source and target artwork. These repairs are reported as conflicts and become durable on the next authored edit.
 
-Live seeds are limited to 500 KB, and individual live edits to 190 KB. Large pixel documents should use the existing source/snapshot transfer. The native status retains the pending queue and explains oversized edits; saving locally retains the full artwork. The service pages its durable log rather than truncating history.
+Pixel buffers travel as bounded, lossless compressed data; a standard blank Layout canvas fits the live seed. Each pixel buffer merges as one property. Live seeds are limited to 500 KB, and individual live edits to 190 KB. Large pixel documents should use the existing source/snapshot transfer. The native status retains the pending queue and explains oversized edits; saving locally retains the full artwork. The service pages its durable log rather than truncating history.
 
 ## Qualification
 

@@ -80,7 +80,7 @@ fn live_ui(ui: &mut Ui, studio: &mut Studio, busy: bool) {
         let session = replica.session.clone();
         let paused = replica.paused;
         let pending = replica.pending.len();
-        let conflicts = replica.conflicts().len();
+        let conflicts = studio.live_conflict_count();
         ui.label(studio.live_status());
         ui.horizontal(|ui| {
             ui.monospace(&session);

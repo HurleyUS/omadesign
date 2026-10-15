@@ -25,6 +25,13 @@ const change = v.object({
             v.null(),
             v.literal("Object"),
             v.literal("List"),
+            v.object({
+              Pixels: v.object({
+                w: v.number(),
+                h: v.number(),
+                data: v.string(),
+              }),
+            }),
             v.object({ Variant: v.string() }),
             v.object({ Value: v.any() }),
           ),

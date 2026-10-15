@@ -16,6 +16,7 @@ pub(super) struct LiveRuntime {
     generation: Option<u64>,
     pub status: String,
     pub presence: Vec<Presence>,
+    conflicts: usize,
 }
 impl Default for LiveRuntime {
     fn default() -> Self {
@@ -28,6 +29,7 @@ impl Default for LiveRuntime {
             generation: None,
             status: "Connecting…".into(),
             presence: Vec::new(),
+            conflicts: 0,
         }
     }
 }
@@ -158,6 +160,9 @@ impl Studio {
             return Ok(());
         };
         let result = replica.record(&self.doc);
+        if result.is_ok() {
+            self.live_runtime.conflicts = replica.conflicts().len();
+        }
         self.doc.collaboration = Some(replica);
         if result? {
             self.dirty = true;
@@ -168,6 +173,7 @@ impl Studio {
 
     fn apply_live(&mut self, replica: Replica) -> Result<(), String> {
         let result = replica.document(&self.doc);
+        self.live_runtime.conflicts = replica.conflicts().len();
         let Ok(mut doc) = result else {
             self.doc.collaboration = Some(replica);
             return result.map(|_| ());
@@ -251,6 +257,10 @@ impl Studio {
             .as_ref()
             .map_or_else(|| self.history.can_redo(), Replica::can_redo)
     }
+    pub fn live_conflict_count(&self) -> usize {
+        self.live_runtime.conflicts
+    }
+
     pub fn live_status(&self) -> &str {
         &self.live_runtime.status
     }
@@ -385,7 +395,7 @@ impl Studio {
                             "Live · {} other editors · {} pending · {} conflicts",
                             self.live_runtime.presence.len(),
                             state.pending.len(),
-                            state.conflicts().len()
+                            self.live_runtime.conflicts
                         )
                     };
                     self.live_runtime.next = Instant::now()
@@ -714,7 +724,7 @@ mod tests {
             cloud_url: data["url"].as_str().unwrap().into(),
             ..Default::default()
         });
-        let doc = Document::new("Acceptance", 64., 64., 72.);
+        let doc = Document::new("Acceptance", 1920., 1080., 72.);
         let seed = serde_json::to_string(&collaboration::snapshot(&doc).unwrap()).unwrap();
         data["session"] = client
             .call(
