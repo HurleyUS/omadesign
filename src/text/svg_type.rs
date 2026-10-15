@@ -44,6 +44,26 @@ fn default_viewport() -> [f32; 2] {
     [100000., 100000.]
 }
 
+fn length(value: &str, reference: f32) -> Option<f32> {
+    let value = value.trim();
+    for (unit, scale) in [
+        ("px", 1.),
+        ("in", 96.),
+        ("cm", 96. / 2.54),
+        ("mm", 96. / 25.4),
+        ("pt", 96. / 72.),
+        ("pc", 16.),
+        ("Q", 96. / 101.6),
+        ("%", reference / 100.),
+        ("em", reference),
+    ] {
+        if let Some(number) = value.strip_suffix(unit) {
+            return number.trim().parse::<f32>().ok().map(|v| v * scale);
+        }
+    }
+    value.parse().ok()
+}
+
 fn viewport(node: roxmltree::Node<'_, '_>) -> [f32; 2] {
     let mut size = [300., 150.];
     let mut ancestors: Vec<_> = node.ancestors().filter(|n| n.has_tag_name("svg")).collect();
@@ -53,7 +73,7 @@ fn viewport(node: roxmltree::Node<'_, '_>) -> [f32; 2] {
             if let Some(value) = svg.attribute(key) {
                 if let Some(percent) = value.strip_suffix('%').and_then(|v| v.parse::<f32>().ok()) {
                     size[i] *= percent / 100.;
-                } else if let Ok(value) = value.trim_end_matches("px").parse::<f32>() {
+                } else if let Some(value) = length(value, size[i]) {
                     size[i] = value;
                 }
             }
@@ -156,6 +176,9 @@ fn attributes(
             continue;
         }
         attrs.insert(name.into(), a.value().into());
+    }
+    if let Some(value) = crate::formats::svg::cascaded_property(node, sheet, "opacity") {
+        attrs.insert("opacity".into(), value);
     }
     for property in PROPERTIES {
         if let Some(value) = crate::formats::svg::cascaded_property(node, sheet, property) {
@@ -536,6 +559,13 @@ fn font_attributes(path: &str) -> String {
     attrs
 }
 
+fn paint_id(fill: &crate::document::Fill) -> String {
+    format!(
+        "oma-range-paint-{:032x}",
+        crate::typography::fingerprint(serde_json::to_string(fill).unwrap().as_bytes())
+    )
+}
+
 fn write_nodes(
     node: &TextNode,
     run: &TypeRun,
@@ -570,7 +600,10 @@ fn write_nodes(
                             attrs.push_str(&format!(" fill=\"{}\"", c.css()))
                         }
                         crate::document::Fill::None => attrs.push_str(" fill=\"none\""),
-                        _ => {}
+                        _ => attrs.push_str(&format!(
+                            " fill=\"url(#{})\" fill-opacity=\"1\"",
+                            paint_id(fill)
+                        )),
                     }
                 }
                 if let Some(shift) = span.baseline_shift {
@@ -620,6 +653,7 @@ fn write_nodes(
                             | "spacing"
                             | "side"
                             | "xml:space"
+                            | "opacity"
                             | "transform"
                     ))
                     || !safe_value(value)
@@ -745,9 +779,28 @@ pub fn source(run: &TypeRun) -> Option<String> {
     matrix = matrix
         .pre_translate(run.origin.x, run.origin.y)
         .pre_scale(scale, scale);
+    let mut definitions = safe_definitions(&svg.definitions);
+    let mut bounds = run.contours.iter().flatten().copied();
+    let mut b =
+        crate::geom::Bounds::from_pt(bounds.next().unwrap_or_else(|| run.map_point(run.origin)));
+    for point in bounds {
+        b.union_pt(point);
+    }
+    let mut seen = std::collections::HashSet::new();
+    for fill in run.spans.iter().filter_map(|s| s.fill.as_ref()) {
+        let id = paint_id(fill);
+        if seen.insert(id.clone()) {
+            definitions.push_str(&crate::svg::type_paint_definition(
+                fill,
+                b,
+                &id,
+                matrix.invert().unwrap_or_default(),
+            ));
+        }
+    }
     Some(wrap(
         &fragment,
-        &safe_definitions(&svg.definitions),
+        &definitions,
         [
             matrix.sx, matrix.ky, matrix.kx, matrix.sy, matrix.tx, matrix.ty,
         ],
@@ -755,33 +808,17 @@ pub fn source(run: &TypeRun) -> Option<String> {
     ))
 }
 
-pub(crate) fn export_fragment(
-    run: &TypeRun,
-    id: u64,
-    outlines: bool,
-    omit_fill: bool,
-) -> Option<String> {
+pub(crate) fn object_paint(run: &TypeRun, fill: &crate::document::Fill) -> TypeRun {
     let mut run = run.clone();
-    if omit_fill {
-        fn clear(node: &mut TextNode) {
-            if let TextNode::Element {
-                attributes,
-                children,
-                ..
-            } = node
-            {
-                attributes.insert("fill".into(), "none".into());
-                for child in children {
-                    clear(child);
-                }
-            }
+    run.set_character_style(0, run.content.chars().count(), |span| {
+        if span.fill.is_none() {
+            span.fill = Some(fill.clone());
         }
-        clear(&mut run.svg_text.as_mut()?.root);
-        for span in &mut run.spans {
-            span.fill = None;
-        }
-    }
-    let run = &run;
+    });
+    run
+}
+
+pub(crate) fn export_fragment(run: &TypeRun, id: u64, outlines: bool) -> Option<String> {
     let original = source(run)?;
     let portable = run.font.starts_with("omatype:")
         || run.font != run.svg_text.as_ref()?.base_font
@@ -816,8 +853,7 @@ pub(crate) fn export_fragment(
             }
         }
     }
-    let root = xml.root_element();
-    let range = root.children().next()?.range().start..root.children().last()?.range().end;
+    let range = 0..source.len();
     let mut fragment = source[range.clone()].to_owned();
     for (r, value) in edits.into_iter().rev() {
         if r.start >= range.start && r.end <= range.end {
@@ -1387,26 +1423,57 @@ pub(crate) fn prepare_flow(source: &str) -> Result<Option<String>, String> {
         let number = |name: &str, default: f32| {
             attrs
                 .get(name)
-                .and_then(|v| v.trim_end_matches("px").parse::<f32>().ok())
+                .and_then(|v| {
+                    length(
+                        v,
+                        match name {
+                            "inline-size" | "x" => viewport(node)[0],
+                            "y" => viewport(node)[1],
+                            _ => default,
+                        },
+                    )
+                })
                 .unwrap_or(default)
         };
         let width = rect
-            .and_then(|r| r.attribute("width").and_then(|v| v.parse::<f32>().ok()))
+            .and_then(|r| {
+                r.attribute("width")
+                    .and_then(|v| length(v, viewport(node)[0]))
+            })
             .unwrap_or_else(|| number("inline-size", 0.));
         if width <= 0. {
             continue;
         }
         let px = number("font-size", 16.);
         let read = |name, default| {
-            rect.and_then(|r| r.attribute(name).and_then(|v| v.parse::<f32>().ok()))
-                .unwrap_or(default)
+            rect.and_then(|r| {
+                r.attribute(name).and_then(|v| {
+                    length(
+                        v,
+                        if matches!(name, "x" | "width") {
+                            viewport(node)[0]
+                        } else {
+                            viewport(node)[1]
+                        },
+                    )
+                })
+            })
+            .unwrap_or(default)
         };
         let flow = Flow {
             x: read("x", number("x", 0.)),
             y: read("y", number("y", 0.) - px),
             width,
             height: read("height", 100000.),
-            leading: number("line-height", px * 1.2),
+            leading: attrs
+                .get("line-height")
+                .and_then(|v| {
+                    v.parse::<f32>()
+                        .ok()
+                        .map(|n| n * px)
+                        .or_else(|| length(v, px))
+                })
+                .unwrap_or(px * 1.2),
         };
         let (mut svg, content) = capture(&xml, node, String::new(), px);
         svg.flow = Some(flow.clone());

@@ -218,6 +218,17 @@ fn fill_reference(defs:&mut String,grad_id:&mut usize,fill:&Fill,shape:&Shape)->
     match fill{Fill::Solid(color)=>svg_color(*color),Fill::None=>"none".into(),Fill::Gradient(g)=>gradient_reference(defs,grad_id,g,shape,0.),Fill::Linear{from,to,c0,c1}=>{let mut g=Gradient::new(GradientKind::Linear,*c0,*c1);g.from=*from;g.to=*to;gradient_reference(defs,grad_id,&g,shape,0.)},Fill::Radial{c0,c1}=>{let mut g=Gradient::new(GradientKind::Radial,*c0,*c1);if shape.geom.bbox().height()>shape.geom.bbox().width(){g.to=[0.5,1.];}gradient_reference(defs,grad_id,&g,shape,0.)}}
 }
 
+/// Encode native character paint through the shared SVG gradient writer.
+/// Args: native fill, document bounds, unique ID and document-to-type matrix. Returns local SVG definitions.
+pub(crate) fn type_paint_definition(fill:&Fill,b:Bounds,id:&str,inverse:tiny_skia::Transform)->String{
+    use crate::gradient::{Gradient,GradientKind};
+    let gradient=match fill{Fill::Gradient(g)=>g.clone(),Fill::Linear{from,to,c0,c1}=>{let mut g=Gradient::new(GradientKind::Linear,*c0,*c1);g.from=*from;g.to=*to;g},Fill::Radial{c0,c1}=>{let mut g=Gradient::new(GradientKind::Radial,*c0,*c1);if b.height()>b.width(){g.to=[0.5,1.];}g},_=>return String::new()};
+    let shape=Shape::new(Geom::Rect{origin:b.min,size:b.size(),radius:0.},crate::document::Style{fill:fill.clone(),stroke:None});let mut defs=String::new();gradient_reference(&mut defs,&mut 0,&gradient,&shape,0.);
+    let matrix=format!("matrix({} {} {} {} {} {})",inverse.sx,inverse.ky,inverse.kx,inverse.sy,inverse.tx,inverse.ty);
+    defs=defs.replace("id=\"g1\"",&format!("id=\"{id}\""));
+    if defs.contains("patternTransform=\""){defs=defs.replace("patternTransform=\"",&format!("patternTransform=\"{matrix} "));}else{defs=defs.replace("gradientUnits=",&format!("gradientTransform=\"{matrix}\" gradientUnits="));}defs
+}
+
 fn object_mask_definition(defs: &mut String, shape: &Shape) -> Option<String> {
     let mask = shape.mask.as_ref()?;
     let mut local = shape.clone();
@@ -357,10 +368,11 @@ fn write_shape(
         extra
     );
     if let Geom::Text(run)=&shape.geom && run.svg_text.is_some() {
-        if let Some(fragment)=crate::text::svg_type::export_fragment(run,shape.id,text_as_paths,shape.style.fill!=run.svg_text.as_ref().unwrap().base_fill){body.push_str(&format!("<g opacity=\"{}\"{extra}>{fragment}</g>",shape.opacity));}
-        let override_fill=shape.style.fill!=run.svg_text.as_ref().unwrap().base_fill;
-        if override_fill || shape.style.stroke.is_some(){let mut native=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());if !override_fill{native.style.fill=Fill::None;}body.push_str(&format!("<g opacity=\"{}\"{extra}>",shape.opacity));write_shape(body,defs,grad_id,&native,"",true);body.push_str("</g>");}
-        return;
+        let painted;let run=if shape.style.fill!=run.svg_text.as_ref().unwrap().base_fill{painted=crate::text::svg_type::object_paint(run,&shape.style.fill);&painted}else{run};
+        body.push_str(&format!("<g opacity=\"{}\"{extra}>",shape.opacity));
+        if let Some(fragment)=crate::text::svg_type::export_fragment(run,shape.id,text_as_paths){body.push_str(&fragment);}
+        if shape.style.stroke.is_some(){let mut native=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());native.style.fill=Fill::None;write_shape(body,defs,grad_id,&native,"",true);}
+        body.push_str("</g>");return;
     }
     if let Geom::Text(run)=&shape.geom && crate::text::has_character_paint(run) {
         body.push_str(&format!("<g opacity=\"{}\"{extra}>",shape.opacity));

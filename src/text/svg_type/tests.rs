@@ -127,7 +127,7 @@ fn svg_type_edit_style_positions_matrix_undo_and_font_substitution() {
 #[test]
 fn svg_type_flow_retains_story_reflows_edits_and_exports_standard_text() {
     for source in [
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="280" height="180"><defs><rect id="frame" x="15" y="10" width="150" height="140"/></defs><text font-size="22" fill="#248" style="shape-inside:url(#frame);line-height:28">Editable flowing words <tspan fill="#d24">retain their style</tspan> after reflow.</text></svg>"##,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="280" height="180"><defs><rect id="frame" x="15" y="10" width="150" height="140"/></defs><text font-size="22" fill="#248" style="shape-inside:url(#frame);line-height:28px">Editable flowing words <tspan fill="#d24">retain their style</tspan> after reflow.</text></svg>"##,
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="280" height="180"><flowRoot font-size="22" fill="#248"><flowRegion><rect x="15" y="10" width="150" height="140"/></flowRegion><flowPara>Editable flowing words retain their style after reflow.</flowPara></flowRoot></svg>"##,
     ] {
         let (mut doc, notes) = crate::formats::svg::read(source, "Flow").unwrap();
@@ -374,4 +374,88 @@ fn svg_type_reviewed_viewport_carets_file_fonts_and_native_paints() {
         ) < 0.001
     );
     assert!(error(&rendered, &render(&crate::svg::export(&doc).unwrap())) < 0.1);
+}
+
+#[test]
+fn svg_type_reviewed_viewport_units_opacity_gradient_edits_and_flow_leading() {
+    for source in [
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 100 50"><text x="50%" y="50%" font-size="12" transform="rotate(8 50 25)">Viewport</text></svg>"##,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="2in" height="1in"><text x="50%" y="50%" font-size="20" transform="rotate(8 96 48)">Physical</text></svg>"##,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><text x="20" y="65" font-size="32" transform="rotate(8 20 65)">A<tspan opacity="0">B</tspan></text></svg>"##,
+    ] {
+        let (doc, _) = crate::formats::svg::read(source, "Reviewed SVG").unwrap();
+        let expected = render(source);
+        assert!(
+            error(
+                &crate::compositor::render_export(&doc, 1).unwrap(),
+                &expected
+            ) < 0.1
+        );
+        assert!(error(&render(&crate::svg::export(&doc).unwrap()), &expected) < 0.1);
+    }
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="140"><defs><linearGradient id="ink"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><text x="20" y="80" font-family="DejaVu Sans" font-size="45" transform="rotate(8 20 80)" fill="url(#ink)" stroke="#248" stroke-width="12">Paint</text></svg>"##;
+    let (mut doc, _) = crate::formats::svg::read(source, "Paint source").unwrap();
+    let image = crate::compositor::render_export(&doc, 1).unwrap();
+    let shape = doc
+        .layers
+        .iter_mut()
+        .filter_map(|l| l.kind.shapes_mut())
+        .flatten()
+        .find(|s| matches!(s.geom, Geom::Text(_)))
+        .unwrap();
+    assert!(!shape.style.fill.is_none());
+    shape.style.fill = crate::document::Fill::None;
+    let no_fill = crate::compositor::render_export(&doc, 1).unwrap();
+    assert!(error(&image, &no_fill) > 0.1);
+    let shape = doc
+        .layers
+        .iter_mut()
+        .filter_map(|l| l.kind.shapes_mut())
+        .flatten()
+        .find(|s| matches!(s.geom, Geom::Text(_)))
+        .unwrap();
+    shape.style.fill = crate::document::Fill::Solid(crate::color::Rgba::rgb(20, 170, 60));
+    let current = crate::compositor::render_export(&doc, 1).unwrap();
+    assert!(error(&current, &render(&crate::svg::export(&doc).unwrap())) < 0.1);
+    let Geom::Text(run) = &mut doc
+        .layers
+        .iter_mut()
+        .filter_map(|l| l.kind.shapes_mut())
+        .flatten()
+        .find(|s| matches!(s.geom, Geom::Text(_)))
+        .unwrap()
+        .geom
+    else {
+        unreachable!()
+    };
+    run.set_character_style(0, 1, |s| {
+        s.fill = Some(crate::document::Fill::Linear {
+            from: [0., 0.],
+            to: [1., 0.],
+            c0: crate::color::Rgba::rgb(255, 0, 0),
+            c1: crate::color::Rgba::rgb(0, 0, 255),
+        })
+    });
+    let svg = crate::text::svg_type::source(run).unwrap();
+    assert!(svg.contains("oma-range-paint-"));
+    let gradient = crate::text::shape(run);
+    assert!(!gradient.is_empty());
+    let painted = crate::compositor::render_export(&doc, 1).unwrap();
+    assert!(error(&painted, &current) > 0.1);
+    assert!(error(&painted, &render(&crate::svg::export(&doc).unwrap())) < 0.1);
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="220" height="160"><text x="10" y="25" font-size="20" fill="#248" style="inline-size:100px;line-height:1.2">Flow words wrap across several rows.</text></svg>"##;
+    let (doc, _) = crate::formats::svg::read(source, "Unitless flow").unwrap();
+    let run = types(&doc)[0];
+    assert!(
+        (run.svg_text
+            .as_ref()
+            .unwrap()
+            .flow
+            .as_ref()
+            .unwrap()
+            .leading
+            - 24.)
+            .abs()
+            < 0.001
+    );
 }

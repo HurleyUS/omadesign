@@ -1199,8 +1199,8 @@ fn draw_shape_inner(
     pose: Pose,
     mask: Option<&tiny_skia::Mask>,
 ) {
-    let rich=if let Geom::Text(run)=&shape.geom {run.svg_text.as_ref().and_then(|svg|crate::text::svg_type::layout(run).map(|layout|(run,svg,layout)))}else{None};
-    let rich_fill=rich.as_ref().is_some_and(|(_,svg,_)|shape.style.fill!=svg.base_fill);
+    let painted_run=if let Geom::Text(run)=&shape.geom{run.svg_text.as_ref().filter(|svg|shape.style.fill!=svg.base_fill).map(|_|crate::text::svg_type::object_paint(run,&shape.style.fill))}else{None};
+    let rich=if let Geom::Text(run)=&shape.geom{let run=painted_run.as_ref().unwrap_or(run);run.svg_text.as_ref().and_then(|_|crate::text::svg_type::layout(run).map(|layout|(run,layout)))}else{None};
     let Some(path) = shape.get_cached_path(96) else {
         return;
     };
@@ -1230,7 +1230,7 @@ fn draw_shape_inner(
             let bounds=glyph_path.bounds();if let Some(rect)=tiny_skia::Rect::from_xywh(bounds.x()-1.,bounds.y()-1.,bounds.width()+2.,bounds.height()+2.){pm.fill_rect(rect,&paint,xf,Some(&clip));}
         }
     }
-    if !painted && (rich.is_none()||rich_fill) && !shape.style.fill.is_none() && shape.geom.is_closed() && fill_reveal > 0.0 {
+    if !painted && rich.is_none() && !shape.style.fill.is_none() && shape.geom.is_closed() && fill_reveal > 0.0 {
         let texture = shape.style.fill.gradient().and_then(|g| {
             crate::gradient::texture(&g, shape, 0., xf.get_scale().0.max(xf.get_scale().1))
         });
@@ -1272,7 +1272,7 @@ fn draw_shape_inner(
             pm.fill_path(&path, &paint, rule, xf, mask);
         }
     }
-    if let Some((run,_,layout))=&rich{let mut source_pose=pose;if rich_fill{source_pose.fill_reveal=Some(0.);}draw_svg_type(pm,shape,run,layout,t,opacity,blend,source_pose,mask);}
+    if let Some((run,layout))=&rich{draw_svg_type(pm,shape,run,layout,t,opacity,blend,pose,mask);}
     if shape.layout.image.is_some() {
         crate::layout_images::draw_with_blend(pm, shape, xf, op, blend, mask);
     }
