@@ -177,7 +177,7 @@ fn amount(
                 }
             });
             focus_outline(ui, &response);
-            changed.then_some(number)
+            crate::app::input_history::record(response, changed).then_some(number)
         },
     )
     .inner
@@ -416,7 +416,7 @@ mod tests {
                 events,
                 ..Default::default()
             },
-            |ui| show(ui, studio),
+            |ui| studio.with_field_history(ui, "character", |ui, studio| show(ui, studio)),
         );
         output.textures_delta.clear();
         output
