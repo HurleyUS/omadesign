@@ -1199,6 +1199,8 @@ fn deserialize_artboards<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Artboard
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Document {
     #[serde(default)]
+    pub color: crate::deep_color::cms::DocumentColor,
+    #[serde(default)]
     pub text_wrap_above_only: bool,
     pub name: String,
     /// Last editing workspace, used by the file browser and when reopening.
@@ -1251,6 +1253,7 @@ impl Document {
         mut clone_shape: impl FnMut(&Shape) -> Shape,
     ) -> Self {
         let mut copy = Self::new(&self.name, 1.0, 1.0, self.dpi);
+        copy.color = self.color.clone();
         copy.width = self.width;
         copy.height = self.height;
         copy.artboards = self.artboards.clone();
@@ -1371,6 +1374,7 @@ impl Document {
         let w = total_w.round().max(1.0) as u32;
         let h = page_h.round().max(1.0) as u32;
         let mut doc = Self {
+            color: Default::default(),
             text_wrap_above_only: false,
             name: name.into(),
             workspace: None,

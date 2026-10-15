@@ -118,6 +118,9 @@ fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
 /// Args: document and integer export scale. Returns an authoritative float RGBA buffer.
 pub fn composite(doc: &Document, scale: u32) -> Result<Pixels, String> {
     doc.validate_hierarchy()?;
+    if doc.color.model == super::cms::Model::Cmyk {
+        return composite_cmyk(doc, scale);
+    }
     let scale = scale.clamp(1, 8);
     let w = (doc.width * scale as f32).round() as u32;
     let h = (doc.height * scale as f32).round() as u32;
@@ -126,7 +129,11 @@ pub fn composite(doc: &Document, scale: u32) -> Result<Pixels, String> {
     }
     let mut out = vec![if doc.transparent { [0.; 4] } else { [1.; 4] }; w as usize * h as usize];
     render(doc, None, &mut out, w, h, scale, 0)?;
-    Pixels::from_samples(w, h, Depth::F32, out.into_iter().flatten().collect())
+    let mut pixels = Pixels::from_samples(w, h, Depth::F32, out.into_iter().flatten().collect())?;
+    if !doc.color.icc_profile.is_empty() {
+        pixels.assign_rgb_profile(doc.color.icc_profile.clone(), doc.color.intent)?;
+    }
+    Ok(pixels)
 }
 fn render(
     doc: &Document,
@@ -276,4 +283,83 @@ fn mask(layer: &Layer, p: Pt, local: Option<(f32, f32)>) -> f32 {
     };
     let m = sample(mask, x, y);
     ((m[0] * 0.2126 + m[1] * 0.7152 + m[2] * 0.0722) * m[3]).clamp(0., 1.)
+}
+
+fn composite_cmyk(doc: &Document, scale: u32) -> Result<Pixels, String> {
+    let mut inks = Vec::new();
+    let mut dimensions = (0, 0);
+    for component in 0..4 {
+        let mut plane = doc.clone();
+        plane.color = Default::default();
+        for layer in &mut plane.layers {
+            if layer.is_group {
+                continue;
+            }
+            if matches!(
+                layer.blend,
+                Blend::Hue | Blend::Saturation | Blend::Color | Blend::Luminosity
+            ) {
+                return Err(
+                    "Nonseparable CMYK blend export needs an explicit RGB conversion".into(),
+                );
+            }
+            let source = if let Some(p) = layer.kind.pixels() {
+                p.clone()
+            } else {
+                let mut one = doc.clone();
+                let mut single = layer.clone();
+                single.parent = None;
+                single.blend = Blend::Normal;
+                single.opacity = 1.;
+                one.layers = vec![single];
+                one.transparent = true;
+                let png = crate::compositor::export_png(&one, 1)?;
+                let image = image::load_from_memory(&png)
+                    .map_err(|e| e.to_string())?
+                    .into_rgba8();
+                let p = Pixels::from_rgba(image.width(), image.height(), image.into_raw())
+                    .ok_or("Invalid vector coverage")?;
+                layer.kind = crate::document::LayerKind::Raster {
+                    pixels: p.clone(),
+                    origin: Pt::ZERO,
+                    size: Pt::new(doc.width, doc.height),
+                    rotation: 0.,
+                    shear: 0.,
+                };
+                layer.mask = None;
+                layer.filters = Default::default();
+                p
+            };
+            let source = source.in_document_color(&doc.color)?;
+            let native = source.native.as_ref().ok_or("Missing CMYK samples")?;
+            let authored = native.cmyk.as_ref().ok_or("Missing CMYK inks")?;
+            let values = authored
+                .chunks_exact(5)
+                .flat_map(|p| {
+                    let v = 1. - p[component];
+                    [v, v, v, p[4]]
+                })
+                .collect();
+            *layer.kind.pixels_mut().unwrap() =
+                Pixels::from_samples(source.w, source.h, Depth::F32, values)?;
+        }
+        let result = composite(&plane, scale)?;
+        dimensions = (result.w, result.h);
+        if inks.is_empty() {
+            inks.resize(result.w as usize * result.h as usize * 5, 0.);
+        }
+        for (i, p) in inks.chunks_exact_mut(5).enumerate() {
+            let value = result.sample(i);
+            p[component] = 1. - value[0];
+            p[4] = value[3];
+        }
+    }
+    Pixels::from_cmyk(
+        dimensions.0,
+        dimensions.1,
+        doc.color.depth,
+        inks,
+        doc.color.icc_profile.clone(),
+        doc.color.intent,
+    )
 }
