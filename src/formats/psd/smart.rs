@@ -109,7 +109,7 @@ pub(super) fn linked_files(bytes: &[u8]) -> Result<Vec<LinkedFile>, String> {
         } else {
             0
         };
-        let source = if &kind == b"liFD" {
+        let source = if &kind == b"liFD" && length > 0 {
             Some(item.take(length)?.to_vec())
         } else {
             None
@@ -126,7 +126,7 @@ pub(super) fn linked_files(bytes: &[u8]) -> Result<Vec<LinkedFile>, String> {
         if version >= 7 {
             item.take(1)?;
         }
-        let source = if &kind == b"liFE" && version == 2 {
+        let source = if &kind == b"liFE" && version == 2 && file_size > 0 {
             Some(item.take(file_size)?.to_vec())
         } else {
             source
@@ -1512,6 +1512,8 @@ mod tests {
                 .iter()
                 .any(|n| n.contains("no embedded source"))
         );
+        assert!(loaded.document.layers[0].source_attachment.is_none());
+        assert!(loaded.document.sources.is_empty());
         assert!(
             loaded.document.layers[0]
                 .psd_smart
