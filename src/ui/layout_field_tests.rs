@@ -25,7 +25,7 @@ impl Default for Seat {
 impl Seat {
     fn frame(&mut self, studio: &mut Studio, events: Vec<Event>, properties: bool) {
         self.time += 0.1;
-        let output = self.ctx.run_ui(
+        let mut output = self.ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900., 1800.))),
                 time: Some(self.time),
@@ -56,6 +56,7 @@ impl Seat {
             .shapes
             .iter()
             .for_each(|shape| visit(&shape.shape, &mut self.labels));
+        output.textures_delta.clear();
     }
 
     fn at(&self, value: &str) -> Pos2 {
