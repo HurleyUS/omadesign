@@ -290,15 +290,17 @@ impl SmartObject {
         Ok(out)
     }
     pub fn has_warp(&self) -> bool {
-        self.descriptor
-            .get("warp")
-            .and_then(D::object)
-            .is_some_and(|d| {
-                d.get("warpStyle")
-                    .and_then(D::text)
-                    .is_some_and(|s| s != "warpNone")
-            })
-            || self.descriptor.get("quiltWarp").is_some()
+        if self.descriptor.get("quiltWarp").is_some() {
+            return true;
+        }
+        let Some(warp) = self.descriptor.get("warp").and_then(D::object) else {
+            return false;
+        };
+        match text(warp, "warpStyle").as_str() {
+            "" | "warpNone" => false,
+            "warpCustom" => !identity_mesh(warp),
+            _ => true,
+        }
     }
     /// Read editable smart-filter controls from the retained Photoshop descriptor.
     /// Args: none. Returns ordered filter controls; unsupported filters retain their full descriptors.
@@ -448,6 +450,59 @@ impl SmartObject {
         Ok(out)
     }
 }
+fn identity_mesh(warp: &Descriptor) -> bool {
+    if ["warpValue", "warpPerspective", "warpPerspectiveOther"]
+        .iter()
+        .any(|k| number(warp, k, 0.).abs() > 1e-9)
+    {
+        return false;
+    }
+    let (u, v) = (
+        number(warp, "uOrder", 0.) as usize,
+        number(warp, "vOrder", 0.) as usize,
+    );
+    if !(2..=64).contains(&u) || !(2..=64).contains(&v) {
+        return false;
+    }
+    let Some(bounds) = warp.get("bounds").and_then(D::object) else {
+        return false;
+    };
+    let Some(mesh) = warp.get("customEnvelopeWarp").and_then(D::object) else {
+        return false;
+    };
+    let Some(D::ObjectArray { items, .. }) = mesh.get("meshPoints") else {
+        return false;
+    };
+    if items.len() != 2 {
+        return false;
+    }
+    for (axis, unit, values) in items {
+        if unit != b"#Pxl" || values.len() != u * v {
+            return false;
+        }
+        let (start, end, horizontal) = match axis.as_str() {
+            "Hrzn" => (number(bounds, "Left", 0.), number(bounds, "Rght", 0.), true),
+            "Vrtc" => (
+                number(bounds, "Top ", 0.),
+                number(bounds, "Btom", 0.),
+                false,
+            ),
+            _ => return false,
+        };
+        for (i, &value) in values.iter().enumerate() {
+            let t = if horizontal {
+                (i % u) as f64 / (u - 1) as f64
+            } else {
+                (i / u) as f64 / (v - 1) as f64
+            };
+            if (value - (start + (end - start) * t)).abs() > 1e-6 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn object_mut<'a>(d: &'a mut Descriptor, key: &str) -> Option<&'a mut Descriptor> {
     match &mut d.fields.iter_mut().find(|(k, _)| k == key)?.1 {
         D::Object(d) => Some(d),
@@ -1121,6 +1176,10 @@ mod tests {
         assert!(original.bytes().starts_with(b"\x89PNG"));
         let smart = layer.psd_smart.as_ref().unwrap().clone();
         assert_eq!(smart.quad, [0., 0., 8., 0., 7., 8., 0., 7.]);
+        assert!(
+            !smart.has_warp(),
+            "Independent identity mesh must remain recomputable"
+        );
         assert_eq!(smart.filters().len(), 1);
         assert_eq!(
             smart.filters()[0].settings.as_ref().unwrap().values[0],
