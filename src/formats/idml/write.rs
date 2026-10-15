@@ -688,11 +688,13 @@ impl Exporter<'_> {
 }
 /// Resolve portable font names. Args: local font path or project ID. Returns family and style when available.
 fn font_info(path: &str) -> Option<(String, String)> {
-    let bytes = if path.starts_with("omatype:") {
-        crate::text::project_font_bytes(path)?
-    } else {
-        std::sync::Arc::new(std::fs::read(path).ok()?)
-    };
+    if path.is_empty() {
+        return None;
+    }
+    let bytes = crate::text::font_bytes_for(&TypeRun {
+        font: path.into(),
+        ..Default::default()
+    })?;
     let face = rustybuzz::ttf_parser::Face::parse(&bytes, 0).ok()?;
     let name = |id| {
         face.names()
