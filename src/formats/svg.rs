@@ -1614,7 +1614,7 @@ mod tests {
             .unwrap();
         assert_eq!(run.content, "Vector");
         assert!((run.spans[0].hscale.unwrap() - 175.).abs() < 0.001);
-        assert!(mean < 0.1, "max={maximum}, mean={mean}");
+        assert!(mean < 0.1, "max={maximum}, mean={mean}, face={}, px={}, origin={:?}, spans={:?}", run.font, run.px, run.origin, run.spans);
         let restored = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
         assert_eq!(
             serde_json::to_value(&restored).unwrap(),
