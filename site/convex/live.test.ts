@@ -2,7 +2,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
 const alice = "a".repeat(64),
   bob = "b".repeat(64);
@@ -303,5 +303,95 @@ describe("Authenticated live sessions", () => {
         ...exchange,
       }),
     ).rejects.toThrow("Sign in");
+  });
+  it("creates near-limit seeds using bounded quota metadata and rejects session101", async () => {
+    const { owner } = await setup();
+    const projectId = await owner.mutation(api.projects.create, {
+      title: "Quota read bound",
+    });
+    const seed = JSON.stringify({
+      "": "Object",
+      "/payload": { Value: "x".repeat(499900) },
+    });
+    expect(new TextEncoder().encode(seed).length).toBeLessThan(500000);
+    for (let index = 0; index < 34; index++)
+      await owner.mutation(api.live.create, { projectId, seed });
+    const measured = await owner.mutation(async (ctx) => {
+      const session = await ctx.runMutation(
+        api.live.create,
+        { projectId, seed },
+        { transactionLimits: { bytesRead: 8192 } },
+      );
+      return { session, metrics: await ctx.meta.getTransactionMetrics() };
+    });
+    expect(measured.metrics.bytesRead.used).toBeLessThan(8192);
+    expect(measured.metrics.documentsRead.used).toBeLessThanOrEqual(6);
+    for (let index = 35; index < 100; index++)
+      await owner.mutation(api.live.create, {
+        projectId,
+        seed: '{"":"Object"}',
+      });
+    await expect(
+      owner.mutation(api.live.create, { projectId, seed }),
+    ).rejects.toThrow("session limit");
+    const quota = await owner.query(async (ctx) =>
+      ctx.db
+        .query("cloudLiveQuotas")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .unique(),
+    );
+    expect(quota?.count).toBe(100);
+  }, 30000);
+
+  it("initializes existing session quotas one bounded page at a time without bypassing the limit", async () => {
+    const { t, owner, reviewer } = await setup();
+    const projectId = await owner.mutation(api.projects.create, {
+      title: "Legacy sessions",
+    });
+    const seed = JSON.stringify({
+      "": "Object",
+      "/payload": { Value: "x".repeat(499900) },
+    });
+    const ids = await t.run(async (ctx) => {
+      const ids = [];
+      for (let index = 0; index < 3; index++)
+        ids.push(
+          await ctx.db.insert("cloudLiveSessions", {
+            projectId,
+            seed,
+            revision: 0,
+          }),
+        );
+      return ids;
+    });
+    await expect(
+      owner.mutation(api.live.create, { projectId, seed }),
+    ).rejects.toThrow("Initialize");
+    const first = await owner.mutation(internal.live.initializeQuotaPage, {
+      projectId,
+    });
+    expect(first.ready).toBe(false);
+    expect(first.bytesRead).toBeLessThan(600000);
+    await expect(
+      owner.mutation(api.live.create, { projectId, seed }),
+    ).rejects.toThrow("initializing");
+    await owner.action(api.live.initializeQuota, { projectId });
+    await owner.mutation(api.live.create, { projectId, seed });
+    const joined = await owner.mutation(api.live.join, {
+      session: ids[0],
+      actor: "f".repeat(64),
+    });
+    expect(joined.seed).toBe(seed);
+    const quota = await owner.query(async (ctx) =>
+      ctx.db
+        .query("cloudLiveQuotas")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .unique(),
+    );
+    expect(quota?.count).toBe(4);
+    expect(quota?.ready).toBe(true);
+    await expect(
+      reviewer.action(api.live.initializeQuota, { projectId }),
+    ).rejects.toThrow("access");
   });
 });

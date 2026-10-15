@@ -1,4 +1,5 @@
-import { mutation, query } from "./_generated/server";
+import { action, internalMutation, mutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { access, deviceArg, fail } from "./cloudAuth";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
@@ -87,16 +88,92 @@ export const create = mutation({
       base[""] !== "Object"
     )
       fail("Invalid live document seed.");
-    const sessions = await ctx.db
-      .query("cloudLiveSessions")
+    let quota = await ctx.db
+      .query("cloudLiveQuotas")
       .withIndex("by_project", (q) => q.eq("projectId", a.projectId))
-      .take(100);
-    if (sessions.length >= 100) fail("Live session limit reached.");
-    return ctx.db.insert("cloudLiveSessions", {
+      .unique();
+    if (!quota) {
+      const legacy = await ctx.db
+        .query("cloudLiveSessions")
+        .withIndex("by_project", (q) => q.eq("projectId", a.projectId))
+        .take(1);
+      if (legacy.length)
+        fail(
+          "Initialize the live session quota before creating another session.",
+        );
+      const quotaId = await ctx.db.insert("cloudLiveQuotas", {
+        projectId: a.projectId,
+        count: 0,
+        ready: true,
+        cursor: null,
+      });
+      quota = (await ctx.db.get(quotaId))!;
+    }
+    if (!quota.ready)
+      fail("Live session quota is initializing. Retry shortly.");
+    if (quota.count >= 100) fail("Live session limit reached.");
+    const session = await ctx.db.insert("cloudLiveSessions", {
       projectId: a.projectId,
       seed: a.seed,
       revision: 0,
     });
+    await ctx.db.patch(quota._id, { count: quota.count + 1 });
+    return session;
+  },
+});
+
+export const initializeQuotaPage = internalMutation({
+  args: {
+    ...deviceArg,
+    projectId: v.id("cloudProjects"),
+  },
+  returns: v.object({ ready: v.boolean(), bytesRead: v.number() }),
+  handler: async (ctx, a) => {
+    await access(ctx, a.projectId, a.deviceToken, "write");
+    const quota = await ctx.db
+      .query("cloudLiveQuotas")
+      .withIndex("by_project", (q) => q.eq("projectId", a.projectId))
+      .unique();
+    if (quota?.ready)
+      return {
+        ready: true,
+        bytesRead: (await ctx.meta.getTransactionMetrics()).bytesRead.used,
+      };
+    const count = quota?.count ?? 0;
+    const cursor = quota?.cursor ?? null;
+    const page = await ctx.db
+      .query("cloudLiveSessions")
+      .withIndex("by_project", (q) => q.eq("projectId", a.projectId))
+      .paginate({ cursor, numItems: 1, maximumBytesRead: 600_000 });
+    const total = count + page.page.length;
+    const ready = page.isDone || total >= 100;
+    const value = {
+      projectId: a.projectId,
+      count: total,
+      ready,
+      cursor: ready ? null : page.continueCursor,
+    };
+    if (quota) await ctx.db.replace(quota._id, value);
+    else await ctx.db.insert("cloudLiveQuotas", value);
+    return {
+      ready,
+      bytesRead: (await ctx.meta.getTransactionMetrics()).bytesRead.used,
+    };
+  },
+});
+
+export const initializeQuota = action({
+  args: { ...deviceArg, projectId: v.id("cloudProjects") },
+  returns: v.null(),
+  handler: async (ctx, a) => {
+    for (let page = 0; page <= 100; page++) {
+      const progress = await ctx.runMutation(
+        internal.live.initializeQuotaPage,
+        a,
+      );
+      if (progress.ready) return null;
+    }
+    fail("Live session quota initialization needs a retry.");
   },
 });
 

@@ -96,6 +96,17 @@ export async function handleCloud(request: Request) {
     const client = new ConvexHttpClient(process.env.CONVEX_URL!);
     const bearer = request.headers.get("Authorization");
     if (bearer?.startsWith("Bearer ")) client.setAuth(bearer.slice(7));
+    if (operation === "live:create") {
+      await client.action(
+        makeFunctionReference<"action">("live:initializeQuota"),
+        {
+          projectId: args.projectId,
+          ...(args.deviceToken === undefined
+            ? {}
+            : { deviceToken: args.deviceToken }),
+        },
+      );
+    }
     const value = queries.has(operation)
       ? await client.query(makeFunctionReference<"query">(operation), args)
       : await client.mutation(
