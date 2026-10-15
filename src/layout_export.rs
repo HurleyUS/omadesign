@@ -364,9 +364,9 @@ fn axis_css(shape: &Shape, parent: Option<&Shape>, horizontal: bool, css: &mut S
         let _ = write!(css, "height:{:.3}px;", span.max(1.));
     }
     if let Some(min) = min {
-        let _ = write!(css, "min-{name}:{:.3}px;", min.max(0.));
-    } else if sizing == Sizing::Fill {
-        let _ = write!(css, "min-{name}:0;");
+        let _ = write!(css, "min-{name}:{:.3}px;", min.max(1.));
+    } else {
+        let _ = write!(css, "min-{name}:1px;");
     }
     if let Some(max) = max {
         let _ = write!(css, "max-{name}:{:.3}px;", max.max(1.));
@@ -737,7 +737,11 @@ impl<'a> Html<'a> {
                 } else {
                     "target"
                 };
-                if let Some(value) = interaction["action"][kind].get_mut(key) {
+                if let Some(value) = interaction
+                    .get_mut("action")
+                    .and_then(|a| a.get_mut(kind))
+                    .and_then(|a| a.get_mut(key))
+                {
                     if let Some(id) = value.as_u64() {
                         *value = serde_json::Value::String(id.to_string());
                     }
@@ -934,6 +938,7 @@ fn portable_variant_ids(
 }
 
 pub fn export_html(doc: &Document, layer: usize, frame_id: u64) -> Result<String, String> {
+    crate::layout::validate_hierarchy(doc)?;
     let frame = doc
         .find_shape(layer, frame_id)
         .filter(|s| s.layout.frame)

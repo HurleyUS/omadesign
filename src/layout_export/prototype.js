@@ -2,15 +2,17 @@
 'use strict';
 const stage=document.getElementById('stage'), overlay=document.getElementById('overlay');
 const history=[], overlays=[], committed=new Map(), hoverRestore=new Map();
-let current=__ROOT__, animation;
+let current=__ROOT__, animation, hovered=null, pointer=null, lastInteraction={transition:"Instant",duration_ms:0};
 const variantTemplate=(node,id)=>document.getElementById('variant-'+node.dataset.variantContext+'-'+node.dataset.component+'-'+id);
 const template=id=>document.getElementById('screen-'+id);
 const frame=()=>stage.firstElementChild;
 const top=()=>overlays.length?overlays[overlays.length-1].node:frame();
 const focus=node=>(node.querySelector('.interactive')||node).focus({preventScroll:true});
 function restoreHover(){
+ const changed=hoverRestore.size>0;
  for(const [node,original] of hoverRestore){if(node.isConnected){node.replaceWith(original);applyCommittedChildren(original);}}
  hoverRestore.clear();
+ return changed;
 }
 function replaceVariant(node,id){
  const source=variantTemplate(node,id);
@@ -75,7 +77,7 @@ function gridAxis(node,tracks,axis){
  }
  if(!hug){
   const fractions=tracks.flatMap((track,i)=>trackKind(track)==='Fraction'?[i]:[]),fixed=sizes.reduce((sum,size,i)=>sum+(fractions.includes(i)?0:size),0);
-  const available=(column?node.clientWidth:node.clientHeight)-(column?parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight):parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom));
+  const available=(column?parseFloat(cs.width):parseFloat(cs.height))-(column?parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight):parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom));
   allocate(tracks,sizes,fractions,available-fixed-gap*(count-1),true);
  }else{
   const fractions=tracks.flatMap((t,i)=>trackKind(t)==='Fraction'?[i]:[]);
@@ -138,6 +140,7 @@ function modal(){
  geometry();
 }
 function closeOverlay(){
+ if(animation){const stop=animation;animation=null;stop();}
  const entry=overlays.pop();if(!entry)return false;
  entry.node.remove();modal();
  if(entry.focus&&entry.focus.isConnected&&!entry.focus.closest('[inert]'))entry.focus.focus({preventScroll:true});
@@ -147,6 +150,7 @@ function closeOverlay(){
 function snapshot(){
  const r=frame().getBoundingClientRect(), canvas=document.createElement('div');
  Object.assign(canvas.style,{position:'fixed',left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px',overflow:'hidden',containerType:'inline-size',pointerEvents:'none',zIndex:'2147483647'});
+ canvas.inert=true;canvas.setAttribute('aria-hidden','true');
  const base=frame().cloneNode(true);base.inert=true;canvas.append(base);
  for(const entry of overlays)canvas.append(entry.node.cloneNode(true));
  canvas.querySelectorAll('[id]').forEach(n=>n.removeAttribute('id'));
@@ -167,8 +171,9 @@ function transition(before,interaction){
  (overlay.open?overlay:document.body).append(before);
  if(overlay.open){const r=overlay.getBoundingClientRect();before.style.left=r.left+'px';before.style.top=r.top+'px';}
  const animations=[old.animate(oldKeys,{duration,easing:'linear',fill:'both'}),next.animate(keys,{duration,easing:'linear',fill:'both'})];
- const cleanup=()=>{animations.forEach(a=>a.cancel());before.remove();};animation=cleanup;
- Promise.all(animations.map(a=>a.finished.catch(()=>{}))).then(()=>{cleanup();if(animation===cleanup)animation=null;});
+ const live=[frame(),...overlays.map(e=>e.node)],opacities=live.map(n=>n.style.opacity);live.forEach(n=>n.style.opacity='0');
+ let done=false;const cleanup=()=>{if(done)return;done=true;animations.forEach(a=>a.cancel());before.remove();live.forEach((n,i)=>n.style.opacity=opacities[i]);};animation=cleanup;
+ Promise.all(animations.map(a=>a.finished.catch(()=>{}))).then(()=>{cleanup();if(animation===cleanup){animation=null;settleHover();}});
 }
 function validate(node,handlers){
  for(const i of handlers){const a=i.action;
@@ -177,6 +182,7 @@ function validate(node,handlers){
  }
 }
 function act(node,i){
+ lastInteraction=i;
  const a=i.action;
  if(a.Navigate){
   if(current===a.Navigate.target)return false;
@@ -200,7 +206,7 @@ function act(node,i){
   if(i.trigger==='Hover'){
    if(!hoverRestore.has(instance))hoverRestore.set(instance,instance.cloneNode(true));
    const original=hoverRestore.get(instance);hoverRestore.delete(instance);
-   const next=replaceVariant(instance,id);hoverRestore.set(next,original);applyCommittedChildren(next);return true;
+   const next=replaceVariant(instance,id);hoverRestore.set(next,original);applyCommittedChildren(next);geometry();return true;
   }
   committed.set(key,id);
   for(const [hovered] of hoverRestore)if(hovered.dataset.component===key)hoverRestore.delete(hovered);
@@ -210,22 +216,35 @@ function act(node,i){
 }
 function applyCommittedChildren(node){for(const child of node.querySelectorAll('[data-component]'))if(child.isConnected)applyCommitted(child);}
 function dispatch(event,trigger){
+ if(animation){event.preventDefault();return;}
  const node=event.target.closest('[data-node]');if(!node||!top().contains(node)||node.closest('[inert]'))return;
  for(let ancestor=node;ancestor&&ancestor!==document.body;ancestor=ancestor.parentElement){
   const handlers=JSON.parse(ancestor.dataset.actions||'[]').filter(i=>i.trigger===trigger);
   if(!handlers.length)continue;
   if(trigger==='Hover'&&event.relatedTarget&&ancestor.contains(event.relatedTarget))return;
   event.preventDefault();
-  try{validate(ancestor,handlers);const before=snapshot();let changed=false;for(const i of handlers)changed=act(ancestor,i)||changed;if(changed)transition(before,handlers[handlers.length-1]);}
+  try{validate(ancestor,handlers);if(animation){const stop=animation;animation=null;stop();}const before=snapshot();let changed=false;for(const i of handlers)changed=act(ancestor,i)||changed;if(changed)transition(before,handlers[handlers.length-1]);}
   catch(error){document.getElementById('prototype-error').textContent=error.message;}
   return;
  }
 }
 document.addEventListener('click',e=>dispatch(e,'Click'));
-document.addEventListener('pointerover',e=>dispatch(e,'Hover'));
 document.addEventListener('pointerdown',e=>dispatch(e,'Press'));
-document.addEventListener('pointerout',event=>{
- for(const [node,original] of hoverRestore)if(node.contains(event.target)&&(!event.relatedTarget||!node.contains(event.relatedTarget))){node.replaceWith(original);applyCommittedChildren(original);hoverRestore.delete(node);geometry();}
+function settleHover(){
+ if(animation)return;
+ const target=pointer?document.elementFromPoint(pointer[0],pointer[1]):null;
+ let node=target?.closest('[data-node]'),handlers=[];
+ if(node&&top().contains(node)&&!node.closest('[inert]')){
+  for(;node&&node!==document.body;node=node.parentElement){handlers=JSON.parse(node.dataset.actions||'[]').filter(i=>i.trigger==='Hover');if(handlers.length)break;}
+ }else node=null;
+ const key=handlers.length?node.dataset.node:null;if(key===hovered)return;
+ const before=snapshot();let changed=restoreHover();hovered=key;
+ if(key)node=(top().dataset.node===key?top():top().querySelector('[data-node="'+key+'"]'))||node;
+ try{if(key){validate(node,handlers);for(const i of handlers)changed=act(node,i)||changed;}geometry();if(changed)transition(before,lastInteraction);}
+ catch(error){document.getElementById('prototype-error').textContent=error.message;}
+}
+for(const name of ['pointermove','pointerover','pointerout'])document.addEventListener(name,event=>{
+ pointer=name==='pointerout'&&!event.relatedTarget?null:[event.clientX,event.clientY];settleHover();
 });
 document.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.matches('.interactive'))dispatch(e,'Click');});
 overlay.addEventListener('cancel',e=>{e.preventDefault();closeOverlay();});

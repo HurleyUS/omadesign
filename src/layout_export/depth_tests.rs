@@ -54,7 +54,7 @@ fn graph() -> (Document, u64, u64, u64, u64) {
     doc.layers[0].kind.shapes_mut().unwrap().push(a);
     doc.layers[1].kind.shapes_mut().unwrap().push(b);
     doc.layers[2].kind.shapes_mut().unwrap().extend([o1, o2]);
-    button(
+    let go = button(
         &mut doc,
         0,
         ids.0,
@@ -63,6 +63,8 @@ fn graph() -> (Document, u64, u64, u64, u64) {
         10.,
         10.,
     );
+    doc.find_shape_mut(0, go).unwrap().layout.interactions[0].transition = Transition::SlideLeft;
+    doc.find_shape_mut(0, go).unwrap().layout.interactions[0].duration_ms = 5000;
     button(
         &mut doc,
         0,
@@ -82,6 +84,7 @@ fn graph() -> (Document, u64, u64, u64, u64) {
         90.,
     );
     button(&mut doc, 1, ids.1, "Back A", Action::Back, 710., 10.);
+    button(&mut doc, 0, ids.0, "Back root", Action::Back, 10., 130.);
     button(
         &mut doc,
         2,
@@ -211,9 +214,15 @@ fn conflicting_variant_rules_are_scoped_to_emitted_state_and_export_deterministi
         crate::layout_components::insert_instance(&mut doc, mid, 0, Pt::new(120., 100.), Some(a))
             .unwrap();
     doc.find_shape_mut(0, instance).unwrap().layout.interactions = vec![
-        interaction(Action::SetVariant { component: v1 }),
+        Interaction {
+            transition: Transition::SlideRight,
+            duration_ms: 900,
+            ..interaction(Action::SetVariant { component: v1 })
+        },
         Interaction {
             trigger: Trigger::Hover,
+            transition: Transition::Dissolve,
+            duration_ms: 700,
             ..interaction(Action::SetVariant { component: v2 })
         },
     ];
@@ -231,6 +240,32 @@ fn conflicting_variant_rules_are_scoped_to_emitted_state_and_export_deterministi
     let label_instance =
         crate::layout_components::property_object(&doc, 0, instance, property).unwrap();
     let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+    let mut state = crate::layout_prototype::PrototypeState::default();
+    state.start(&reopened, a).unwrap();
+    state.activate(&reopened, instance, Trigger::Click).unwrap();
+    assert_eq!(state.active_variants.get(&instance), Some(&v1));
+    for name in ["Go B", "Back A"] {
+        let source = reopened
+            .layers
+            .iter()
+            .filter_map(|l| l.kind.shapes())
+            .flatten()
+            .find(|s| s.name == name)
+            .unwrap()
+            .id;
+        state.activate(&reopened, source, Trigger::Click).unwrap();
+    }
+    assert_eq!(state.active_variants.get(&instance), Some(&v1));
+    state.activate(&reopened, instance, Trigger::Hover).unwrap();
+    assert_eq!(state.active_variants.get(&instance), Some(&v2));
+    state.clear_hover();
+    assert_eq!(state.active_variants.get(&instance), Some(&v1));
+    let preview = state.preview_document(&reopened).unwrap();
+    let Geom::Text(label) = &preview.find_shape(0, label_instance).unwrap().geom else {
+        panic!()
+    };
+    assert_eq!(label.content, "Local café Ω");
+    assert_eq!(label.px, 18.);
     let html = export_html(&reopened, 0, a).unwrap();
     assert_eq!(html, export_html(&reopened, 0, a).unwrap());
     assert!(html.contains(&format!(
@@ -526,4 +561,87 @@ fn prototype_ids_remain_exact_above_javascript_number_precision() {
     let html = export_html(&doc, 0, root).unwrap();
     assert!(html.contains("let current=\"9007199254741100\""));
     assert!(html.contains("&quot;target&quot;:&quot;9007199254741101&quot;"));
+}
+
+#[test]
+fn capped_hug_and_fraction_tracks_keep_the_hand_derived_budget_in_exports() {
+    use crate::layout::{AutoStack, GridPlacement, GridTrack, GridTrackSize as Size, Sizing};
+    let mut doc = Document::new("Track limits", 600., 40., 96.);
+    doc.layers = vec![Layer::vector("Grid")];
+    let mut root = make_frame(Pt::ZERO, Pt::new(600., 40.));
+    root.layout.stack = Some(AutoStack {
+        flow: StackFlow::Grid,
+        padding: [0.; 4],
+        gap: 10.,
+        cross_gap: 0.,
+        column_tracks: vec![
+            GridTrack {
+                size: Size::Fixed(80.),
+                ..Default::default()
+            },
+            GridTrack {
+                size: Size::Hug,
+                min: Some(20.),
+                max: Some(60.),
+            },
+            GridTrack {
+                size: Size::Fraction(1.),
+                min: Some(80.),
+                max: Some(100.),
+            },
+            GridTrack {
+                size: Size::Fraction(2.),
+                ..Default::default()
+            },
+        ],
+        row_tracks: vec![GridTrack {
+            size: Size::Fixed(40.),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let id = root.id;
+    root.name = "Track limits".into();
+    doc.layers[0].kind.shapes_mut().unwrap().push(root);
+    let mut ids = Vec::new();
+    for column in 0..4 {
+        let mut child = make_frame(Pt::ZERO, Pt::new(if column == 1 { 120. } else { 20. }, 20.));
+        child.name = format!("Limit {column}");
+        child.layout = crate::layout::FrameLayout {
+            parent: Some(id),
+            width: if column == 1 {
+                Sizing::Fixed
+            } else {
+                Sizing::Fill
+            },
+            height: Sizing::Fill,
+            grid: GridPlacement {
+                column: Some(column),
+                row: Some(0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        ids.push(child.id);
+        doc.layers[0].kind.shapes_mut().unwrap().push(child);
+    }
+    crate::layout::reflow(&mut doc, 0, id);
+    let doc = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+    for (index, x, width) in [
+        (0, 0., 80.),
+        (1, 90., 120.),
+        (2, 160., 100.),
+        (3, 270., 330.),
+    ] {
+        let b = doc.find_shape(0, ids[index]).unwrap().geom.bbox();
+        assert!((b.min.x - x).abs() < 0.02);
+        assert!((b.width() - width).abs() < 0.02);
+    }
+    if let Ok(directory) = std::env::var("OMADESIGN_LAYOUT_PROOF") {
+        std::fs::write(
+            std::path::Path::new(&directory).join("grid-limits.html"),
+            export_html(&doc, 0, id).unwrap(),
+        )
+        .unwrap();
+    }
 }
