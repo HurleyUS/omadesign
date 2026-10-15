@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Inspect a publishing export independently with Node and libxml2.
- * Args: output IDML; optional --master-source IDML --native OMA, --master-image FILE --unavailable-source DIR. Returns a JSON receipt or rejects broken references and payloads.
+ * Args: output IDML; optional --master-source IDML --native OMA, --master-image FILE --unavailable-source DIR, --text-evidence JSON. Returns a JSON receipt or rejects broken references and payloads.
  */
 import fs from 'node:fs';
 import zlib from 'node:zlib';
@@ -84,7 +84,7 @@ for (const [key, value] of Object.entries({Top:9, InsideOrLeft:12, Bottom:15, Ou
 const stories = xmls.filter(([n]) => n.startsWith('Stories/'));
 assert.equal(stories.length, 1);
 const story = stories[0][1].toString();
-assert(story.includes(sourceFile ? 'Café &amp; typography' : 'Edited café'));
+if (!textEvidence) assert(story.includes(sourceFile ? 'Café &amp; typography' : 'Edited café'));
 assert(!story.includes('<Table') && !story.includes('<Note'));
 assert(story.includes('CharacterStyle/Emphasis'));
 const images = spreads.map(([, text]) => text.toString()).join('');
