@@ -478,6 +478,9 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
             let color = self.s.obj(e, b"Colr").and_then(|c| paint::color(self, c));
             if kind != Tag::of(b"Gaus") && color.is_none() { self.warn(format!("layer effect {kind} without a supported color")); continue; }
             let blend = self.s.enumeration(e, b"BlnM").and_then(|(id,v)| Blend::from_enum(id,v)).unwrap_or(Blend::Normal);
+            if self.s.f64(e,b"Comp").is_some_and(|v|v.abs()>1e-6) {
+                self.warn("layer effect intensity profile (uses the standard editor profile)");
+            }
             let finite = |value: Option<f64>, default: f64| value.filter(|v|v.is_finite()).unwrap_or(default);
             out.push(LayerEffect {
                 kind,

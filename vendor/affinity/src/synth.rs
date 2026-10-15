@@ -209,7 +209,7 @@ pub fn container(entries: &[(&str, &[u8], Method)], thumbnail_png: Option<&[u8]>
                 e.write_all(data).unwrap();
                 e.finish().unwrap()
             }
-            Method::Zstd => zstd::stream::encode_all(*data, 1).unwrap_or_default(),
+            Method::Zstd => zstd::stream::encode_all(*data, 1).expect("synthetic zstd fixture"),
         };
         let offset = out.len() as u64;
         out.extend(b"#Fil");
