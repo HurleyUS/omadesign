@@ -785,7 +785,6 @@ impl Reader<'_> {
         }
         if chunk.spans().iter().any(|span| {
             span.small_caps()
-                || !span.font().variations().is_empty()
                 || !matches!(
                     span.dominant_baseline(),
                     usvg::DominantBaseline::Auto | usvg::DominantBaseline::Alphabetic
@@ -867,6 +866,39 @@ impl Reader<'_> {
         let Some(face) = self.tree.fontdb().face(glyph.font) else {
             return Ok(false);
         };
+        let native_axes = self
+            .tree
+            .fontdb()
+            .with_face_data(glyph.font, |bytes, index| {
+                let Ok(font) = rustybuzz::ttf_parser::Face::parse(bytes, index) else {
+                    return false;
+                };
+                index == 0
+                    && font.variation_axes().into_iter().all(|axis| {
+                        chunk.spans().iter().all(|span| {
+                            let explicit = span
+                                .font()
+                                .variations()
+                                .iter()
+                                .find(|value| value.tag == axis.tag.to_bytes());
+                            let value = explicit.map(|value| value.value).unwrap_or_else(|| {
+                                if axis.tag.to_bytes() == *b"opsz"
+                                    && span.font_optical_sizing() == usvg::FontOpticalSizing::Auto
+                                {
+                                    span.font_size().get()
+                                } else {
+                                    axis.def_value
+                                }
+                            });
+                            (value.clamp(axis.min_value, axis.max_value) - axis.def_value).abs()
+                                < 0.0001
+                        })
+                    })
+            })
+            .unwrap_or(false);
+        if !native_axes {
+            return Ok(false);
+        }
         let font = match &face.source {
             usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _) => {
                 p.to_string_lossy().into_owned()
@@ -1267,6 +1299,21 @@ mod tests {
             serde_json::to_value(&restored).unwrap(),
             serde_json::to_value(&doc).unwrap()
         );
+    }
+
+    #[test]
+    fn svg_inactive_variation_settings_do_not_outline_static_font_text() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><text x="12" y="45" font-family="Liberation Sans" font-size="28" fill="#248" style="font-variation-settings:'wdth' 75" transform="scale(1.4 .8)">Vector</text></svg>"##;
+        let (doc, notes, _, mean) = compare_render(source);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(
+            doc.layers
+                .iter()
+                .filter_map(|layer| layer.kind.shapes())
+                .flatten()
+                .any(|shape| matches!(shape.geom, Geom::Text(_)))
+        );
+        assert!(mean < 0.1, "mean={mean}");
     }
 
     #[test]
