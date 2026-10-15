@@ -368,7 +368,9 @@ pub(super) fn keyboard_gesture(studio: &mut Studio, points: &[Pt], shift: bool, 
             return Err("Choose an editable photo and the Crop tool.".into());
         }
         let Some(&last) = points.get(1) else { return Err("Crop needs two opposite corners.".into()); };
+        let before = studio.photo.selected().unwrap().develop.clone();
         studio.commit_photo_crop(first, last);
+        if studio.photo.selected().unwrap().develop == before { return Err("Choose a crop with a larger width and height.".into()); }
         return Ok(());
     }
     if matches!(studio.tool, Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal | Tool::Smudge | Tool::Fill | Tool::Wand | Tool::Marquee | Tool::EllipseMarquee | Tool::Lasso | Tool::BezierLasso)
@@ -381,6 +383,12 @@ pub(super) fn keyboard_gesture(studio: &mut Studio, points: &[Pt], shift: bool, 
         studio.clone_source = Some(first);
         studio.status = "Source set".into();
         return Ok(());
+    }
+    if matches!(studio.tool, Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal | Tool::Smudge) {
+        let distance: f32 = points.windows(2).map(|pair| (pair[1] - pair[0]).length()).sum();
+        if distance / studio.brush.spacing_distance().max(0.01) > 65_536. {
+            return Err("Use a shorter stroke or fewer points.".into());
+        }
     }
     studio.reset_snap_gesture();
     match studio.tool {
@@ -417,6 +425,7 @@ pub(super) fn keyboard_gesture(studio: &mut Studio, points: &[Pt], shift: bool, 
         }
         _ => {
             start_drag(studio, first, first, shift, alt);
+            if studio.op.is_none() { return Err(studio.status.clone()); }
             for &point in &points[1..] { continue_drag(studio, point, shift, alt); }
             if points.len() == 1 && let Some(Op::Move { selection_on_click, .. }) = &studio.op {
                 studio.selection = selection_on_click.clone();

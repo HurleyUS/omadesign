@@ -15,6 +15,7 @@ struct Dialog {
     layer: Option<u64>,
     pixel_generation: u64,
     photo: Option<(usize, crate::photo::DevelopParams)>,
+    photo_generation: u64,
     tool: Tool,
     persona: Persona,
     points: String,
@@ -28,6 +29,7 @@ struct Dialog {
 impl Dialog {
     fn current(&self, studio: &Studio) -> bool {
         self.document == studio.swap_id
+            && self.photo_generation == studio.photo.sel_version
             && self.generation == studio.canvas_gen
             && self.selection == studio.selection
             && self.pixel_generation == studio.pixel_sel_gen
@@ -115,6 +117,7 @@ pub(crate) fn open(ctx: &egui::Context, studio: &Studio) {
             .photo
             .selected
             .and_then(|i| studio.photo.images.get(i).map(|p| (i, p.develop.clone()))),
+        photo_generation: studio.photo.sel_version,
         tool: studio.tool,
         persona: studio.persona,
         points: format!("{},{}; {},{}", first.x, first.y, last.x, last.y),
@@ -141,10 +144,16 @@ pub(super) fn show(ctx: &egui::Context, studio: &mut Studio) {
         &dialog.selection,
         dialog.tool,
         dialog.pixel_generation,
+        dialog.photo.as_ref().map(|(index, _)| *index),
+        dialog.photo_generation,
     ));
     let modal = egui::Modal::new(Id::new(ID)).show(ctx, |ui| {
         ui.set_width(380.);
         ui.heading(format!("{} with keyboard", dialog.tool.label()));
+        if dialog.persona == Persona::Photo && let Some(image) = studio.photo.selected() {
+            let (width, height) = image.develop.output_dim(image.preview.w, image.preview.h);
+            ui.label(format!("Photo coordinates: {width} × {height} px"));
+        }
         ui.label("Enter canvas coordinates in pixels. Use one point to click or sample, two to draw a line or region, and more to follow a path.");
         ui.push_id(scope, |ui| {
             let error = dialog.parse().err();
@@ -378,6 +387,9 @@ mod tests {
         let mut invalid = draft.clone();
         invalid.points = "NaN,1; 2,3".into();
         assert!(invalid.apply(&mut studio).is_err());
+        let mut too_long = draft.clone();
+        too_long.points = "0,0; 1000000,1000000".into();
+        assert!(too_long.apply(&mut studio).unwrap_err().contains("shorter"));
         let layer = studio.raster_target().unwrap();
         studio.doc.layers[layer].locked = true;
         assert!(draft.apply(&mut studio).unwrap_err().contains("unlocked"));
