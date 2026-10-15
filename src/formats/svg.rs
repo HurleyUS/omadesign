@@ -1629,26 +1629,28 @@ mod tests {
     }
 
     #[test]
-    fn large_vector_canvas_budgets_raster_fallbacks_by_object_size() {
+    fn large_vector_canvas_keeps_patterns_vector_at_any_object_size() {
         let source = |size| {
             format!(
                 r##"<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="80000"><defs><pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="2"/></pattern></defs><path d="M10 10h{size}v{size}H10Z" fill="url(#p)"/></svg>"##,
             )
         };
-        let (doc, notes) = read(&source(30), "Small fallback").unwrap();
-        assert_eq!(doc.size(), Pt::new(100000., 80000.));
-        let pixels = doc
-            .layers
-            .iter()
-            .find_map(|layer| layer.kind.pixels())
-            .unwrap();
-        assert!(pixels.w < 100 && pixels.h < 100);
-        assert_eq!(notes.len(), 1);
-        assert!(
-            read(&source(9000), "Large fallback")
-                .unwrap_err()
-                .contains("SVG layer exceeds 64 megapixels")
-        );
+        for size in [30, 9000] {
+            let (doc, notes) = read(&source(size), "Large vector paint").unwrap();
+            assert_eq!(doc.size(), Pt::new(100000., 80000.));
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+            assert!(
+                doc.layers
+                    .iter()
+                    .filter_map(|l| l.kind.shapes())
+                    .flatten()
+                    .any(|s| matches!(s.style.fill, Fill::Pattern(_)))
+            );
+            let preview = crate::compositor::render_export_preview(&doc, 400).unwrap();
+            assert_eq!((preview.width(), preview.height()), (400, 320));
+            assert!(crate::project::encode(&doc).unwrap().len() < 20_000);
+        }
     }
 
     #[test]

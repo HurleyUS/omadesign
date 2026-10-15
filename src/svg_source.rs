@@ -335,7 +335,7 @@ fn visit_sources(doc: &mut crate::document::Document, visit: &mut impl FnMut(&mu
 pub fn append_source(definitions: &mut String, source: &Arc<str>) -> String {
     use sha2::{Digest, Sha256};
     let prefix = format!("oma-resource-{:x}-", Sha256::digest(source.as_bytes()));
-    let marker = format!("<!--{prefix}-->");
+    let marker = format!("<!--{}-->", prefix.trim_end_matches('-'));
     if !definitions.contains(&marker) {
         definitions.push_str(&marker);
         definitions.push_str(&namespace(source, &prefix));
