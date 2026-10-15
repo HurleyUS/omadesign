@@ -134,3 +134,101 @@ pub fn path_data(path: &tiny_skia::Path) -> String {
     }
     out
 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SvgFilterGraph {
+    pub definitions: String,
+    pub original_definitions: String,
+    pub filters: Vec<String>,
+    pub transform: [f32; 6],
+    #[serde(default)]
+    pub reductions: Vec<String>,
+}
+
+impl SvgFilterGraph {
+    /// Apply the retained filter graph in its original coordinate system.
+    /// Args: export definitions, unique prefix and current editable vector content.
+    /// Returns a vector group; invalid singular placement leaves the content intact.
+    pub fn wrap(&self, definitions: &mut String, prefix: &str, content: String) -> String {
+        let placement = transform(self.transform);
+        let Some(inverse) = placement.invert() else {
+            return content;
+        };
+        definitions.push_str(&namespace(&self.definitions, prefix));
+        let filters = self
+            .filters
+            .iter()
+            .map(|id| format!("url(#{prefix}{id})"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!(
+            "<g transform=\"{}\" filter=\"{filters}\"><g transform=\"{}\">{content}</g></g>",
+            matrix(placement),
+            matrix(inverse)
+        )
+    }
+}
+
+/// Identify SVG operations the current renderer cannot execute.
+/// Args: filter XML. Returns one explicit reduction per unsupported primitive or external input.
+pub fn reductions(source: &str) -> Vec<String> {
+    let Ok(xml) = roxmltree::Document::parse(source) else {
+        return vec!["Invalid SVG effect source".into()];
+    };
+    let mut notes = Vec::new();
+    for node in xml.descendants().filter(|n| n.is_element()) {
+        let tag = node.tag_name().name();
+        if tag.starts_with("fe")
+            && !matches!(
+                tag,
+                "feBlend"
+                    | "feColorMatrix"
+                    | "feComponentTransfer"
+                    | "feComposite"
+                    | "feConvolveMatrix"
+                    | "feDiffuseLighting"
+                    | "feDisplacementMap"
+                    | "feDistantLight"
+                    | "feDropShadow"
+                    | "feFlood"
+                    | "feFuncR"
+                    | "feFuncG"
+                    | "feFuncB"
+                    | "feFuncA"
+                    | "feGaussianBlur"
+                    | "feImage"
+                    | "feMerge"
+                    | "feMergeNode"
+                    | "feMorphology"
+                    | "feOffset"
+                    | "fePointLight"
+                    | "feSpecularLighting"
+                    | "feSpotLight"
+                    | "feTile"
+                    | "feTurbulence"
+            )
+        {
+            notes.push(format!(
+                "SVG filter operation {tag} is not rendered; original source retained."
+            ));
+        }
+        if tag == "feImage"
+            && node.attributes().any(|a| {
+                a.name() == "href" && !a.value().starts_with('#') && !a.value().starts_with("data:")
+            })
+        {
+            notes.push("SVG filter linked feImage is not loaded; embed the image first.".into());
+        }
+        for attribute in ["in", "in2"] {
+            if let Some(
+                input @ ("BackgroundImage" | "BackgroundAlpha" | "FillPaint" | "StrokePaint"),
+            ) = node.attribute(attribute)
+            {
+                notes.push(format!(
+                    "SVG filter input {input} is reduced by the renderer; original source retained."
+                ));
+            }
+        }
+    }
+    notes
+}

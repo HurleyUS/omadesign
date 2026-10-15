@@ -731,6 +731,9 @@ fn motion_exported(shape: &Shape, prop: crate::motion::Prop) -> bool {
 fn export_warnings(doc: &Document) -> Vec<String> {
     let mut warnings = Vec::new();
     for layer in &doc.layers {
+        if let Some(graph) = &layer.svg_filter {
+            warnings.extend(graph.reductions.iter().cloned());
+        }
         if layer.filters.active() {
             warnings.extend(
                 crate::filter::export_notes(&layer.filters)
@@ -1454,6 +1457,9 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
         }
         if layer_body.is_empty() && !layer.is_group {
             continue;
+        }
+        if let Some(graph) = &layer.svg_filter {
+            layer_body = graph.wrap(&mut defs, &format!("oma-graph-{}-", layer.id), layer_body);
         }
         if independent {
             if let Some(mask_id) = write_layer_mask(&mut defs, layer)? {

@@ -275,7 +275,7 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
     }
     let mut metadata = HashMap::new();
     let mut edits = Vec::new();
-    let mut warnings = Vec::new();
+    let mut warnings = crate::svg_source::reductions(svg);
     let visibility = preserve_hidden_artwork(&xml, svg, &mut edits);
     // Keep hidden artwork editable: usvg deliberately discards display:none nodes.
     for (index, node) in xml.descendants().filter(|n| n.is_element()).enumerate() {
@@ -364,6 +364,11 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
         metadata,
         tree: &tree,
         definitions: normalized_definitions(&tree),
+        original_definitions: xml
+            .descendants()
+            .filter(|n| n.has_tag_name("filter"))
+            .map(|n| &svg[n.range()])
+            .collect(),
         pixel_bytes: 0,
         mask_sources: HashMap::new(),
     };
@@ -381,6 +386,7 @@ struct Reader<'a> {
     metadata: HashMap<String, Metadata>,
     tree: &'a usvg::Tree,
     definitions: String,
+    original_definitions: String,
     pixel_bytes: u64,
     mask_sources: HashMap<usize, MaskSource>,
 }
@@ -449,15 +455,6 @@ impl Reader<'_> {
             }
             match node {
                 usvg::Node::Group(g) => {
-                    let filters = native_filters(g);
-                    if filters.is_none() {
-                        self.raster(
-                            node,
-                            parent,
-                            "SVG filter appearance retained as a pixel layer",
-                        )?;
-                        continue;
-                    }
                     let mut layer = Layer::group(self.name(g.id(), "Group"));
                     layer.parent = parent;
                     layer.opacity = g.opacity().get();
@@ -466,7 +463,19 @@ impl Reader<'_> {
                         && g.opacity().get() == 1.
                         && g.blend_mode() == usvg::BlendMode::Normal;
                     self.meta(&mut layer, g.id());
-                    layer.filters = filters.unwrap();
+                    if !g.filters().is_empty() {
+                        layer.svg_filter = Some(crate::svg_source::SvgFilterGraph {
+                            definitions: self.definitions.clone(),
+                            original_definitions: self.original_definitions.clone(),
+                            filters: g.filters().iter().map(|f| f.id().to_string()).collect(),
+                            transform: matrix(g.abs_transform()),
+                            reductions: crate::svg_source::reductions(&format!(
+                                "<svg>{}</svg>",
+                                self.original_definitions
+                            )),
+                        });
+                        layer.pass_through = false;
+                    }
                     if let Some(clip) = g.clip_path() {
                         layer.artwork_masks.extend(self.clip_masks(
                             clip,
@@ -1056,29 +1065,6 @@ fn spread(mode: usvg::SpreadMethod) -> crate::gradient::Spread {
         usvg::SpreadMethod::Repeat => crate::gradient::Spread::Repeat,
         usvg::SpreadMethod::Reflect => crate::gradient::Spread::Reflect,
     }
-}
-fn native_filters(g: &usvg::Group) -> Option<crate::filter::FilterStack> {
-    let mut stack = crate::filter::FilterStack::default();
-    for filter in g.filters() {
-        if filter.primitives().len() != 1 {
-            return None;
-        }
-        match filter.primitives()[0].kind() {
-            usvg::filter::Kind::GaussianBlur(blur)
-                if (blur.std_dev_x().get() - blur.std_dev_y().get()).abs() < 0.001 =>
-            {
-                let (sx, sy) = g.abs_transform().get_scale();
-                if (sx - sy).abs() > 0.001 {
-                    return None;
-                }
-                stack.items.push(crate::filter::Fx::Blur {
-                    std: blur.std_dev_x().get() * sx,
-                });
-            }
-            _ => return None,
-        }
-    }
-    Some(stack)
 }
 fn matrix(t: Transform) -> [f32; 6] {
     [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]
