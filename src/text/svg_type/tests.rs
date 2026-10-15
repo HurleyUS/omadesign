@@ -225,3 +225,41 @@ fn svg_type_rtl_repeated_letters_keep_logical_carets_and_source_direction() {
         run.content
     );
 }
+
+#[test]
+fn svg_type_saved_metadata_cannot_add_executable_svg_content() {
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><text x="20" y="50" transform="rotate(10)">Safe type</text></svg>"##;
+    let (mut doc, _) = crate::formats::svg::read(source, "Safe type").unwrap();
+    let shape = doc
+        .layers
+        .iter_mut()
+        .filter_map(|l| l.kind.shapes_mut())
+        .flatten()
+        .find(|s| matches!(s.geom, Geom::Text(_)))
+        .unwrap();
+    let Geom::Text(run) = &mut shape.geom else {
+        unreachable!()
+    };
+    let svg = run.svg_text.as_mut().unwrap();
+    svg.definitions
+        .push_str("<script>alert(1)</script><image href=\"https://invalid.example/private.png\"/>");
+    let TextNode::Element {
+        attributes,
+        children,
+        ..
+    } = &mut svg.root
+    else {
+        unreachable!()
+    };
+    attributes.insert("onload".into(), "alert(1)".into());
+    children.push(TextNode::Element {
+        name: "script".into(),
+        attributes: BTreeMap::new(),
+        children: vec![],
+    });
+    let exported = crate::svg::export(&doc).unwrap();
+    let xml = roxmltree::Document::parse(&exported).unwrap();
+    assert!(!xml.descendants().any(|n| n.has_tag_name("script")
+        || n.attribute("onload").is_some()
+        || n.has_tag_name("image")));
+}

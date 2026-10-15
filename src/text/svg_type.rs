@@ -75,7 +75,7 @@ fn attributes(
         } else {
             a.name()
         };
-        if name.starts_with("on") || matches!(name, "id" | "class" | "style") {
+        if name.to_ascii_lowercase().starts_with("on") || matches!(name, "id" | "class" | "style") {
             continue;
         }
         if name == "href" && !a.value().starts_with('#') {
@@ -127,7 +127,32 @@ const PROPERTIES: &[&str] = &[
     "inline-size",
     "shape-inside",
     "line-height",
+    "stop-color",
+    "stop-opacity",
 ];
+
+const CSS_PROPERTIES: &[&str] = &[
+    "font-variation-settings",
+    "font-optical-sizing",
+    "font-kerning",
+    "font-feature-settings",
+    "white-space",
+    "text-orientation",
+];
+
+fn safe_value(value: &str) -> bool {
+    !value.contains([';', '{', '}'])
+        && (!value.contains("url(")
+            || value
+                .trim()
+                .strip_prefix("url(#")
+                .and_then(|v| v.strip_suffix(')'))
+                .is_some_and(|id| {
+                    !id.is_empty()
+                        && !id.contains(['(', ')', '\'', '"'])
+                        && !id.chars().any(char::is_whitespace)
+                }))
+}
 
 fn collect(
     node: roxmltree::Node<'_, '_>,
@@ -243,6 +268,9 @@ fn definition(node: roxmltree::Node<'_, '_>, sheet: &simplecss::StyleSheet<'_>, 
         out.push_str(&format!(" id=\"{}\"", escape(id)));
     }
     for (key, value) in attributes(node, sheet) {
+        if !safe_value(&value) {
+            continue;
+        }
         out.push_str(&format!(" {key}=\"{}\"", escape(&value)));
     }
     out.push('>');
@@ -250,6 +278,28 @@ fn definition(node: roxmltree::Node<'_, '_>, sheet: &simplecss::StyleSheet<'_>, 
         definition(child, sheet, out);
     }
     out.push_str(&format!("</{tag}>"));
+}
+
+fn safe_definitions(source: &str) -> String {
+    let source = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\">{source}</svg>"
+    );
+    let Ok(xml) = roxmltree::Document::parse_with_options(
+        &source,
+        roxmltree::ParsingOptions {
+            allow_dtd: false,
+            nodes_limit: 400000,
+            entity_resolver: None,
+        },
+    ) else {
+        return String::new();
+    };
+    let sheet = sheet(&xml);
+    let mut out = String::new();
+    for node in xml.root_element().children() {
+        definition(node, &sheet, &mut out);
+    }
+    out
 }
 
 /// Capture SVG type without discarding its nested attributes.
@@ -461,8 +511,35 @@ fn write_nodes(
             attributes,
             children,
         } => {
+            let name = if matches!(name.as_str(), "text" | "tspan" | "textPath") {
+                name.as_str()
+            } else {
+                "tspan"
+            };
             out.push_str(&format!("<{name}"));
+            let mut css = String::new();
             for (key, value) in attributes {
+                if !(PROPERTIES.contains(&key.as_str())
+                    || matches!(
+                        key.as_str(),
+                        "x" | "y"
+                            | "dx"
+                            | "dy"
+                            | "rotate"
+                            | "textLength"
+                            | "lengthAdjust"
+                            | "href"
+                            | "method"
+                            | "spacing"
+                            | "side"
+                            | "xml:space"
+                            | "transform"
+                    ))
+                    || !safe_value(value)
+                    || key == "href" && !value.starts_with('#')
+                {
+                    continue;
+                }
                 if matches!(
                     key.as_str(),
                     "data-oma-flow" | "data-oma-flow-source" | "inline-size" | "shape-inside"
@@ -483,9 +560,15 @@ fn write_nodes(
                 } else {
                     value.clone()
                 };
+                if CSS_PROPERTIES.contains(&key.as_str()) {
+                    css.push_str(&format!("{key}:{value};"));
+                    continue;
+                }
                 out.push_str(&format!(" {key}=\"{}\"", escape(&value)));
             }
-
+            if !css.is_empty() {
+                out.push_str(&format!(" style=\"{}\"", escape(&css)));
+            }
             out.push('>');
             for child in children {
                 write_nodes(child, run, cursor, range.clone(), out, false);
@@ -576,7 +659,7 @@ pub fn source(run: &TypeRun) -> Option<String> {
         .pre_scale(scale, scale);
     Some(wrap(
         &fragment,
-        &svg.definitions,
+        &safe_definitions(&svg.definitions),
         [
             matrix.sx, matrix.ky, matrix.kx, matrix.sy, matrix.tx, matrix.ty,
         ],
@@ -1026,7 +1109,11 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
         return out;
     };
     out.push_str("<text");
+    let mut css = String::new();
     for (key, value) in attributes {
+        if !(PROPERTIES.contains(&key.as_str()) || key == "xml:space") || !safe_value(value) {
+            continue;
+        }
         if !matches!(
             key.as_str(),
             "x" | "y"
@@ -1038,8 +1125,15 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
                 | "shape-inside"
                 | "transform"
         ) {
+            if CSS_PROPERTIES.contains(&key.as_str()) {
+                css.push_str(&format!("{key}:{value};"));
+                continue;
+            }
             out.push_str(&format!(" {key}=\"{}\"", escape(value)));
         }
+    }
+    if !css.is_empty() {
+        out.push_str(&format!(" style=\"{}\"", escape(&css)));
     }
     out.push_str(&format!(
         " data-oma-flow=\"{}\" data-oma-flow-source=\"{}\">",

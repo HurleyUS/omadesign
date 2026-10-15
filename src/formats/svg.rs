@@ -1386,13 +1386,14 @@ mod tests {
     }
 
     #[test]
-    fn svg_text_styles_keep_their_appearance_when_type_cannot_represent_them() {
+    fn svg_type_styles_remain_editable_with_their_appearance() {
         for source in [
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="65"><text x="10" y="45" font-size="28" fill="#248">A<tspan baseline-shift="super">2</tspan></text></svg>"##,
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="65"><text x="10" y="45" font-size="28" fill="#248">Vec<tspan fill="#c42">tor</tspan></text></svg>"##,
         ] {
             let (doc, notes, maximum, mean) = compare_render(source);
-            assert!(notes.iter().any(|note| note.contains("editable outlines")));
+            assert!(!notes.iter().any(|note|note.contains("editable outlines")),"{notes:?}");
+            assert!(doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().any(|s|matches!(s.geom,Geom::Text(_))));
             assert!(doc.layers.iter().all(|layer| layer.kind.pixels().is_none()));
             assert!(maximum <= 3 && mean < 0.02, "max={maximum}, mean={mean}");
         }
