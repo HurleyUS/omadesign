@@ -118,8 +118,11 @@ fn integrated_retained_cells_scan_base_changes_atomic_color_and_disabled_history
         COLOR
     );
     replica["changes"][0]["edit"]["writes"][0]["value"]["Pixels"]["native"]["intent"] = json!(1);
+    let profile = include_bytes!("../../formats/psd/fixtures/srgb-cc0.icc");
+    replica["changes"][0]["edit"]["writes"][0]["value"]["Pixels"]["native"]["icc_profile"] =
+        json!(pack(profile));
     replica["changes"][0]["edit"]["writes"][0]["value"]["Pixels"]["native"]["icc_bytes"] =
-        json!(128);
+        json!(profile.len());
     assert_eq!(
         crate::project::retained_feature_version(&replica).unwrap(),
         COLOR
@@ -147,4 +150,21 @@ fn integrated_retained_cells_scan_base_changes_atomic_color_and_disabled_history
                 .contains("Unsupported")
         );
     }
+    envelope["version"] = 23.into();
+    let directory = std::env::current_dir()
+        .unwrap()
+        .join(".artifacts")
+        .join(format!(
+            "native-preview-gate-{}",
+            crate::document::next_id()
+        ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("retained.oma");
+    std::fs::write(&path, envelope.to_string()).unwrap();
+    assert!(
+        crate::brand::load_preview_document(&path, false)
+            .unwrap_err()
+            .contains("Unsupported")
+    );
+    std::fs::remove_dir_all(directory).unwrap();
 }

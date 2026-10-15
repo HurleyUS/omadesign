@@ -79,7 +79,9 @@ pub(crate) fn retained_feature_version(value: &serde_json::Value) -> Result<u32,
     features::value_version(value)
 }
 
-fn validate_retained_json(text: &str) -> Result<(), String> {
+/// Refuse unsupported retained state before a project or preview reader can discard fields.
+/// Args: original JSON. Returns a version error before typed materialization.
+pub(crate) fn validate_retained_json(text: &str) -> Result<(), String> {
     let (required, declared) = features::serialized_version(text)?;
     if required > VERSION || declared.is_some_and(|version| !supports_version(version)) {
         return Err("Unsupported omadesign project version".into());

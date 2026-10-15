@@ -681,6 +681,7 @@ fn check_filters(stack: &crate::filter::FilterStack, budget: &mut usize) -> Resu
 }
 
 fn oma_document(bytes: &[u8]) -> Result<crate::document::Document, String> {
+    crate::project::validate_retained_json(std::str::from_utf8(bytes).map_err(|e| e.to_string())?)?;
     #[derive(Deserialize)]
     struct Project {
         version: u32,
@@ -710,6 +711,7 @@ pub(crate) fn load_full_preview_document(path: &Path, recovery: bool) -> Result<
 
 fn load_preview_document_with_budget(path: &Path, recovery: bool, complex: bool) -> Result<crate::document::Document, String> {
     let bytes = read_bounded(path, 64 * 1024 * 1024)?;
+    crate::project::validate_retained_json(std::str::from_utf8(&bytes).map_err(|e| e.to_string())?)?;
     if recovery {
         let meta: crate::project::SwapMeta =
             serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
@@ -800,6 +802,7 @@ fn prepare_preview_pixels(
         }
         px.data = crate::deep_color::storage::adopt(image.into_raw())?;
     }
+    px.validate_native()?;
     Ok(())
 }
 
