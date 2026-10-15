@@ -123,13 +123,15 @@ pub(super) fn field(
             ]
         }
     };
-    let sample = |position: f32| {
+    let sample = |position: f32, right: bool| {
         let first = &g.stops[0];
-        if position <= first.offset {
+        if position < first.offset || (!right && position == first.offset) {
             return channels(first.color);
         }
         for pair in g.stops.windows(2) {
-            if position <= pair[1].offset && pair[1].offset > pair[0].offset {
+            if (position < pair[1].offset || (!right && position == pair[1].offset))
+                && pair[1].offset > pair[0].offset
+            {
                 let t =
                     ((position - pair[0].offset) / (pair[1].offset - pair[0].offset)).clamp(0., 1.);
                 return channels(pair[0].color)
@@ -161,8 +163,8 @@ pub(super) fn field(
         stops.sort_by(f32::total_cmp);
         stops.dedup();
         for pair in stops.windows(2) {
-            let from = sample(if reverse { 1. - pair[0] } else { pair[0] });
-            let to = sample(if reverse { 1. - pair[1] } else { pair[1] });
+            let from = sample(if reverse { 1. - pair[0] } else { pair[0] }, !reverse);
+            let to = sample(if reverse { 1. - pair[1] } else { pair[1] }, reverse);
             if !functions.is_empty() {
                 cuts.push(Object::Real((cycle + pair[0] - start) / (end - start)));
             }
