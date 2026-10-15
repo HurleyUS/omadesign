@@ -569,7 +569,7 @@ mod native_type_acceptance {
     }
     #[test]
     fn native_type_paint_ligatures_rotation_gradient_masks_and_svg_matrix(){
-        let mut run=sample("fi fi");run.set_character_style(1,2,|s|s.fill=Some(Fill::Solid(Rgba::rgb(220,40,60))));assert_eq!(crate::text::glyph_count(&run),4);
+        let mut run=sample("fi fi");run.set_character_style(1,2,|s|s.fill=Some(Fill::Solid(Rgba::rgb(220,40,60))));assert_eq!(crate::text::glyph_count(&run),4);assert_eq!(crate::text::paint_groups(&run,&Fill::Solid(Rgba::rgb(0,0,220))).len(),3);
         run.transform=Some([1.,0.15,0.25,1.,30.,5.]);let mut doc=document(run);let shape=&mut doc.layers[0].kind.shapes_mut().unwrap()[0];shape.rotation=0.3;shape.style.fill=Fill::Linear{from:[0.,0.],to:[1.,0.],c0:Rgba::rgb(0,0,220),c1:Rgba::rgb(0,200,80)};shape.opacity=0.7;
         let svg=crate::svg::export(&doc).unwrap();assert!(compare(&svg,&doc)<0.1,"SVG and native painted affine type differ: {}",compare(&svg,&doc));
         doc.layers[0].kind.shapes_mut().unwrap()[0].visible=false;let svg=crate::svg::export(&doc).unwrap();assert!(compare(&svg,&doc)<0.01);

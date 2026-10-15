@@ -538,7 +538,7 @@ pub(crate) fn paint_groups(run:&TypeRun,inherited:&crate::document::Fill)->Vec<(
         let fill=run.character_style(glyph.cluster).fill.unwrap_or_else(||inherited.clone());
         let mut contours=glyph_contours(run,glyph);
         for point in contours.iter_mut().flatten(){*point=run.map_point(*point);}
-        if let Some((_,all))=groups.iter_mut().find(|(old,_)|*old==fill){all.extend(contours);}else{groups.push((fill,contours));}
+        if let Some((_,all))=groups.last_mut().filter(|(old,_)|*old==fill){all.extend(contours);}else{groups.push((fill,contours));}
     }}
     groups
 }
