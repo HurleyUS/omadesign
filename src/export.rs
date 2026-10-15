@@ -149,6 +149,10 @@ pub fn encode(
         progress.check()?;
         return Ok((bytes, vec![]));
     }
+    if let Source::Document(doc)=source && doc.color.model==crate::deep_color::cms::Model::Cmyk {
+        if settings.format!=Format::Tiff || settings.ai.is_some() {return Err("CMYK authoring exports as PSD, PSB or TIFF. Convert the document to RGB explicitly for PNG/JPEG.".into());}
+        let mut pixels=crate::deep_color::composite(doc,settings.scale)?;pixels.native.as_mut().unwrap().depth=crate::deep_color::document_depth(doc);return Ok((crate::deep_color::tiff::encode(&pixels)?,vec![]));
+    }
     let _native_memory;
     let mut raster = match source {
         Source::Photo(photo) => {
@@ -229,6 +233,10 @@ pub fn encode(
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95)
             .encode_image(&DynamicImage::ImageRgba8(rgba).into_rgb8())
             .map_err(|e| e.to_string())?;
+    } else if let Source::Document(doc)=source && !doc.color.icc_profile.is_empty() {
+        use image::ImageEncoder;
+        if settings.format==Format::Png {let mut encoder=image::codecs::png::PngEncoder::new(&mut bytes);encoder.set_icc_profile(doc.color.icc_profile.clone()).map_err(|e|e.to_string())?;raster.write_with_encoder(encoder).map_err(|e|e.to_string())?;}
+        else {let mut encoder=image::codecs::tiff::TiffEncoder::new(&mut bytes);encoder.set_icc_profile(doc.color.icc_profile.clone()).map_err(|e|e.to_string())?;raster.write_with_encoder(encoder).map_err(|e|e.to_string())?;}
     } else {
         raster
             .write_to(
