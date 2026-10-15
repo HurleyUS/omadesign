@@ -77,6 +77,10 @@ function allocate(tracks,sizes,indices,total,weighted){
   for(const c of frozen){sizes[c.i]=c.actual;remaining-=c.actual;active=active.filter(i=>i!==c.i);}
  }
 }
+function gridNatural(item,column){
+ const css=getComputedStyle(item),basis=item.hasAttribute('data-text-ink')&&item.dataset[column?'widthSizing':'heightSizing']==='Hug'?item.getBoundingClientRect()[column?'width':'height']:Number(item.dataset.basis.split(',')[column?0:1]);
+ return basis+(column?0:(parseFloat(css.marginTop)||0)+(parseFloat(css.marginBottom)||0));
+}
 function gridAxis(node,tracks,axis){
  const cs=getComputedStyle(node),column=axis==='Columns',gap=parseFloat(column?cs.columnGap:cs.rowGap)||0;
  const items=[...node.children].filter(n=>n.matches('[data-node]')&&getComputedStyle(n).position!=='absolute');
@@ -87,7 +91,7 @@ function gridAxis(node,tracks,axis){
  const hug=node.dataset[column?'widthSizing':'heightSizing']==='Hug';
  cells.sort((a,b)=>a.span-b.span||a.start-b.start);
  for(const cell of cells){
-  const itemCss=getComputedStyle(cell.item),basis=cell.item.hasAttribute('data-text-ink')&&cell.item.dataset[column?'widthSizing':'heightSizing']==='Hug'?cell.item.getBoundingClientRect()[column?'width':'height']:Number(cell.item.dataset.basis.split(',')[column?0:1]),natural=basis+(column?0:(parseFloat(itemCss.marginTop)||0)+(parseFloat(itemCss.marginBottom)||0)),indices=Array.from({length:cell.span},(_,j)=>cell.start+j);
+  const natural=gridNatural(cell.item,column),indices=Array.from({length:cell.span},(_,j)=>cell.start+j);
   const required=Math.max(0,natural-gap*(cell.span-1)),present=indices.reduce((sum,i)=>sum+sizes[i],0);if(required<=present)continue;
   const flexible=indices.filter(i=>trackKind(tracks[i])==='Hug');
   const fixed=indices.filter(i=>!flexible.includes(i)).reduce((sum,i)=>sum+sizes[i],0);
@@ -102,7 +106,7 @@ function gridAxis(node,tracks,axis){
   let unit=Math.max(0,...fractions.map(i=>sizes[i]/trackSize(tracks[i])));
   for(const cell of cells){
    const indices=Array.from({length:cell.span},(_,j)=>cell.start+j),flexible=indices.filter(i=>fractions.includes(i));
-   const fixed=indices.filter(i=>!flexible.includes(i)).reduce((sum,i)=>sum+sizes[i],0),natural=Number(cell.item.dataset.basis.split(',')[column?0:1]);
+   const fixed=indices.filter(i=>!flexible.includes(i)).reduce((sum,i)=>sum+sizes[i],0),natural=gridNatural(cell.item,column);
    const candidate=sizes.slice();allocate(tracks,candidate,flexible,natural-fixed-gap*(cell.span-1),true);
    unit=Math.max(unit,...flexible.map(i=>candidate[i]/trackSize(tracks[i])));
   }

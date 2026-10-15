@@ -540,6 +540,60 @@ fn advanced_grid_and_real_font_baselines_export_from_reopened_native_artwork() {
     let mut baseline = crate::project::decode(&crate::project::encode(&baseline).unwrap()).unwrap();
     crate::layout::reflow(&mut baseline, 0, bid);
     let expected:Vec<_>=baseline.layers[0].kind.shapes().unwrap().iter().map(|shape|{let b=shape.geom.bbox();serde_json::json!({"name":shape.name,"x":b.min.x,"y":b.min.y,"width":b.width(),"height":b.height(),"baseline":if let Geom::Text(run)=&shape.geom {Some(run.origin.y)}else{None}})}).collect();
+    let mut fractions = baseline.layout_snapshot();
+    let stack = fractions
+        .find_shape_mut(0, bid)
+        .unwrap()
+        .layout
+        .stack
+        .as_mut()
+        .unwrap();
+    stack.flow = StackFlow::Grid;
+    stack.cross_gap = 0.;
+    stack.column_tracks = vec![GridTrack {
+        size: Size::Fixed(600.),
+        ..Default::default()
+    }];
+    stack.row_tracks = vec![
+        GridTrack::default(),
+        GridTrack {
+            size: Size::Fraction(2.),
+            ..Default::default()
+        },
+    ];
+    for (row, shape) in fractions.layers[0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .iter_mut()
+        .filter(|shape| shape.id != bid)
+        .enumerate()
+    {
+        shape.layout.grid = GridPlacement {
+            column: Some(0),
+            row: Some(row as u32),
+            ..Default::default()
+        };
+    }
+    crate::layout::reflow(&mut fractions, 0, bid);
+    let fractions = crate::project::decode(&crate::project::encode(&fractions).unwrap()).unwrap();
+    let fraction_height = fractions.find_shape(0, bid).unwrap().geom.bbox().height();
+    let second_baseline = fractions.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .find_map(|shape| {
+            if let Geom::Text(run) = &shape.geom {
+                (run.px == 24.).then_some(crate::text::caret_pt(run, 0).y)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert!(fraction_height >= 3. * (48.336 + 14.304));
+    assert!((fraction_height / 3. + 24.168 - second_baseline).abs() < 0.02);
+    let fraction_expected:Vec<_>=fractions.layers[0].kind.shapes().unwrap().iter().map(|shape|{let b=shape.geom.bbox();serde_json::json!({"name":shape.name,"x":b.min.x,"y":b.min.y,"width":b.width(),"height":b.height(),"baseline":if let Geom::Text(run)=&shape.geom {Some(crate::text::caret_pt(run,0).y)}else{None}})}).collect();
     if let Ok(directory) = std::env::var("OMADESIGN_LAYOUT_PROOF") {
         let directory = std::path::Path::new(&directory);
         std::fs::create_dir_all(directory).unwrap();
@@ -547,6 +601,11 @@ fn advanced_grid_and_real_font_baselines_export_from_reopened_native_artwork() {
             ("grid.html", html),
             ("grid.svg", crate::svg::export_frame(&doc, 0, id).unwrap()),
             ("baseline.html", export_html(&baseline, 0, bid).unwrap()),
+            ("baseline-fr.html", export_html(&fractions, 0, bid).unwrap()),
+            (
+                "baseline-fr-expected.json",
+                serde_json::to_string(&fraction_expected).unwrap(),
+            ),
             (
                 "baseline.svg",
                 crate::svg::export_frame(&baseline, 0, bid).unwrap(),
