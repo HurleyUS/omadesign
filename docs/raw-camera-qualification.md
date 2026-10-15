@@ -9,8 +9,8 @@ extensions in `src/formats/raw.rs::EXTENSIONS` and the format guide. It includes
 80 candidate cases: 61 independently pinned public source URLs/hashes and 19
 cases awaiting a licensed source. The inventory names concrete capture axes and
 records every remaining axis as unqualified. It is not an exhaustive camera
-support list. No case currently has the complete reference and identity pins
-needed for a required pass.
+support list. The M50 RAW case has verified identity and reference pins ready for
+application checks. No camera case has passed those checks yet.
 
 ## Provenance
 
@@ -21,12 +21,13 @@ and
 [`crates/raw/tests/cr3_corpus.rs`](https://github.com/storytold/lightcraft/blob/0da998f24dfc03069d49867f8877af2bf7c51f94/crates/raw/tests/cr3_corpus.rs).
 The pinned source declares these fixtures CC0. Its MIT license was read before
 reuse; the manifest retains its attribution and complete permission notice.
-Only URLs, source hashes and attributed oracle metadata were reused. No external
-implementation or image asset was copied. Acquisition must still match the
-named URL, license and digest before using the source.
+Only URLs, source hashes and attributed oracle metadata were reused in the repo.
+Camera images and reference executables stay in private qualification storage.
+Acquisition must match the named URL, license and digest before using the source.
 
-Eight CR3 cases carry DNGLab 0.8.0 black-box sensor FNV-1a metadata, full sensor
-geometry and the upstream macOS release **archive** SHA-256. The archive hash is
+Eight CR3 cases carry DNGLab 0.8.0 black-box sensor FNV-1a metadata and full sensor
+geometry. Unprepared cases retain the upstream macOS release **archive** SHA-256;
+M50 RAW now pins the actual official Linux aarch64 executable. An archive hash is
 neither the executable hash nor the sensor-file SHA-256. These samples include
 masked borders. Photo exposes oriented, white-balanced, demosaiced RGB, so those
 sensor hashes cannot validate its developed pixels. The test-only native sensor
@@ -38,9 +39,10 @@ to independent oracles. The M50 C-RAW archive's 3:2 label conflicts with the pin
 4000x4000 shot crop; that exception is recorded without inferring native geometry.
 
 The parent supplied HEAD-only receipts for the exact M50 nice URL (28,349,772
-bytes) and iPhone 12 Pro data URL (29,195,592 bytes). Those sizes are recorded
-without claiming a download. The bare M50 `/4657` URL returns HTML; acquisition
-uses the complete pinned nice URL. The iPhone data URL redirects to `/download/data/`.
+bytes) and iPhone 12 Pro data URL (29,195,592 bytes). M50 was subsequently acquired
+and hash-verified; iPhone remains a HEAD-only receipt. The bare M50 `/4657` URL
+returns HTML; acquisition uses the complete pinned nice URL. The iPhone data URL
+redirects to `/download/data/`.
 
 The original PHOTO-03 exploration, original implementation brief, audit acceptance
 and `progress.json` alignment were read. The aligned scope is all advertised RAW
@@ -60,6 +62,8 @@ required run. Firmware and optional crop/opcode/frame descriptions may remain
 unknown without inventing a value. Non-exposed source tags still require an
 independently documented tag inspection; the native assertions cover the actual
 model/make, output geometry, orientation and WB.
+When present, `identity.crop` records `[left, top, width, height]` in source sensor
+pixels; it does not silently replace a decoder's measured output geometry.
 
 Reference kinds have separate meanings:
 
@@ -165,7 +169,7 @@ exact committed revisions; queued/interrupted logs are not passes. Use the exist
 Every build/test goes through its shared global heavy lock and canonical target:
 
 ```sh
-node scripts/serialized-cargo.mjs \
+node /home/michael/Projects/omadesign/.artifacts/craft-gap-stack/tooling/c4a4ce84171cd41c0db544efbb1c99c57e4bd26c/scripts/serialized-cargo.mjs \
   /home/michael/Projects/omadesign/.artifacts/craft-gap-stack/build-config.json \
   omadesign FULL_COMMIT test --locked --lib -- \
   formats::raw::qualification::tests::raw_camera_contract_ --test-threads=1
@@ -248,22 +252,32 @@ never deleted. No resource measurement runs concurrently with a compiler here.
 
 ## Remaining evidence
 
-All 80 cases still lack pinned developed-reference SHA-256/executable identities
-and complete verified in-file identity. Nineteen cases also lack source URLs and
+Seventy-nine cases still lack complete pinned references and verified in-file
+identity. Nineteen cases also lack source URLs and
 source hashes. The 61 public source pins establish provenance, not local corpus
-presence or decoding success. One pinned CC0 Canon M50 RAW and an official hash-verified DNGLab 0.8.0 executable
-are locally acquired. Serial reference preparation is scheduled; this acquisition
-is not a decode/reference/camera pass. The remaining sources are not locally
-claimed present.
-The eight DNGLab sensor metadata pins cannot close the missing native sensor-plane
+presence or decoding success. The pinned CC0 Canon M50 RAW and official
+hash-verified DNGLab 0.8.0 executable are locally acquired. Its canonical sensor
+reference matches the attributed DNGLab FNV exactly, and its separate LibRaw
+integration reference is pinned at 6024x4020. Full sensor CMP1 tags confirm 14-bit
+encoding at 6288x4056; decoded samples use 16-bit storage. DNGLab reports an active
+rectangle of 6022x4018 and a 6000x4000 shot inset, which remain distinct from the
+measured LibRaw output. Original source hashes before/after match. These are tool
+and reference receipts; application comparison, settings reopen and active
+cancellation have not passed. The remaining sources are not claimed present.
+The eight DNGLab metadata pins alone cannot close the native sensor-plane
 comparison. Historical private fixtures/reference bundles need recovery and rights
 review before binding or sharing.
 
 Contract tests cover missing corpora, hash changes, missing references, zero
 comparisons, future/invalid schemas, wrong sensor planes, optional skips, safe
 outputs and an original generated 64x48 DNG through the real Photo workflow. They
-have been prepared; the Rust tests are not compiled or executed. Targeted Rust
-formatting and Node syntax checks passed. The authorized narrow Node self-test
+passed at `6492b77debebc9628f433d42236b9a860fb953f9`: 103 passed, zero failed,
+three ignored. The first final link failed with `Input/output error`; one
+authorized identical retry linked and passed. Both receipts are preserved.
+Actual synthetic AHD cancellation stopped in 39.6 ms and the immediate next
+64x48 decode succeeded. The strict corpus, private camera fixture and real M50
+cancellation tests were ignored. Targeted Rust formatting and Node syntax checks
+passed. The authorized narrow Node self-test
 passed: `{"command":"self-test","status":"passed","contract_mutations":10,"camera_decodes":0}`.
 It also checks missing/changed file pins, reference corruption, zero required runs
 and optional skip accounting using four original bytes, then removes its own

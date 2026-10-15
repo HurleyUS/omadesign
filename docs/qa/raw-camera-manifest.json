@@ -2537,24 +2537,40 @@
       "required": true,
       "status": "not_yet_qualified",
       "identity": {
-        "make": null,
-        "model": null,
+        "make": "Canon",
+        "model": "EOS M50",
         "firmware": null,
-        "compression": "RAW lossless",
-        "cfa": null,
-        "bit_depth": null,
+        "compression": "CRX lossless (CMP1 encoding_type=0, image_levels=0)",
+        "cfa": "RGGB",
+        "bit_depth": 14,
         "sensor_dimensions": [
           6288,
           4056
         ],
-        "active_dimensions": null,
-        "output_dimensions": null,
-        "orientation": null,
-        "camera_wb": null,
-        "profile": null,
-        "crop": null,
-        "opcodes": null,
-        "frames": null
+        "active_dimensions": [
+          6022,
+          4018
+        ],
+        "output_dimensions": [
+          6024,
+          4020
+        ],
+        "orientation": 0,
+        "camera_wb": [
+          1103,
+          1024,
+          1945,
+          1024
+        ],
+        "profile": "LibRaw 0.22.2 camera matrix to linear sRGB; no embedded ICC",
+        "crop": [
+          276,
+          48,
+          6000,
+          4000
+        ],
+        "opcodes": "not DNG",
+        "frames": 1
       },
       "source": {
         "filename": "cr3-canon-m50-raw.cr3",
@@ -2562,7 +2578,7 @@
         "sha256": "1ba9ad6b51b315b88820eb0fe5fd7f52bc136ba37b1a5ca76825ebfe25b18058",
         "size_bytes": 28349772,
         "license": "CC0-1.0",
-        "provenance": "https://github.com/storytold/lightcraft/blob/0da998f24dfc03069d49867f8877af2bf7c51f94/xtask/src/main.rs#L868; upstream CC0 declaration lines 463-464; metadata only, actual file tags not read."
+        "provenance": "https://github.com/storytold/lightcraft/blob/0da998f24dfc03069d49867f8877af2bf7c51f94/xtask/src/main.rs#L868; upstream CC0 declaration lines 463-464. Acquired exact nice URL; source SHA-256 and length matched. CMP1 headers, DNGLab 0.8.0 metadata and system LibRaw 0.22.2 raw-identify tags were inspected."
       },
       "required_reference_kinds": [
         "libraw_integration",
@@ -2573,16 +2589,19 @@
           "id": "libraw-integration",
           "kind": "libraw_integration",
           "representation": "oriented-linear-srgb-rgb16le",
-          "filename": null,
-          "sha256": null,
-          "dimensions": null,
+          "filename": "m50-linear-srgb.rgb16le",
+          "sha256": "b0378fad8b04cc3b965efc377870a9cdf1da6aa224c901578f3597264197731b",
+          "dimensions": [
+            6024,
+            4020
+          ],
           "sensor_fnv1a64": null,
           "toolchain": {
             "name": "system/upstream LibRaw",
             "version": "0.22.2",
-            "executable_sha256": null,
+            "executable_sha256": "842a5537970389e3441909891447b4d143fe58fbddff6d8f88b2ec1edb5596e8",
             "archive_sha256": null,
-            "platform": null,
+            "platform": "linux-aarch64",
             "command": [
               "dcraw_emu",
               "-disars",
@@ -2597,11 +2616,14 @@
               "3",
               "-H",
               "0",
-              "-T",
+              "-o",
+              "1",
+              "-Z",
+              "-",
               "SOURCE"
             ]
           },
-          "provenance": "Separate system/upstream LibRaw invocation plus lossless RGB16LE extraction; integration reference, not an independent decoder implementation. Reference generation and toolchain identity remain missing.",
+          "provenance": "Separate system LibRaw 0.22.2-1 aarch64 invocation with the pinned flags. P6 RGB16 big-endian payload byte-swapped to oriented linear-sRGB RGB16LE. Integration reference; this is the same decoder implementation as the application. Source before/after SHA-256 matched.",
           "tolerance": {
             "mean": 0,
             "max": 0
@@ -2611,8 +2633,8 @@
           "id": "independent-sensor",
           "kind": "independent_sensor",
           "representation": "sensor-u16le-masked",
-          "filename": null,
-          "sha256": null,
+          "filename": "m50-sensor.u16le",
+          "sha256": "41524361c0005d0c1147d335e706507f8374f66686a277be1e239a98fa679a30",
           "dimensions": [
             6288,
             4056
@@ -2621,9 +2643,9 @@
           "toolchain": {
             "name": "DNGLab",
             "version": "0.8.0",
-            "executable_sha256": null,
-            "archive_sha256": "ee70805cb60f18d5ed62548c4e595f6cee0a33407e15358eb1766a46afc1c16e",
-            "platform": null,
+            "executable_sha256": "141a438add075718308c833f9b070aa77944dc843d8b12ac44c5f2432005c6e0",
+            "archive_sha256": null,
+            "platform": "linux-aarch64",
             "command": [
               "dnglab",
               "analyze",
@@ -2631,7 +2653,7 @@
               "SOURCE"
             ]
           },
-          "provenance": "https://github.com/storytold/lightcraft/blob/0da998f24dfc03069d49867f8877af2bf7c51f94/crates/raw/tests/cr3_corpus.rs; black-box release executable; FNV-1a over full row-major little-endian sensor u16 including masked borders. Archive digest is NOT the executable or pixel SHA-256. No matching native sensor plane is exposed.",
+          "provenance": "https://github.com/storytold/lightcraft/blob/0da998f24dfc03069d49867f8877af2bf7c51f94/crates/raw/tests/cr3_corpus.rs; official DNGLab v0.8.0 Linux aarch64 executable asset 536735889, SHA-256 pinned independently. P5 header removed and big-endian u16 payload byte-swapped to row-major little-endian sensor samples including masked borders. Actual FNV-1a 62261f0ba81cfcd2 matches the attributed oracle; no color/look conversion. Direct executable asset, no archive identity claimed.",
           "tolerance": {
             "mean": 0,
             "max": 0
@@ -2643,10 +2665,11 @@
         "max": 0.011764705882352941
       },
       "notes": [
-        "Candidate camera/mode: Canon - EOS M50 - 3:2.CR3",
-        "Source URL/hash/license reused with attribution only; not downloaded or decoded. Unknown in-file identity remains null and fails required qualification.",
-        "All unlisted body/firmware and cross-axis combinations remain unqualified. No camera-JPEG look is required.",
-        "Parent HEAD-only probe, 2026-10-15: advertised Content-Length 28349772 bytes; no source download or decode. Use the exact pinned nice/data URL; a bare getfile ID may return HTML."
+        "This pinned Canon EOS M50 source only; no other body, firmware or capture mode is qualified by inference. Firmware is unknown.",
+        "Actual full-sensor CMP1 track: 6288x4056, four planes, 14 encoded bits, encoding_type=0, image_levels=0. DNGLab bitDepth=16 describes decoded storage.",
+        "System raw-identify 0.22.2 reports Canon/EOS M50, RGGB, flip 0, one RAW image, no embedded ICC, as-shot multipliers [1103,1024,1945,1024], and output 6024x4020.",
+        "DNGLab 0.8.0 active rectangle: origin [264,36], size [6022,4018]. Identity crop records source shot-inset [left,top,width,height]: [276,48,6000,4000]. LibRaw output 6024x4020 is preserved as measured; no camera-JPEG look comparison is required.",
+        "Both independent sensor and integration reference files are source/tool/output-hashed. Application comparison, workflow and active cancellation are still unrun; status remains not_yet_qualified."
       ]
     },
     {
