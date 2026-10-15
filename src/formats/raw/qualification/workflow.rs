@@ -220,7 +220,7 @@ pub(super) fn run(
                     return Err("export exceeded temporary budget".into());
                 }
                 let decoded = decode_export(&output, photo.dimensions())?;
-                let pixels = decoded.as_slice();
+                let pixels = decoded.as_raw().as_slice();
                 let digest = hash_samples(pixels);
                 if baseline_export_hash
                     .as_ref()
@@ -261,8 +261,8 @@ pub(super) fn run(
                 .develop
                 .output_dim(photo.dimensions().0, photo.dimensions().1);
             let decoded = decode_export(&output, dimensions)?;
-            let edited_digest = hash_samples(decoded.as_slice());
-            let edited_stats = check_transfer(&photo, decoded.as_slice())?;
+            let edited_digest = hash_samples(decoded.as_raw().as_slice());
+            let edited_stats = check_transfer(&photo, decoded.as_raw().as_slice())?;
             if baseline_export_hash.as_ref() == Some(&edited_digest) {
                 return Err(
                     "changed exposure/crop/rotation did not change the exported image".into(),
@@ -286,7 +286,7 @@ pub(super) fn run(
             }
             reopened.export_to(&output)?;
             let decoded = decode_export(&output, dimensions)?;
-            if hash_samples(decoded.as_slice()) != edited_digest {
+            if hash_samples(decoded.as_raw().as_slice()) != edited_digest {
                 return Err("settings reopen changed the developed TIFF pixels".into());
             }
             verify_hash(&copy, case.source.sha256.as_deref())?;

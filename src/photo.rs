@@ -730,7 +730,7 @@ fn box_blur_checked(
         .try_for_each(|(strip_index, strip)| {
             progress.check()?;
             let start_y = strip_index * STRIP_ROWS;
-            let mut sums = photo_buffer(w)?;
+            let mut sums: Vec<f32> = photo_buffer(w)?;
             for offset in 0..win {
                 let y = (start_y + offset).saturating_sub(radius).min(h - 1);
                 for (sum, value) in sums.iter_mut().zip(&horiz[y * w..(y + 1) * w]) {
