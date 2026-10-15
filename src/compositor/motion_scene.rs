@@ -30,6 +30,23 @@ pub(super) fn draw(
     if depth > crate::motion::compositions::MAX_DEPTH {
         return Err("CompositionDepth: at most eight nested compositions".into());
     }
+    if let Some(scene) = &doc.motion.scene3d {
+        let view = crate::scene3d::render::View {
+            width: pm.width(),
+            height: pm.height(),
+            document_width: doc.width as f64,
+            document_height: doc.height as f64,
+            affine: [
+                transform.sx as f64,
+                transform.ky as f64,
+                transform.kx as f64,
+                transform.sy as f64,
+                transform.tx as f64,
+                transform.ty as f64,
+            ],
+        };
+        crate::scene3d::render::render(scene, view, time as f64, keep)?.composite(pm)?;
+    }
     for comp in &doc.motion.compositions {
         if !keep() {
             return Err("Cancelled: render cancelled".into());

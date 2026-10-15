@@ -1,7 +1,8 @@
 //! Editable 3D model composition shared by the canvas and image/animation export.
 pub mod model;
+pub mod render;
 
-use model::{Mat4, Model, Vec3, vec3};
+use model::{Mat4, Model, Vec3};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -187,7 +188,7 @@ impl Scene {
         let finite = |v: &[f64]| v.iter().all(|x| x.is_finite() && x.abs() <= 1e12);
         let mut ids = std::collections::HashSet::new();
         for object in &self.objects {
-            if object.id == 0 || !ids.insert(object.id) {
+            if object.id == 0 || object.id >= u64::MAX - 200_000 || !ids.insert(object.id) {
                 return Err("SceneId: duplicate model id".into());
             }
             object.model.validate().map_err(|e| e.to_string())?;
