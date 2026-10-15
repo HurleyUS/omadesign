@@ -1787,6 +1787,10 @@ pub enum Cmd {
         before: Vec<String>,
         after: Vec<String>,
     },
+    SetSources {
+        before: Vec<crate::source_attachment::SourceAttachment>,
+        after: Vec<crate::source_attachment::SourceAttachment>,
+    },
     SetGroupPassThrough {
         index: usize,
         before: bool,
@@ -2286,6 +2290,7 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
             before: after,
             after: before,
         },
+        Cmd::SetSources { before, after } => Cmd::SetSources { before: after, after: before },
         Cmd::SetGroupPassThrough {
             index,
             before,
@@ -2650,6 +2655,7 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
             }
         }
         Cmd::SetImportNotes { after, .. } => doc.import_notes = after.clone(),
+        Cmd::SetSources { after, .. } => doc.sources = after.clone(),
         Cmd::SetGroupPassThrough { index, after, .. } => {
             if let Some(layer) = doc.layers.get_mut(*index) {
                 layer.pass_through = *after;
