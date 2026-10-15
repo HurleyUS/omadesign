@@ -1,3 +1,7 @@
+#[path = "../../vendor/oma-ui/fields.rs"]
+pub(crate) mod fields;
+#[path = "../../vendor/oma-ui/workspace.rs"]
+pub(crate) mod workspace;
 mod artboard_dialog;
 mod agent;
 mod agent_attachments;
