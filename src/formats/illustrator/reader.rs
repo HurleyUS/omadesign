@@ -117,6 +117,7 @@ struct Reader<'a> {
     raster: Option<(String, Vec<V>)>,
     source: Option<&'a Path>,
     texts: Option<super::text::Texts>,
+    text_slots: Vec<(u64, usize, usize, bool)>,
     last: Option<u64>,
     objects: usize,
     sources: HashMap<String, crate::source_attachment::SourceAttachment>,
@@ -157,6 +158,7 @@ pub(super) fn read(
         raster: None,
         source,
         texts: super::text::Texts::read(data),
+        text_slots: vec![],
         last: None,
         objects: 0,
         sources: HashMap::new(),
@@ -986,7 +988,7 @@ impl Reader<'_> {
         }
     }
 
-    fn dictionary(&mut self, obj: &Obj, _hidden: bool) -> Result<(), String> {
+    fn dictionary(&mut self, obj: &Obj, hidden: bool) -> Result<(), String> {
         if obj.ty == "Document" {
             fn find<'a>(obj: &'a Obj, key: &str, depth: usize) -> Option<&'a Obj> {
                 if depth > 64 {
@@ -1071,6 +1073,7 @@ impl Reader<'_> {
                 }
                 let mut layer = Layer::vector("Text");
                 layer.kind.shapes_mut().unwrap().push(shape);
+                self.text_slots.push((layer.id, story, frame, hidden));
                 self.add(layer)?;
             } else {
                 self.note(format!("Illustrator story {story}, frame {frame} could not be reconstructed as editable type."));
@@ -1267,6 +1270,19 @@ impl Reader<'_> {
     }
 
     fn finish(mut self, name: &str) -> Result<(Document, Vec<String>), String> {
+        let plain = self
+            .text_slots
+            .iter()
+            .filter(|(_, _, _, hidden)| !hidden)
+            .map(|(_, story, frame, _)| (*story, *frame))
+            .collect::<std::collections::HashSet<_>>();
+        let copies = self
+            .text_slots
+            .iter()
+            .filter(|(_, story, frame, hidden)| *hidden && plain.contains(&(*story, *frame)))
+            .map(|(id, _, _, _)| *id)
+            .collect::<std::collections::HashSet<_>>();
+        self.layers.retain(|l| !copies.contains(&l.id));
         if self.layers.is_empty() {
             return Err("Illustrator editing data contains no supported artwork".into());
         }
