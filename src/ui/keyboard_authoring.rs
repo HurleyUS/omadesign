@@ -267,6 +267,7 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         let mut studio = Studio::new();
+        studio.doc = crate::document::Document::new("Keyboard artwork", 128., 96., 72.);
         studio.show_welcome = false;
         (ctx, studio)
     }
@@ -305,6 +306,7 @@ mod tests {
         }
         frame(&ctx, &mut studio, vec![key(Key::Enter, chord())]);
         assert!(!is_open(&ctx));
+        frame(&ctx, &mut studio, vec![]);
         let first = studio.primary().unwrap();
         let Geom::Rect { origin, size, .. } = studio.doc.find_shape(first.0, first.1).unwrap().geom
         else {
@@ -338,6 +340,7 @@ mod tests {
         );
         frame(&ctx, &mut studio, vec![key(Key::Enter, chord())]);
         let second = studio.primary().unwrap();
+        frame(&ctx, &mut studio, vec![]);
         assert_ne!(first, second);
         frame(&ctx, &mut studio, vec![key(Key::PageUp, Modifiers::NONE)]);
         assert_eq!(studio.selection, vec![first]);
@@ -356,6 +359,7 @@ mod tests {
             ],
         );
         frame(&ctx, &mut studio, vec![key(Key::Enter, chord())]);
+        frame(&ctx, &mut studio, vec![]);
         frame(
             &ctx,
             &mut studio,
@@ -419,14 +423,15 @@ mod tests {
     fn keyboard_authoring_rejects_stale_busy_locked_and_modal_or_field_shortcuts() {
         let (ctx, mut studio) = editor();
         let draft = ArtworkDraft::new(&mut studio, ArtworkKind::Rectangle);
-        studio.doc.layers[0].locked = true;
+        let target = studio.vector_target().unwrap();
+        studio.doc.layers[target].locked = true;
         assert!(
             studio
                 .create_keyboard_artwork(&draft)
                 .unwrap_err()
                 .contains("locked")
         );
-        studio.doc.layers[0].locked = false;
+        studio.doc.layers[target].locked = false;
         studio.updates.freezing = true;
         assert!(studio.create_keyboard_artwork(&draft).is_err());
         studio.updates.freezing = false;

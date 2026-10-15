@@ -302,6 +302,7 @@ mod tests {
     fn keyboard_authoring_all_creation_tools_produce_editable_undoable_commands() {
         for kind in ArtworkKind::ALL {
             let mut studio = Studio::new();
+            studio.doc = Document::new("Keyboard artwork", 128., 96., 72.);
             studio.show_welcome = false;
             let mut draft = ArtworkDraft::new(&mut studio, kind);
             draft.text = "Editable text".into();
@@ -331,6 +332,7 @@ mod tests {
     #[test]
     fn keyboard_authoring_selection_skips_hidden_locked_and_stale_items() {
         let mut studio = Studio::new();
+        studio.doc = Document::new("Keyboard selection", 128., 96., 72.);
         studio.show_welcome = false;
         let mut ids = Vec::new();
         for _ in 0..3 {

@@ -1166,6 +1166,7 @@ mod keyboard_tests {
     fn keyboard_document_close_is_named_reachable_and_keeps_the_unsaved_guard() {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
+        super::super::theme::apply(&ctx);
         let mut studio = Studio::new();
         studio.doc = crate::document::Document::new("Same name", 8., 8., 72.);
         studio.show_welcome = false;
@@ -1191,6 +1192,7 @@ mod keyboard_tests {
     #[test]
     fn keyboard_document_switch_close_and_canvas_focus_need_no_pointer() {
         let ctx = egui::Context::default();
+        super::super::theme::apply(&ctx);
         let mut studio = Studio::new();
         studio.show_welcome = false;
         studio.new_tab();
