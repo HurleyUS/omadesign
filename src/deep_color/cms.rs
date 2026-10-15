@@ -198,3 +198,51 @@ impl Api {
         }
     }
 }
+
+impl crate::document::Document {
+    /// Prepare one undoable document color conversion.
+    /// Args: target authoring mode, depth, ICC profile and intent. Returns commands for every raster and the document settings.
+    pub fn color_conversion(&self, color: DocumentColor) -> Result<crate::document::Cmd, String> {
+        validate_profile(&color.icc_profile, color.model)?;
+        let mut commands = Vec::new();
+        for (index, layer) in self.layers.iter().enumerate() {
+            if let Some(before) = layer.kind.pixels() {
+                let mut after = before.in_document_color(&color)?;
+                if let Some(native) = &mut after.native {
+                    native.depth = color.depth;
+                }
+                if color.depth == Depth::U8 {
+                    if let Some(inks) = after.native.as_ref().and_then(|n| n.cmyk.as_ref()) {
+                        after = crate::document::Pixels::from_cmyk(
+                            after.w,
+                            after.h,
+                            Depth::U8,
+                            inks.iter().map(|v| super::byte(*v) as f32 / 255.).collect(),
+                            color.icc_profile.clone(),
+                            color.intent,
+                        )?;
+                    } else {
+                        after.set_samples(
+                            after
+                                .samples()
+                                .into_iter()
+                                .map(|v| super::byte(v) as f32 / 255.)
+                                .collect(),
+                        )?;
+                    }
+                }
+                commands.push(crate::document::Cmd::NativePixels {
+                    layer: index,
+                    mask: false,
+                    before: before.clone(),
+                    after,
+                });
+            }
+        }
+        commands.push(crate::document::Cmd::SetDocumentColor {
+            before: self.color.clone(),
+            after: color,
+        });
+        Ok(crate::document::Cmd::Batch(commands))
+    }
+}

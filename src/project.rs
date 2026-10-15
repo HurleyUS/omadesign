@@ -19,7 +19,7 @@ pub fn encode(doc: &Document) -> Result<String, String> {
     serde_json::to_string(&File {
         // Older readers must not silently strip a mask or change stroke placement.
         // Keep plain documents compatible with v5; v1-v13 remain readable here.
-        version: if doc.layers.iter().any(|l| l.kind.pixels().is_some_and(|p|p.native.is_some()) || l.mask.as_ref().is_some_and(|p|p.native.is_some()) || l.kind.shapes().is_some_and(|ss|ss.iter().any(|s|s.mask.as_ref().is_some_and(|p|p.native.is_some())))) {
+        version: if doc.color!=crate::deep_color::cms::DocumentColor::default() || doc.layers.iter().any(|l| l.kind.pixels().is_some_and(|p|p.native.is_some()) || l.mask.as_ref().is_some_and(|p|p.native.is_some()) || l.kind.shapes().is_some_and(|ss|ss.iter().any(|s|s.mask.as_ref().is_some_and(|p|p.native.is_some())))) {
             14
         } else if !doc.mask_sources().is_empty() {
             13

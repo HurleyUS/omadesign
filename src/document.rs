@@ -1705,6 +1705,7 @@ impl RasterState {
 
 #[derive(Clone, Debug)]
 pub enum Cmd {
+    SetDocumentColor {before:crate::deep_color::cms::DocumentColor,after:crate::deep_color::cms::DocumentColor},
     SetCanvas { before: CanvasSettings, after: CanvasSettings },
     SetFillOpacity {
         layer: usize,
@@ -2170,6 +2171,7 @@ fn coalesce(prev: &mut Cmd, next: &Cmd) -> bool {
 
 pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
     match cmd {
+        Cmd::SetDocumentColor {before,after}=>Cmd::SetDocumentColor {before:after,after:before},
         Cmd::SetCanvas { before, after } => Cmd::SetCanvas { before: after, after: before },
         Cmd::SetFillOpacity {
             layer,
@@ -2501,6 +2503,7 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
 
 pub fn apply(doc: &mut Document, cmd: &Cmd) {
     match cmd {
+        Cmd::SetDocumentColor{after,..}=>doc.color=after.clone(),
         Cmd::SetCanvas { after, .. } => {
             doc.name = after.name.clone();
             doc.width = after.width;
