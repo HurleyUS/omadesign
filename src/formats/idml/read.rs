@@ -58,6 +58,7 @@ pub fn read_with_links(
             ("Color/Paper".into(), Rgba::WHITE),
         ]),
         stories: HashMap::new(),
+        story_colors: HashMap::new(),
         frames: Vec::new(),
         parts: &parts,
         link,
@@ -224,6 +225,7 @@ struct Importer<'a> {
     notes: Vec<String>,
     colors: BTreeMap<String, Rgba>,
     stories: HashMap<String, TypeRun>,
+    story_colors: HashMap<String, Rgba>,
     frames: Vec<Frame>,
     parts: &'a BTreeMap<String, Vec<u8>>,
     link: &'a dyn Fn(&str) -> Option<Vec<u8>>,
@@ -345,8 +347,36 @@ impl Importer<'_> {
             ..Default::default()
         };
         let mut first = true;
+        let mut story_color = None;
         for p in n.children().filter(|n| tag(*n) == "ParagraphStyleRange") {
             let a = self.resolve(p, "AppliedParagraphStyle", &Attributes::new())?;
+            if a.keys().any(|k| {
+                !matches!(
+                    k.as_str(),
+                    "Self"
+                        | "Name"
+                        | "BasedOn"
+                        | "AppliedParagraphStyle"
+                        | "AppliedCharacterStyle"
+                        | "AppliedFont"
+                        | "FontStyle"
+                        | "PointSize"
+                        | "Tracking"
+                        | "Leading"
+                        | "HorizontalScale"
+                        | "VerticalScale"
+                        | "BaselineShift"
+                        | "NoBreak"
+                        | "Justification"
+                        | "Hyphenation"
+                        | "FillColor"
+                )
+            }) {
+                warn(
+                    &mut self.notes,
+                    "Unsupported IDML paragraph formatting remains in named style definitions but is not rendered.",
+                );
+            }
             let start = run.content.chars().count();
             let align = match a.get("Justification").map(String::as_str) {
                 Some("CenterAlign") => TextAlign::Center,
@@ -368,6 +398,48 @@ impl Importer<'_> {
             });
             for c in p.children().filter(|n| tag(*n) == "CharacterStyleRange") {
                 let a = self.resolve(c, "AppliedCharacterStyle", &a)?;
+                if a.keys().any(|k| {
+                    !matches!(
+                        k.as_str(),
+                        "Self"
+                            | "Name"
+                            | "BasedOn"
+                            | "AppliedParagraphStyle"
+                            | "AppliedCharacterStyle"
+                            | "AppliedFont"
+                            | "FontStyle"
+                            | "PointSize"
+                            | "Tracking"
+                            | "Leading"
+                            | "HorizontalScale"
+                            | "VerticalScale"
+                            | "BaselineShift"
+                            | "NoBreak"
+                            | "Justification"
+                            | "Hyphenation"
+                            | "FillColor"
+                    )
+                }) {
+                    warn(
+                        &mut self.notes,
+                        "Unsupported IDML character formatting remains in named style definitions but is not rendered.",
+                    );
+                }
+                let color = a
+                    .get("FillColor")
+                    .and_then(|id| self.colors.get(id))
+                    .copied()
+                    .unwrap_or(Rgba::BLACK);
+                if let Some(first) = story_color {
+                    if first != color {
+                        warn(
+                            &mut self.notes,
+                            "Mixed IDML text colors are displayed in the first text color; named color styles remain in the package.",
+                        );
+                    }
+                } else {
+                    story_color = Some(color);
+                }
                 let font = self.font(&a);
                 let size = number(&a, "PointSize", 12.)?.clamp(0.1, 10000.);
                 if first {
@@ -397,14 +469,10 @@ impl Importer<'_> {
                     no_break: a.get("NoBreak").is_some_and(|v| v == "true"),
                     ..Default::default()
                 });
-                if a.get("FillColor").is_some_and(|c| c != "Color/Black") {
-                    warn(
-                        &mut self.notes,
-                        "Mixed IDML text colors are displayed in the frame's first text color; named color styles remain in the package.",
-                    );
-                }
             }
         }
+        self.story_colors
+            .insert(attr(n, "Self"), story_color.unwrap_or(Rgba::BLACK));
         if self.stories.insert(attr(n, "Self"), run).is_some() {
             return Err("Duplicate IDML story ID".into());
         }
@@ -437,6 +505,15 @@ impl Importer<'_> {
             }
             let mut a = Artboard::new(self.doc.artboards.len(), b.min + offset, b.size());
             a.name = attr(*page, "Name");
+            if page
+                .attribute("OverrideList")
+                .is_some_and(|v| !v.is_empty())
+            {
+                warn(
+                    &mut self.notes,
+                    "IDML master page-item overrides are unsupported; inherited previews can differ from the source.",
+                );
+            }
             if let Some(side) = page.attribute("PageSide") {
                 self.doc.publishing.page_sides.insert(a.id, side.into());
             }
@@ -660,7 +737,12 @@ impl Importer<'_> {
                 let mut shape = Shape::new(
                     Geom::Text(run),
                     Style {
-                        fill: Fill::Solid(Rgba::BLACK),
+                        fill: Fill::Solid(
+                            self.story_colors
+                                .get(&story)
+                                .copied()
+                                .unwrap_or(Rgba::BLACK),
+                        ),
                         stroke: None,
                     },
                 );
