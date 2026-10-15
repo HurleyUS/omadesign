@@ -157,7 +157,7 @@ impl Context<'_, '_> {
             ) {
                 Ok(surface) => temp = surface,
                 Err(error) => {
-                    log::warn!("{error}");
+                    eprintln!("SVG effect graph: {error}");
                     self.draw_children(&mut temp, Some(layer.id), depth + 1);
                 }
             }
