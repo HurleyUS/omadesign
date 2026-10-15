@@ -30,6 +30,7 @@ struct DecodeState {
     bool damaged = false;
     int (*cancelled)(const void *) = nullptr;
     const void *context = nullptr;
+    void (*report)(const void *, uint32_t) = nullptr;
     bool stop_requested() const {
         return (cancelled && cancelled(context)) ||
             std::chrono::steady_clock::now() - started > std::chrono::seconds(120);
@@ -57,8 +58,9 @@ struct CancelMonitor {
     }
 };
 
-int progress(void *context, LibRaw_progress, int, int) {
+int progress(void *context, LibRaw_progress stage, int, int) {
     const auto *state = static_cast<DecodeState *>(context);
+    if (state->report) state->report(state->context, static_cast<uint32_t>(stage));
     return state->stop_requested();
 }
 void damaged(void *context, const char *, INT64) {
@@ -87,7 +89,8 @@ template <size_t N, size_t M> void copy_text(char (&to)[N], const char (&from)[M
 
 extern "C" int oma_raw_decode(const unsigned char *bytes, size_t length,
                               OmaRawImage *output, int (*cancelled)(const void *),
-                              const void *context, int (*reserve)(const void *, uint64_t),
+                              const void *context, void (*report)(const void *, uint32_t),
+                              int (*reserve)(const void *, uint64_t),
                               const void *memory_context, uint64_t memory_limit) noexcept {
     if (!output) return 1;
     *output = OmaRawImage{};
@@ -97,6 +100,7 @@ extern "C" int oma_raw_decode(const unsigned char *bytes, size_t length,
         DecodeState state;
         state.cancelled = cancelled;
         state.context = context;
+        state.report = report;
         LibRaw raw(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK);
         CancelMonitor monitor(raw, state);
         raw.set_progress_handler(progress, &state);

@@ -85,6 +85,19 @@ impl Budget {
             .push((Arc::downgrade(pixels), lease));
     }
 
+    /// Find admission already owned by a restored sample allocation.
+    /// Args: shared samples. Returns their existing lease without counting them twice.
+    pub(crate) fn retained(&self, pixels: &Arc<Vec<u16>>) -> Option<Arc<Lease>> {
+        let weak = Arc::downgrade(pixels);
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sources
+            .iter()
+            .find(|(source, _)| source.ptr_eq(&weak))
+            .map(|(_, lease)| lease.clone())
+    }
+
     /// Inspect current admitted storage after releasing expired source leases.
     /// Args: none. Returns used bytes and total byte limit.
     pub fn usage(&self) -> (u64, u64) {

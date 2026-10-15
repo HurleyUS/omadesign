@@ -58,6 +58,7 @@ pub struct RawImage {
     pub width: u32,
     pub height: u32,
     /// Interleaved, oriented, linear sRGB. Every pixel has exactly 3 channels.
+    #[serde(deserialize_with = "restore_samples")]
     pub pixels: std::sync::Arc<Vec<u16>>,
     #[serde(skip)]
     pub(crate) memory: Option<std::sync::Arc<resources::Lease>>,
@@ -76,6 +77,10 @@ impl RawImage {
             if count == 0 || count.checked_mul(3) != Some(self.pixels.len() as u64) {
                 return Err("Invalid linear RAW samples".into());
             }
+            if let Some(lease) = resources::global().retained(&self.pixels) {
+                self.memory = Some(lease);
+                return Ok(());
+            }
             let lease = resources::global().reserve(
                 resources::retained_demand(count).ok_or("RAW memory demand overflow")?,
                 cancel,
@@ -85,6 +90,52 @@ impl RawImage {
         }
         Ok(())
     }
+}
+
+/// Restore the existing JSON sample array with admission before each allocation.
+/// Args: serde array deserializer. Returns shared samples whose lease follows their last clone.
+fn restore_samples<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<std::sync::Arc<Vec<u16>>, D::Error> {
+    struct Samples;
+    impl<'de> serde::de::Visitor<'de> for Samples {
+        type Value = std::sync::Arc<Vec<u16>>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an admitted array of linear RGB16 samples")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Self::Value, A::Error> {
+            use serde::de::Error;
+            let cancel = Cancellation::default();
+            let lease = resources::global()
+                .reserve(40 * 1024 * 1024, &cancel)
+                .map_err(A::Error::custom)?;
+            let mut values = Vec::new();
+            while let Some(sample) = seq.next_element::<u16>()? {
+                if values.len() == values.capacity() {
+                    let capacity = values
+                        .len()
+                        .checked_add(65536)
+                        .ok_or_else(|| A::Error::custom("RAW sample count overflow"))?;
+                    let bytes = (capacity as u64)
+                        .checked_mul(2)
+                        .and_then(|bytes| bytes.checked_add(40 * 1024 * 1024))
+                        .ok_or_else(|| A::Error::custom("RAW memory demand overflow"))?;
+                    lease.resize(bytes, &cancel).map_err(A::Error::custom)?;
+                    values
+                        .try_reserve_exact(capacity - values.len())
+                        .map_err(A::Error::custom)?;
+                }
+                values.push(sample);
+            }
+            let values = std::sync::Arc::new(values);
+            resources::global().retain(&values, lease);
+            Ok(values)
+        }
+    }
+    deserializer.deserialize_seq(Samples)
 }
 
 #[repr(C)]
@@ -120,6 +171,7 @@ unsafe extern "C" {
         image: *mut NativeImage,
         cancelled: unsafe extern "C" fn(*const c_void) -> i32,
         context: *const c_void,
+        progress: unsafe extern "C" fn(*const c_void, u32),
         reserve: unsafe extern "C" fn(*const c_void, u64) -> i32,
         memory_context: *const c_void,
         memory_limit: u64,
@@ -177,6 +229,7 @@ pub(crate) fn decode_reserved(
             &mut native,
             cancellation::cancelled,
             (cancel as *const Cancellation).cast(),
+            cancellation::progress,
             reserve_native,
             (&admission as *const Admission).cast(),
             resources::global().usage().1,
