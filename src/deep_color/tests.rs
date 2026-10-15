@@ -70,3 +70,35 @@ fn float_blending_retains_sub_byte_values_and_hdr() {
     assert!((out[0] - (b[0] * (1. - s[3]) + s[0] * s[3])).abs() < 1e-7);
     assert!(blend_pixel([0.; 4], [2., -0.2, 1., 1.], crate::color::Blend::Normal, 1.)[0] > 1.);
 }
+
+#[test]
+fn independent_raw_depth_fixtures_keep_adjacent_samples_and_hdr() {
+    for (bytes, depth, expected) in [
+        (
+            include_bytes!("../formats/psd/fixtures/independent-16.psd").as_slice(),
+            Depth::U16,
+            [1000. / 65535., 32767. / 65535., 60000. / 65535., 1.],
+        ),
+        (
+            include_bytes!("../formats/psd/fixtures/independent-32.psd").as_slice(),
+            Depth::F32,
+            [1.25, 0.1234567, -0.125, 1.],
+        ),
+    ] {
+        let doc = crate::formats::psd::decode(bytes, "Independent")
+            .unwrap()
+            .document;
+        let p = doc.layers[0].kind.pixels().unwrap();
+        assert_eq!(p.native.as_ref().unwrap().depth, depth);
+        assert_eq!(p.sample(0), expected);
+        assert_ne!(p.sample(0)[0], p.sample(1)[0]);
+        let out = crate::formats::psd::encode(&doc, false).unwrap();
+        if let Ok(dir) = std::env::var("OMADESIGN_DEEP_QA_DIR") {
+            std::fs::write(
+                std::path::Path::new(&dir).join(format!("native-{}.psd", depth.bits())),
+                out.bytes,
+            )
+            .unwrap();
+        }
+    }
+}
