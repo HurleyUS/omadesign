@@ -47,6 +47,8 @@ pub struct Change {
 pub struct Replica {
     pub session: String,
     pub actor: String,
+    #[serde(default)]
+    pub project: String,
     pub base: Snapshot,
     pub changes: Vec<Change>,
     #[serde(default)]
@@ -209,6 +211,7 @@ impl Replica {
         Self {
             session,
             actor,
+            project: String::new(),
             base,
             changes: Vec::new(),
             pending: BTreeSet::new(),
@@ -494,6 +497,44 @@ impl Replica {
                 && !matches!(cells.get(parent), Some(Cell::List))
             {
                 conflicts.insert(key.clone());
+            }
+        }
+        for suffix in ["/parent", "/layout/parent"] {
+            for (path, cell) in &cells {
+                if !path.starts_with("/@entities/") || !path.ends_with(suffix) {
+                    continue;
+                }
+                let Cell::Value(value) = cell else {
+                    continue;
+                };
+                let Some(mut id) = value.as_u64() else {
+                    continue;
+                };
+                let own = path["/@entities/".len()..]
+                    .split('/')
+                    .next()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap_or(0);
+                let mut seen = BTreeSet::from([own]);
+                loop {
+                    if !seen.insert(id) || seen.len() > 64 {
+                        conflicts.insert(path.clone());
+                        break;
+                    }
+                    let parent_path = format!("/@entities/{id}{suffix}");
+                    if !cells.contains_key(&format!("/@entities/{id}")) {
+                        conflicts.insert(path.clone());
+                        break;
+                    }
+                    let Some(Cell::Value(value)) = cells.get(&parent_path) else {
+                        break;
+                    };
+                    let Some(parent) = value.as_u64() else {
+                        break;
+                    };
+                    id = parent;
+                }
             }
         }
         for change in active {
