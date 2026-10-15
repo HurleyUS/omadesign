@@ -56,11 +56,8 @@ pub(crate) fn open_with_progress(path: &Path, stage: impl Fn(&'static str)) -> R
         return Ok(Imported::Document(crate::project::load_from(path)?));
     }
     if kind == "affinity" {
-        stage("Converting Affinity artwork");
-        let (svg, mut notes) = crate::formats::affinity::read(path)?;
-        stage("Building editable vector objects");
-        let (doc, svg_notes) = crate::formats::svg::read(&svg, &name)?;
-        notes.extend(svg_notes);
+        stage("Reading native Affinity objects");
+        let (doc, notes) = crate::formats::affinity::read_document(path)?;
         return document(doc, notes);
     }
     if kind == "lottie" {
@@ -115,11 +112,8 @@ pub(crate) fn open_with_progress(path: &Path, stage: impl Fn(&'static str)) -> R
         return document(doc, notes);
     }
     if bytes.starts_with(&[0x00, 0xff, 0x4b, 0x41]) {
-        stage("Converting Affinity artwork");
-        let (svg, mut notes) = crate::formats::affinity::read(path)?;
-        stage("Building editable vector objects");
-        let (doc, more) = crate::formats::svg::read(&svg, &name)?;
-        notes.extend(more);
+        stage("Reading native Affinity objects");
+        let (doc, notes) = crate::formats::affinity::read_document(path)?;
         return document(doc, notes);
     }
     match crate::formats::decode_image(&bytes) {

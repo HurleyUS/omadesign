@@ -2939,6 +2939,7 @@ dependencies = [
 name = "omadesign"
 version = "0.6.4"
 dependencies = [
+ "omadesign-affinity",
  "ab_glyph",
  "arboard",
  "base64",
@@ -2975,6 +2976,16 @@ dependencies = [
  "x11-clipboard",
  "x11rb",
  "zip",
+ "zstd",
+]
+
+[[package]]
+name = "omadesign-affinity"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "image",
  "zstd",
 ]
 
