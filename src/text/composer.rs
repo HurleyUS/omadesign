@@ -583,22 +583,25 @@ fn justify_glyphs(glyphs: &mut [LayoutGlyph], target: f32, style: &ParagraphStyl
     glyphs[count-1].x+glyphs[count-1].advance
 }
 
-/// Trace a glyph in the run's local type space.
-/// Args: text run and positioned glyph. Returns contours before the optional run matrix.
-pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
+/// Resolve a glyph through the shared font cache.
+/// Args: run and positioned glyph. Returns its font outline and document-unit scale.
+pub(super) fn glyph_outline(run: &TypeRun, glyph: &LayoutGlyph) -> Option<(ab_glyph::Outline, f32)> {
     let style = run.character_style(glyph.cluster);
     let mut face_run = run.clone();
     face_run.font = style.font.unwrap_or_else(|| run.font.clone());
-    let Some(bytes) = resolve_path(&face_run).and_then(|p| font_bytes(&p)) else {
-        return Vec::new();
-    };
-    let Ok(font) = ab_glyph::FontRef::try_from_slice(&bytes) else {
-        return Vec::new();
-    };
-    let Some(outline) = font.outline(GlyphId(glyph.id)) else {
-        return Vec::new();
-    };
+    let bytes = resolve_path(&face_run).and_then(|p| font_bytes(&p))?;
+    let font = ab_glyph::FontRef::try_from_slice(&bytes).ok()?;
+    let outline = font.outline(GlyphId(glyph.id))?;
     let scale = style.px.unwrap_or(run.px).max(1.) / font.units_per_em().unwrap_or(1000.);
+    Some((outline, scale))
+}
+
+/// Trace a glyph in the run's local type space.
+/// Args: text run and positioned glyph. Returns contours before the optional run matrix.
+pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
+    let Some((outline, scale)) = glyph_outline(run, glyph) else {
+        return Vec::new();
+    };
     let curves = map_curves(&outline.curves, 0., 0., scale);
     let [a, b, c, d, _, _] = run.transform.unwrap_or([1., 0., 0., 1., 0., 0.]);
     let stretch = ((a * glyph.hscale).powi(2) + (b * glyph.hscale).powi(2)
