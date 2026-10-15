@@ -16,8 +16,8 @@ then adjust Size, Spacing, Flow, and Opacity. The cursor shows the selected tipâ
 or export the selected pack to share it.
 
 Paint across and outside artboards, including negative canvas coordinates. Pixel
-layers grow with the brush; existing artwork stays in place. Undo restores both
-the stroke and the previous layer bounds. Selections and layer masks still limit
+layers grow with the brush; existing artwork stays in place. Undo removes the
+stroke and restores the previous layer bounds. Selections and layer masks still limit
 where paint appears. Automatic growth supports up to 64 million pixels per layer;
 add another pixel layer when working across a larger area.
 
