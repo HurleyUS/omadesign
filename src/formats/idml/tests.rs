@@ -306,3 +306,40 @@ fn idml_open_native_save_reopen_and_both_export_routes() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[test]
+fn idml_story_color_does_not_become_an_opaque_text_frame() {
+    let (doc, _) = read(FIXTURE, "Publishing").unwrap();
+    let color = crate::color::Rgba::rgb(12, 50, 90);
+    let head=doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().find(|s|matches!(&s.geom,Geom::Text(t) if t.thread.as_ref().is_some_and(|t|t.prev.is_none()))).unwrap();
+    assert_eq!(head.style.fill, crate::document::Fill::Solid(color));
+    let (bytes, _) = write(&doc).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).unwrap();
+        if !f.name().starts_with("Spreads/") {
+            continue;
+        }
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut f, &mut xml).unwrap();
+        let tree = roxmltree::Document::parse(&xml).unwrap();
+        for frame in tree.descendants().filter(|n| n.has_tag_name("TextFrame")) {
+            assert_eq!(frame.attribute("FillColor"), Some("Swatch/None"));
+        }
+        assert!(
+            tree.descendants()
+                .filter(|n| n.has_tag_name("Image"))
+                .all(|n| n.descendants().any(|n| n.has_tag_name("GraphicBounds")))
+        );
+    }
+    let (round, _) = read(&bytes, "Again").unwrap();
+    assert!(
+        round
+            .layers
+            .iter()
+            .filter_map(|l| l.kind.shapes())
+            .flatten()
+            .any(|s| matches!(&s.geom, Geom::Text(_))
+                && s.style.fill == crate::document::Fill::Solid(color))
+    );
+}
