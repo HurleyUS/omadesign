@@ -6,11 +6,26 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { fingerprint, source } from './contract.mjs';
 import { ownerEvidence } from './owner-evidence.mjs';
+import { buildBinding } from './build.mjs';
+import { hash } from './contract.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 fs.mkdirSync(path.join(root,'.artifacts'),{recursive:true});
 const scratch=fs.mkdtempSync(path.join(root,'.artifacts/suite-evidence-'));
 test.after(()=>fs.rmSync(scratch,{recursive:true,force:true}));
+
+test('locked compiler artifacts bind the original bytes, never a later reused target or a zero-artifact run',()=>{
+  const record={schema:1,repository:'omadesign',revision:'1'.repeat(40),source_tree:'2'.repeat(40),dirty_before:false,dirty_after:false,exit_code:0,signal:null,receipt_errors:[],executables:[{path:path.join(scratch,'already-overwritten-or-missing'),sha256:'3'.repeat(64),size:123,profile:{test:true}}]};
+  const config={repositories:{omadesign:{worktree:root}}};
+  const save=r=>{const bytes=JSON.stringify(r)+'\n';const file=path.join(scratch,`${hash(bytes)}.json`);fs.writeFileSync(file,bytes);return file};
+  const binding=buildBinding(config,save(record));
+  assert.equal(binding.sha256,record.executables[0].sha256);
+  assert.equal(binding.test_execution_proven,false);
+  assert.throws(()=>buildBinding(config,save({...record,executables:[]})),/exactly one/);
+  assert.throws(()=>buildBinding(config,save({...record,dirty_after:true})),/Clean successful/);
+  const corrupt=save(record);fs.appendFileSync(corrupt,' ');
+  assert.throws(()=>buildBinding(config,corrupt),/integrity/);
+});
 
 test('owner proofs reject altered artifacts, old source and absent acceptance checks',()=>{
   const current=source(root);

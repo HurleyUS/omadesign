@@ -22,6 +22,12 @@ node scripts/qualify-suite.mjs run --lane candidate --config BUILD_CONFIG --buil
 node scripts/qualify-suite.mjs gate --lane candidate --builds LOCAL_BUILDS
 ```
 
+Use `node scripts/suite/build.mjs CONFIG LOCKED_CARGO_RECEIPT /home/.../BUILD.json
+[EXACT_ARTIFACT_SHA]` to consume the central helper's immutable compiler-artifact
+receipt. It does not start Cargo or hash a possibly overwritten target later.
+The suite checks the actual executable against that locked digest before use.
+A build binding, including `--no-run`, is explicitly not fixture execution proof.
+
 `--roots LOCAL_JSON` binds product IDs to local checkouts. `--builds LOCAL_JSON`
 binds each product to `{revision,tree,binary,sha256,driver,tools}`; tools are keyed
 by manifest tool ID and contain `{path,sha256,version}`. These files, inputs and
