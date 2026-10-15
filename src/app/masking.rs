@@ -85,8 +85,8 @@ impl Studio {
     /// Finish or restore an in-flight pixel edit before changing document context.
     /// Returning true lets Undo cancel the current gesture before touching history.
     pub(crate) fn end_pixel_stroke(&mut self, cancel: bool) -> bool {
-        if matches!(self.op,Some(Op::NativeStroke{..})) {
-            let Some(Op::NativeStroke{layer,mask,before,..})=self.op.take()else{unreachable!()};
+        if matches!(self.op,Some(Op::NativeStroke{..}|Op::NativeRetouch{..})) {
+            let (layer,mask,before)=match self.op.take().unwrap(){Op::NativeStroke{layer,mask,before,..}=>(layer,mask,before),Op::NativeRetouch{layer,before,..}=>(layer,false,before),_=>unreachable!()};
             let target=if mask {self.doc.layers[layer].mask.as_mut()}else {self.doc.layers[layer].kind.pixels_mut()};
             if let Some(target)=target {if cancel {*target=before;}else{let after=target.clone();self.history.push(Cmd::NativePixels{layer,mask,before,after});self.dirty=true;}}
             self.paint_contact=None;self.brush.pressure=1.;self.mark();return true;

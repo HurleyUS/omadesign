@@ -179,12 +179,7 @@ pub(super) fn start(studio: &mut Studio, world: Pt) {
         return;
     };
     if pixels.native.is_some() {
-        if heal {
-            studio.status =
-                "Healing requires an explicit 8-bit copy; original native pixels are preserved"
-                    .into();
-            return;
-        }
+        if heal { start_native_retouch(studio,world,Tool::Heal); return; }
         let before = pixels.clone();
         let Some(coverage) = tiny_skia::Pixmap::new(before.w, before.h) else {
             return;
@@ -343,15 +338,7 @@ pub(super) fn start_brush(studio: &mut Studio, world: Pt) {
 }
 
 pub(super) fn start_smudge(studio: &mut Studio, world: Pt) {
-    if studio
-        .active_layer
-        .and_then(|i| studio.doc.layers.get(i))
-        .and_then(|l| l.kind.pixels())
-        .is_some_and(|p| p.native.is_some())
-    {
-        studio.status="Use native pixel filters or paint on this high-depth layer; retouch requires an explicit 8-bit copy".into();
-        return;
-    }
+    if start_native_retouch(studio,world,Tool::Smudge) { return; }
     let Some(layer) = studio.raster_target() else {
         studio.status = "Choose an unlocked pixel layer to smudge".into();
         return;
@@ -377,15 +364,7 @@ pub(super) fn start_clone(studio: &mut Studio, world: Pt) {
         studio.status = "Alt-click to set clone source".into();
         return;
     }
-    if studio
-        .active_layer
-        .and_then(|i| studio.doc.layers.get(i))
-        .and_then(|l| l.kind.pixels())
-        .is_some_and(|p| p.native.is_some())
-    {
-        studio.status="Use native pixel filters or paint on this high-depth layer; retouch requires an explicit 8-bit copy".into();
-        return;
-    }
+    if start_native_retouch(studio,world,Tool::Clone) { return; }
     let Some(layer) = studio.raster_target() else {
         studio.status = "Choose an unlocked pixel layer to clone".into();
         return;
@@ -2097,4 +2076,66 @@ mod deep_color {
             mask_values
         );
     }
+    #[test]
+    fn native_clone_smudge_and_heal_edit_samples_undo_and_reopen() {
+        for tool in [Tool::Clone,Tool::Smudge,Tool::Heal] {
+            let mut studio=Studio::new();studio.show_welcome=false;
+            studio.doc=Document::new("Native retouch",64.,32.,72.);studio.doc.transparent=true;
+            let values:Vec<f32>=(0..64*32).flat_map(|i| {
+                let x=i%64;let y=i/64;
+                let mut r=if x<20 {1.25+(x%2) as f32*0.012345} else {0.2+x as f32/200.};
+                if tool==Tool::Heal && (x as i32-40).pow(2)+(y as i32-16).pow(2)<4 {r=0.05;}
+                [r,0.1234567,-0.125,0.50001]
+            }).collect();
+            studio.doc.layers=vec![Layer::placed_raster("Retouch",Pixels::from_samples(64,32,Depth::F32,values.clone()).unwrap(),Pt::ZERO,Pt::new(64.,32.))];
+            studio.active_layer=Some(0);studio.tool=tool;studio.persona=crate::tools::Persona::Pixel;
+            studio.brush.size=12.;studio.brush.opacity=0.75;studio.brush.flow=1.;studio.brush.hardness=0.8;
+            studio.clone_source=Some(Pt::new(8.,16.));
+            studio.pixel_sel=Some((0..64*32).map(|i|if i%64<48 {255}else{0}).collect());studio.pixel_sel_gen+=1;
+            match tool {
+                Tool::Clone=>start_clone(&mut studio,Pt::new(40.,16.)),
+                Tool::Smudge=>{start_smudge(&mut studio,Pt::new(14.,16.));native_retouch_drag(&mut studio,Pt::new(24.,16.));},
+                Tool::Heal=>start(&mut studio,Pt::new(40.,16.)),
+                _=>unreachable!(),
+            }
+            assert!(matches!(studio.op,Some(Op::NativeRetouch{..})),"{tool:?}");
+            studio.end_pixel_stroke(false);
+            let after=studio.doc.layers[0].kind.pixels().unwrap().samples();assert_ne!(after,values,"{tool:?}");
+            assert_eq!(&after[..4],&values[..4]);
+            for y in 0..32 {assert_eq!(&after[(y*64+48)*4..(y*64+64)*4],&values[(y*64+48)*4..(y*64+64)*4]);}
+            if tool==Tool::Clone {assert!(after[(16*64+40)*4]>1.);}
+            if tool==Tool::Heal {assert!(after[(16*64+40)*4]>0.2);}
+            studio.undo();assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().samples(),values);
+            studio.redo();assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().samples(),after);
+            let saved=crate::project::decode(&crate::project::encode(&studio.doc).unwrap()).unwrap();assert_eq!(saved.layers[0].kind.pixels().unwrap().samples(),after);
+            start_native_retouch(&mut studio,Pt::new(40.,16.),Tool::Clone);native_retouch_drag(&mut studio,Pt::new(42.,16.));studio.end_pixel_stroke(true);
+            assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().samples(),after);
+        }
+    }
+}
+
+fn start_native_retouch(studio:&mut Studio,world:Pt,tool:Tool)->bool {
+    let Some(layer)=studio.raster_target() else {return false;};
+    let Some(before)=studio.doc.layers[layer].kind.pixels().filter(|p|p.native.is_some()).cloned() else {return false;};
+    let pos=studio.mask_point(layer,world);
+    let offset=studio.clone_source.map_or(Pt::ZERO,|p|studio.mask_point(layer,p)-pos);
+    studio.op=Some(Op::NativeRetouch{layer,working:before.clone(),before,last:world,offset,tool});
+    native_retouch_drag(studio,world);true
+}
+
+pub(super) fn native_retouch_drag(studio:&mut Studio,world:Pt) {
+    let Some(Op::NativeRetouch{layer,before,working,last,offset,tool})=studio.op.take() else {return;};
+    let from=studio.mask_point(layer,last);let to=studio.mask_point(layer,world);
+    let result=crate::deep_color::retouch::stroke(&before,&working,from,to,offset,tool,&studio.brush);
+    let working=match result {Ok(p)=>p,Err(error)=>{studio.status=error;working}};
+    let mut after=working.clone();
+    if let Some(selection)=studio.pixel_sel_mask(layer) {
+        let a=before.samples();let b=working.samples();
+        let samples=a.chunks_exact(4).zip(b.chunks_exact(4)).zip(selection.iter()).flat_map(|((a,b),&m)|{
+            let t=m as f32/255.;crate::deep_color::retouch::mix(a.try_into().unwrap(),b.try_into().unwrap(),t)
+        }).collect();
+        if let Err(error)=after.set_samples(samples){studio.status=error;}
+    }
+    if let Some(target)=studio.doc.layers[layer].kind.pixels_mut(){*target=after;}
+    studio.op=Some(Op::NativeRetouch{layer,before,working,last:world,offset,tool});studio.mark_interaction();
 }

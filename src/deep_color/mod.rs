@@ -1,5 +1,6 @@
 //! Native document samples. RGBA8 is a display cache; authored samples remain authoritative.
 mod composite;
+pub mod retouch;
 pub use composite::{blend_pixel, composite};
 
 use crate::document::Pixels;

@@ -231,6 +231,7 @@ pub enum Op {
         before: crate::document::RasterState,
         selection_generation: u64,
     },
+    NativeRetouch {layer:usize,before:crate::document::Pixels,working:crate::document::Pixels,last:Pt,offset:Pt,tool:Tool},
     NativeStroke {layer:usize,mask:bool,erase:bool,before:crate::document::Pixels,coverage:Pixmap,last:Pt},
     Retouch {
         layer: usize,
