@@ -2104,7 +2104,12 @@ mod deep_color {
             assert_eq!(&after[..4],&values[..4]);
             for y in 0..32 {assert_eq!(&after[(y*64+48)*4..(y*64+64)*4],&values[(y*64+48)*4..(y*64+64)*4]);}
             if tool==Tool::Clone {assert!(after[(16*64+40)*4]>1.);}
-            if tool==Tool::Heal {assert!(after[(16*64+40)*4]>0.2);}
+            if tool==Tool::Heal {
+                let corrected=after[(16*64+40)*4];
+                assert!((corrected-0.4).abs() < (values[(16*64+40)*4]-0.4).abs(), "healing must move the blemish toward its surrounding color: {corrected}");
+                assert!(corrected < 0.4, "partial opacity must retain some original color");
+                assert_eq!(after[(16*64+40)*4+3], values[(16*64+40)*4+3]);
+            }
             studio.undo();assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().samples(),values);
             studio.redo();assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().samples(),after);
             let saved=crate::project::decode(&crate::project::encode(&studio.doc).unwrap()).unwrap();assert_eq!(saved.layers[0].kind.pixels().unwrap().samples(),after);
