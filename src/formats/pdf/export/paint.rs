@@ -2,15 +2,32 @@
 use super::*;
 use crate::gradient::Spread;
 
+/// Keep all visible page coordinates when a paint is evaluated before object rotation.
+/// Args: page bounds, rotation center and radians. Returns a conservative unrotated page rectangle.
+pub(super) fn local_bounds(bounds: Bounds, center: Pt, rotation: f32) -> Bounds {
+    let corners = [
+        bounds.min,
+        Pt::new(bounds.max.x, bounds.min.y),
+        bounds.max,
+        Pt::new(bounds.min.x, bounds.max.y),
+    ];
+    let mut result = Bounds::from_pt(corners[0].rotate_about(center, -rotation));
+    for point in corners {
+        result.union_pt(point.rotate_about(center, -rotation));
+    }
+    result
+}
+
 /// Encode a periodic native paint field without a pixel surface.
 /// Args: object store, normalized gradient, object bounds and channel selection. Returns a PDF shading.
 pub(super) fn field(
     pdf: &mut Pdf,
     g: &Gradient,
     bounds: Bounds,
+    extent: Bounds,
     alpha: bool,
 ) -> Result<ObjectId, String> {
-    let mut domain = bounds.inflate(bounds.width().max(bounds.height()).max(1.));
+    let mut domain = extent;
     let position = if g.kind == GradientKind::Radial {
         let inverse = g
             .radial_transform(bounds)

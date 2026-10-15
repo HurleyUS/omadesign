@@ -111,6 +111,12 @@ fn native_text() -> Document {
             ))),
             ..Default::default()
         },
+        CharSpan {
+            start: 18,
+            end: 24,
+            fill: Some(pattern_fill()),
+            ..Default::default()
+        },
     ];
     run.contours = crate::text::shape(&run);
     let mut layer = Layer::vector("Native editable text");
@@ -129,6 +135,15 @@ fn native_text() -> Document {
     layer.kind.shapes_mut().unwrap().push(shape);
     doc.layers.push(layer);
     doc
+}
+fn pattern_fill() -> Fill {
+    let (doc, _) =
+        crate::formats::svg::read(include_str!("fixtures/pattern.svg"), "Pattern paint").unwrap();
+    doc.layers
+        .iter()
+        .flat_map(|l| l.kind.shapes().into_iter().flatten())
+        .find_map(|s| matches!(s.style.fill, Fill::Pattern(_)).then(|| s.style.fill.clone()))
+        .unwrap()
 }
 fn filtered(source_mask: bool) -> Document {
     let (mut doc, notes) = crate::formats::svg::read(
@@ -317,6 +332,77 @@ fn pdf_adapter_affine_periodic_fields_stroke_alpha_real_output() {
                 .any(|d| d.get(b"ShadingType").and_then(Object::as_i64).ok() == Some(kind))
         );
     }
+}
+
+#[test]
+#[ignore = "independent PDF stroke qualification requires qpdf and Poppler"]
+fn pdf_adapter_periodic_field_covers_the_full_wide_stroke() {
+    let mut doc = Document::new("Wide periodic stroke", 100., 80., 72.);
+    doc.layers.clear();
+    backdrop(&mut doc);
+    let mut gradient = Gradient::new(
+        GradientKind::Linear,
+        Rgba::new(240, 30, 70, 240),
+        Rgba::new(20, 80, 230, 90),
+    );
+    gradient.spread = Spread::Repeat;
+    let mut shape = rect(Pt::new(45., 35.), Pt::new(10., 10.), Fill::None);
+    shape.style.stroke = Some(Stroke {
+        width: 70.,
+        color: Rgba::new(0, 0, 0, 40),
+        gradient: Some(gradient),
+        ..Default::default()
+    });
+    let mut layer = Layer::vector("Wide editable gradient stroke");
+    layer.kind.shapes_mut().unwrap().push(shape);
+    doc.layers.push(layer);
+    let (pdf, _) = inspect(&doc, "wide-stroke", 1.5);
+    assert!(
+        !pdf.objects
+            .values()
+            .filter_map(|o| o.as_stream().ok())
+            .any(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image"))
+    );
+}
+
+#[test]
+#[ignore = "independent PDF outline qualification requires qpdf and Poppler"]
+fn pdf_adapter_outlined_range_rotates_about_the_whole_text_object() {
+    let mut doc = Document::new("Rotated combining painted text", 420., 190., 72.);
+    doc.layers.clear();
+    backdrop(&mut doc);
+    let mut run = TypeRun {
+        content: "a\u{323}\u{30a} mixed paint".into(),
+        font: "/usr/share/fonts/noto/NotoSans-Regular.ttf".into(),
+        px: 35.,
+        origin: Pt::new(50., 90.),
+        spans: vec![CharSpan {
+            start: 0,
+            end: 3,
+            fill: Some(Fill::Solid(Rgba::rgb(220, 30, 70))),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert!(crate::text::compose(&run).iter().any(|line| {
+        let mut clusters = std::collections::HashSet::new();
+        line.glyphs.iter().any(|g| !clusters.insert(g.cluster))
+    }));
+    run.contours = crate::text::shape(&run);
+    let mut shape = Shape::new(
+        Geom::Text(run),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(20, 60, 200)),
+            stroke: None,
+        },
+    );
+    shape.rotation = 0.25;
+    let mut layer = Layer::vector("Whole-object rotated range outlines");
+    layer.kind.shapes_mut().unwrap().push(shape);
+    doc.layers.push(layer);
+    let (_, notes) = write(&doc).unwrap();
+    assert!(notes.iter().any(|s| s.contains("multi-glyph")), "{notes:?}");
+    inspect(&doc, "rotated-outlined-range", 1.5);
 }
 
 #[test]
