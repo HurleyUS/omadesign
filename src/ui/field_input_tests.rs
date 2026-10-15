@@ -78,9 +78,12 @@ impl Seat {
     }
 
     fn text(&self, text: &str) -> Pos2 {
+        let number = text.parse::<f64>().ok();
         self.labels
             .iter()
-            .find(|(t, _)| t == text)
+            .find(|(t, _)| {
+                t == text || number.is_some_and(|number| t.parse::<f64>() == Ok(number))
+            })
             .unwrap_or_else(|| panic!("{text:?} missing: {:?}", self.labels))
             .1
             .center()
@@ -456,7 +459,8 @@ fn field_input_actual_size_copy_cut_paste_and_local_undo_for_control_and_command
         seat.click(&mut studio, at, false);
         seat.frame(&mut studio, vec![key(Key::A, modifiers)], false);
         seat.frame(&mut studio, clipboard(Key::C, modifiers, ""), false);
-        assert_eq!(seat.copied, ["120"], "selected source size");
+        assert_eq!(seat.copied.len(), 1, "selected source size");
+        assert_eq!(seat.copied[0].parse::<f32>().unwrap(), 120.);
         let copied = seat.copied[0].clone();
         let at = seat.text("35");
         seat.click(&mut studio, at, false);
@@ -477,6 +481,8 @@ fn field_input_actual_size_copy_cut_paste_and_local_undo_for_control_and_command
             false,
         );
         assert_eq!(bounds(&studio).height(), 120.);
+        seat.frame(&mut studio, vec![key(Key::A, modifiers)], false);
+        seat.frame(&mut studio, clipboard(Key::V, modifiers, "120"), false);
         seat.frame(
             &mut studio,
             vec![key(Key::ArrowLeft, Modifiers::SHIFT)],

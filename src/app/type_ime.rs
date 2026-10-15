@@ -353,7 +353,16 @@ mod tests {
         let ime = output
             .platform_output
             .ime
-            .expect("canvas must enable native IME");
+            .unwrap_or_else(|| {
+                panic!(
+                    "canvas must enable native IME: editing={}, focus={:?}, owner={:?}, canvas={:?}, text={:?}",
+                    studio.type_edit.is_some(),
+                    ctx.memory(|memory| memory.focused()),
+                    studio.shortcut_focus(&ctx),
+                    studio.canvas_rect,
+                    studio.selected_type().map(|run| (run.content, run.layout.is_some())),
+                )
+            });
         assert!(ime.rect.width() < 10.);
         assert!(ime.rect.height() > 20.);
         assert!(studio.canvas_rect.unwrap().contains(ime.rect.center()));
