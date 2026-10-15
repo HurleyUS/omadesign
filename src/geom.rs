@@ -624,14 +624,20 @@ pub fn path_svg_d(anchors: &[Anchor], closed: bool) -> String {
     let Some(first) = segments.first() else {
         return String::new();
     };
-    let mut d = format!("M {:.3} {:.3}", first[0].x, first[0].y);
+    let mut d = format!("M {} {}", first[0].x, first[0].y);
     for [a, c1, c2, b] in segments {
-        let eps = 1.0_f32.max((b - a).length() * 0.02);
-        if (c1 - a).length() < eps && (c2 - b).length() < eps {
-            d.push_str(&format!(" L {:.3} {:.3}", b.x, b.y));
+        let chord = b - a;
+        let length = chord.length_sq();
+        let straight = length > 0. && [c1,c2].iter().all(|p| {
+            let handle = *p - a;
+            let along = handle.dot(chord);
+            handle.cross(chord) == 0. && along >= 0. && along <= length
+        });
+        if (c1 == a && c2 == b) || straight {
+            d.push_str(&format!(" L {} {}", b.x, b.y));
         } else {
             d.push_str(&format!(
-                " C {:.3} {:.3} {:.3} {:.3} {:.3} {:.3}",
+                " C {} {} {} {} {} {}",
                 c1.x, c1.y, c2.x, c2.y, b.x, b.y
             ));
         }

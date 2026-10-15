@@ -56,6 +56,14 @@ fn matches(actual: &tiny_skia::Pixmap, expected: &tiny_skia::Pixmap, name: &str)
 fn svg_masks_keep_editable_sources_and_match_independent_rendering() {
     let fixtures = [
         (
+            "nested-mask-content",
+            r##"<defs><mask id="a" maskUnits="userSpaceOnUse" x="0" y="0" width="40" height="30"><rect width="20" height="30" fill="white"/></mask><mask id="b" maskUnits="userSpaceOnUse" x="0" y="0" width="40" height="30"><g mask="url(#a)"><rect width="40" height="30" fill="white"/></g></mask></defs><g transform="translate(5 0)" mask="url(#b)"><rect width="30" height="30" fill="red"/></g>"##,
+        ),
+        (
+            "small-clip",
+            r##"<defs><clipPath id="c"><circle cx="16" cy="13" r="1"/></clipPath></defs><rect width="40" height="30" fill="red" clip-path="url(#c)"/>"##,
+        ),
+        (
             "clip",
             r##"<defs><clipPath id="c"><circle cx="16" cy="13" r="10"/></clipPath></defs><rect width="40" height="30" fill="red" clip-path="url(#c)"/>"##,
         ),
@@ -496,5 +504,34 @@ fn selected_frame_exports_include_mask_sources_and_exclude_unrelated_artwork() {
         &reference(&crate::svg::export(&exported).unwrap(), 1),
         &pixels,
         "Selected frame SVG mask",
+    );
+}
+
+#[test]
+fn imported_bounding_box_mask_nodes_use_document_coordinates() {
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><defs><clipPath id="c" clipPathUnits="objectBoundingBox"><rect width=".5" height="1"/></clipPath></defs><rect x="5" y="4" width="30" height="20" fill="red" clip-path="url(#c)"/></svg>"##;
+    let (mut doc, _) = crate::formats::svg::read(source, "Editable coordinates").unwrap();
+    let source = doc.mask_sources().into_iter().next().unwrap();
+    let shape = doc
+        .layers
+        .iter_mut()
+        .find(|l| l.parent == Some(source.layer))
+        .unwrap()
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .first_mut()
+        .unwrap();
+    let bounds = shape.geom.bbox();
+    assert_eq!(bounds.min, Pt::new(5., 4.));
+    assert_eq!(bounds.size(), Pt::new(15., 20.));
+    shape.geom.translate(Pt::new(2., 0.));
+    let pixels = crate::compositor::render_export(&doc, 1).unwrap();
+    assert_eq!(pixels.pixel(6, 8).unwrap().alpha(), 0);
+    assert_eq!(pixels.pixel(8, 8).unwrap().red(), 255);
+    matches(
+        &reference(&crate::svg::export(&doc).unwrap(), 1),
+        &pixels,
+        "Document-space node editing",
     );
 }
