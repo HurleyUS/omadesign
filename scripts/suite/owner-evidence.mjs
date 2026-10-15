@@ -17,7 +17,7 @@ export function ownerEvidence(requirements,{directory,roots,builds}) {
       const build=builds[`${requirement.id}.${requirement.product}`] ?? builds[requirement.product];
       verifyCompilerReceipt(build);
       if (actual.dirty || packet.revision!==actual.revision || packet.tree!==actual.tree || !build?.binary || build.revision!==actual.revision || build.tree!==actual.tree || packet.binary_sha256!==fingerprint(build.binary).sha256 || packet.binary_sha256!==build.sha256) throw Error('historical source/binary binding');
-      if (packet.version!==1 || packet.id!==requirement.id || packet.product!==requirement.product || packet.status!=='passed' || !Array.isArray(packet.checks) || !packet.checks.length) throw Error('required owner checks unavailable');
+      if (packet.version!==1 || packet.id!==requirement.id || packet.product!==requirement.product || packet.status!=='passed' || !/^[a-f0-9]{64}$/.test(packet.host_sha256) || !Array.isArray(packet.checks) || !packet.checks.length) throw Error('required owner checks/host binding unavailable');
       const artifacts=[];
       for(const check of packet.checks) {
         const proof=check.artifact;
@@ -26,7 +26,7 @@ export function ownerEvidence(requirements,{directory,roots,builds}) {
         artifacts.push({check:check.id,...actual});
       }
       if (!requirement.checks.every(id=>packet.checks.some(c=>c.id===id && c.status==='passed'))) throw Error('required owner acceptance check missing');
-      return {...row,status:'passed',reason:'current owner acceptance and artifacts verified',source:actual,binary_sha256:packet.binary_sha256,artifacts};
+      return {...row,status:'passed',reason:'current owner acceptance and artifacts verified',source:actual,binary_sha256:packet.binary_sha256,producer_host_sha256:packet.host_sha256,artifacts};
     } catch {return row;}
   });
 }

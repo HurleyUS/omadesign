@@ -32,7 +32,7 @@ test('owner proofs reject altered artifacts, old source and absent acceptance ch
   const binary=fingerprint(process.execPath);
   const artifact=path.join(scratch,'proof.txt');
   fs.writeFileSync(artifact,'explicit synthetic validator proof, not a product receipt');
-  const packet={version:1,id:'UI-03',product:'omadesign',...current,binary_sha256:binary.sha256,status:'passed',checks:[{id:'UI-03',status:'passed',artifact:{path:artifact,...fingerprint(artifact)}}]};
+  const packet={version:1,id:'UI-03',product:'omadesign',...current,binary_sha256:binary.sha256,host_sha256:'5'.repeat(64),status:'passed',checks:[{id:'UI-03',status:'passed',artifact:{path:artifact,...fingerprint(artifact)}}]};
   const file=path.join(scratch,'UI-03.omadesign.json');
   const requirements=[{id:'UI-03',product:'omadesign',checks:['UI-03']}];
   const local={directory:scratch,roots:{omadesign:root},builds:{omadesign:{...current,binary:process.execPath,...binary}}};
@@ -53,7 +53,7 @@ test('UI semantic proof cannot satisfy appearance and wrong executable or missin
   const artifact=path.join(scratch,'ui-proof.txt');
   fs.writeFileSync(artifact,'synthetic semantic validator proof only');
   const receipt=path.join(scratch,'editability.json');
-  const packet={check:'editability',status:'passed',revision:'1'.repeat(40),binary_sha256:'2'.repeat(64),fixture_sha256:'3'.repeat(64),artifact:{path:artifact,...fingerprint(artifact)}};
+  const packet={check:'editability',status:'passed',revision:'1'.repeat(40),binary_sha256:'2'.repeat(64),fixture_sha256:'3'.repeat(64),host_sha256:'5'.repeat(64),artifact:{path:artifact,...fingerprint(artifact)}};
   const request={fixture:{required:['editability','appearance'],ui:{appearance_references:[]}},verified_binding:{source:{revision:packet.revision},binary:{sha256:packet.binary_sha256},inputs:{input:{sha256:packet.fixture_sha256}}},ui_receipts:{editability:receipt},output:scratch};
   const requestFile=path.join(scratch,'ui-request.json');
   fs.writeFileSync(requestFile,JSON.stringify(request));

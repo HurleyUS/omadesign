@@ -106,16 +106,16 @@ Each UI case requires separate app edit, undo, native save/reopen, keyboard, foc
 mixed, invalid, error, preservation and appearance checks. The source generator is
 pinned; currently absent appearance/font/theme pins are explicit unavailable
 dependencies. `builds[FIXTURE_ID].ui_receipts` maps semantic check IDs to compact
-owner packets `{check,status,revision,binary_sha256,fixture_sha256,artifact:{path,
+owner packets `{check,status,revision,binary_sha256,fixture_sha256,host_sha256,artifact:{path,
 sha256,bytes}}`. The referenced artifact must exist and match. `ui_captures` maps
-each scale to `{path,font_sha256,theme_sha256}`. All 100/150/200 percent captures
+each scale to `{path,font_sha256,theme_sha256,host_sha256}`. All 100/150/200 percent captures
 must exactly match their pinned PNG bytes and font/theme identity. This conservative
 appearance check is independent of semantic proof and establishes no native-window,
 physical or human acceptance. Existing accepted 0.5.0 history is not reused here.
 
 `owner_gates` retains each product owner's stricter acceptance. `--owner-receipts`
 points to packets named `GAP-ID.PRODUCT.json` containing `{version:1,id,product,
-revision,tree,binary_sha256,status,checks:[{id,status,artifact:{path,sha256,bytes}}]}`.
+revision,tree,binary_sha256,host_sha256,status,checks:[{id,status,artifact:{path,sha256,bytes}}]}`.
 Every named check, actual artifact and current executable/source must match. A
 packet's `passed` means the owner asserts its complete acceptance, including its
 stricter required native/product gates; a narrow partial test log is insufficient.
