@@ -10,6 +10,7 @@ mod effects_cache;
 mod mask_cache;
 mod frames;
 mod groups;
+mod svg_effects;
 pub(crate) mod interaction;
 #[cfg(test)]
 mod performance_tests;
@@ -593,7 +594,7 @@ fn layer_region(
 
 /// A mask bounds all output unless a filter expands or replaces the masked pixels.
 fn masked_outside_view(layer: &Layer, view: Transform, width: u32, height: u32) -> bool {
-    if layer.filters.active() {
+    if layer.filters.active() || layer.svg_filter.is_some() {
         return false;
     }
     let Some(mask) = &layer.mask else {
@@ -875,7 +876,7 @@ fn recolor_fill(fill: &mut Fill, color: crate::color::Rgba) {
                 stop.color = color;
             }
         }
-        Fill::None => *fill = Fill::Solid(color),
+        Fill::None | Fill::Pattern(_) => *fill = Fill::Solid(color),
     }
 }
 
@@ -1225,7 +1226,60 @@ fn draw_shape_inner(
             | crate::geom::Geom::Paths { winding: true, .. } => FillRule::Winding,
             _ => FillRule::EvenOdd,
         };
-        if fill_reveal < 1.0 {
+        if let Fill::Pattern(pattern) = &shape.style.fill {
+            let rotation = Transform::from_rotate_at(
+                shape.rotation.to_degrees(),
+                shape.geom.bbox().center().x,
+                shape.geom.bbox().center().y,
+            );
+            let local_path = path
+                .as_ref()
+                .clone()
+                .transform(rotation.invert().unwrap_or_default());
+            if let Some(local_path) = local_path {
+                let mut reveal = None;
+                if fill_reveal < 1. {
+                    let bounds = shape.world_bbox();
+                    if let Some(rect) = tiny_skia::Rect::from_xywh(
+                        bounds.min.x,
+                        bounds.max.y - bounds.height() * fill_reveal,
+                        bounds.width().max(1e-5),
+                        (bounds.height() * fill_reveal).max(1e-5),
+                    ) {
+                        reveal = mask
+                            .cloned()
+                            .or_else(|| tiny_skia::Mask::new(pm.width(), pm.height()));
+                        if let Some(clip) = &mut reveal {
+                            if mask.is_some() {
+                                clip.intersect_path(
+                                    &PathBuilder::from_rect(rect),
+                                    FillRule::Winding,
+                                    true,
+                                    xf,
+                                );
+                            } else {
+                                clip.fill_path(
+                                    &PathBuilder::from_rect(rect),
+                                    FillRule::Winding,
+                                    true,
+                                    xf,
+                                );
+                            }
+                        }
+                    }
+                }
+                pattern.draw(
+                    pm,
+                    &local_path,
+                    shape.geom.bbox(),
+                    xf.pre_concat(rotation),
+                    op,
+                    blend,
+                    reveal.as_ref().or(mask),
+                    shape.geom.nonzero_winding(),
+                );
+            }
+        } else if fill_reveal < 1.0 {
             let bounds = shape.world_bbox();
             if let Some(rect) = tiny_skia::Rect::from_xywh(
                 bounds.min.x,
@@ -1354,7 +1408,7 @@ fn fill_paint<'a>(
                 .map(crate::gradient::texture_shader)
                 .unwrap_or_else(|| gradient.skia(geom.bbox()));
         }
-        Fill::None => {}
+        Fill::None | Fill::Pattern(_) => {}
         Fill::Solid(c) => paint.set_color(c.to_skia()),
         Fill::Linear { from, to, c0, c1 } => {
             let b = geom.bbox();

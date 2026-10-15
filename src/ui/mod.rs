@@ -46,6 +46,8 @@ mod selection;
 mod studios;
 mod panel_workspace;
 mod shared_transform;
+mod svg_paint;
+mod svg_effect;
 mod text_geometry;
 mod templates;
 pub mod theme;

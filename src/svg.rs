@@ -190,16 +190,33 @@ fn gradient_reference(
                 "x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"",
                 a.x, a.y, b.x, b.y
             )
-        } else {
+        } else if gradient.radial_axis.is_none()
+            && gradient.focal == [0., 0.]
+            && gradient.inner_radius == 0.
+        {
             format!(
                 "cx=\"{}\" cy=\"{}\" r=\"{}\"",
                 a.x,
                 a.y,
                 (b - a).length().max(0.001)
             )
+        } else {
+            format!(
+                "cx=\"0\" cy=\"0\" r=\"1\" fx=\"{}\" fy=\"{}\" fr=\"{}\" gradientTransform=\"matrix({} {} {} {} {} {})\"",
+                gradient.focal[0],
+                gradient.focal[1],
+                gradient.inner_radius,
+                gradient.radial_transform(shape.geom.bbox()).sx,
+                gradient.radial_transform(shape.geom.bbox()).ky,
+                gradient.radial_transform(shape.geom.bbox()).kx,
+                gradient.radial_transform(shape.geom.bbox()).sy,
+                a.x,
+                a.y
+            )
         };
         defs.push_str(&format!(
-            "<{tag} id=\"{id}\" gradientUnits=\"userSpaceOnUse\" {geometry}>"
+            "<{tag} id=\"{id}\" gradientUnits=\"userSpaceOnUse\" spreadMethod=\"{}\" {geometry}>",
+            gradient.spread.svg()
         ));
         for stop in &gradient.stops {
             defs.push_str(&format!(
@@ -373,6 +390,15 @@ fn write_shape(
             "fill=\"{}\"",
             gradient_reference(defs, grad_id, g, shape, 0.)
         ),
+        Fill::Pattern(pattern) => {
+            *grad_id += 1;
+            let reference = pattern.append_definition(
+                defs,
+                &format!("oma-pattern-{grad_id}-"),
+                shape.geom.bbox(),
+            );
+            format!("fill=\"{reference}\" fill-opacity=\"{}\"", pattern.opacity)
+        }
         Fill::None => "fill=\"none\"".to_string(),
         Fill::Solid(c) => format!("fill=\"{}\"", svg_color(*c)),
         Fill::Linear { from, to, c0, c1 } => {
@@ -617,7 +643,7 @@ fn spin_placement(shape: &Shape) -> Option<(SpinTarget, Pt)> {
             let gradient = shape.style.fill.gradient()?;
             Some((SpinTarget::Fill, center_of(&gradient)))
         }
-        Fill::Gradient(_) => None,
+        Fill::Gradient(_) | Fill::Pattern(_) => None,
         _ => {
             let gradient = shape.style.stroke.as_ref()?.gradient.as_ref()?;
             svg_gradient(gradient.kind).then(|| (SpinTarget::Stroke, center_of(gradient)))
@@ -735,6 +761,9 @@ fn motion_exported(shape: &Shape, prop: crate::motion::Prop) -> bool {
 fn export_warnings(doc: &Document) -> Vec<String> {
     let mut warnings = Vec::new();
     for layer in &doc.layers {
+        if let Some(graph) = &layer.svg_filter {
+            warnings.extend(graph.reductions.iter().cloned());
+        }
         if layer.filters.active() {
             warnings.extend(
                 crate::filter::export_notes(&layer.filters)
@@ -1308,6 +1337,44 @@ fn write_shape_tree(
     );
 }
 
+/// Export current pose overrides for source filter evaluation.
+/// Args: editable document and evaluated object poses. Returns vector SVG at this frame.
+pub(crate) fn export_posed(
+    doc: &Document,
+    poses: &std::collections::HashMap<u64, crate::motion::Pose>,
+) -> Result<String, String> {
+    let source = export_inner(doc, false, true)?;
+    let xml = roxmltree::Document::parse(&source).map_err(|e| e.to_string())?;
+    let mut edits = Vec::new();
+    for node in xml.descendants().filter(|n| n.is_element()) {
+        let Some(id) = node
+            .attribute("id")
+            .and_then(|id| id.strip_prefix("oma-"))
+            .and_then(|id| id.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let Some(pose) = poses.get(&id) else {
+            continue;
+        };
+        let Some(shape) = doc.layers.iter().find_map(|l| l.find(id)) else {
+            continue;
+        };
+        let transform = pose.to_skia(shape.world_bbox().center());
+        edits.push((
+            node.range().start,
+            format!("<g transform=\"{}\">", crate::svg_source::matrix(transform)),
+        ));
+        edits.push((node.range().end, "</g>".to_string()));
+    }
+    edits.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    let mut output = source;
+    for (at, text) in edits {
+        output.insert_str(at, &text);
+    }
+    Ok(output)
+}
+
 fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<String, String> {
     doc.validate_hierarchy()?;
     let mut body = String::new();
@@ -1458,6 +1525,9 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
         }
         if layer_body.is_empty() && !layer.is_group {
             continue;
+        }
+        if let Some(graph) = &layer.svg_filter {
+            layer_body = graph.wrap(&mut defs, &format!("oma-graph-{}-", layer.id), layer_body);
         }
         if independent {
             if let Some(mask_id) = write_layer_mask(&mut defs, layer)? {
