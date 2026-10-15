@@ -1126,6 +1126,7 @@ mod qualification_tests {
         let mut s = Scene::default();
         s.add(m, "Cube".into()).unwrap();
         s.objects[0].looped = false;
+        s.objects[0].rotation = [22., 35., 0.];
         s
     }
     #[test]
