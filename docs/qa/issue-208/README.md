@@ -17,9 +17,12 @@ per layer with a visible status message. Add another pixel layer for a larger
 span. This fixes bitmap clipping; intentional selections and masks still apply.
 
 The new edge-crossing regression fails on the published source before this fix.
-The focused retouch suite passed: 21 tests, zero failures, one ignored manual
-benchmark. All-target compilation passed. The final library result is recorded
-below after the complete run.
+The full library suite passed: 1,033 tests, zero failures, nine ignored manual
+benchmarks, in 41.44 seconds. This includes 22 retouch regressions. All-target
+compilation passed. Tests use an isolated profile and system fixture tools;
+the owner's installed brush packs and settings are excluded.
+
+[Validation receipt](checks.json)
 
 The native WGPU replay paints a Square brush around all four sides of a
 320 × 180 bitmap. Its stroke runs from (-70, -60) to (-70, 240), (430, 240),
