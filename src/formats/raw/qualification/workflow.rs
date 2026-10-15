@@ -3,6 +3,7 @@ use super::*;
 use crate::photo::{PhotoImage, RgbaImage, edits};
 use image::{DynamicImage, GenericImageView};
 use std::io::BufReader;
+use std::time::Instant;
 
 /// Add a classified qualification failure.
 /// Args: destination, category and explanation. Returns nothing.
@@ -34,6 +35,8 @@ pub(super) fn run(
     directory: &Path,
     mode: &str,
 ) -> Value {
+    let started = Instant::now();
+    let mut resources = vec![resource_sample("before", started)];
     let source = bindings
         .source
         .clone()
@@ -108,6 +111,7 @@ pub(super) fn run(
             drop(destination);
             verify_hash(&copy, case.source.sha256.as_deref())?;
             let mut photo = PhotoImage::load(&copy)?;
+            resources.push(resource_sample("camera_opened", started));
             if !photo.develop.is_default() {
                 return Err("owned source unexpectedly loaded settings".into());
             }
@@ -206,6 +210,7 @@ pub(super) fn run(
                 }
             }
             check_render(&photo, &mut checks, case.preview_tolerance)?;
+            resources.push(resource_sample("baseline_preview_full_checked", started));
             let mut baseline_export_hash = None;
             for extension in ["png", "tif"] {
                 let output = directory.join(format!("baseline.{extension}"));
@@ -225,6 +230,7 @@ pub(super) fn run(
                 }
                 baseline_export_hash = Some(digest.clone());
                 let precision = check_transfer(&photo, pixels)?;
+                resources.push(resource_sample(&format!("{extension}_decoded"), started));
                 checks.push(json!({"check":format!("{extension}_u16_codec_decode"),"dimensions":photo.dimensions(),"channel_bits":16,"pixel_sha256":digest,"stats":precision}));
                 if extension == "png" {
                     for (reference, path) in &ready {
@@ -274,6 +280,7 @@ pub(super) fn run(
             edits::save(&copy, identity, &develop)?;
             drop(photo);
             let reopened = PhotoImage::load(&sidecar)?;
+            resources.push(resource_sample("settings_reopened", started));
             if reopened.develop != develop {
                 return Err("settings reopen changed the development parameters".into());
             }
@@ -290,6 +297,18 @@ pub(super) fn run(
         if let Err(error) = result {
             problem(&mut errors, "workflow", error);
         }
+    }
+    resources.push(resource_sample("released", started));
+    if resources.last().unwrap()["admitted_bytes"]
+        .as_u64()
+        .unwrap()
+        > resources[0]["admitted_bytes"].as_u64().unwrap()
+    {
+        problem(
+            &mut errors,
+            "workflow",
+            "case retained admitted buffers after its last source/output owner dropped",
+        );
     }
     let after = hash_file(&source).ok();
     if before != after {
@@ -327,7 +346,26 @@ pub(super) fn run(
     };
     json!({"schema_version":1,"case":case.id,"required":case.required,"status":status,"checked":checked,
         "source_before_sha256":before,"source_after_sha256":after,"required_reference_kinds":case.required_reference_kinds,
-        "observed":observed,"reference_tools":tools,"comparisons":comparisons,"checks":checks,"errors":errors})
+        "observed":observed,"reference_tools":tools,"comparisons":comparisons,"checks":checks,"errors":errors,
+        "resources":{"measurement":"Linux procfs process RSS/high-water bytes and shared pool admission; process lifetime high-water includes test/reference work, not an isolated decoder peak","samples":resources}})
+}
+
+/// Record actual process memory alongside admitted buffer ownership.
+/// Args: workflow stage and monotonic start. Returns no host names or local paths; unavailable OS counters remain null.
+fn resource_sample(stage: &str, started: Instant) -> Value {
+    let status = fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let bytes = |counter: &str| {
+        status.lines().find_map(|line| {
+            let mut words = line.split_whitespace();
+            (words.next()? == counter)
+                .then(|| words.next()?.parse::<u64>().ok()?.checked_mul(1024))
+                .flatten()
+        })
+    };
+    let (admitted, limit) = crate::resources::global().usage();
+    json!({"stage":stage,"elapsed_ms":started.elapsed().as_secs_f64()*1000.,
+        "rss_bytes":bytes("VmRSS:"),"process_high_water_bytes":bytes("VmHWM:"),
+        "host_available_bytes":crate::resources::available_memory(),"admitted_bytes":admitted,"pool_limit_bytes":limit})
 }
 
 /// Keep unknown camera/mode identity visible as missing evidence.
@@ -517,23 +555,49 @@ fn record_reference(
     }
 }
 
+/// Keep codec validation samples admitted until their final owner drops.
+struct DecodedExport {
+    image: image::ImageBuffer<image::Rgba<u16>, Vec<u16>>,
+    _memory: std::sync::Arc<crate::resources::Lease>,
+}
+impl std::ops::Deref for DecodedExport {
+    type Target = image::ImageBuffer<image::Rgba<u16>, Vec<u16>>;
+    fn deref(&self) -> &Self::Target {
+        &self.image
+    }
+}
+
 /// Decode the actual encoded export through the codec reader.
-/// Args: exported PNG/TIFF and expected dimensions. Returns RGBA16 without an 8-to-16 promotion.
-fn decode_export(
-    path: &Path,
-    dimensions: (u32, u32),
-) -> Result<image::ImageBuffer<image::Rgba<u16>, Vec<u16>>, String> {
-    let image = image::ImageReader::open(path)
+/// Args: exported PNG/TIFF and expected dimensions. Returns admitted RGBA16 without an 8-to-16 promotion or fixed pixel ceiling.
+fn decode_export(path: &Path, dimensions: (u32, u32)) -> Result<DecodedExport, String> {
+    let bytes = u64::from(dimensions.0)
+        .checked_mul(u64::from(dimensions.1))
+        .and_then(|pixels| pixels.checked_mul(16))
+        .and_then(|bytes| bytes.checked_add(64 * 1024 * 1024))
+        .ok_or("export validation allocation overflow")?;
+    let cancel = super::super::Cancellation::default();
+    let memory = crate::resources::global().reserve(bytes, &cancel)?;
+    let mut reader = image::ImageReader::open(path)
         .map_err(|e| e.to_string())?
         .with_guessed_format()
-        .map_err(|e| e.to_string())?
-        .decode()
         .map_err(|e| e.to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(dimensions.0);
+    limits.max_image_height = Some(dimensions.1);
+    limits.max_alloc = Some(bytes);
+    reader.limits(limits);
+    let image = reader.decode().map_err(|e| e.to_string())?;
     if image.dimensions() != dimensions {
         return Err("export geometry mismatch".into());
     }
     match image {
-        DynamicImage::ImageRgba16(image) => Ok(image),
+        DynamicImage::ImageRgba16(image) => {
+            memory.resize(image.as_raw().capacity() as u64 * 2, &cancel)?;
+            Ok(DecodedExport {
+                image,
+                _memory: memory,
+            })
+        }
         _ => Err("RAW export codec did not decode sixteen-bit RGBA channels".into()),
     }
 }
@@ -643,12 +707,21 @@ fn check_render(
         raw.pixels.as_slice(),
     )
     .ok_or("invalid source")?;
+    let oracle_bytes = u64::from(raw.width)
+        .checked_mul(u64::from(dims.1))
+        .and_then(|pixels| pixels.checked_mul(16))
+        .and_then(|bytes| bytes.checked_add(u64::from(dims.0) * u64::from(dims.1) * 6))
+        .and_then(|bytes| bytes.checked_add(32 * 1024 * 1024))
+        .ok_or("preview reference allocation overflow")?;
+    let cancel = super::super::Cancellation::default();
+    let oracle_memory = crate::resources::global().reserve(oracle_bytes, &cancel)?;
     let resized = image::imageops::resize(
         &source,
         dims.0,
         dims.1,
         image::imageops::FilterType::Triangle,
     );
+    oracle_memory.resize(resized.as_raw().capacity() as u64 * 2, &cancel)?;
     let full = photo.render_full()?;
     for (name, actual, linear, source_dims) in [
         (

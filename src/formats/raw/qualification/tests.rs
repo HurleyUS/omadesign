@@ -377,6 +377,25 @@ fn raw_camera_contract_real_photo_workflow_cannot_replace_external_references() 
     assert_eq!(report["checked"], true, "{report}");
     assert_eq!(report["source_before_sha256"], before);
     assert_eq!(report["source_after_sha256"], before);
+    let resources = report["resources"]["samples"].as_array().unwrap();
+    assert_eq!(resources.first().unwrap()["stage"], "before");
+    assert_eq!(resources.last().unwrap()["stage"], "released");
+    assert_eq!(
+        resources.first().unwrap()["admitted_bytes"],
+        resources.last().unwrap()["admitted_bytes"]
+    );
+    assert!(
+        resources
+            .iter()
+            .any(|sample| sample["stage"] == "camera_opened")
+    );
+    #[cfg(target_os = "linux")]
+    assert!(resources.iter().all(|sample| {
+        sample["rss_bytes"].as_u64().is_some_and(|n| n > 0)
+            && sample["process_high_water_bytes"]
+                .as_u64()
+                .is_some_and(|n| n > 0)
+    }));
     assert!(report["comparisons"].as_array().unwrap().is_empty());
     assert!(
         report["checks"]

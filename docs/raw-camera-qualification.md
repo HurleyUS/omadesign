@@ -98,11 +98,17 @@ as external decoder comparisons. They cannot turn a missing-reference case green
 
 Every case receipt includes original source hashes before/after, observed metadata,
 reference tool identities, decoder version, test executable hash, exact revision,
-Rust toolchain, Cargo.lock hash, OS/architecture, workflow checks and classified
+Rust toolchain, Cargo.lock hash, OS/architecture, hashed producer hostname, workflow checks and classified
 errors. Optional mode explicitly counts `checked` and `skipped`; a checked workflow
 with missing evidence remains skipped. Hash corruption or a workflow failure still
-fails optional mode. No UI, memory, deadline or cancellation performance proof is
-implied by these receipts.
+fails optional mode. Resource samples report Linux process RSS/high-water bytes, live host availability
+and the same shared pool at route milestones. The process lifetime high-water
+includes qualification/reference work; it is not an isolated decoder peak. A case
+fails if admitted buffers remain above its starting baseline after its last owners
+drop. The codec validation reader uses checked byte admission and retains its
+sample lease; it does not impose the codec default memory ceiling. Unsupported OS
+counters stay null. These measurements imply no native-window, device or physical
+proof. Active cancellation has a separate exact-source test and receipt.
 
 ## APIs and coordinator registration
 
@@ -118,7 +124,10 @@ The integrated cut registers the test module and adds a native integer mosaic
 reference path; it does not change the app/schema version. The runner expects `RawImage.pixels` slice API,
 `PhotoImage::load(&Path) -> Result<PhotoImage, String>`,
 `render_full() -> Result<AdmittedImage, String>` where the owner dereferences to
-`RgbaImage`, `render_preview()`, `export_to()` and `photo::edits::save()` APIs.
+`RgbaImage`; `render_preview()` and `render_thumbnail()` also return a fallible
+`AdmittedImage`. `export_to()` and `photo::edits::save()` retain their ordinary path
+contracts. Linear preview samples share `Arc<Allocation<u16>>`; each original
+display/thumbnail Arc retains independent admission through its final clone.
 It makes no `PhotoImage::from_raw` call and does not construct `RawImage`, so the
 new memory lease and fallible constructor require no special test bypass.
 
@@ -150,8 +159,8 @@ case.
 
 ## Commands, for the coordinator to schedule
 
-No command in this section has been executed as a build, acquisition or camera run.
-Use the existing config at
+The narrow Node self-test has run. Build and camera receipts must be read at their
+exact committed revisions; queued/interrupted logs are not passes. Use the existing config at
 `/home/michael/Projects/omadesign/.artifacts/craft-gap-stack/build-config.json`.
 Every build/test goes through its shared global heavy lock and canonical target:
 
@@ -162,10 +171,12 @@ node scripts/serialized-cargo.mjs \
   formats::raw::qualification::tests::raw_camera_contract_ --test-threads=1
 ```
 
-Compile the exact integrated corpus test executable through the same helper with
-`test --locked --lib --no-run --message-format=json`, then independently record its
-reported executable path and SHA-256. Supply that hash on the actual run of the
-same commit/toolchain. A changed executable fails before decoding.
+Use the executable path and SHA-256 from the ordinary focused run's canonical
+Cargo receipt. The shared helper owns Cargo JSON formatting and hashes the test
+executable before releasing its lock. Do not submit another build merely to obtain
+a binding receipt, and do not pass a custom message format. Verify those live bytes
+against that exact source/tree/lockfile receipt, then supply the hash on the actual
+run of the same commit/toolchain. A changed executable fails before decoding.
 
 Metadata planning performs no acquisition, compiler invocation or decoding:
 
@@ -240,7 +251,10 @@ never deleted. No resource measurement runs concurrently with a compiler here.
 All 80 cases still lack pinned developed-reference SHA-256/executable identities
 and complete verified in-file identity. Nineteen cases also lack source URLs and
 source hashes. The 61 public source pins establish provenance, not local corpus
-presence or decoding success. None was downloaded or decoded in this change.
+presence or decoding success. One pinned CC0 Canon M50 RAW and an official hash-verified DNGLab 0.8.0 executable
+are locally acquired. Serial reference preparation is scheduled; this acquisition
+is not a decode/reference/camera pass. The remaining sources are not locally
+claimed present.
 The eight DNGLab sensor metadata pins cannot close the missing native sensor-plane
 comparison. Historical private fixtures/reference bundles need recovery and rights
 review before binding or sharing.
@@ -254,6 +268,7 @@ passed: `{"command":"self-test","status":"passed","contract_mutations":10,"camer
 It also checks missing/changed file pins, reference corruption, zero required runs
 and optional skip accounting using four original bytes, then removes its own
 scratch files. It downloads nothing and runs no compiler or decoder.
-Native resource/cancellation/precision integration,
-actual corpus/reference execution, camera qualification, commits and PRs remain
-with the coordinator.
+Native resource/cancellation/precision implementation is under exact-commit
+qualification in PRs #259, #261, #263 and #264. Actual corpus/reference execution
+and active cancellation proof remain pending. Precise Design placement waits for
+the full qualified native/color dependency; no partial native cut bypass is allowed.
