@@ -1043,6 +1043,7 @@ impl Geom {
     /// Canvas handles and Text frame dimensions continue to reflow at the same type size.
     pub fn map_into_with_text_scale(&mut self, src: Bounds, dst: Bounds) {
         self.map_into(src, dst);
+        if matches!(self,Geom::Text(run) if run.transform.is_some()){return;}
         if let Geom::Text(run) = self && run.frame.is_some() {
             let sx = dst.width() / src.width().max(0.001);
             let sy = dst.height() / src.height().max(0.001);

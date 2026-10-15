@@ -577,7 +577,7 @@ pub fn selection_rects(run:&TypeRun,a:usize,b:usize)->Vec<(Pt,Pt)> {
         let mut from=lo.max(line.start);let end=hi.min(line.end);
         while from<end {
             let style=character_metrics(run,from);let mut to=from+1;
-            while to<end {let next=character_metrics(run,to);if next.baseline_shift!=style.baseline_shift||next.vscale!=style.vscale{break;}to+=1;}
+            while to<end {let next=character_metrics(run,to);if next.baseline_shift!=style.baseline_shift||next.vscale!=style.vscale||next.px!=style.px{break;}to+=1;}
             let y=run.origin.y+line.baseline-style.baseline_shift.unwrap();let px=style.px.unwrap_or(run.px)*style.vscale.unwrap()/100.;
             rects.push((Pt::new(run.origin.x+line.caret_x(from),y-px*0.9),Pt::new(run.origin.x+line.caret_x(to),y+px*0.25)));from=to;
         }

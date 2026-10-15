@@ -578,5 +578,6 @@ mod native_type_acceptance {
     #[test]
     fn native_type_threaded_frame_uses_range_faces_and_affine_after_layout(){
         let mut story=sample("MMMM WWWW");story.frame=Some(crate::text_geometry::TextFrame{size:Pt::new(240.,100.),..Default::default()});story.set_character_style(5,9,|s|s.font=Some("/usr/share/fonts/liberation/LiberationSans-Bold.ttf".into()));let plain=crate::text_geometry::layout_frame(&story,&story,0,&[],false);assert!(!plain.contours.is_empty());story.transform=Some([1.,0.2,0.3,1.,20.,10.]);let mapped=crate::text_geometry::layout_frame(&story,&story,0,&[],false);assert!((mapped.contours[0][0]-story.map_point(plain.contours[0][0])).length()<0.001);assert!((mapped.selections[0].2[0]-story.map_point(plain.selections[0].2[0])).length()<0.001);
+        let mut geom=Geom::Text(story);let bounds=geom.bbox();geom.map_into_with_text_scale(bounds,crate::geom::Bounds::from_min_size(bounds.min,bounds.size()*2.));let Geom::Text(run)=geom else{unreachable!()};assert_eq!(run.px,32.);assert!((run.transform.unwrap()[0]-2.).abs()<0.001);
     }
 }
