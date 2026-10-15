@@ -9,6 +9,12 @@ mod features;
 
 pub(crate) const VERSION: u32 = features::PUBLISHING;
 
+/// Check whether this build implements a project version.
+/// Args: envelope version. Returns false for unimplemented reserved formats.
+pub(crate) fn supports_version(version: u32) -> bool {
+    features::supports_version(version)
+}
+
 #[derive(Serialize, Deserialize)]
 struct File {
     version: u32,
@@ -31,7 +37,7 @@ pub fn encode(doc: &Document) -> Result<String, String> {
 
 pub fn decode(s: &str) -> Result<Document, String> {
     let file: File = serde_json::from_str(s).map_err(|e| e.to_string())?;
-    if !features::supports_version(file.version) {
+    if !supports_version(file.version) {
         return Err("Unsupported omadesign project version".into());
     }
     features::validate_version(&file.doc, file.version, !file.svg_sources.is_empty())?;
@@ -51,7 +57,7 @@ pub fn decode(s: &str) -> Result<Document, String> {
 
 /// Shared normalization after pixels have been decoded under the caller's budgets.
 pub(crate) fn normalize_decoded_document(mut doc: Document, version: u32) -> Result<Document, String> {
-    if !features::supports_version(version) {
+    if !supports_version(version) {
         return Err("Unsupported omadesign project version".into());
     }
     features::validate_version(&doc, version, false)?;

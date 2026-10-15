@@ -688,7 +688,7 @@ fn oma_document(bytes: &[u8]) -> Result<crate::document::Document, String> {
     }
     let Project { version, doc } = serde_json::from_slice(bytes)
         .map_err(|e| format!("Could not read project preview: {e}"))?;
-    if !(1..=crate::project::VERSION).contains(&version) {
+    if !crate::project::supports_version(version) {
         return Err("Unsupported omadesign project version.".into());
     }
     crate::project::normalize_decoded_document(checked_preview_document(doc)?, version)
@@ -725,7 +725,7 @@ fn load_preview_document_with_budget(path: &Path, recovery: bool, complex: bool)
         #[derive(Deserialize)]
         struct Project { version: u32, doc: crate::document::Document }
         let Project { version, doc } = serde_json::from_slice(&bytes).map_err(|e| format!("Could not read project preview: {e}"))?;
-        if !(1..=crate::project::VERSION).contains(&version) { return Err("Unsupported omadesign project version.".into()); }
+        if !crate::project::supports_version(version) { return Err("Unsupported omadesign project version.".into()); }
         crate::project::normalize_decoded_document(checked_preview_document_with_budget(doc, complex)?, version)
     }
 }
