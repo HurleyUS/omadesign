@@ -289,7 +289,7 @@ fn illustrator_linked_picture_retains_original_once_and_reopens() {
     )
     .unwrap();
     assert!(!notes.iter().any(|n| n.contains("saved preview")));
-    assert_eq!(doc.sources.len(), 1);
+    assert_eq!(doc.sources.len(), 2);
     assert_eq!(doc.sources[0].bytes(), bytes);
     assert_eq!(doc.sources[0].name, "pixel.png");
     assert_eq!(
@@ -393,8 +393,60 @@ fn illustrator_independent_real_fixture_without_pdf_preview_and_oma_reopen() {
                 text.iter().any(|t| !t.content.trim().is_empty()),
                 "{file}: text must retain characters"
             );
+            let reference = path.with_extension("preview-text.html");
+            let output = std::process::Command::new("pdftotext")
+                .arg("-bbox-layout")
+                .arg(&path)
+                .arg(&reference)
+                .output()
+                .expect("independent text check requires Poppler pdftotext");
+            assert!(
+                output.status.success(),
+                "{file}: independent Poppler text extraction failed"
+            );
+            let html = std::fs::read_to_string(&reference).unwrap();
+            let words = html
+                .lines()
+                .filter(|l| l.trim_start().starts_with("<word "))
+                .map(|line| {
+                    roxmltree::Document::parse(line.trim())
+                        .unwrap()
+                        .root_element()
+                        .text()
+                        .unwrap_or("")
+                        .to_string()
+                })
+                .filter(|s| !s.trim().is_empty())
+                .collect::<Vec<_>>();
+            let content = text
+                .iter()
+                .map(|t| t.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let matched = words
+                .iter()
+                .filter(|w| content.contains(w.as_str()))
+                .count();
+            let bounds=doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().filter_map(|s|if let Geom::Text(t)=&s.geom{Some(serde_json::json!({"text":t.content,"origin":t.origin,"bounds":s.world_bbox()}))}else{None}).take(8).collect::<Vec<_>>();
+            std::fs::write(path.with_extension("native-type-qualification.json"),serde_json::to_string_pretty(&serde_json::json!({"file":file,"source_story_slots":expected_stories,"native_text_objects":text.len(),"independent_pdf_words":words.len(),"words_retained_as_editable_characters":matched,"native_examples":bounds,"warnings":notes})).unwrap()).unwrap();
+            assert!(
+                !words.is_empty(),
+                "{file}: independent PDF text oracle is empty"
+            );
+            assert!(
+                matched * 10 >= words.len() * 9,
+                "{file}: only {matched}/{} independent PDF words survived as editable type",
+                words.len()
+            );
         }
         let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        assert!(
+            reopened
+                .sources
+                .iter()
+                .any(|s| s.format == "illustrator" && s.bytes() == bytes),
+            "{file}: original AI bytes must survive native import and reopen"
+        );
         assert_eq!(
             shapes(&doc),
             shapes(&reopened),

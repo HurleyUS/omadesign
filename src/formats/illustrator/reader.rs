@@ -1067,10 +1067,14 @@ impl Reader<'_> {
                 .texts
                 .as_ref()
                 .and_then(|texts| texts.shape(story, frame, template));
-            if let Some((shape, notes)) = shape {
+            if let Some((mut shape, notes)) = shape {
                 for note in notes {
                     self.note(note);
                 }
+                shape.visible = self.state.visible;
+                shape.locked = self.state.locked;
+                shape.opacity = self.state.opacity;
+                shape.blend = self.state.blend;
                 let mut layer = Layer::vector("Text");
                 layer.kind.shapes_mut().unwrap().push(shape);
                 self.text_slots.push((layer.id, story, frame, hidden));
@@ -1424,6 +1428,26 @@ impl Reader<'_> {
                     }
                     Err(error) => {
                         self.note(format!("Illustrator styled type could not use the shared SVG importer: {error}. Editable source characters remain available."));
+                    }
+                }
+            }
+        }
+        for layer in &mut doc.layers {
+            if let Some(shapes) = layer.kind.shapes_mut() {
+                for shape in shapes {
+                    crate::text::fill_contours(&mut shape.geom);
+                    if self.text_slots.iter().any(|(id, _, _, _)| *id == layer.id)
+                        && shape.rotation.abs() > 1e-6
+                    {
+                        let anchor = if let Geom::Text(text) = &shape.geom {
+                            text.origin
+                        } else {
+                            continue;
+                        };
+                        let centre = shape.geom.bbox().center();
+                        shape
+                            .geom
+                            .translate(centre.rotate_about(anchor, shape.rotation) - centre);
                     }
                 }
             }
