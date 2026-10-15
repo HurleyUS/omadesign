@@ -21,7 +21,7 @@ pub(super) fn editor(ui: &mut Ui, pattern: &mut SvgPattern) -> bool {
         if ui.add(egui::TextEdit::multiline(&mut source).code_editor().desired_rows(8)).changed() { ui.data_mut(|d| d.insert_temp(id, source.clone())); }
         if ui.button("Apply vector source").clicked() {
             let candidate = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><defs>{source}</defs><rect width=\"10\" height=\"10\" fill=\"url(#{})\"/></svg>", pattern.id);
-            match usvg::Tree::from_str(&candidate, &usvg::Options::default()) {
+            match usvg::Tree::from_str(&candidate, &crate::svg_source::options()) {
                 Ok(tree) if tree.patterns().iter().any(|p| p.id() == pattern.id) => {
                     pattern.definitions = source;
                     ui.data_mut(|d| d.remove::<String>(id.with("error")));

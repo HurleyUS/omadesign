@@ -94,7 +94,7 @@ impl SvgPattern {
             self.opacity.clamp(0., 1.),
             if winding { "nonzero" } else { "evenodd" }
         );
-        let Ok(tree) = usvg::Tree::from_str(&source, &usvg::Options::default()) else {
+        let Ok(tree) = usvg::Tree::from_str(&source, &options()) else {
             return;
         };
         let Some(mut surface) = tiny_skia::Pixmap::new(pm.width(), pm.height()) else {
@@ -231,4 +231,12 @@ pub fn reductions(source: &str) -> Vec<String> {
         }
     }
     notes
+}
+
+/// Parse only self-contained vector source.
+/// Returns SVG options that resolve embedded data while refusing file or network references.
+pub fn options() -> usvg::Options<'static> {
+    let mut options = usvg::Options::default();
+    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    options
 }

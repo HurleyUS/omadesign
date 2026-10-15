@@ -28,7 +28,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut crate::app::Studio) {
                 if ui.button("Apply filter source").clicked() {
                     let filters = graph.filters.iter().map(|s| format!("url(#{s})")).collect::<Vec<_>>().join(" ");
                     let candidate = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><defs>{source}</defs><g filter=\"{filters}\"><rect width=\"10\" height=\"10\"/></g></svg>");
-                    if let Ok(tree) = usvg::Tree::from_str(&candidate, &usvg::Options::default()) {
+                    if let Ok(tree) = usvg::Tree::from_str(&candidate, &crate::svg_source::options()) {
                         if graph.filters.iter().all(|id| tree.filters().iter().any(|f| f.id() == id)) {
                             graph.reductions = crate::svg_source::reductions(&candidate);
                             graph.definitions = source;

@@ -142,7 +142,7 @@ mod tests {
         };
         crate::document::apply(&mut doc, &command);
         assert_ne!(original, crate::compositor::export_png(&doc, 1).unwrap());
-        crate::document::apply(&mut doc, &crate::document::invert(command));
+        crate::document::apply(&mut doc, &crate::document::invert_cmd(command));
         assert_eq!(original, crate::compositor::export_png(&doc, 1).unwrap());
     }
 
