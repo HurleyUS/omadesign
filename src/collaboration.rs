@@ -9,13 +9,62 @@ use std::collections::{BTreeMap, BTreeSet};
 type Snapshot = BTreeMap<String, Cell>;
 const PIXEL_BUDGET: u64 = 512 * 1024 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Cell {
     Object,
     List,
     Variant(String),
     Pixels { w: u32, h: u32, data: String },
     Value(Value),
+}
+
+impl PartialEq for Cell {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Object, Self::Object) | (Self::List, Self::List) => true,
+            (Self::Variant(a), Self::Variant(b)) => a == b,
+            (
+                Self::Pixels {
+                    w: aw,
+                    h: ah,
+                    data: a,
+                },
+                Self::Pixels {
+                    w: bw,
+                    h: bh,
+                    data: b,
+                },
+            ) => aw == bw && ah == bh && a == b,
+            (Self::Value(a), Self::Value(b)) => same_json(a, b),
+            _ => false,
+        }
+    }
+}
+
+/// Compare JSON values across native and JavaScript numeric representations.
+/// Args: two values. Returns equality, including safe integers written as floats.
+fn same_json(a: &Value, b: &Value) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) if a.is_f64() != b.is_f64() => {
+            let (integer, float) = if a.is_f64() { (b, a) } else { (a, b) };
+            integer
+                .as_f64()
+                .filter(|value| value.abs() <= ((1u64 << 53) - 1) as f64)
+                .is_some_and(|integer| Some(integer) == float.as_f64())
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_json(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| same_json(a, b)))
+        }
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -848,6 +897,48 @@ mod tests {
         a.receive(b.changes.clone()).unwrap();
         b.receive(a.changes.clone()).unwrap();
     }
+
+    #[test]
+    fn javascript_numeric_replays_preserve_immutable_operations_and_own_undo() {
+        let (mut doc, mut a, _) = pair();
+        doc.width = 200.;
+        a.record(&doc).unwrap();
+        let mut replay = serde_json::to_value(&a.changes[0]).unwrap();
+        replay["edit"]["writes"][0]["value"]["Value"] = json!(200);
+        let replay: Change = serde_json::from_value(replay).unwrap();
+        assert!(
+            matches!(&replay.edit, Edit::Write { writes } if writes.len() == 1 && writes[0].path == "/width")
+        );
+        a.receive([replay.clone()]).unwrap();
+        assert!(!a.record(&a.document(&doc).unwrap()).unwrap());
+        let mut forged = serde_json::to_value(&replay).unwrap();
+        forged["edit"]["writes"][0]["value"]["Value"] = json!(201);
+        assert!(
+            a.receive([serde_json::from_value(forged).unwrap()])
+                .is_err()
+        );
+        assert_eq!(a.document(&doc).unwrap().width, 200.);
+        assert!(a.undo());
+        assert_eq!(a.document(&doc).unwrap().width, 100.);
+        assert!(a.redo());
+        assert_eq!(a.document(&doc).unwrap().width, 200.);
+    }
+
+    #[test]
+    fn json_numeric_equality_preserves_nested_types_and_large_integer_identity() {
+        let native = Cell::Value(json!({"tuple":[1.0,-0.0,0.125],"nested":{"v":23.0}}));
+        let wire = Cell::Value(
+            serde_json::from_str(r#"{"tuple":[1,0,0.125],"nested":{"v":23}}"#).unwrap(),
+        );
+        assert_eq!(native, wire);
+        assert_ne!(
+            Cell::Value(json!(9007199254740993u64)),
+            Cell::Value(json!(9007199254740992.0f64))
+        );
+        assert_ne!(Cell::Value(json!(true)), Cell::Value(json!(1)));
+        assert_ne!(Cell::Value(json!("1")), Cell::Value(json!(1)));
+    }
+
     fn names(doc: &Document) -> Vec<String> {
         doc.layers[1]
             .kind
