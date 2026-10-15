@@ -93,11 +93,7 @@ impl Studio {
         let device = fingerprint(&self.cloud_identity);
         self.cloud_task(move |client| {
             let seed = serde_json::to_string(&base).map_err(|e| e.to_string())?;
-            let session = client
-                .call("live:create", json!({"projectId":project,"seed":seed}))?
-                .as_str()
-                .ok_or("Missing live session ID")?
-                .to_owned();
+            let session = client.create_live(&project, seed)?;
             let actor = crate::cloud::client::random_token()?;
             let mut replica = client.join_live(&session, &actor)?;
             replica.device = device;
@@ -541,7 +537,9 @@ mod tests {
         studio.cloud_identity.token = "a".repeat(64);
         let device = fingerprint(&studio.cloud_identity);
         studio.doc.collaboration.as_mut().unwrap().device = device;
-        let root = std::env::temp_dir().join(format!("live-lease-{}", crate::document::next_id()));
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".artifacts/live-tests")
+            .join(format!("live-lease-{}", crate::document::next_id()));
         let claim = |actor: &str| lease_at(&root, actor);
         studio.prepare_live_ownership(claim).unwrap();
         let actor = studio.doc.collaboration.as_ref().unwrap().actor.clone();
@@ -649,6 +647,8 @@ mod tests {
                 json!({"session":replica.session,"actor":replica.actor}),
             )
             .unwrap();
+        crate::collaboration::native_tests::edit(&mut studio.doc, &role);
+        studio.mark();
         add(&mut studio, &format!("{role} offline"));
         studio.record_live().unwrap();
         let path = root.join(format!("{role}-offline.oma"));
@@ -695,6 +695,11 @@ mod tests {
         let final_doc = crate::project::encode(&studio.doc).unwrap();
         std::fs::write(root.join(format!("{role}-final.oma")), &final_doc).unwrap();
         let reopened = crate::project::decode(&final_doc).unwrap();
+        crate::collaboration::native_tests::assert_native_equal(&studio.doc, &reopened);
+        let mut expected = crate::collaboration::native_tests::fixture();
+        crate::collaboration::native_tests::edit(&mut expected, "Alice");
+        crate::collaboration::native_tests::edit(&mut expected, "Bob");
+        crate::collaboration::native_tests::assert_native_equal(&expected, &reopened);
         assert_eq!(
             collaboration::snapshot(&reopened).unwrap(),
             collaboration::snapshot(&studio.doc).unwrap()
@@ -724,14 +729,36 @@ mod tests {
             cloud_url: data["url"].as_str().unwrap().into(),
             ..Default::default()
         });
-        let doc = Document::new("Acceptance", 1920., 1080., 72.);
+        let mut doc = crate::collaboration::native_tests::fixture();
+        doc.width = 1920.;
+        doc.height = 1080.;
         let seed = serde_json::to_string(&collaboration::snapshot(&doc).unwrap()).unwrap();
+        assert!(
+            client
+                .call(
+                    "live:create",
+                    json!({"projectId":data["project"],"seed":seed})
+                )
+                .unwrap_err()
+                .contains("native-preservation")
+        );
         data["session"] = client
             .call(
                 "live:create",
-                json!({"projectId":data["project"],"seed":seed}),
+                json!({"projectId":data["project"],"seed":seed,"protocol":collaboration::PROTOCOL}),
             )
             .unwrap();
+        let legacy_actor = "c".repeat(64);
+        assert!(
+            client
+                .call(
+                    "live:join",
+                    json!({"session":data["session"],"actor":legacy_actor})
+                )
+                .unwrap_err()
+                .contains("native-preservation")
+        );
+        assert!(client.call("live:exchange",json!({"session":data["session"],"actor":legacy_actor,"changes":[],"cursor":null,"selection":[],"after":0})).unwrap_err().contains("native-preservation"));
         let root = fixture
             .parent()
             .unwrap()
