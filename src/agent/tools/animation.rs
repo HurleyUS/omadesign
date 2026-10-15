@@ -13,11 +13,65 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
             .collect();
         let next = offset.saturating_add(tracks.len());
         return Ok(
-            json!({"duration":studio.doc.motion.duration,"fps":studio.doc.motion.fps,"looped":studio.doc.motion.looped,"time":studio.playhead,"playing":studio.playing,"tracks":tracks,"expressions":studio.doc.motion.expressions,"error":studio.doc.motion.evaluate_frame(studio.playhead,&mut ||true).err(),"next_offset":(next<studio.doc.motion.tracks.len()).then_some(next),"revision":studio.canvas_gen}),
+            json!({"duration":studio.doc.motion.duration,"fps":studio.doc.motion.fps,"looped":studio.doc.motion.looped,"time":studio.playhead,"playing":studio.playing,"tracks":tracks,"expressions":studio.doc.motion.expressions,"compositions":studio.doc.motion.compositions.iter().map(|c|json!({"id":c.id,"name":c.name,"start":c.start,"end":c.end,"source_start":c.source_start,"speed":c.speed,"looped":c.looped,"position":c.position,"scale":c.scale,"rotation":c.rotation.to_degrees(),"opacity":c.opacity,"visible":c.visible,"width":c.document.width,"height":c.document.height})).collect::<Vec<_>>(),"error":studio.doc.motion.evaluate_frame(studio.playhead,&mut ||true).err(),"next_offset":(next<studio.doc.motion.tracks.len()).then_some(next),"revision":studio.canvas_gen}),
         );
     }
     let mut after = studio.doc.motion.clone();
     match name {
+        "set_composition" => {
+            let id = args["id"].as_u64();
+            if boolean(args, "remove", false)? {
+                let id = id.ok_or("Composition id is required")?;
+                if !after.compositions.iter().any(|c| c.id == id) {
+                    return Err("Unknown composition".into());
+                }
+                after.compositions.retain(|c| c.id != id);
+                after.drop_shape(id);
+            } else {
+                let comp = if let Some(id) = id {
+                    after
+                        .compositions
+                        .iter_mut()
+                        .find(|c| c.id == id)
+                        .ok_or("Unknown composition")?
+                } else {
+                    let path = files::path(args)?;
+                    files::regular(&path, 64 * 1024 * 1024)?;
+                    let doc = if path.extension().is_some_and(|e| e == "omamotion") {
+                        crate::motion::compositions::import(
+                            &std::fs::read_to_string(&path).map_err(|e| e.to_string())?,
+                        )?
+                    } else {
+                        crate::project::load_from(&path)?
+                    };
+                    after
+                        .compositions
+                        .push(crate::motion::compositions::Composition::new(doc));
+                    after.compositions.last_mut().unwrap()
+                };
+                comp.name = text(args, "name", &comp.name)?;
+                comp.start = number(args, "start", comp.start)?;
+                comp.end = number(args, "end", comp.end)?;
+                comp.source_start = number(args, "source_start", comp.source_start)?;
+                comp.speed = number(args, "speed", comp.speed)?;
+                comp.looped = boolean(args, "looped", comp.looped)?;
+                comp.position.x = number(args, "x", comp.position.x)?;
+                comp.position.y = number(args, "y", comp.position.y)?;
+                comp.scale.x = number(args, "scale_x", comp.scale.x)?;
+                comp.scale.y = number(args, "scale_y", comp.scale.y)?;
+                comp.rotation = number(args, "rotation", comp.rotation.to_degrees())?.to_radians();
+                comp.opacity = number(args, "opacity", comp.opacity)?;
+                comp.visible = boolean(args, "visible", comp.visible)?;
+                after.duration = after.duration.max(comp.end);
+            }
+            let mut candidate = studio.doc.clone();
+            candidate.motion = after.clone();
+            crate::motion::compositions::validate(&candidate)?;
+            studio.commit(Cmd::Batch(vec![Cmd::SetMotion {
+                before: studio.doc.motion.clone(),
+                after,
+            }]));
+        }
         "set_expression" => {
             let li = index(args, "layer")?;
             let id = index(args, "id")? as u64;
@@ -113,6 +167,11 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                         key.get("ease").cloned().unwrap_or(json!("EaseInOut")),
                     )
                     .map_err(|e| e.to_string())?;
+                    if !ease.valid() {
+                        return Err(
+                            "Curve controls must be finite; x controls must be within 0–1".into(),
+                        );
+                    }
                     if prop == Prop::Fill {
                         after.set_color_key(
                             target.id,
