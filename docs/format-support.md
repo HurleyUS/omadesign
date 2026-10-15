@@ -19,6 +19,12 @@ Omadesign imports supported content into its native layer tree and records conve
 | Camera RAW: DNG, CR2/CR3, NEF/NRW, ARW, RAF, ORF, RW2, PEF and others | Full-resolution sensor decoding and Photo development | Developed PNG/TIFF with 16-bit channels, or JPEG; no camera RAW writer | Support depends on the camera and compression mode. Lens corrections, proprietary camera looks and unsupported DNG opcodes/profiles are not recreated. Design placement becomes 8-bit pixels. |
 | PNG, JPEG, WebP, GIF, BMP, TIFF | Pixel image | PNG and JPEG through headless conversion; other existing export actions remain separate | This path imports a single image, not layered TIFF or animated GIF structure. |
 
+## SVG editability
+
+Compound paths retain their individual Bézier contours and fill rule. Centered circular radial gradients with padded edges retain their editable stops. Stretched horizontal text and equivalent adjacent text spans remain native type when the font and styling can be represented.
+
+Custom miter limits, nonuniformly transformed strokes, extended dash arrays and stroke-first paint order retain vector artwork. Stroke settings the native stroke model cannot express become editable filled outlines, with a conversion note. Their original width and dash controls are no longer live stroke properties. Unsupported text styling still becomes editable outlines; unsupported patterns, gradient geometry and effects can still require pixel layers. These limits describe the affected objects, not the vector canvas area.
+
 ## Camera RAW
 
 RAW decoding is built into Omadesign using the pinned [LibRaw 0.22.2 source](https://github.com/LibRaw/LibRaw/tree/0.22.2). It does not require an installed converter or a download when opening a photo. The decoder reads sensor data at full resolution, subtracts black levels, demosaics supported Bayer/X-Trans sensors, applies the camera white balance and color matrix, and honors image orientation. It returns 16-bit linear sRGB with automatic brightness disabled. DNG baseline exposure and the Photo exposure/white-balance adjustments are applied before the display transfer function.

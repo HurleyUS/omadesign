@@ -2,7 +2,7 @@
 use crate::artwork_mask::{ArtworkMask, MaskMode, MaskSource};
 use crate::color::{Blend, Rgba};
 use crate::document::{Cap, Document, Fill, Join, Layer, Pixels, Shape, Stroke, Style};
-use crate::geom::{Anchor, Geom, Pt, TypeRun};
+use crate::geom::{Anchor, Geom, PathContour, Pt, TypeRun};
 use std::collections::HashMap;
 use tiny_skia::{PathSegment, Transform};
 
@@ -557,12 +557,6 @@ impl Reader<'_> {
         Ok(masks)
     }
     fn path(&mut self, path: &usvg::Path, parent: Option<u64>) -> Result<bool, String> {
-        if path.paint_order() == usvg::PaintOrder::StrokeAndFill
-            && path.fill().is_some()
-            && path.stroke().is_some()
-        {
-            return Ok(false);
-        }
         let transform = path.abs_transform();
         let Some(transformed) = path.data().clone().transform(transform) else {
             return Ok(false);
@@ -597,7 +591,7 @@ impl Reader<'_> {
                     && (s.miterlimit().get() - 4.).abs() > 0.001
                 || s.dasharray().is_some_and(|a| a.len() != 2)
             {
-                return Ok(false);
+                return self.outlined_stroke(path, parent, geom, fill);
             }
             Some(Stroke {
                 alignment: crate::document::StrokeAlignment::Center,
@@ -620,14 +614,120 @@ impl Reader<'_> {
         } else {
             None
         };
-        let mut shape = Shape::new(geom, Style { fill, stroke });
+        let stroke_first = path.paint_order() == usvg::PaintOrder::StrokeAndFill;
+        let separate = !fill.is_none()
+            && stroke.is_some()
+            && (stroke_first || geom.path_contours().iter().any(|(_, closed)| !closed));
+        let border = separate.then(|| {
+            Shape::new(
+                geom.clone(),
+                Style {
+                    fill: Fill::None,
+                    stroke: stroke.clone(),
+                },
+            )
+        });
+        let geom = if fill.is_none() {
+            geom
+        } else {
+            closed_fill(geom)
+        };
+        let mut shape = Shape::new(
+            geom,
+            Style {
+                fill,
+                stroke: if separate { None } else { stroke },
+            },
+        );
         shape.name = self.name(path.id(), "Path");
         shape.visible = path.is_visible();
         let mut layer = Layer::vector(shape.name.clone());
         layer.parent = parent;
         self.meta(&mut layer, path.id());
-        layer.kind.shapes_mut().unwrap().push(shape);
+        let mut shapes = vec![shape];
+        if let Some(mut border) = border {
+            border.name = format!("{} stroke", shapes[0].name);
+            border.visible = shapes[0].visible;
+            if stroke_first {
+                shapes.insert(0, border);
+            } else {
+                shapes.push(border);
+            }
+        }
+        layer.kind.shapes_mut().unwrap().extend(shapes);
         self.doc.layers.push(layer);
+        Ok(true)
+    }
+    fn outlined_stroke(
+        &mut self,
+        path: &usvg::Path,
+        parent: Option<u64>,
+        geom: Geom,
+        fill: Fill,
+    ) -> Result<bool, String> {
+        let Some(stroke) = path.stroke() else {
+            return Ok(false);
+        };
+        let transform = path.abs_transform();
+        let scale = tiny_skia::PathStroker::compute_resolution_scale(&transform);
+        let settings = stroke.to_tiny_skia();
+        let dashed = settings
+            .dash
+            .as_ref()
+            .map(|dash| path.data().dash(dash, scale));
+        let source = match &dashed {
+            Some(Some(path)) => path,
+            Some(None) => return Ok(false),
+            None => path.data(),
+        };
+        let Some(outline) = source
+            .stroke(&settings, scale)
+            .and_then(|outline| outline.transform(transform))
+        else {
+            return Ok(false);
+        };
+        let Some(outline) = path_geom(&outline, true) else {
+            return Ok(true);
+        };
+        let Some(paint) = paint(
+            stroke.paint(),
+            stroke.opacity().get(),
+            transform,
+            outline.bbox(),
+        ) else {
+            return Ok(false);
+        };
+        let name = self.name(path.id(), "Path");
+        let mut border = Shape::new(
+            outline,
+            Style {
+                fill: paint,
+                stroke: None,
+            },
+        );
+        border.name = format!("{name} stroke");
+        border.visible = path.is_visible();
+        let mut shapes = vec![];
+        if !fill.is_none() {
+            let mut inside = Shape::new(closed_fill(geom), Style { fill, stroke: None });
+            inside.name = name.clone();
+            inside.visible = path.is_visible();
+            shapes.push(inside);
+        }
+        if path.paint_order() == usvg::PaintOrder::StrokeAndFill {
+            shapes.insert(0, border);
+        } else {
+            shapes.push(border);
+        }
+        let mut layer = Layer::vector(name);
+        layer.parent = parent;
+        self.meta(&mut layer, path.id());
+        layer.kind.shapes_mut().unwrap().extend(shapes);
+        self.doc.layers.push(layer);
+        warn(
+            &mut self.warnings,
+            "SVG stroke settings retained as editable vector outlines.".into(),
+        );
         Ok(true)
     }
     fn image(
@@ -666,19 +766,47 @@ impl Reader<'_> {
         if t.kx.abs() > 0.0001
             || t.ky.abs() > 0.0001
             || t.sx <= 0.
-            || (t.sx - t.sy).abs() > 0.001
+            || t.sy <= 0.
             || text.chunks().len() != 1
             || text.rotate().iter().any(|v| v.abs() > 0.001)
             || text.dx().iter().any(|v| v.abs() > 0.001)
             || text.dy().iter().any(|v| v.abs() > 0.001)
+            || text.writing_mode() != usvg::WritingMode::LeftToRight
         {
             return Ok(false);
         }
         let chunk = &text.chunks()[0];
-        if chunk.spans().len() != 1 || !matches!(chunk.text_flow(), usvg::TextFlow::Linear) {
+        if chunk.spans().is_empty() || !matches!(chunk.text_flow(), usvg::TextFlow::Linear) {
             return Ok(false);
         }
         let span = &chunk.spans()[0];
+        if span.font_size().get() * t.sy < 1. || !(0.01..=10.).contains(&(t.sx / t.sy)) {
+            return Ok(false);
+        }
+        if chunk.spans().iter().any(|span| {
+            span.small_caps()
+                || !matches!(
+                    span.dominant_baseline(),
+                    usvg::DominantBaseline::Auto | usvg::DominantBaseline::Alphabetic
+                )
+                || !matches!(
+                    span.alignment_baseline(),
+                    usvg::AlignmentBaseline::Auto
+                        | usvg::AlignmentBaseline::Baseline
+                        | usvg::AlignmentBaseline::Alphabetic
+                )
+                || span.baseline_shift().iter().any(|shift| {
+                    !matches!(
+                        shift,
+                        usvg::BaselineShift::Baseline | usvg::BaselineShift::Number(0.)
+                    )
+                })
+                || span.decoration().underline().is_some()
+                || span.decoration().overline().is_some()
+                || span.decoration().line_through().is_some()
+        }) {
+            return Ok(false);
+        }
         if span.stroke().is_some()
             || span.text_length().is_some()
             || span.word_spacing().abs() > 0.001
@@ -693,6 +821,32 @@ impl Reader<'_> {
         } else {
             Fill::None
         };
+        for other in chunk.spans().iter().skip(1) {
+            let other_fill = match other.fill() {
+                Some(paint) => match paint.paint() {
+                    usvg::Paint::Color(color_value) => {
+                        Fill::Solid(color(*color_value, paint.opacity().get()))
+                    }
+                    _ => return Ok(false),
+                },
+                None => Fill::None,
+            };
+            if other_fill != fill
+                || other.stroke().is_some()
+                || other.text_length().is_some()
+                || other.font_size() != span.font_size()
+                || other.letter_spacing() != span.letter_spacing()
+                || other.word_spacing() != span.word_spacing()
+                || other.apply_kerning() != span.apply_kerning()
+                || other.is_visible() != span.is_visible()
+                || other.font().families() != span.font().families()
+                || other.font().style() != span.font().style()
+                || other.font().weight() != span.font().weight()
+                || other.font().stretch() != span.font().stretch()
+            {
+                return Ok(false);
+            }
+        }
         let Some(glyph) = text
             .layouted()
             .iter()
@@ -701,9 +855,50 @@ impl Reader<'_> {
         else {
             return Ok(false);
         };
+        if text
+            .layouted()
+            .iter()
+            .flat_map(|span| &span.positioned_glyphs)
+            .any(|other| other.font != glyph.font)
+        {
+            return Ok(false);
+        }
         let Some(face) = self.tree.fontdb().face(glyph.font) else {
             return Ok(false);
         };
+        let native_axes = self
+            .tree
+            .fontdb()
+            .with_face_data(glyph.font, |bytes, index| {
+                let Ok(font) = rustybuzz::ttf_parser::Face::parse(bytes, index) else {
+                    return false;
+                };
+                index == 0
+                    && font.variation_axes().into_iter().all(|axis| {
+                        chunk.spans().iter().all(|span| {
+                            let explicit = span
+                                .font()
+                                .variations()
+                                .iter()
+                                .find(|value| value.tag == axis.tag.to_bytes());
+                            let value = explicit.map(|value| value.value).unwrap_or_else(|| {
+                                if axis.tag.to_bytes() == *b"opsz"
+                                    && span.font_optical_sizing() == usvg::FontOpticalSizing::Auto
+                                {
+                                    span.font_size().get()
+                                } else {
+                                    axis.def_value
+                                }
+                            });
+                            (value.clamp(axis.min_value, axis.max_value) - axis.def_value).abs()
+                                < 0.0001
+                        })
+                    })
+            })
+            .unwrap_or(false);
+        if !native_axes {
+            return Ok(false);
+        }
         let font = match &face.source {
             usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _) => {
                 p.to_string_lossy().into_owned()
@@ -722,6 +917,14 @@ impl Reader<'_> {
             kern: span.apply_kerning(),
             ..Default::default()
         };
+        if (t.sx - t.sy).abs() > 0.0001 {
+            run.spans.push(crate::geom::CharSpan {
+                start: 0,
+                end: run.content.chars().count(),
+                hscale: Some(t.sx / t.sy * 100.),
+                ..Default::default()
+            });
+        }
         let width = crate::text::measure(&run).0;
         run.origin.x -= match chunk.anchor() {
             usvg::TextAnchor::Start => 0.,
@@ -898,6 +1101,43 @@ fn paint(p: &usvg::Paint, alpha: f32, t: Transform, b: crate::geom::Bounds) -> O
                 }))
             }
         }
+        usvg::Paint::RadialGradient(g)
+            if g.spread_method() == usvg::SpreadMethod::Pad
+                && g.fr().get() == 0.
+                && (g.fx() - g.cx()).abs() < 0.0001
+                && (g.fy() - g.cy()).abs() < 0.0001 =>
+        {
+            let xf = t.pre_concat(g.transform());
+            let (sx, sy) = xf.get_scale();
+            if (sx - sy).abs() > 0.0001 * sx.max(sy).max(1.)
+                || (xf.sx * xf.kx + xf.ky * xf.sy).abs() > 0.0001 * (sx * sy).max(1.)
+            {
+                return None;
+            }
+            let mut center = tiny_skia::Point::from_xy(g.cx(), g.cy());
+            let mut radius = tiny_skia::Point::from_xy(g.cx() + g.r().get(), g.cy());
+            xf.map_point(&mut center);
+            xf.map_point(&mut radius);
+            let point = |p: tiny_skia::Point| {
+                [
+                    (p.x - b.min.x) / b.width().max(0.001),
+                    (p.y - b.min.y) / b.height().max(0.001),
+                ]
+            };
+            Some(Fill::Gradient(crate::gradient::Gradient {
+                kind: crate::gradient::GradientKind::Radial,
+                from: point(center),
+                to: point(radius),
+                stops: g
+                    .stops()
+                    .iter()
+                    .map(|stop| crate::gradient::GradientStop {
+                        offset: stop.offset().get(),
+                        color: color(stop.color(), alpha * stop.opacity().get()),
+                    })
+                    .collect(),
+            }))
+        }
         _ => None,
     }
 }
@@ -925,6 +1165,15 @@ fn warn(warnings: &mut Vec<String>, s: String) {
     if !warnings.contains(&s) {
         warnings.push(s);
     }
+}
+
+fn closed_fill(mut geom: Geom) -> Geom {
+    match &mut geom {
+        Geom::Path { closed, .. } => *closed = true,
+        Geom::Paths { paths, .. } => paths.iter_mut().for_each(|path| path.closed = true),
+        _ => {}
+    }
+    geom
 }
 
 fn path_geom(path: &tiny_skia::Path, winding: bool) -> Option<Geom> {
@@ -971,14 +1220,14 @@ fn path_geom(path: &tiny_skia::Path, winding: bool) -> Option<Geom> {
     }
     if paths.is_empty() {
         None
-    } else if paths.len() == 1 {
+    } else if paths.len() == 1 && !winding {
         let (anchors, closed) = paths.pop()?;
         Some(Geom::Path { anchors, closed })
     } else {
-        Some(Geom::Poly {
-            contours: paths
+        Some(Geom::Paths {
+            paths: paths
                 .into_iter()
-                .flat_map(|(anchors, closed)| Geom::Path { anchors, closed }.contours(64))
+                .map(|(anchors, closed)| PathContour { anchors, closed })
                 .collect(),
             winding,
         })
@@ -988,6 +1237,134 @@ fn path_geom(path: &tiny_skia::Path, winding: bool) -> Option<Geom> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svg_stroke_variants_remain_editable_vectors() {
+        for source in [
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><path d="M15 70L45 12L73 70" fill="#c72" stroke="#258" stroke-width="14" stroke-miterlimit="1.5"/></svg>"##,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><path transform="matrix(1.7 .1 .3 .8 8 9)" d="M5 5C15 75 40 5 65 70" fill="none" stroke="#258" stroke-width="6" stroke-linecap="round" stroke-dasharray="8 3 2 3"/></svg>"##,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><path d="M25 25H120V75H25Z" fill="#fc8" stroke="#258" stroke-width="18" paint-order="stroke fill"/></svg>"##,
+        ] {
+            let (doc, notes, maximum, mean) = compare_render(source);
+            assert!(
+                doc.layers.iter().all(|layer| layer.kind.pixels().is_none()),
+                "{notes:?}"
+            );
+            assert!(maximum <= 64 && mean < 0.05, "max={maximum}, mean={mean}");
+            doc.validate_hierarchy().unwrap();
+        }
+    }
+
+    #[test]
+    fn svg_radial_paint_keeps_editable_stops_and_radius() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><defs><radialGradient id="p" gradientUnits="userSpaceOnUse" cx="37" cy="30" r="40"><stop stop-color="#128"/><stop offset=".4" stop-color="#4cc" stop-opacity=".6"/><stop offset="1" stop-color="white"/></radialGradient></defs><g transform="translate(5 6) scale(.8)"><path d="M5 5H95V75H5Z" fill="url(#p)"/></g></svg>"##;
+        let (doc, notes, maximum, mean) = compare_render(source);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(doc.layers.iter().all(|layer| layer.kind.pixels().is_none()));
+        let gradient = doc
+            .layers
+            .iter()
+            .filter_map(|layer| layer.kind.shapes())
+            .flatten()
+            .find_map(|shape| shape.style.fill.gradient())
+            .unwrap();
+        assert_eq!(gradient.kind, crate::gradient::GradientKind::Radial);
+        assert_eq!(gradient.stops.len(), 3);
+        assert!(maximum <= 1 && mean < 0.02, "max={maximum}, mean={mean}");
+    }
+
+    #[test]
+    fn svg_stretched_equivalent_spans_remain_editable_text() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><text x="12" y="45" font-family="sans-serif" font-size="28" fill="#248" transform="translate(4 6) scale(1.4 .8)"><tspan>Vec</tspan><tspan>tor</tspan></text></svg>"##;
+        let (doc, notes, maximum, mean) = compare_render(source);
+        assert!(notes.is_empty(), "{notes:?}");
+        let run = doc
+            .layers
+            .iter()
+            .filter_map(|layer| layer.kind.shapes())
+            .flatten()
+            .find_map(|shape| {
+                if let Geom::Text(run) = &shape.geom {
+                    Some(run)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(run.content, "Vector");
+        assert!((run.spans[0].hscale.unwrap() - 175.).abs() < 0.001);
+        assert!(mean < 0.1, "max={maximum}, mean={mean}");
+        let restored = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            serde_json::to_value(&doc).unwrap()
+        );
+    }
+
+    #[test]
+    fn svg_inactive_variation_settings_do_not_outline_static_font_text() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><text x="12" y="45" font-family="Liberation Sans" font-size="28" fill="#248" style="font-variation-settings:'wdth' 75" transform="scale(1.4 .8)">Vector</text></svg>"##;
+        let (doc, notes, _, mean) = compare_render(source);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(
+            doc.layers
+                .iter()
+                .filter_map(|layer| layer.kind.shapes())
+                .flatten()
+                .any(|shape| matches!(shape.geom, Geom::Text(_)))
+        );
+        assert!(mean < 0.2, "mean={mean}");
+    }
+
+    #[test]
+    fn svg_compound_curves_keep_bezier_handles() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><path fill="#369" fill-rule="evenodd" d="M10 50C10 5 90 5 90 50C90 95 10 95 10 50ZM30 50C30 75 70 75 70 50C70 25 30 25 30 50Z"/></svg>"##;
+        let (doc, _, maximum, mean) = compare_render(source);
+        let shape = doc
+            .layers
+            .iter()
+            .filter_map(|layer| layer.kind.shapes())
+            .flatten()
+            .next()
+            .unwrap();
+        let Geom::Paths { paths, winding } = &shape.geom else {
+            panic!("Compound curves became flattened points")
+        };
+        assert_eq!(paths.len(), 2);
+        assert!(!winding);
+        assert!(
+            paths
+                .iter()
+                .all(|path| path.anchors.iter().any(|anchor| anchor.h_out.length() > 0.))
+        );
+        assert!(maximum <= 1 && mean < 0.02, "max={maximum}, mean={mean}");
+    }
+
+    #[test]
+    fn svg_open_fill_and_nonzero_winding_keep_their_appearance() {
+        for source in [
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="90"><path d="M10 75L50 10L90 75" fill="#fc8" stroke="#258" stroke-width="8"/></svg>"##,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="90"><path d="M50 5L77 80L7 33H93L23 80Z" fill="#369" fill-rule="nonzero"/></svg>"##,
+        ] {
+            let (doc, notes, maximum, mean) = compare_render(source);
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(doc.layers.iter().all(|layer| layer.kind.pixels().is_none()));
+            assert!(maximum <= 3 && mean < 0.02, "max={maximum}, mean={mean}");
+        }
+    }
+
+    #[test]
+    fn svg_text_styles_keep_their_appearance_when_type_cannot_represent_them() {
+        for source in [
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="65"><text x="10" y="45" font-size="28" fill="#248">A<tspan baseline-shift="super">2</tspan></text></svg>"##,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="65"><text x="10" y="45" font-size="28" fill="#248">Vec<tspan fill="#c42">tor</tspan></text></svg>"##,
+        ] {
+            let (doc, notes, maximum, mean) = compare_render(source);
+            assert!(notes.iter().any(|note| note.contains("editable outlines")));
+            assert!(doc.layers.iter().all(|layer| layer.kind.pixels().is_none()));
+            assert!(maximum <= 3 && mean < 0.02, "max={maximum}, mean={mean}");
+        }
+    }
 
     #[test]
     fn large_vector_canvas_keeps_thousands_of_objects_editable() {
@@ -1049,7 +1426,7 @@ mod tests {
     fn large_vector_canvas_budgets_raster_fallbacks_by_object_size() {
         let source = |size| {
             format!(
-                r#"<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="80000"><path d="M10 10h{size}v{size}H10Z" fill="none" stroke="black" stroke-width="4" stroke-miterlimit="8"/></svg>"#,
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="80000"><defs><pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="2"/></pattern></defs><path d="M10 10h{size}v{size}H10Z" fill="url(#p)"/></svg>"##,
             )
         };
         let (doc, notes) = read(&source(30), "Small fallback").unwrap();
@@ -1114,18 +1491,20 @@ mod tests {
         let (doc, notes) = read(source, "SVG appearance").unwrap();
         let actual =
             super::super::decode_image(&crate::compositor::export_png(&doc, 1).unwrap()).unwrap();
-        let tree = usvg::Tree::from_str(source, &usvg::Options::default()).unwrap();
+        let mut options = usvg::Options::default();
+        options.fontdb_mut().load_system_fonts();
+        let tree = usvg::Tree::from_str(source, &options).unwrap();
         let mut expected = tiny_skia::Pixmap::new(actual.w, actual.h).unwrap();
         resvg::render(&tree, Transform::identity(), &mut expected.as_mut());
-        let expected = Pixels::from_pixmap(&expected);
+        let actual = actual.to_pixmap().unwrap();
         let mut maximum = 0;
         let mut sum = 0u64;
-        for (a, b) in actual.data.iter().zip(&expected.data) {
+        for (a, b) in actual.data().iter().zip(expected.data()) {
             let delta = a.abs_diff(*b);
             maximum = maximum.max(delta);
             sum += u64::from(delta);
         }
-        (doc, notes, maximum, sum as f64 / actual.data.len() as f64)
+        (doc, notes, maximum, sum as f64 / actual.data().len() as f64)
     }
 
     #[test]
