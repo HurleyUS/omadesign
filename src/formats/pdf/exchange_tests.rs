@@ -532,3 +532,239 @@ fn pdf_exchange_applies_fill_opacity_once_to_overlapping_fill_and_stroke() {
         );
     }
 }
+
+fn text_document() -> Document {
+    let mut doc = Document::new("Embedded editable text", 360., 140., 72.);
+    doc.layers.clear();
+    let mut layer = Layer::vector("Live text");
+    let mut run = TypeRun {
+        origin: Pt::new(15., 45.),
+        content: "Editable office — café".into(),
+        px: 24.,
+        liga: false,
+        ..Default::default()
+    };
+    run.contours = crate::text::shape(&run);
+    layer.kind.shapes_mut().unwrap().push(Shape::new(
+        Geom::Text(run),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(25, 35, 60)),
+            stroke: None,
+        },
+    ));
+    let mut run = TypeRun {
+        origin: Pt::new(18., 98.),
+        content: "Rotated vector type".into(),
+        px: 22.,
+        tracking: 0.4,
+        ..Default::default()
+    };
+    run.contours = crate::text::shape(&run);
+    let mut rotated = Shape::new(
+        Geom::Text(run),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(130, 45, 75)),
+            stroke: None,
+        },
+    );
+    rotated.rotation = 0.13;
+    layer.kind.shapes_mut().unwrap().push(rotated);
+    doc.layers.push(layer);
+    doc
+}
+
+#[test]
+fn pdf_exchange_text_has_embedded_font_unicode_and_positioned_glyphs() {
+    let doc = text_document();
+    let (bytes, notes) = write(&doc).unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let pdf = Pdf::load_mem(&bytes).unwrap();
+    let fonts = pdf
+        .objects
+        .values()
+        .filter_map(|o| o.as_dict().ok())
+        .filter(|d| d.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Type0"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fonts.len(),
+        1,
+        "the same resolved font should be embedded once"
+    );
+    assert!(fonts[0].get(b"ToUnicode").is_ok());
+    assert!(!pdf.objects.values().any(|o| subtype(o, b"Image")));
+    let text_ops = pdf
+        .objects
+        .values()
+        .filter_map(|o| o.as_stream().ok())
+        .filter(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Form"))
+        .flat_map(|s| {
+            Content::decode(&decoded(s, STREAM_LIMIT).unwrap())
+                .unwrap()
+                .operations
+        })
+        .filter(|o| o.operator == "Tj")
+        .count();
+    assert!(text_ops > 30, "text did not remain PDF text");
+    let (imported, notes) = read(&bytes, "editable.pdf").unwrap();
+    assert!(
+        notes.iter().all(|n| !n.contains("substituted")
+            && !n.contains("widths")
+            && !n.contains("could not")),
+        "{notes:?}"
+    );
+    let text = imported
+        .layers
+        .iter()
+        .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+        .filter_map(|s| {
+            if let Geom::Text(run) = &s.geom {
+                Some(run.content.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<String>();
+    assert_eq!(text, "Editable office — café");
+    assert!(
+        imported
+            .layers
+            .iter()
+            .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+            .any(|s| matches!(&s.geom,Geom::Text(run) if run.font.starts_with("omatype:")))
+    );
+}
+
+#[test]
+#[ignore = "independent text/font interoperability: requires Poppler utilities"]
+fn pdf_exchange_text_poppler_and_fresh_process_native_reopen() {
+    if let Some(path) = std::env::var_os("OMA_PDF_PORTABLE_REOPEN") {
+        let doc = crate::project::load_from(std::path::Path::new(&path)).unwrap();
+        let runs = doc
+            .layers
+            .iter()
+            .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+            .filter_map(|s| {
+                if let Geom::Text(run) = &s.geom {
+                    Some(run)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(!runs.is_empty());
+        for run in runs {
+            assert!(run.font.starts_with("omatype:"));
+            assert!(crate::text::font_bytes_for(run).is_some());
+        }
+        let (bytes, notes) = write(&doc).unwrap();
+        assert!(notes.iter().all(|n| !n.contains("font")), "{notes:?}");
+        assert!(!bytes.is_empty());
+        return;
+    }
+    let folder =
+        std::env::temp_dir().join(format!("pdf-text-exchange-{}", crate::document::next_id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let doc = text_document();
+    let (bytes, notes) = write(&doc).unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let pdf = folder.join("text.pdf");
+    std::fs::write(&pdf, &bytes).unwrap();
+    let fonts = std::process::Command::new("pdffonts")
+        .arg(&pdf)
+        .output()
+        .unwrap();
+    assert!(fonts.status.success());
+    assert!(
+        fonts.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&fonts.stderr)
+    );
+    let inventory = String::from_utf8_lossy(&fonts.stdout);
+    let row = inventory.lines().skip(2).collect::<Vec<_>>();
+    assert_eq!(row.len(), 1, "{inventory}");
+    assert!(
+        row[0].contains("CID TrueType")
+            && row[0].contains("Identity-H")
+            && row[0].split_whitespace().filter(|&s| s == "yes").count() == 2,
+        "{inventory}"
+    );
+    let text = std::process::Command::new("pdftotext")
+        .args(["-layout", "-enc", "UTF-8"])
+        .arg(&pdf)
+        .arg("-")
+        .output()
+        .unwrap();
+    assert!(text.status.success());
+    assert!(
+        text.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let extracted = String::from_utf8_lossy(&text.stdout);
+    assert!(extracted.contains("Editable office — café"), "{extracted}");
+    assert!(extracted.contains("Rotated vector type"), "{extracted}");
+    let render = std::process::Command::new("pdftocairo")
+        .args(["-png", "-r", "72", "-singlefile"])
+        .arg(&pdf)
+        .arg(folder.join("text-poppler"))
+        .output()
+        .unwrap();
+    assert!(render.status.success());
+    assert!(
+        render.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&render.stderr)
+    );
+    let expected = crate::compositor::render_export(&doc, 1).unwrap();
+    expected.save_png(folder.join("text-native.png")).unwrap();
+    let actual = image::open(folder.join("text-poppler.png"))
+        .unwrap()
+        .to_rgb8();
+    assert_eq!(actual.dimensions(), (360, 140));
+    let error = expected
+        .pixels()
+        .iter()
+        .zip(actual.pixels())
+        .map(|(a, b)| {
+            let a = a.demultiply();
+            u64::from(a.red().abs_diff(b.0[0]))
+                + u64::from(a.green().abs_diff(b.0[1]))
+                + u64::from(a.blue().abs_diff(b.0[2]))
+        })
+        .sum::<u64>() as f64
+        / (360. * 140. * 3.);
+    eprintln!(
+        "embedded text: {} bytes, one embedded Unicode CID TrueType font; Poppler mean absolute channel difference {error:.4}/255",
+        bytes.len()
+    );
+    let (imported, _) = read(&bytes, "text.pdf").unwrap();
+    let portable = folder.join("portable-text.oma");
+    crate::project::save_to(&imported, &portable).unwrap();
+    let child=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","formats::pdf::exchange_tests::pdf_exchange_text_poppler_and_fresh_process_native_reopen","--ignored","--nocapture"]).env("OMA_PDF_PORTABLE_REOPEN",&portable).output().unwrap();
+    assert!(
+        child.status.success(),
+        "fresh-process reopen failed: {}\n{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    if let Some(receipts) = std::env::var_os("OMA_PDF_EXCHANGE_RECEIPTS") {
+        let receipts = std::path::PathBuf::from(receipts);
+        std::fs::create_dir_all(&receipts).unwrap();
+        for name in [
+            "text.pdf",
+            "text-native.png",
+            "text-poppler.png",
+            "portable-text.oma",
+        ] {
+            std::fs::copy(folder.join(name), receipts.join(name)).unwrap();
+        }
+        std::fs::write(receipts.join("pdffonts.txt"), fonts.stdout).unwrap();
+        std::fs::write(receipts.join("pdftotext.txt"), text.stdout).unwrap();
+    }
+    assert!(
+        error < 2.,
+        "embedded text differs by {error}/255; evidence in {}",
+        folder.display()
+    );
+    std::fs::remove_dir_all(folder).unwrap();
+}

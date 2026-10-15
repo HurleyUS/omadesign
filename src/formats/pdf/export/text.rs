@@ -1,6 +1,5 @@
 //! Embedded text uses the same cached face and positioned glyphs as the canvas.
 use super::*;
-use crate::geom::TypeRun;
 use rustybuzz::ttf_parser::{Face, GlyphId, Permissions};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -293,7 +292,7 @@ mod tests {
     use super::*;
     #[test]
     fn pdf_exchange_rejects_restricted_and_print_only_font_embedding() {
-        let run = TypeRun::default();
+        let run = crate::geom::TypeRun::default();
         let bytes = crate::text::font_bytes_for(&run).expect("test font");
         let face = Face::parse(&bytes, 0).unwrap();
         assert!(editable_font(&face));
