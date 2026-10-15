@@ -92,7 +92,14 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Pixels>, String> {
     limits.intermediate_buffer_size = scratch.max(64 * 1024);
     limits.ifd_value_size = 16 * 1024 * 1024;
     decoder = decoder.with_limits(limits);
-    let profile = decoder.find_tag(Tag::IccProfile).map_err(|e| e.to_string())?.map(|v| v.into_u8_vec()).transpose().map_err(|e| e.to_string())?.unwrap_or_default();
+    let profile = if let Some(entry) = decoder.image_ifd().find_entry(Tag::IccProfile) {
+        if !matches!(entry.field_type(), tiff::tags::Type::BYTE | tiff::tags::Type::UNDEFINED) {return Err("Invalid TIFF ICC profile tag type".into());}
+        let length = usize::try_from(entry.count()).map_err(|_| "TIFF ICC profile length overflows")?;
+        if length > 16 * 1024 * 1024 {return Err("TIFF ICC profile exceeds the metadata limit".into());}
+        let mut profile = resources::global().allocate_now::<u8,_>(length,&storage::check)?;
+        if decoder.image_ifd().find_tag_bytes(Tag::IccProfile,profile.as_mut_slice(),0).map_err(|e| e.to_string())? != Some(length) {return Err("Truncated TIFF ICC profile".into());}
+        profile
+    } else {resources::global().allocate_now::<u8,_>(0,&storage::check)?};
     let associated = decoder.find_tag_unsigned_vec::<u16>(Tag::ExtraSamples).map_err(|e| e.to_string())?.is_some_and(|v| v.first() == Some(&1));
     let mut raw = resources::global().allocate_now::<u8,_>(layout.complete_len,&storage::check)?;
     decoder.read_image_bytes(raw.as_mut_slice()).map_err(|e| e.to_string())?;
@@ -110,6 +117,7 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Pixels>, String> {
         if associated {let alpha = dst[out_channels-1];for c in &mut dst[..out_channels-1] {*c = if alpha > 0. {*c / alpha} else {0.};}}
     }
     drop(raw);drop(_codec);drop(decoder);
+    let (profile,_profile_memory) = profile.into_parts();
     if cmyk {Pixels::from_cmyk_allocation(w,h,depth,Arc::new(samples),profile,1).map(Some)}
     else {
         let mut pixels = if depth == Depth::U8 && profile.is_empty() {Pixels::from_byte_allocation(w,h,storage::collect(samples.iter().map(|&v| super::byte(v)))?)?} else {Pixels::from_sample_allocation(w,h,depth,Arc::new(samples))?};
