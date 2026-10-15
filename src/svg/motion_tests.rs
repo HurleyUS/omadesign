@@ -37,6 +37,9 @@ pub(crate) fn fixture(case: &str) -> Document {
     if case == "singular" {
         g.radial_axis = Some([0.; 2]);
     }
+    if case == "subunit" {
+        g.to = [85.5 / 180., 55. / 120.];
+    }
     let mut shape = Shape::new(
         Geom::Rect {
             origin: Pt::new(10., 10.),
@@ -158,6 +161,10 @@ fn affine_gradient_motion_preserves_field_factors_and_retains_browser_fixtures()
             )
             .unwrap();
             let m = g.radial_transform(shape.geom.bbox());
+            if case == "both" {
+                let stroke = paint_gradient(&shape, SpinTarget::Stroke).unwrap();
+                assert_eq!(stroke.radial_transform(shape.geom.bbox()), m);
+            }
             matrices
                 .push(serde_json::json!({"time":time,"matrix":[m.sx,m.ky,m.kx,m.sy,m.tx,m.ty]}));
         }
@@ -188,6 +195,15 @@ fn singular_and_expression_only_reductions_reach_report_and_legacy_errors() {
         report.warnings
     );
     assert!(export_animated(&doc).unwrap_err().contains("singular"));
+    let subunit = fixture("subunit");
+    assert!(
+        animated_export(&subunit)
+            .unwrap()
+            .warnings
+            .iter()
+            .any(|w| w.contains("sub-unit") && w.contains("Swatch") && w.contains("Art"))
+    );
+    assert!(export_animated(&subunit).unwrap_err().contains("sub-unit"));
     doc.motion
         .set_expression(id, Prop::GradientAngle, Some("1 / 0".into()))
         .unwrap();

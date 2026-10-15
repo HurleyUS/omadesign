@@ -990,7 +990,6 @@ fn tilt_gradient(shape: &mut Shape, offset: f32) {
     if let Fill::Gradient(gradient) = &mut shape.style.fill {
         let rest = gradient.angle(bounds);
         gradient.set_angle(rest + offset, bounds);
-        return;
     }
     if let Some(stroke) = &mut shape.style.stroke
         && let Some(gradient) = &mut stroke.gradient

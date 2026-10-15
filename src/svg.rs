@@ -806,6 +806,16 @@ fn gradient_motion_error(shape: &Shape, target: SpinTarget) -> Option<&'static s
     {
         return Some("singular affine radial field cannot preserve angle animation");
     }
+    if g.kind == crate::gradient::GradientKind::Radial
+        && (g.radial_axis.is_some() || g.focal != [0., 0.] || g.inner_radius != 0.)
+    {
+        let (a, b) = g.endpoints(shape.geom.bbox());
+        if (b - a).length() < 1. {
+            return Some(
+                "sub-unit affine radial field changes native radius during angle animation",
+            );
+        }
+    }
     None
 }
 

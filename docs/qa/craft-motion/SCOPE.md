@@ -15,3 +15,5 @@ Qualification uses committed source, focused serialized Rust tests, native proje
 Model import/geometry code is adapted from EffectCraft commit `0311bdc34d0dc10c2d18ff7875b4f52d483e5e27` under its MIT option. The required copyright/permission notice is retained at `docs/licenses/effectcraft-model-MIT.txt` and in adapted modules. No additional dependencies or app-version/lockfile changes are required.
 
 Common integration retains the shared SVG source table, recursive pixel/normalization and portable-font archive paths. Advanced paint/resvg and tiny-skia remain RGBA8. The scene LinearFrame interface stays float-linear; integration of deep native color, float pattern/filter rendering and coverage remains a later boundary.
+
+Animated SVG rotates complete affine radial fields for both fill and stroke, retaining focal and inner-radius data and unwrapped full turns. Singular fields, character-range angle animation, and sub-unit affine radial fields that encounter the native angle setter's radius clamp report named reductions. The report/save-tool paths retain warnings; the legacy string-only export fails when it cannot carry them.
