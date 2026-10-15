@@ -14,6 +14,7 @@ struct File {
 }
 
 pub fn encode(doc: &Document) -> Result<String, String> {
+    doc.validate_sources()?;
     let mut packed = doc.clone();
     pack_rasters(&mut packed)?;
     serde_json::to_string(&File {
@@ -85,19 +86,7 @@ pub fn decode(s: &str) -> Result<Document, String> {
 
 /// Shared normalization after pixels have been decoded under the caller's budgets.
 pub(crate) fn normalize_decoded_document(mut doc: Document, version: u32) -> Result<Document, String> {
-    let mut source_bytes = 0usize;
-    let mut source_ids = std::collections::HashSet::new();
-    for source in &doc.sources {
-        source.validate()?;
-        source_bytes = source_bytes.checked_add(source.bytes().len()).ok_or("Retained sources exceed 512 MiB")?;
-        if source_bytes > 512 * 1024 * 1024 { return Err("Retained sources exceed 512 MiB".into()); }
-        if !source_ids.insert(&source.id) { return Err("Duplicate retained source UUID".into()); }
-    }
-    for layer in &doc.layers {
-        if let Some(id) = &layer.source_attachment && doc.source(id).is_none() {
-            return Err(format!("Layer {} references a missing original source", layer.name));
-        }
-    }
+    doc.validate_sources()?;
     for layer in &mut doc.layers {
         if version < 7 { layer.filters.migrate_legacy(layer.blend); }
         if let Some(shapes) = layer.kind.shapes_mut() {
