@@ -13,8 +13,9 @@ import { verifyCompilerReceipt } from './suite/build.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [command, ...args] = process.argv.slice(2);
 const options = {};
+const allowedOptions=new Set(['index','roots','lane','base','builds','out','config','inside','diff-product','product','raw-bindings','raw-receipts','raw-corpus','owner-receipts']);
 for (let i = 0; i < args.length; i += 2) {
-  if (!args[i].startsWith('--') || args[i+1] === undefined || options[args[i].slice(2)] !== undefined) throw Error('Use named --option VALUE pairs');
+  if (!args[i].startsWith('--') || !allowedOptions.has(args[i].slice(2)) || args[i+1] === undefined || options[args[i].slice(2)] !== undefined) throw Error('Use known named --option VALUE pairs');
   options[args[i].slice(2)] = args[i+1];
 }
 const read = f => JSON.parse(fs.readFileSync(f, 'utf8'));
@@ -50,7 +51,10 @@ function assertBuildLock(configPath) {
   const config=read(configPath);
   if (!config.lock?.startsWith('/home/') || !ancestors.some(a=>path.basename(a[0])==='flock' && a[1]===config.lock)) throw Error('Global serialized lock ancestry unavailable');
 }
-if (command === 'plan') {
+if (command==='run' && fixtures.length===0 && cohorts.length===0) {
+  console.log(JSON.stringify({lane,selection,passed:false,status:'not_run',reason:'zero selected fixtures; no qualification performed'},null,2));
+  process.exitCode=1;
+} else if (command === 'plan') {
   console.log(JSON.stringify({ lane, ...selection, cohorts:cohorts.map(c=>c.id),owner_gates:lane==='candidate'?(index.owner_gates ?? []).map(r=>`${r.id}.${r.product}`):[] }, null, 2));
 } else if (['run','gate','verify'].includes(command)) {
   const builds = options.builds ? read(options.builds) : {};
