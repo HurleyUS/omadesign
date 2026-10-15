@@ -4,31 +4,74 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { asset, canonical, contained, fingerprint, gate, hash, select, source, validate } from './suite/contract.mjs';
+import { asset, canonical, contained, fingerprint, gate, hash, libraries, select, source, validate } from './suite/contract.mjs';
 import { runProcess } from './suite/process.mjs';
+import { rawEvidence } from './suite/raw-evidence.mjs';
+import { ownerEvidence } from './suite/owner-evidence.mjs';
+import { producerEvidence } from './suite/producer-evidence.mjs';
+import { verifyCompilerReceipt } from './suite/build.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [command, ...args] = process.argv.slice(2);
 const options = {};
+const allowedOptions=new Set(['index','roots','lane','base','builds','out','config','inside','diff-product','product','raw-bindings','raw-receipts','raw-corpus','owner-receipts','producer-roots','raw-producer-bindings']);
 for (let i = 0; i < args.length; i += 2) {
-  if (!args[i].startsWith('--') || args[i+1] === undefined || options[args[i].slice(2)] !== undefined) throw Error('Use named --option VALUE pairs');
+  if (!args[i].startsWith('--') || !allowedOptions.has(args[i].slice(2)) || args[i+1] === undefined || options[args[i].slice(2)] !== undefined) throw Error('Use known named --option VALUE pairs');
   options[args[i].slice(2)] = args[i+1];
 }
 const read = f => JSON.parse(fs.readFileSync(f, 'utf8'));
 const indexPath = options.index ?? path.join(root, 'qualification/suite/index.json');
 const index = validate(read(indexPath));
 const roots = { omadesign: root, ...(options.roots ? read(options.roots) : {}) };
+const rawProducerBinding = options['raw-producer-bindings'] ? read(options['raw-producer-bindings']) : undefined;
+if (rawProducerBinding) {
+  roots['raw-camera'] ??= rawProducerBinding.producer_worktree;
+  roots['raw-evidence'] ??= path.resolve(path.dirname(rawProducerBinding.public_packet),'../..');
+}
+const cameraBindings = () => options['raw-bindings'] ? read(options['raw-bindings']) : rawProducerBinding?.case_bindings ? read(rawProducerBinding.case_bindings) : {};
+const inspectProducers = (videoOnly = false) => ({...producerEvidence(read(path.join(root,'qualification/suite/owner-sources.json')), {...roots,...(options['producer-roots'] ? read(options['producer-roots']) : {})},{videoOnly}),inspection_source:source(root)});
 const lane = options.lane ?? 'candidate';
 let changed = [];
 if (lane === 'affected') {
   if (!options.base) throw Error('Affected selection requires --base COMMIT');
-  const raw = execFileSync('git', ['-C', root, 'diff', '--no-renames', '--name-only', '-z', `${options.base}...HEAD`]);
+  const diffRoot=options['diff-product']?roots[options['diff-product']]:root;
+  if (!diffRoot) throw Error('affected diff product root unavailable');
+  const raw = execFileSync('git', ['-C', diffRoot, 'diff', '--no-renames', '--name-only', '-z', `${options.base}...HEAD`]);
   changed = raw.toString().split('\0').filter(Boolean);
 }
-const selection = lane === 'product' ? { ids:index.fixtures.filter(f=>f.product === options.product).map(f=>f.id), reason:'product headless lane; does not qualify a full candidate' } : select(index, lane, changed);
+const selection = ['product','baseline'].includes(lane) ? { ids:index.fixtures.filter(f=>f.product === options.product && (lane!=='baseline' || f.cohort!=='ui')).map(f=>f.id), reason:`${lane} headless developer lane; does not qualify a full candidate` } : select(index, lane, changed,options['diff-product'] ?? 'omadesign');
 const fixtures = index.fixtures.filter(f => selection.ids.includes(f.id));
-if (command === 'plan') {
-  console.log(JSON.stringify({ lane, ...selection }, null, 2));
+const cohorts = (index.cohorts ?? []).filter(c=>lane==='candidate' || (lane==='affected' && selection.ids.length>0 && (options['diff-product'] ?? 'omadesign')==='omadesign' && (selection.full || changed.some(p=>c.affected.some(s=>p.startsWith(s))))));
+/** Verify the enclosing shared lock rather than trusting an internal CLI marker.
+ * Args: optional canonical config. Returns nothing or throws before any fixture work.
+ */
+function assertBuildLock(configPath) {
+  const ancestors=[];
+  let pid=process.ppid;
+  for(let n=0;pid>1 && n<32;n++) {
+    const command=fs.readFileSync(`/proc/${pid}/cmdline`,'utf8').split('\0').filter(Boolean);
+    ancestors.push(command);
+    const helper=command.findIndex(a=>a.endsWith('/scripts/serialized-cargo.mjs'));
+    if (!configPath && helper>=0 && command[helper+1]==='--inside') configPath=command[helper+2];
+    pid=Number(fs.readFileSync(`/proc/${pid}/status`,'utf8').match(/^PPid:\s+(\d+)/m)?.[1] ?? 0);
+  }
+  if (!configPath) throw Error('Internal fixture execution requires the actual global serialized lock');
+  const config=read(configPath);
+  if (!config.lock?.startsWith('/home/') || !ancestors.some(a=>path.basename(a[0])==='flock' && a[1]===config.lock)) throw Error('Global serialized lock ancestry unavailable');
+}
+if (command === 'raw-evidence') {
+  const raw = await rawEvidence(index.cohorts.find(c=>c.id==='raw-camera'),{roots,bindings:cameraBindings(),producerBinding:rawProducerBinding});
+  console.log(JSON.stringify({...raw,inspection_source:source(root)},null,2));
+  process.exitCode = raw.passed ? 0 : 1;
+} else if (command === 'evidence' || command === 'video-evidence') {
+  const evidence = inspectProducers(command === 'video-evidence');
+  console.log(JSON.stringify(evidence,null,2));
+  process.exitCode = evidence.integrity_passed ? 0 : 1;
+} else if (command==='run' && fixtures.length===0 && cohorts.length===0) {
+  console.log(JSON.stringify({lane,selection,passed:false,status:'not_run',reason:'zero selected fixtures; no qualification performed'},null,2));
+  process.exitCode=1;
+} else if (command === 'plan') {
+  console.log(JSON.stringify({ lane, ...selection, cohorts:cohorts.map(c=>c.id),owner_gates:lane==='candidate'?(index.owner_gates ?? []).map(r=>`${r.id}.${r.product}`):[] }, null, 2));
 } else if (['run','gate','verify'].includes(command)) {
   const builds = options.builds ? read(options.builds) : {};
   const out = path.resolve(options.out ?? path.join(root, '.artifacts/suite'));
@@ -42,7 +85,9 @@ if (command === 'plan') {
     process.stdout.write(result.output);
     process.exitCode = result.reason ? 1 : result.code ?? 1;
   } else {
+    if (command==='run') assertBuildLock(options.config);
     const current = {}, receipts = [], issues = [];
+    let cancelled=false;
     for (const f of fixtures) {
       const started_at = new Date().toISOString();
       let binding, receipt;
@@ -61,8 +106,18 @@ if (command === 'plan') {
         let binary = null;
         if (f.adapter.kind !== 'node') {
           if (!build?.binary || build.revision !== actualSource.revision || build.tree !== actualSource.tree) throw Error('current source-bound build unavailable');
+          if (!build.runtime_root || canonical(source(build.runtime_root)) !== canonical(actualSource)) throw Error('build runtime fixture checkout unavailable or changed');
           binary = { ...fingerprint(build.binary), driver: build.driver };
           if (binary.sha256 !== build.sha256) throw Error('build executable hash changed');
+          if (build.compiler_receipt) verifyCompilerReceipt(build);
+          else {
+            let pid=process.ppid, live=false;
+            for(let n=0;pid>1 && n<32;n++) {
+              if (pid===build.live_test_pid && fingerprint(`/proc/${pid}/exe`).sha256===binary.sha256) {live=true;break;}
+              pid=Number(fs.readFileSync(`/proc/${pid}/status`,'utf8').match(/^PPid:\s+(\d+)/m)?.[1] ?? 0);
+            }
+            if (command!=='run' || !live) throw Error('current locked compiler receipt or live Cargo test binding unavailable');
+          }
         }
         const tools = [];
         for (const name of f.tools ?? []) {
@@ -75,19 +130,25 @@ if (command === 'plan') {
           if (probe.status !== 0 || probe.error || !version) throw Error(`required tool ${name} version probe failed`);
           tools.push({ id: name, ...actual, version_sha256:hash(version) });
         }
-        binding = { source: actualSource, adapter_source: adapterSource, adapter_sha256: hash(fs.readFileSync(adapter)), binary, inputs, tools, runner_sha256: hash(fs.readFileSync(fileURLToPath(import.meta.url))), contract_sha256: hash(fs.readFileSync(new URL('./suite/contract.mjs', import.meta.url))), node_sha256: hash(fs.readFileSync(process.execPath)), host: { id: hash(os.hostname()), platform: os.platform(), arch: os.arch(), release: os.release() } };
+        const nativeLibraries=binary?libraries(build.binary):[];
+        const runnerSource=source(root);
+        if (runnerSource.dirty) throw Error('product runner source dirty');
+        binding = { source: actualSource, runner_source:runnerSource, adapter_source: adapterSource, adapter_sha256: hash(fs.readFileSync(adapter)), binary, inputs, tools, native_libraries:nativeLibraries, runner_sha256: hash(fs.readFileSync(fileURLToPath(import.meta.url))), contract_sha256: hash(fs.readFileSync(new URL('./suite/contract.mjs', import.meta.url))), process_sha256:hash(fs.readFileSync(new URL('./suite/process.mjs',import.meta.url))), node_sha256: fingerprint(process.execPath).sha256, host: { id: hash(os.hostname()), platform: os.platform(), arch: os.arch(), release: os.release() } };
         current[f.id] = binding;
         if (command === 'run') {
           const scratch = fs.mkdtempSync(path.join(out, 'run-'));
-          const request = { fixture: f, input: contained(roots[f.input.root], f.input.path), reference: f.reference ? contained(roots[f.reference.root], f.reference.path) : null, output: scratch, binary: build?.binary, driver: build?.driver, tools: build?.tools ?? {} };
+          const request = { fixture: f, input: contained(roots[f.input.root], f.input.path), reference: f.reference ? contained(roots[f.reference.root], f.reference.path) : null, output: scratch, binary: build?.binary, driver: build?.driver, tools: build?.tools ?? {}, verified_binding:binding,ui_receipts:build?.ui_receipts,ui_captures:build?.ui_captures };
           fs.writeFileSync(path.join(scratch,'request.json'), JSON.stringify(request));
           const started = performance.now();
           const result = await runProcess(process.execPath, [adapter, path.join(scratch,'request.json')], { cwd: productRoot, env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch }, deadline_ms: f.limits.deadline_ms });
+          cancelled=result.reason==='cancelled';
           if (canonical(source(productRoot)) !== canonical(actualSource) || canonical(source(adapterRoot)) !== canonical(adapterSource)) throw Error('product or adapter source changed during run');
           asset(f.input, roots);
           if (f.reference) asset(f.reference, roots);
           for (const dependency of f.dependencies ?? []) asset(dependency,roots);
           if (binary && fingerprint(build.binary).sha256 !== binary.sha256) throw Error('build executable changed during run');
+          if (binary && canonical(libraries(build.binary)) !== canonical(nativeLibraries)) throw Error('required native library changed during run');
+          if (binary && canonical(source(build.runtime_root)) !== canonical(actualSource)) throw Error('build runtime fixture checkout changed during run');
           for (const tool of tools) if (fingerprint(build.tools[tool.id].path).sha256 !== tool.sha256) throw Error('required tool changed during run');
           fs.writeFileSync(path.join(scratch,'process.log'), result.output);
           const reportFile = path.join(scratch,'result.json');
@@ -98,13 +159,14 @@ if (command === 'plan') {
             const artifacts = [];
             for (const relative of check?.artifacts ?? []) {
               const file = contained(scratch, relative);
+              if (fs.statSync(file).size>4194304) throw Error('required artifact exceeds bounded receipt budget');
               const bytes = fs.readFileSync(file);
               artifacts.push({ path: path.relative(out,file), sha256: hash(bytes), bytes: bytes.length });
             }
-            checks[key] = { status: check?.status === 'passed' && artifacts.length ? 'passed' : 'failed', artifacts };
+            checks[key] = { status: check?.status === 'passed' && artifacts.length ? 'passed' : check?.status==='unavailable'?'unavailable':'failed', artifacts };
           }
           const passed = result.code === 0 && !result.reason && f.required.every(k => checks[k].status === 'passed');
-          receipt = { version: 1, fixture: f.id, contract: hash(canonical(f)), tier: 'headless', binding, started_at, duration_ms: Math.round(performance.now()-started), status: passed ? 'passed' : 'failed', reason: passed ? 'required headless checks passed' : result.reason ?? 'adapter exit or required evidence failed', checks, losses: f.losses, evidence: binary ? binary.driver === 'libtest' ? 'headless library/test executable; installed CLI unproven' : 'product CLI executable; installed app unproven' : 'Node-only; no product binary', memory: report.memory ?? { parent_rss_kib: null, worker_rss_kib: null, reason: 'not measured; no memory acceptance claimed' } };
+          receipt = { version: 1, fixture: f.id, contract: hash(canonical(f)), tier: 'headless', binding, started_at, duration_ms: Math.round(performance.now()-started), status: passed ? 'passed' : 'failed', reason: passed ? 'required headless checks passed' : result.reason ?? 'adapter exit or required evidence failed', checks, losses: f.losses, evidence: binary ? binary.driver === 'libtest' ? 'headless library/test executable; installed CLI unproven' : 'product CLI executable; installed app unproven' : 'Node-only; no product binary', memory:result.memory,limits:f.limits };
           fs.rmSync(path.join(scratch,'request.json'));
         }
       } catch (error) {
@@ -116,6 +178,7 @@ if (command === 'plan') {
         const bytes = canonical(receipt);
         fs.writeFileSync(path.join(out, `${hash(bytes)}.json`), bytes, { flag: 'wx' });
       }
+      if (cancelled) break;
     }
     if (command !== 'verify') {
       for (const name of fs.readdirSync(out).filter(n => /^[a-f0-9]{64}\.json$/.test(n))) {
@@ -128,7 +191,23 @@ if (command === 'plan') {
       }
     }
     const result = command === 'verify' ? { passed: fixtures.length > 0 && issues.length === 0 } : gate(fixtures,receipts,current);
-    console.log(JSON.stringify({ lane, selection, ...result, issues }, null, 2));
+    for (const cohort of cohorts) {
+      const raw = await rawEvidence(cohort,{roots,builds,bindings:cameraBindings(),receipts:options['raw-receipts'],corpus:options['raw-corpus'],producerBinding:rawProducerBinding});
+      result.passed &&= raw.passed;
+      result.rows ??= [];
+      result.rows.push(...raw.rows);
+      const bytes=canonical({version:1,cohort:cohort.id,checked_at:new Date().toISOString(),...raw});
+      fs.writeFileSync(path.join(out,`producer-${hash(bytes)}.json`),bytes,{flag:'wx'});
+    }
+    if (lane==='candidate') {
+      const owners=ownerEvidence(index.owner_gates ?? [],{directory:options['owner-receipts'],roots,builds});
+      result.passed &&= owners.length>0 && owners.every(r=>r.status==='passed');
+      result.rows ??= [];
+      result.rows.push(...owners);
+    }
+    const producer_evidence = options['producer-roots'] ? inspectProducers() : undefined;
+    if (producer_evidence && !producer_evidence.integrity_passed) result.passed = false;
+    console.log(JSON.stringify({ lane, selection, ...result, issues, producer_evidence }, null, 2));
     process.exitCode = result.passed && issues.length === 0 ? 0 : 1;
   }
-} else throw Error('Use plan|verify|run|gate --lane affected|candidate [--base COMMIT] [--roots LOCAL.json] [--builds LOCAL.json] [--out DIR] [--config BUILD-CONFIG]');
+} else throw Error('Use raw-evidence --raw-producer-bindings PRIVATE.json, evidence|video-evidence --producer-roots PRIVATE.json or plan|verify|run|gate --lane affected|candidate [--base COMMIT] [--roots LOCAL.json] [--builds LOCAL.json] [--out DIR] [--config BUILD-CONFIG]');

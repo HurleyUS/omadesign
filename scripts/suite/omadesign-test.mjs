@@ -17,6 +17,7 @@ for (const id of ['rsvg-convert','pdftoppm']) {
   tools[id] = {path:filename,...fingerprint(filename),version_args:id==='pdftoppm'?['-v']:['--version']};
 }
 const builds = path.join(out,'builds.json');
-fs.writeFileSync(builds,JSON.stringify({omadesign:{...current,binary,...fingerprint(binary),driver:'libtest',tools,origin:'current_exe of serialized Cargo test; library/test evidence only'}}));
-const result = spawnSync(process.execPath,[path.join(root,'scripts/qualify-suite.mjs'),'run','--lane','product','--product','omadesign','--builds',builds,'--out',out,'--inside','locked'],{stdio:'inherit',env:process.env});
+if (fs.realpathSync(`/proc/${process.ppid}/exe`)!==fs.realpathSync(binary)) throw Error('Current executable is not the actual Cargo test parent');
+fs.writeFileSync(builds,JSON.stringify({omadesign:{...current,binary,...fingerprint(binary),runtime_root:root,driver:'libtest',tools,live_test_pid:process.ppid,origin:'independently observed live serialized Cargo test parent; final locked compiler receipt pending'}}));
+const result = spawnSync(process.execPath,[path.join(root,'scripts/qualify-suite.mjs'),'run','--lane','baseline','--product','omadesign','--builds',builds,'--out',out,'--inside','locked'],{stdio:'inherit',env:process.env});
 process.exitCode=result.status ?? 1;

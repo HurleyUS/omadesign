@@ -1,0 +1,41 @@
+name: Suite contract and affected fixture plan
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Plan only; product proof needs actual local binaries
+        type: choice
+        options: [candidate, affected]
+        default: candidate
+permissions:
+  contents: read
+concurrency:
+  group: suite-contract-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  contract-and-plan:
+    name: Validate contract and plan fixtures (no product qualification)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test scripts/suite/contract.test.mjs scripts/suite/evidence.test.mjs scripts/suite/producer-evidence.test.mjs scripts/suite/raw-evidence.test.mjs
+      - name: Plan affected PR or complete candidate cohort
+        env:
+          SUITE_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+          SUITE_LANE: ${{ inputs.lane || 'affected' }}
+        run: |
+          mkdir -p .artifacts
+          node scripts/qualify-suite.mjs plan --lane "$SUITE_LANE" --base "$SUITE_BASE" > .artifacts/suite-plan.json
+          cat .artifacts/suite-plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: suite-fixture-plan
+          path: .artifacts/suite-plan.json
