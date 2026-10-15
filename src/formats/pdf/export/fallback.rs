@@ -110,7 +110,7 @@ pub(super) fn prepare(
         warnings.insert(if original.is_group {
             "PDF export preserves complex group appearance as a raster layer; its internal objects remain editable in the .oma project.".into()
         }else{
-            "PDF export preserves gradients, masks, and effects as raster layers where needed; unaffected vector layers stay editable.".into()
+            "PDF export preserves unsupported filters, shape/conic gradients, frame composition, or stroke alignment as raster layers; supported vector paint and masks stay editable.".into()
         });
     }
     prepared.layers.retain(|layer| !removed.contains(&layer.id));
@@ -123,36 +123,32 @@ pub(super) fn prepare(
 }
 
 fn needs_pixels(layer: &Layer) -> bool {
-    if layer.is_group {
-        !layer.pass_through
-            || layer.fill_opacity < 1.
-            || layer.opacity < 1.
-            || layer.mask.is_some()
-            || layer.filters.active()
-    } else {
-        layer.fill_opacity < 1.
-            || layer.mask.is_some()
-            || layer.filters.active()
-            || layer.kind.shapes().is_some_and(|shapes| {
-                shapes.iter().any(|shape| {
-                    shape.fill_opacity < 1.
-                        || shape.blend != Blend::Normal
-                        || shape.filters.active()
-                        || shape.mask.is_some()
-                        || shape.style.stroke.as_ref().is_some_and(|s| {
-                            s.gradient.is_some()
-                                || s.alignment != crate::document::StrokeAlignment::Center
-                        })
-                        || matches!(
-                            shape.style.fill,
-                            Fill::Gradient(_) | Fill::Linear { .. } | Fill::Radial { .. }
-                        )
-                })
+    layer.filters.active()
+        || layer.blend_interior
+        || layer.kind.shapes().is_some_and(|shapes| {
+            shapes.iter().any(|shape| {
+                shape.filters.active()
+                    || shape.blend_interior
+                    || shape.layout.parent.is_some()
+                    || shape.style.stroke.as_ref().is_some_and(|s| {
+                        s.alignment != crate::document::StrokeAlignment::Center
+                            || s.gradient.as_ref().is_some_and(unsupported_gradient)
+                    })
+                    || shape
+                        .style
+                        .fill
+                        .gradient()
+                        .as_ref()
+                        .is_some_and(unsupported_gradient)
             })
-    }
+        })
 }
 
-fn layer_bounds(layer: &Layer) -> Option<Bounds> {
+fn unsupported_gradient(g: &Gradient) -> bool {
+    !matches!(g.kind, GradientKind::Linear | GradientKind::Radial)
+}
+
+pub(super) fn layer_bounds(layer: &Layer) -> Option<Bounds> {
     let bounds = match &layer.kind {
         LayerKind::Vector { shapes } => shapes
             .iter()
