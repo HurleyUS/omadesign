@@ -120,23 +120,35 @@ pub(super) fn inspector(ui: &mut Ui, studio: &mut Studio) {
                                         }
                                     }
                                     Ok(Value::Opacity(mut value)) => {
-                                        value *= 100.;
-                                        let response = super::fields::number(
+                                        studio.with_field_history(
                                             ui,
-                                            "value",
-                                            &property.name,
-                                            &mut value,
-                                            0.0..=100.0,
-                                            " %",
-                                            None,
-                                            Default::default(),
+                                            ("named-opacity", root, property.id),
+                                            |ui, studio| {
+                                                value *= 100.;
+                                                let response = super::fields::number(
+                                                    ui,
+                                                    "value",
+                                                    &property.name,
+                                                    &mut value,
+                                                    0.0..=100.0,
+                                                    " %",
+                                                    None,
+                                                    Default::default(),
+                                                );
+                                                if crate::app::input_history::record(
+                                                    response.response,
+                                                    response.changed,
+                                                ) {
+                                                    studio.apply_component_property(
+                                                        target.clone(),
+                                                        Edit::Set {
+                                                            id: property.id,
+                                                            value: Value::Opacity(value / 100.),
+                                                        },
+                                                    );
+                                                }
+                                            },
                                         );
-                                        if response.changed {
-                                            edit = Some(Edit::Set {
-                                                id: property.id,
-                                                value: Value::Opacity(value / 100.),
-                                            });
-                                        }
                                     }
                                     Ok(Value::Fill(Fill::Solid(color))) => {
                                         if let Some(value) = text(
