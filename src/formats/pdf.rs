@@ -17,9 +17,9 @@ mod masks;
 mod shading;
 pub use export::write;
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod exchange_tests;
+#[cfg(test)]
+mod tests;
 
 const STREAM_LIMIT: usize = 128 * 1024 * 1024;
 const PIXEL_LIMIT: usize = 64 * 1024 * 1024;
@@ -987,31 +987,10 @@ impl Reader<'_> {
         };
         run.contours = crate::text::shape(&run);
         let advance = if let Some(font) = font {
-            let first = font
-                .get(b"FirstChar")
-                .ok()
-                .and_then(number_value)
-                .unwrap_or(0.) as usize;
-            let widths = font
-                .get(b"Widths")
-                .ok()
-                .and_then(|object| resolve(self.pdf, object))
-                .and_then(|object| object.as_array().ok());
-            if let Some(widths) = widths {
-                bytes
-                    .iter()
-                    .map(|code| {
-                        (*code as usize)
-                            .checked_sub(first)
-                            .and_then(|index| widths.get(index))
-                            .and_then(number_value)
-                            .unwrap_or(500.)
-                            * font_size
-                            / 1000.
-                    })
-                    .sum::<f32>()
+            if let Some(width) = self.text_width(font, bytes) {
+                width * font_size / 1000.
             } else {
-                self.warn("PDF text without simple font widths is reflowed using the imported font; glyph positioning can differ.");
+                self.warn("PDF text without readable font widths is reflowed using the imported font; glyph positioning can differ.");
                 text_advance(&run) / if simple { a.max(0.0001) } else { 1. }
             }
         } else {
@@ -1049,6 +1028,94 @@ impl Reader<'_> {
         self.add_shapes(vec![shape], state, marked)
     }
 
+    /// Read horizontal advances from simple and Identity-H CID font dictionaries.
+    /// Args: font dictionary and encoded text. Returns widths in thousandths of an em.
+    fn text_width(&self, font: &Dictionary, bytes: &[u8]) -> Option<f32> {
+        if font.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Type0") {
+            if font.get(b"Encoding").and_then(Object::as_name).ok() != Some(b"Identity-H")
+                || bytes.len() % 2 != 0
+            {
+                return None;
+            }
+            let descendant = font
+                .get(b"DescendantFonts")
+                .ok()
+                .and_then(|o| resolve(self.pdf, o))?
+                .as_array()
+                .ok()?
+                .first()
+                .and_then(|o| dictionary(self.pdf, o))?;
+            let default = descendant
+                .get(b"DW")
+                .ok()
+                .and_then(number_value)
+                .unwrap_or(1000.);
+            let widths = descendant
+                .get(b"W")
+                .ok()
+                .and_then(|o| resolve(self.pdf, o))
+                .and_then(|o| o.as_array().ok());
+            let mut total = 0.;
+            for code in bytes.chunks_exact(2) {
+                let cid = u16::from_be_bytes([code[0], code[1]]) as usize;
+                let mut width = default;
+                if let Some(widths) = widths {
+                    let mut index = 0;
+                    while index + 1 < widths.len() {
+                        let start = number_value(&widths[index])? as usize;
+                        if let Some(values) =
+                            resolve(self.pdf, &widths[index + 1]).and_then(|o| o.as_array().ok())
+                        {
+                            if let Some(value) = cid
+                                .checked_sub(start)
+                                .and_then(|i| values.get(i))
+                                .and_then(number_value)
+                            {
+                                width = value;
+                                break;
+                            }
+                            index += 2;
+                        } else {
+                            let end = number_value(&widths[index + 1])? as usize;
+                            let value = widths.get(index + 2).and_then(number_value)?;
+                            if (start..=end).contains(&cid) {
+                                width = value;
+                                break;
+                            }
+                            index += 3;
+                        }
+                    }
+                }
+                total += width;
+            }
+            Some(total)
+        } else {
+            let first = font
+                .get(b"FirstChar")
+                .ok()
+                .and_then(number_value)
+                .unwrap_or(0.) as usize;
+            let widths = font
+                .get(b"Widths")
+                .ok()
+                .and_then(|o| resolve(self.pdf, o))?
+                .as_array()
+                .ok()?;
+            Some(
+                bytes
+                    .iter()
+                    .map(|&c| {
+                        (c as usize)
+                            .checked_sub(first)
+                            .and_then(|i| widths.get(i))
+                            .and_then(number_value)
+                            .unwrap_or(500.)
+                    })
+                    .sum(),
+            )
+        }
+    }
+
     fn text_font(&mut self, font: Option<&Dictionary>) -> String {
         let Some(font) = font else {
             self.warn("A PDF text font is missing; the default font is substituted.");
@@ -1061,8 +1128,10 @@ impl Reader<'_> {
         // Include descriptor reference in the cache key: different embedded fonts
         // may intentionally use the same PostScript name on different pages.
         let mut key = base.to_vec();
-        if let Ok(descriptor) = font.get(b"FontDescriptor") {
-            key.extend_from_slice(format!("{descriptor:?}").as_bytes());
+        for field in [b"FontDescriptor".as_slice(), b"DescendantFonts".as_slice()] {
+            if let Ok(value) = font.get(field) {
+                key.extend_from_slice(format!("{value:?}").as_bytes());
+            }
         }
         if let Some(path) = self.font_cache.get(&key) {
             return path.clone();
@@ -1094,7 +1163,9 @@ impl Reader<'_> {
             let label = String::from_utf8_lossy(base);
             if crate::text::register_memory_font(&id, &label, std::sync::Arc::new(bytes)).is_ok() {
                 self.font_cache.insert(key, id.clone());
-                self.warn("Embedded PDF fonts are retained when readable; subset fonts may lack characters needed for later text edits.");
+                if base.get(6) == Some(&b'+') {
+                    self.warn("Embedded PDF subset fonts may lack characters needed for later text edits.");
+                }
                 return id;
             }
         }
