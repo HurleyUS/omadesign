@@ -19,6 +19,7 @@ pub fn character_metrics(run: &TypeRun, index: usize) -> CharSpan {
     style.baseline_shift.get_or_insert(0.);
     style.hscale.get_or_insert(100.);
     style.vscale.get_or_insert(100.);
+    style.px.get_or_insert(run.px);
     style
 }
 
@@ -141,7 +142,7 @@ mod tests {
         compose(run)[0].width
     }
     #[test]
-    fn affine_styled_type_survives_edit_transform_and_project_reopen() {
+    fn native_type_affine_styled_type_survives_edit_transform_and_project_reopen() {
         use crate::{color::Rgba,document::{Document,Shape,Style},geom::Pt};
         let mut r=run("Type type");
         r.set_character_style(5,9,|s| {s.px=Some(70.);s.font=Some(r#"/usr/share/fonts/liberation/LiberationSans-Bold.ttf"#.into());s.fill=Some(crate::document::Fill::Solid(Rgba::rgb(220,30,50)));});
@@ -159,13 +160,13 @@ mod tests {
         r.replace_text(0,0,"é",None);
         assert_eq!(r.character_style(6).px,Some(70.));
         let mut doc=Document::new("Affine type",300.,180.,96.);
-        doc.layers[0].kind.shapes_mut().unwrap().push(Shape::new(geom,Style::default()));
+        doc.layers.clear();let mut layer=crate::document::Layer::vector("Type");layer.kind.shapes_mut().unwrap().push(Shape::new(geom,Style::default()));doc.layers.push(layer);
         let encoded=crate::project::encode(&doc).unwrap();
         assert!(encoded.contains("\"version\":14"));
         let decoded=crate::project::decode(&encoded).unwrap();
         assert_eq!(serde_json::to_value(&doc).unwrap(),serde_json::to_value(&decoded).unwrap());
         let image=crate::compositor::render_export(&decoded,1).unwrap();
-        assert!(image.pixels().iter().any(|p|p.red()>p.blue()+20 && p.red()>p.green()+20));
+        assert!(image.pixels().iter().any(|p|u16::from(p.red())>u16::from(p.blue())+20 && u16::from(p.red())>u16::from(p.green())+20));
     }
     fn near(a: f32, b: f32) {
         assert!((a - b).abs() < 0.02, "{a} != {b}");
@@ -549,5 +550,33 @@ mod tests {
         assert_eq!(run.character_style(5).tracking, Some(80.));
         assert_eq!(run.character_style(6).baseline_shift, Some(5.));
         assert_eq!(run.character_style(3).tracking, None);
+    }
+}
+
+#[cfg(test)]
+mod native_type_acceptance {
+    use crate::{color::Rgba,document::{Document,Fill,Layer,Shape,Style},geom::{Geom,Pt,TypeRun}};
+    fn sample(content:&str)->TypeRun{TypeRun{content:content.into(),px:32.,origin:Pt::new(25.,65.),font:concat!(env!("CARGO_MANIFEST_DIR"),"/tests/assets/fonts/EBGaramond.ttf").into(),..Default::default()}}
+    fn document(mut run:TypeRun)->Document{run.contours=crate::text::shape(&run);let mut doc=Document::new("Native type",320.,180.,96.);doc.width=320.;doc.height=180.;doc.transparent=true;doc.layers.clear();let mut layer=Layer::vector("Type");layer.kind.shapes_mut().unwrap().push(Shape::new(Geom::Text(run),Style::default()));doc.layers.push(layer);doc}
+    fn compare(source:&str,doc:&Document)->f32{let mut options=usvg::Options::default();options.fontdb_mut().load_system_fonts();let tree=usvg::Tree::from_str(source,&options).unwrap();let mut expected=tiny_skia::Pixmap::new(320,180).unwrap();resvg::render(&tree,tiny_skia::Transform::identity(),&mut expected.as_mut());let actual=crate::compositor::render_export(doc,1).unwrap();actual.data().iter().zip(expected.data()).map(|(a,b)|a.abs_diff(*b)as f32).sum::<f32>()/actual.data().len()as f32}
+    #[test]
+    fn native_type_size_boundaries_leading_resize_and_affine_editing(){
+        let mut run=sample("AAAA\nBBBB");run.set_character_style(2,4,|s|s.px=Some(64.));run.manual_kern.insert(2,125.);
+        let line=crate::text::compose(&run);let before=line[0].glyphs.iter().find(|g|g.cluster==2).unwrap().x;
+        run.manual_kern.clear();let line=crate::text::compose(&run);assert!((before-line[0].glyphs.iter().find(|g|g.cluster==2).unwrap().x-8.).abs()<0.01);assert!(line[0].height>=76.);
+        run.contours=crate::text::shape(&run);let mut geom=Geom::Text(run);let src=geom.bbox();geom.map_into(src,crate::geom::Bounds::from_min_size(src.min,src.size()*2.));let Geom::Text(mut run)=geom else{unreachable!()};assert_eq!(run.character_style(2).px,Some(128.));
+        run.transform=Some([0.,1.,-1.,0.,150.,0.]);run.contours=crate::text::shape(&run);let(top,bottom)=crate::text::caret_segment(&run,2);assert!((top.x-bottom.x).abs()>100. && (top.y-bottom.y).abs()<0.01);let quads=crate::text_geometry::selection_quads(&run,2,3).unwrap();assert!((quads[0][0]-run.map_point(crate::text::selection_rects(&run,2,3)[0].0)).length()<0.01);
+    }
+    #[test]
+    fn native_type_paint_ligatures_rotation_gradient_masks_and_svg_matrix(){
+        let mut run=sample("fi fi");run.set_character_style(1,2,|s|s.fill=Some(Fill::Solid(Rgba::rgb(220,40,60))));assert_eq!(crate::text::glyph_count(&run),4);
+        run.transform=Some([1.,0.15,0.25,1.,30.,5.]);let mut doc=document(run);let shape=&mut doc.layers[0].kind.shapes_mut().unwrap()[0];shape.rotation=0.3;shape.style.fill=Fill::Linear{from:[0.,0.],to:[1.,0.],c0:Rgba::rgb(0,0,220),c1:Rgba::rgb(0,200,80)};shape.opacity=0.7;
+        let svg=crate::svg::export(&doc).unwrap();assert!(compare(&svg,&doc)<0.1,"SVG and native painted affine type differ: {}",compare(&svg,&doc));
+        doc.layers[0].kind.shapes_mut().unwrap()[0].visible=false;let svg=crate::svg::export(&doc).unwrap();assert!(compare(&svg,&doc)<0.01);
+        let mut plain=sample("Matrix");plain.transform=Some([0.9,0.3,-0.2,1.1,20.,4.]);let doc=document(plain);let svg=crate::svg::export(&doc).unwrap();assert!(compare(&svg,&doc)<0.1);
+    }
+    #[test]
+    fn native_type_threaded_frame_uses_range_faces_and_affine_after_layout(){
+        let mut story=sample("MMMM WWWW");story.frame=Some(crate::text_geometry::TextFrame{size:Pt::new(240.,100.),..Default::default()});story.set_character_style(5,9,|s|s.font=Some("/usr/share/fonts/liberation/LiberationSans-Bold.ttf".into()));let plain=crate::text_geometry::layout_frame(&story,&story,0,&[],false);assert!(!plain.contours.is_empty());story.transform=Some([1.,0.2,0.3,1.,20.,10.]);let mapped=crate::text_geometry::layout_frame(&story,&story,0,&[],false);assert!((mapped.contours[0][0]-story.map_point(plain.contours[0][0])).length()<0.001);assert!((mapped.selections[0].2[0]-story.map_point(plain.selections[0].2[0])).length()<0.001);
     }
 }

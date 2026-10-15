@@ -1176,22 +1176,6 @@ fn draw_shape_inner(
     pose: Pose,
     mask: Option<&tiny_skia::Mask>,
 ) {
-    if let crate::geom::Geom::Text(run)=&shape.geom
-        && run.spans.iter().any(|span|span.fill.is_some())
-        && run.on_path.is_none() && run.frame.is_none()
-    {
-        let center=shape.geom.bbox().center();
-        let xf=t.pre_concat(pose.to_skia(shape.world_bbox().center()))
-            .pre_concat(Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y));
-        for line in crate::text::compose(run).iter() {
-            for glyph in &line.glyphs {
-                let mut part=Shape::new(crate::geom::Geom::Poly {contours:crate::text::glyph_contours(run,glyph),winding:true},shape.style.clone());
-                part.style.fill=run.character_style(glyph.cluster).fill.unwrap_or_else(||shape.style.fill.clone());
-                draw_shape_inner(pm,&part,xf,opacity*pose.opacity.unwrap_or(shape.opacity),blend,Pose::identity(),mask);
-            }
-        }
-        return;
-    }
     let Some(path) = shape.get_cached_path(96) else {
         return;
     };
@@ -1203,7 +1187,25 @@ fn draw_shape_inner(
         t.pre_concat(pose.to_skia(shape.world_bbox().center()))
     };
     let fill_reveal = pose.fill_reveal.unwrap_or(1.0).clamp(0.0, 1.0);
-    if !shape.style.fill.is_none() && shape.geom.is_closed() && fill_reveal > 0.0 {
+    let painted=if let Geom::Text(run)=&shape.geom {run.spans.iter().any(|s|s.fill.is_some()) && run.on_path.is_none() && run.frame.is_none()}else{false};
+    if painted && fill_reveal>0. {
+        let Geom::Text(run)=&shape.geom else{unreachable!()};
+        for (fill,mut contours) in crate::text::paint_groups(run,&shape.style.fill) {
+            if shape.rotation.abs()>1e-5{let center=shape.geom.bbox().center();for point in contours.iter_mut().flatten(){*point=point.rotate_about(center,shape.rotation);}}
+            if fill.is_none(){continue;}
+            let part=Shape::new(Geom::Poly{contours,winding:true},shape.style.clone());
+            let Some(glyph_path)=part.get_cached_path(96)else{continue;};
+            let Some(mut clip)=tiny_skia::Mask::new(pm.width(),pm.height())else{continue;};
+            clip.fill_path(&glyph_path,FillRule::Winding,true,xf);
+            if let Some(parent)=mask{for(a,b)in clip.data_mut().iter_mut().zip(parent.data()){*a=((u16::from(*a)*u16::from(*b)+127)/255)as u8;}}
+            if fill_reveal<1. {let bounds=shape.world_bbox();if let Some(rect)=tiny_skia::Rect::from_xywh(bounds.min.x,bounds.max.y-bounds.height()*fill_reveal,bounds.width().max(0.001),bounds.height()*fill_reveal){clip.intersect_path(&PathBuilder::from_rect(rect),FillRule::Winding,true,xf);}}
+            let texture=fill.gradient().and_then(|g|crate::gradient::texture(&g,shape,0.,xf.get_scale().0.max(xf.get_scale().1)));
+            let mut paint=fill_paint(&fill,&shape.geom,texture.as_ref());paint.blend_mode=blend;paint.shader.apply_opacity(op);
+            if shape.rotation.abs()>1e-5{let center=shape.geom.bbox().center();paint.shader.transform(Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y));}
+            let bounds=shape.world_bbox();if let Some(rect)=tiny_skia::Rect::from_xywh(bounds.min.x,bounds.min.y,bounds.width(),bounds.height()){pm.fill_rect(rect,&paint,xf,Some(&clip));}
+        }
+    }
+    if !painted && !shape.style.fill.is_none() && shape.geom.is_closed() && fill_reveal > 0.0 {
         let texture = shape.style.fill.gradient().and_then(|g| {
             crate::gradient::texture(&g, shape, 0., xf.get_scale().0.max(xf.get_scale().1))
         });

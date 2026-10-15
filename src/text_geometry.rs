@@ -169,6 +169,13 @@ pub struct TextGeometryLayout {
     pub hyphen_tail: usize,
 }
 
+pub(crate) fn map_layout(mut layout:TextGeometryLayout,run:&TypeRun)->TextGeometryLayout {
+    for p in layout.contours.iter_mut().flatten(){*p=run.map_point(*p);}
+    for (_,point,tangent) in &mut layout.carets{let end=run.map_point(*point+*tangent);*point=run.map_point(*point);*tangent=(end-*point).normalized();}
+    for (_,_,quad) in &mut layout.selections{*quad=quad.map(|p|run.map_point(p));}
+    layout
+}
+
 pub fn path_interval(on: &TextOnPath) -> Option<(f32, f32)> {
     let path = on.cache.as_ref()?;
     let start = on.start * path.length;
@@ -210,6 +217,7 @@ pub fn path_position(run: &TypeRun, distance: f32) -> Option<(Pt, Pt)> {
 }
 
 pub fn layout_on_path(run: &TypeRun) -> TextGeometryLayout {
+    if run.transform.is_some(){let mut local=run.clone();local.transform=None;local.layout=None;return map_layout(layout_on_path(&local),run);}
     let Some(on)=run.on_path.as_ref() else {return TextGeometryLayout::default()};
     let Some((_,span))=path_interval(on) else {return TextGeometryLayout::default()};
     let mut plain=run.clone();
@@ -335,6 +343,7 @@ pub fn hit_char(run: &TypeRun, point: Pt) -> Option<usize> {
         .map(|c| c.0)
 }
 pub fn selection_quads(run: &TypeRun, a: usize, b: usize) -> Option<Vec<[Pt; 4]>> {
+    if run.transform.is_some() && run.frame.is_none() && run.on_path.is_none(){return Some(crate::text::selection_rects(run,a,b).into_iter().map(|(a,b)|[a,Pt::new(b.x,a.y),b,Pt::new(a.x,b.y)].map(|p|run.map_point(p))).collect());}
     let computed;
     let layout = if let Some(layout) = &run.layout {
         layout

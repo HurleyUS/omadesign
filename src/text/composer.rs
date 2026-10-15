@@ -303,7 +303,7 @@ pub fn compose(run: &TypeRun) -> Arc<Vec<LayoutLine>> {
                     _ => 0.,
                 };
             }
-            let height=(start..end).map(|i|super::character_metrics(run,i).leading.unwrap().pixels(run.px)).fold(0.,f32::max).max(if start==end{run.line_height()}else{1.});
+            let height=(start..end).map(|i|{let m=super::character_metrics(run,i);m.leading.unwrap().pixels(m.px.unwrap_or(run.px))}).fold(0.,f32::max).max(if start==end{run.line_height()}else{1.});
             let baseline=lines.last().map_or(0.,|previous|previous.baseline+height);
 
             for glyph in &mut glyphs {
@@ -394,6 +394,7 @@ fn shape_line(
     }
     cuts.sort_unstable();
     cuts.dedup();
+    cuts.retain(|&at|at==0 || at==count || {let a=run.character_style(start+at-1);let b=run.character_style(start+at);(a.font.unwrap_or_else(||run.font.clone()),a.px.unwrap_or(run.px))!=(b.font.unwrap_or_else(||run.font.clone()),b.px.unwrap_or(run.px))});
     if cuts.len() <= 2
         && run.character_style(start).font.is_none()
         && run.character_style(start).px.is_none()
@@ -407,6 +408,7 @@ fn shape_line(
         let mut part = run.clone();
         part.font = style.font.unwrap_or_else(|| run.font.clone());
         part.px = style.px.unwrap_or(run.px);
+        part.align=TextAlign::Start;part.paragraphs=vec![ParagraphStyle{start:paragraph_style(run,start).start,word_spacing:[100.;3],..Default::default()}];
         let bytes = resolve_path(&part).and_then(|path| font_bytes(&path));
         let face = bytes
             .as_ref()
@@ -423,9 +425,15 @@ fn shape_line(
         for glyph in &mut next {
             glyph.x += pen;
         }
+        if pair[0]>0 {
+            let index=start+pair[0];
+            let boundary=run.manual_kern.get(&index).copied().unwrap_or(0.)*part.px/1000.;
+            for glyph in &mut next{glyph.x+=boundary;} pen+=boundary;
+        }
         glyphs.extend(next);
         pen += width;
     }
+    paragraph_adjustments(run,start,&mut glyphs);
     glyphs
 }
 
@@ -492,6 +500,10 @@ fn shape_line_uniform(
         pen+=advance;previous_cluster=Some(cluster);
         previous_untracked_advance = untracked_advance;
     }
+    paragraph_adjustments(run,start,&mut result);
+    result
+}
+fn paragraph_adjustments(run:&TypeRun,start:usize,result:&mut [LayoutGlyph]) {
     let style = paragraph_style(run, start);
     if matches!(style.align,TextAlign::Justify{..}) && run.wrap_width.is_some() && style.break_mode!=BreakMode::KeepAll && let Some(last)=result.last_mut() {last.advance-=super::character_metrics(run,last.cluster).tracking.unwrap()*run.px/1000.;}
     let n = result.len();
@@ -503,14 +515,13 @@ fn shape_line_uniform(
         } else {
             0.
         }) + if i + 1 < n {
-            run.px * style.letter_spacing[1] / 100.
+            run.character_style(g.cluster).px.unwrap_or(run.px) * style.letter_spacing[1] / 100.
         } else {
             0.
         };
         g.advance += extra;
         added += extra;
     }
-    result
 }
 fn trim_width(glyphs: &[LayoutGlyph]) -> f32 {
     glyphs
@@ -593,10 +604,10 @@ pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
             contour
                 .into_iter()
                 .map(|p| {
-                    run.map_point(Pt::new(
+                    Pt::new(
                         run.origin.x + glyph.x + p.x * glyph.hscale,
                         run.origin.y + glyph.y + p.y * glyph.vscale,
-                    ))
+                    )
                 })
                 .collect()
         })

@@ -232,18 +232,6 @@ fn write_shape(
     extra: &str,
     text_as_paths: bool,
 ) {
-    if let Geom::Text(run)=&shape.geom && run.spans.iter().any(|span|span.fill.is_some()) && run.on_path.is_none() && run.frame.is_none() {
-        body.push_str(&format!("<g{} opacity=\"{}\"{extra}>",xf_attr(shape),shape.opacity));
-        for line in crate::text::compose(run).iter() {
-            for glyph in &line.glyphs {
-                let mut part=Shape::new(Geom::Poly {contours:crate::text::glyph_contours(run,glyph),winding:true},shape.style.clone());
-                part.style.fill=run.character_style(glyph.cluster).fill.unwrap_or_else(||shape.style.fill.clone());
-                write_shape(body,defs,grad_id,&part,"",true);
-            }
-        }
-        body.push_str("</g>");
-        return;
-    }
     if shape.mask.is_some() {
         let mut plain = shape.clone();
         plain.mask = None;
@@ -363,6 +351,19 @@ fn write_shape(
         },
         extra
     );
+    if let Geom::Text(run)=&shape.geom && run.spans.iter().any(|span|span.fill.is_some()) && run.on_path.is_none() && run.frame.is_none() {
+        body.push_str(&format!("<g opacity=\"{}\"{extra}>",shape.opacity));
+        for (index,(fill,contours)) in crate::text::paint_groups(run,&shape.style.fill).into_iter().enumerate() {
+            if fill.is_none(){continue;}
+            let part=Shape::new(Geom::Poly{contours,winding:true},shape.style.clone());
+            let id=format!("oma-type-paint-{}-{index}",shape.id);
+            defs.push_str(&format!("<clipPath id=\"{id}\" clipPathUnits=\"userSpaceOnUse\"><path d=\"{}\" clip-rule=\"nonzero\"/></clipPath>",path_data(&part)));
+            let bounds=shape.geom.bbox();let mut painted=Shape::new(Geom::Rect{origin:bounds.min,size:bounds.size(),radius:0.},shape.style.clone());painted.style.fill=fill;painted.style.stroke=None;
+            write_shape(body,defs,grad_id,&painted,&format!(" clip-path=\"url(#{id})\""),true);
+        }
+        if shape.style.stroke.is_some(){let mut stroke=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());stroke.style.fill=Fill::None;write_shape(body,defs,grad_id,&stroke,"",true);}
+        body.push_str("</g>");return;
+    }
     let fill_attr = match &shape.style.fill {
         Fill::Gradient(g) => format!(
             "fill=\"{}\"",
@@ -427,6 +428,7 @@ fn write_shape(
     // may not have the brand font. Text stays editable in the original document.
     if let Geom::Text(run) = &shape.geom
         && !text_as_paths
+        && run.transform.is_none()
         && run.on_path.is_none()
         && run.frame.is_none()
         && !run.font.starts_with("omatype:")

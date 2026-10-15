@@ -75,10 +75,12 @@ impl TextWrap {
 
 pub fn frame_bounds(run: &TypeRun) -> Option<Bounds> {
     let frame = run.frame.as_ref()?;
-    Some(Bounds::from_min_size(
+    let bounds=Bounds::from_min_size(
         Pt::new(run.origin.x, run.origin.y - run.px * 0.85),
         frame.size,
-    ))
+    );
+    let points=[bounds.min,Pt::new(bounds.max.x,bounds.min.y),bounds.max,Pt::new(bounds.min.x,bounds.max.y)].map(|p|run.map_point(p));
+    let mut result=Bounds::from_pt(points[0]);for p in &points[1..]{result.union_pt(*p);}Some(result)
 }
 
 #[derive(Clone)]
@@ -368,6 +370,7 @@ fn layout_frame_continued(
     has_next: bool,
     initial_hyphens: usize,
 ) -> TextGeometryLayout {
+    if frame_run.transform.is_some(){let mut local=frame_run.clone();local.transform=None;local.layout=None;let mut story=story.clone();story.transform=None;story.layout=None;return super::map_layout(layout_frame_continued(&local,&story,start,obstacles,has_next,initial_hyphens),frame_run);}
     let mut metrics=FlowMetrics::default();
     let Some(frame)=frame_run.frame.as_ref() else { return TextGeometryLayout::default(); };
     if frame.valign==VAlign::Top || (obstacles.is_empty() && frame.contour.is_none()) {
