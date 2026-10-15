@@ -61,7 +61,12 @@ from this repository:
   subdirectory's license is MIT; this fixture is used only for local, read-only
   QA without assuming redistribution rights.
   Its editing data has five artboards (`xs`, `sm`, `md`, `lg`, `xl`); the single
-  PDF page previews `xl`. The test checks all five names and placements.
+  PDF page has the `xl` crop size but contains Adobe's no-PDF-content notice.
+  The test checks all five names and placements, then compares an exact multiset
+  of 104 live story texts against independent qpdf/Node ATE extraction. It keeps
+  paragraph breaks, blank lines and duplicate text occurrences; three orphan
+  stories and 61 undo records are not active artwork. The reusable extractor is
+  `node scripts/inspect-ai-live-text.mjs INPUT.ai OUTPUT.json [POPPLER-TEXT.html]`.
 
 The test removes every PDF page's `Contents`, confirms identical editing data,
 and compares the resulting native geometry, paint and artboards with the
@@ -70,3 +75,7 @@ checks native save/reopen. The generated and independent real-file checks are
 separate. Passing software checks does not establish a native Illustrator
 opening/saving session, human visual acceptance, or a new Illustrator-data
 writer roundtrip.
+
+Shared SVG type can replace the fallback only when it preserves the source
+characters and paragraph breaks exactly. Otherwise the editable ATE text stays
+available and a saved diagnostic identifies the fallback layout.

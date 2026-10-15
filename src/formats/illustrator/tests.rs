@@ -467,26 +467,104 @@ fn independent_fixture(file: &str, expected_boards: usize, needs_type: bool) {
             })
             .filter(|s| !s.trim().is_empty())
             .collect::<Vec<_>>();
-        let content = text
-            .iter()
-            .map(|t| t.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let matched = words
-            .iter()
-            .filter(|w| content.contains(w.as_str()))
-            .count();
-        let bounds=doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().filter_map(|s|if let Geom::Text(t)=&s.geom{Some(serde_json::json!({"text":t.content,"origin":t.origin,"bounds":s.world_bbox()}))}else{None}).take(8).collect::<Vec<_>>();
-        std::fs::write(path.with_extension("native-type-qualification.json"),serde_json::to_string_pretty(&serde_json::json!({"file":file,"source_story_slots":expected_stories,"native_text_objects":text.len(),"independent_pdf_words":words.len(),"words_retained_as_editable_characters":matched,"native_examples":bounds,"warnings":notes})).unwrap()).unwrap();
         assert!(
             !words.is_empty(),
-            "{file}: independent PDF text oracle is empty"
+            "{file}: independent PDF text extraction is empty"
         );
-        assert!(
-            matched * 10 >= words.len() * 9,
-            "{file}: only {matched}/{} independent PDF words survived as editable type",
-            words.len()
-        );
+        let placeholder = words
+            .join(" ")
+            .contains("File that was saved without PDF Content.");
+        let mut qualification = serde_json::json!({"file":file,"sha256":sha256,"source_story_slots":expected_stories,"native_text_objects":text.len(),"independent_pdf_words":words.len(),"pdf_is_placeholder":placeholder,"warnings":notes});
+        let bounds=doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().filter_map(|s|if let Geom::Text(t)=&s.geom{Some(serde_json::json!({"text":t.content,"origin":t.origin,"bounds":s.world_bbox()}))}else{None}).take(8).collect::<Vec<_>>();
+        qualification["native_examples"] = serde_json::json!(bounds);
+        if file == "reuters-dynamicText.ai" {
+            assert!(
+                placeholder,
+                "Reuters intentionally has no PDF artwork preview"
+            );
+            let oracle_path = path.with_extension("independent-live-text.json");
+            let output = std::process::Command::new("node")
+                .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/inspect-ai-live-text.mjs"))
+                .arg(&path)
+                .arg(&oracle_path)
+                .arg(&reference)
+                .output()
+                .expect("independent private-text check requires Node and qpdf");
+            assert!(
+                output.status.success(),
+                "independent ATE extraction failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let oracle: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&oracle_path).unwrap()).unwrap();
+            assert_eq!(oracle["sourceSha256"].as_str().unwrap(), sha256);
+            assert_eq!(oracle["expectedNativeTextObjects"], 104);
+            let live = oracle["liveStoryContent"].as_object().unwrap();
+            let multiset = |values: Vec<String>| {
+                let mut counts = std::collections::BTreeMap::new();
+                for value in values {
+                    *counts.entry(value).or_insert(0usize) += 1;
+                }
+                counts
+            };
+            let expected = multiset(
+                live.values()
+                    .map(|v| v.as_str().unwrap().to_owned())
+                    .collect(),
+            );
+            let actual = multiset(text.iter().map(|t| t.content.clone()).collect());
+            let matched = expected
+                .iter()
+                .map(|(s, n)| (*n).min(actual.get(s).copied().unwrap_or(0)))
+                .sum::<usize>();
+            let missing: Vec<_> = live
+                .iter()
+                .filter(|(_, v)| {
+                    let content = v.as_str().unwrap();
+                    actual.get(content).copied().unwrap_or(0)
+                        != expected.get(content).copied().unwrap_or(0)
+                })
+                .map(|(index, _)| index)
+                .collect();
+            qualification["source_oracle"] = "independent qpdf/Node live ATE stories".into();
+            qualification["expected_live_text_objects"] = 104.into();
+            qualification["exact_live_text_objects_retained"] = matched.into();
+            qualification["source_live_words"] = oracle["counts"]["liveWords"].clone();
+            qualification["missing_story_indices"] = serde_json::json!(missing);
+            std::fs::write(
+                path.with_extension("native-type-qualification.json"),
+                serde_json::to_string_pretty(&qualification).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(text.len(), 104, "Reuters live editable text count");
+            assert!(
+                actual == expected,
+                "Reuters exact live characters/paragraphs: retained {matched}/104 source objects; missing story indices {missing:?}"
+            );
+        } else {
+            assert!(!placeholder, "font fixture requires actual PDF artwork");
+            let content = text
+                .iter()
+                .map(|t| t.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let matched = words
+                .iter()
+                .filter(|w| content.contains(w.as_str()))
+                .count();
+            qualification["source_oracle"] = "independent Poppler PDF artwork words".into();
+            qualification["words_retained_as_editable_characters"] = matched.into();
+            std::fs::write(
+                path.with_extension("native-type-qualification.json"),
+                serde_json::to_string_pretty(&qualification).unwrap(),
+            )
+            .unwrap();
+            assert!(
+                matched * 10 >= words.len() * 9,
+                "{file}: only {matched}/{} independent PDF words survived as editable type",
+                words.len()
+            );
+        }
     }
     let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
     assert!(
