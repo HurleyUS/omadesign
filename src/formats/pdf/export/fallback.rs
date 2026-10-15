@@ -170,6 +170,8 @@ fn needs_pixels(layer: &Layer) -> bool {
         })
 }
 
+/// Identify gradient kinds without a PDF shading equivalent.
+/// Args: gradient. Returns true when native appearance fallback is required.
 fn unsupported_gradient(g: &Gradient) -> bool {
     !matches!(g.kind, GradientKind::Linear | GradientKind::Radial)
 }

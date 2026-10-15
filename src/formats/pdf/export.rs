@@ -139,6 +139,8 @@ impl Scene {
             vec![Object::Name(name.into_bytes())],
         ));
     }
+    /// Encode the current content stream.
+    /// Returns PDF drawing bytes or an encoding error.
     fn encode(&self) -> Result<Vec<u8>, String> {
         Content {
             operations: self.ops.clone(),
@@ -196,6 +198,8 @@ impl Writer {
         }
         Ok(())
     }
+    /// Paint one layer or mask source.
+    /// Args: document, layer, bounds, output, depth and mask mode. Returns any export error.
     fn layer(
         &mut self,
         doc: &Document,
@@ -316,6 +320,8 @@ impl Writer {
         }
         Ok(())
     }
+    /// Paint one fill or stroke as vector content.
+    /// Args: object, stroke selection, bounds and output. Returns any paint encoding error.
     fn paint(
         &mut self,
         shape: &Shape,
@@ -587,6 +593,8 @@ impl Writer {
         }
         Ok(id)
     }
+    /// Wrap artwork in one soft mask while preserving isolation.
+    /// Args: artwork form, mask form, mask mode and bounds. Returns the masked form.
     fn masked(
         &mut self,
         id: ObjectId,
@@ -608,17 +616,7 @@ impl Writer {
         let mut scene = Scene::default();
         scene.invoke("gs", "ExtGState", state);
         scene.invoke("Do", "XObject", id);
-        let wrapper = self.form(scene, bounds, true)?;
-        if !isolated {
-            self.pdf
-                .get_object_mut(wrapper)
-                .map_err(|e| e.to_string())?
-                .as_stream_mut()
-                .map_err(|e| e.to_string())?
-                .dict
-                .remove(b"Group");
-        }
-        Ok(wrapper)
+        self.form(scene, bounds, isolated)
     }
     fn state(&mut self, fill: u8, stroke: u8, blend: Blend) -> ObjectId {
         let key = (fill, stroke, blend_name(blend).to_string());
@@ -659,6 +657,8 @@ impl Writer {
     }
 }
 
+/// Check native RGBA buffer dimensions.
+/// Args: pixels. Returns an error for empty, overflowing or inconsistent buffers.
 fn validate_pixels(pixels: &Pixels) -> Result<(), String> {
     if pixels.w == 0
         || pixels.h == 0
@@ -671,9 +671,13 @@ fn validate_pixels(pixels: &Pixels) -> Result<(), String> {
     }
     Ok(())
 }
+/// Append an affine transform.
+/// Args: output operations and transform. Returns no value.
 fn matrix(ops: &mut Vec<Operation>, t: tiny_skia::Transform) {
     op(ops, "cm", &[t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]);
 }
+/// Place a PDF image in native pixel coordinates.
+/// Args: output, transform and image dimensions. Returns no value.
 fn image_matrix(ops: &mut Vec<Operation>, t: tiny_skia::Transform, w: u32, h: u32) {
     let (w, h) = (w as f32, h as f32);
     op(
@@ -689,6 +693,8 @@ fn image_matrix(ops: &mut Vec<Operation>, t: tiny_skia::Transform, w: u32, h: u3
         ],
     );
 }
+/// Rotate a paint coordinate system around its object.
+/// Args: output, center and radians. Returns no value.
 fn rotate_matrix(ops: &mut Vec<Operation>, center: Pt, rotation: f32) {
     if rotation.abs() > 1e-8 {
         matrix(
@@ -697,6 +703,8 @@ fn rotate_matrix(ops: &mut Vec<Operation>, center: Pt, rotation: f32) {
         );
     }
 }
+/// Merge disjoint resource names.
+/// Args: destination and source dictionaries. Returns no value.
 fn merge_resources(out: &mut Dictionary, other: Dictionary) {
     for (category, values) in other {
         if let Ok(values) = values.as_dict() {
@@ -711,6 +719,8 @@ fn merge_resources(out: &mut Dictionary, other: Dictionary) {
         }
     }
 }
+/// Write native stroke parameters.
+/// Args: output and object. Returns no value.
 fn stroke_style(ops: &mut Vec<Operation>, shape: &Shape) {
     if let Some(s) = &shape.style.stroke {
         op(ops, "w", &[s.width]);
@@ -745,6 +755,8 @@ fn stroke_style(ops: &mut Vec<Operation>, shape: &Shape) {
         ));
     }
 }
+/// Write an outlined stroke as exact vector segments.
+/// Args: output and Skia path. Returns no value.
 fn skia_path(ops: &mut Vec<Operation>, path: &tiny_skia::Path) {
     let mut last = Pt::ZERO;
     for segment in path.segments() {
