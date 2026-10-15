@@ -153,7 +153,9 @@ fn apply(studio: &mut Studio, after: [f32; 5], changed: [bool; 5]) -> bool {
         }
         studio.commit_motion(motion);
     } else {
-        let commands = shapes
+        let resize_frames = changed[..4].iter().any(|changed| *changed)
+            && shapes.iter().any(|(_, shape)| shape.layout.frame);
+        let mut commands: Vec<Cmd> = shapes
             .into_iter()
             .map(|(layer, shape)| {
                 let bounds = shape.geom.bbox();
@@ -185,6 +187,40 @@ fn apply(studio: &mut Studio, after: [f32; 5], changed: [bool; 5]) -> bool {
                 }
             })
             .collect();
+        if resize_frames {
+            let mut resized = studio.doc.layout_snapshot();
+            let original: Vec<_> = resized
+                .layers
+                .iter()
+                .enumerate()
+                .flat_map(|(layer, row)| {
+                    row.kind
+                        .shapes()
+                        .unwrap_or(&[])
+                        .iter()
+                        .map(move |shape| (layer, shape.id, shape.geom.clone()))
+                })
+                .collect();
+            for command in &commands {
+                crate::document::apply(&mut resized, command);
+            }
+            crate::layout::apply_resize(&mut resized, &original, &studio.selection);
+            commands = studio
+                .doc
+                .layers
+                .iter()
+                .zip(&resized.layers)
+                .enumerate()
+                .filter_map(|(layer, (before, after))| {
+                    let (before, after) = (before.kind.shapes()?, after.kind.shapes()?);
+                    (before != after).then(|| Cmd::SetVectorShapes {
+                        layer,
+                        before: before.to_vec(),
+                        after: after.to_vec(),
+                    })
+                })
+                .collect();
+        }
         studio.commit(Cmd::Batch(commands));
     }
     true
@@ -231,8 +267,17 @@ mod tests {
             .map(|s| s.geom.bbox().min)
             .collect();
         assert_eq!(positions, vec![Pt::new(20.0, 50.0), Pt::new(220.0, 50.0)]);
-        let encoded = crate::project::encode(&studio.doc).unwrap();
-        let reopened = crate::project::decode(&encoded).unwrap();
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".artifacts")
+            .join(format!("shared-ui-document-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("fields.oma");
+        crate::project::save_to(&studio.doc, &path).unwrap();
+        let reopened = crate::project::load_from(&path).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(raw.get("doc").is_some());
+        std::fs::remove_dir_all(root).unwrap();
         assert_eq!(
             reopened.layers[0].kind.shapes().unwrap()[1].geom.bbox().min,
             Pt::new(220.0, 50.0)
@@ -259,6 +304,47 @@ mod tests {
             [false, true, false, false, false]
         ));
         assert_eq!(encoded, serde_json::to_vec(&studio.doc).unwrap());
+    }
+    #[test]
+    fn shared_frame_resize_keeps_child_constraints_and_one_batch_undo() {
+        let mut studio = fixture();
+        let frames = studio.selection.clone();
+        let mut children = Vec::new();
+        for (layer, id) in frames {
+            let frame = studio.doc.find_shape_mut(layer, id).unwrap();
+            frame.layout.frame = true;
+            let min = frame.geom.bbox().min;
+            let mut child = crate::document::Shape::new(
+                crate::geom::Geom::Rect {
+                    origin: min + Pt::new(10.0, 10.0),
+                    size: Pt::new(20.0, 20.0),
+                    radius: 0.0,
+                },
+                Default::default(),
+            );
+            child.layout.parent = Some(id);
+            child.layout.constraint_x = crate::layout::Constraint::Stretch;
+            children.push(child.id);
+            studio.doc.layers[layer]
+                .kind
+                .shapes_mut()
+                .unwrap()
+                .push(child);
+        }
+        let before = crate::project::encode(&studio.doc).unwrap();
+        assert!(apply(
+            &mut studio,
+            [0.0, 0.0, 200.0, 80.0, 0.0],
+            [false, false, true, false, false]
+        ));
+        for id in children {
+            assert_eq!(
+                studio.doc.find_shape(0, id).unwrap().geom.bbox().width(),
+                120.0
+            );
+        }
+        studio.undo();
+        assert_eq!(before, crate::project::encode(&studio.doc).unwrap());
     }
 }
 
@@ -299,7 +385,8 @@ mod idle_render_tests {
                 let before = crate::project::encode(&studio.doc).unwrap();
                 let ctx = eframe::egui::Context::default();
                 for _ in 0..3 {
-                    let _ = ctx.run_ui(
+                    let _ = crate::ui::shared_fields_tests::headless(
+                        &ctx,
                         eframe::egui::RawInput {
                             screen_rect: Some(eframe::egui::Rect::from_min_size(
                                 eframe::egui::Pos2::ZERO,
