@@ -7,6 +7,7 @@ const PANELS: &[(&str, &str)] = &[
     ("properties", "Properties"),
     ("layers", "Layers"),
     ("timeline", "Timeline"),
+    ("hierarchy", "Layout hierarchy"),
 ];
 
 /// Draw task panels around the document canvas.
@@ -22,7 +23,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
         ),
         (
             "Layout",
-            Workspace::preset(&[("properties", Place::Right), ("layers", Place::Left)]),
+            Workspace::preset(&[("properties", Place::Right), ("hierarchy", Place::Left)]),
         ),
         (
             "Pixel",
@@ -40,7 +41,29 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
     for (_, layout) in &mut book.tasks {
         layout.normalize(&PANELS.iter().map(|p| p.0).collect::<Vec<_>>());
     }
+    let persona_key = egui::Id::new("oma-workspace-persona");
+    let persona_name = match studio.persona {
+        crate::tools::Persona::Layout => "Layout",
+        crate::tools::Persona::Pixel => "Pixel",
+        crate::tools::Persona::Motion => "Motion",
+        _ => "Design",
+    };
+    let previous_persona: Option<String> = ui.ctx().data_mut(|data| data.get_temp(persona_key));
+    if previous_persona.as_deref() != Some(persona_name) {
+        book.active = persona_name.into();
+    }
     book.toolbar(ui, &presets, PANELS);
+    let active_persona = match book.active.as_str() {
+        "Layout" => crate::tools::Persona::Layout,
+        "Pixel" => crate::tools::Persona::Pixel,
+        "Motion" => crate::tools::Persona::Motion,
+        _ => crate::tools::Persona::Design,
+    };
+    if studio.persona != active_persona {
+        studio.switch_persona(active_persona);
+    }
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(persona_key, book.active.clone()));
     let active = book.active.clone();
     let center =
         book.tasks
@@ -50,6 +73,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                 "properties" => super::studios::inspector_content(ui, studio),
                 "layers" => super::studios::layers_content(ui, studio),
                 "timeline" => super::timeline::content(ui, studio),
+                "hierarchy" => super::layout::hierarchy_content(ui, studio),
                 _ => {}
             });
     ui.scope_builder(egui::UiBuilder::new().max_rect(center), |ui| {
@@ -159,5 +183,55 @@ mod persistence_tests {
         assert_eq!(before, crate::project::encode(&studio.doc).unwrap());
         assert!(!studio.dirty);
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod persona_tests {
+    use super::*;
+    #[test]
+    fn shared_workspaces_follow_personas_and_preserve_layout_node_routes() {
+        let ctx = egui::Context::default();
+        let mut studio = Studio::new();
+        studio.show_welcome = false;
+        for (persona, name) in [
+            (crate::tools::Persona::Layout, "Layout"),
+            (crate::tools::Persona::Motion, "Motion"),
+            (crate::tools::Persona::Pixel, "Pixel"),
+        ] {
+            studio.persona = persona;
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| show(ui, &mut studio),
+            );
+            assert_eq!(studio.panel_workspaces.active, name);
+            assert_eq!(studio.persona, persona);
+            if name == "Layout" {
+                assert!(
+                    studio.panel_workspaces.tasks[name]
+                        .groups
+                        .iter()
+                        .any(|group| group.panels.iter().any(|panel| panel == "hierarchy"))
+                );
+            }
+        }
+        studio.panel_workspaces.active = "Design".into();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ui| show(ui, &mut studio),
+        );
+        assert_eq!(studio.persona, crate::tools::Persona::Design);
     }
 }
