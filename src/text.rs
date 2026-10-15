@@ -518,6 +518,63 @@ fn buzz_shape(_bytes: &[u8], run: &TypeRun) -> Option<Vec<Vec<Pt>>> {
     Some(compose(run).iter().flat_map(|line|line.glyphs.iter().flat_map(|g|glyph_contours(run,g))).collect())
 }
 
+/// Keep native glyph curves for painting ordinary editable text.
+/// Args: the composed text run. Returns its exact path, or no path for other layout routes.
+pub(crate) fn outline_path(run: &TypeRun) -> Option<tiny_skia::Path> {
+    use ab_glyph::OutlineCurve;
+    if run.content.is_empty() || run.frame.is_some() || run.on_path.is_some() || run.svg_text.is_some() {
+        return None;
+    }
+    if run.contours != shape(run) {
+        return None;
+    }
+    let mut path = tiny_skia::PathBuilder::new();
+    for line in compose(run).iter() {
+        for glyph in &line.glyphs {
+            let Some((outline, scale)) = composer::glyph_outline(run, glyph) else {
+                continue;
+            };
+            let map = |p: ab_glyph::Point| {
+                run.map_point(Pt::new(
+                    run.origin.x + glyph.x + p.x * scale * glyph.hscale,
+                    run.origin.y + glyph.y - p.y * scale * glyph.vscale,
+                ))
+            };
+            let mut last = None;
+            for curve in &outline.curves {
+                let start = match *curve {
+                    OutlineCurve::Line(a, _) | OutlineCurve::Quad(a, _, _) | OutlineCurve::Cubic(a, _, _, _) => a,
+                };
+                if last != Some(start) {
+                    if last.is_some() { path.close(); }
+                    let a = map(start);
+                    path.move_to(a.x, a.y);
+                }
+                let end = match *curve {
+                    OutlineCurve::Line(_, b) | OutlineCurve::Quad(_, _, b) | OutlineCurve::Cubic(_, _, _, b) => b,
+                };
+                match *curve {
+                    OutlineCurve::Line(_, b) => {
+                        let b = map(b);
+                        path.line_to(b.x, b.y);
+                    }
+                    OutlineCurve::Quad(_, b, c) => {
+                        let (b, c) = (map(b), map(c));
+                        path.quad_to(b.x, b.y, c.x, c.y);
+                    }
+                    OutlineCurve::Cubic(_, b, c, d) => {
+                        let (b, c, d) = (map(b), map(c), map(d));
+                        path.cubic_to(b.x, b.y, c.x, c.y, d.x, d.y);
+                    }
+                }
+                last = Some(end);
+            }
+            if last.is_some() { path.close(); }
+        }
+    }
+    path.finish()
+}
+
 mod composer;
 pub mod svg_type;
 mod edit;

@@ -1134,6 +1134,10 @@ impl Geom {
                 t.leading *= sy;
                 t.scale_character_metrics(sy);
                 if (sx-sy).abs()>0.001 && sy.abs()>0.001 {t.scale_character_widths(sx/sy);}
+                if t.on_path.is_none() && t.svg_text.is_none() {
+                    t.contours = crate::text::shape(t);
+                    return;
+                }
                 for c in &mut t.contours {
                     for p in c {
                         *p = src.map_pt(*p, dst);
