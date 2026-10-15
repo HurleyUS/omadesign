@@ -9,6 +9,7 @@ use lopdf::{Dictionary, Document as Pdf, Object, ObjectId, Stream, dictionary};
 use std::collections::{BTreeSet, HashMap};
 
 mod fallback;
+mod text;
 
 /// Write editable PDF artwork.
 /// Args: the source document. Returns PDF 1.7 bytes and any appearance fallback notes.
@@ -22,6 +23,7 @@ pub fn write(document: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
         states: HashMap::new(),
         images: HashMap::new(),
         properties: Dictionary::new(),
+        fonts: text::Fonts::default(),
     };
     let page_tree = writer.pdf.new_object_id();
     let mut ocgs = vec![];
@@ -103,6 +105,7 @@ pub fn write(document: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
     let info = writer.pdf.add_object(dictionary! {"Title"=>lopdf::text_string(&document.name), "Producer"=>lopdf::text_string("Omadesign")});
     writer.pdf.trailer.set("Root", catalog);
     writer.pdf.trailer.set("Info", info);
+    writer.fonts.finish(&mut writer.pdf)?;
     writer.pdf.compress();
     let mut bytes = Vec::new();
     writer
@@ -156,6 +159,7 @@ struct Writer {
     states: HashMap<(u8, u8, String), ObjectId>,
     images: HashMap<u64, ObjectId>,
     properties: Dictionary,
+    fonts: text::Fonts,
 }
 impl Writer {
     /// Encode a bounded transparency form.
@@ -332,7 +336,13 @@ impl Writer {
     /// Args: object, page bounds and output. Returns an error for invalid gradient data.
     fn shape(&mut self, shape: &Shape, bounds: Bounds, out: &mut Scene) -> Result<(), String> {
         if matches!(shape.geom, Geom::Text(_)) {
-            self.warnings.insert("PDF text exports as vector outlines, preserving appearance but not live text editing.".into());
+            match text::write(&mut self.pdf, &mut self.fonts, shape, out) {
+                Ok(()) => return Ok(()),
+                Err(reason) => {
+                    self.warnings
+                        .insert(format!("PDF text uses vector outlines because {reason}."));
+                }
+            }
         }
         if !shape.style.fill.is_none() {
             op(&mut out.ops, "q", &[]);
