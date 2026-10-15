@@ -161,31 +161,18 @@ fn collect(
     preserve: bool,
 ) -> Option<TextNode> {
     if node.is_text() {
-        let text = node.text().unwrap_or("");
-        let text = if preserve {
-            text.replace(['\n', '\r', '\t'], " ")
-        } else {
-            text.split_whitespace().collect::<Vec<_>>().join(" ")
-        };
-        let text = if !preserve {
-            let leading = text.len() > 0
-                && node.text().unwrap_or("").starts_with(char::is_whitespace)
-                && !content.is_empty()
-                && !content.ends_with(' ');
-            let trailing = node.text().unwrap_or("").ends_with(char::is_whitespace);
-            format!(
-                "{}{}{}",
-                if leading { " " } else { "" },
-                text,
-                if trailing && !text.is_empty() {
-                    " "
-                } else {
-                    ""
-                }
-            )
-        } else {
-            text
-        };
+        let raw = node.text().unwrap_or("").replace(['\n', '\r', '\t'], " ");
+        let mut text = String::new();
+        for c in raw.chars() {
+            let previous = text
+                .chars()
+                .last()
+                .or_else(|| content.chars().last())
+                .unwrap_or(' ');
+            if preserve || c != ' ' || previous != ' ' {
+                text.push(c);
+            }
+        }
         let count = text.chars().count();
         content.push_str(&text);
         return Some(TextNode::Characters { count });
@@ -312,7 +299,38 @@ pub(crate) fn capture(
 ) -> (SvgText, String) {
     let sheet = sheet(xml);
     let mut content = String::new();
-    let mut root = collect(node, &sheet, &mut content, false).unwrap();
+    let preserve = node
+        .ancestors()
+        .find_map(|n| n.attribute((roxmltree::NS_XML_URI, "space")))
+        .is_some_and(|v| v == "preserve");
+    let mut root = collect(node, &sheet, &mut content, preserve).unwrap();
+    fn trim_last(node: &mut TextNode, preserve: bool) -> Option<bool> {
+        match node {
+            TextNode::Characters { count } if *count > 0 => {
+                if !preserve {
+                    *count -= 1;
+                }
+                Some(!preserve)
+            }
+            TextNode::Characters { .. } => None,
+            TextNode::Element {
+                attributes,
+                children,
+                ..
+            } => {
+                let preserve = attributes
+                    .get("xml:space")
+                    .map_or(preserve, |v| v == "preserve");
+                children
+                    .iter_mut()
+                    .rev()
+                    .find_map(|child| trim_last(child, preserve))
+            }
+        }
+    }
+    if content.ends_with(' ') && trim_last(&mut root, preserve) == Some(true) {
+        content.pop();
+    }
     if let Some(saved) = node
         .attribute("data-oma-flow-source")
         .and_then(|value| serde_json::from_str::<FlowSource>(value).ok())
@@ -322,15 +340,20 @@ pub(crate) fn capture(
     }
     if let TextNode::Element { attributes, .. } = &mut root {
         for property in PROPERTIES {
-            if attributes.contains_key(*property) {
+            if attributes
+                .get(*property)
+                .is_some_and(|value| !matches!(value.as_str(), "inherit" | "unset"))
+            {
                 continue;
             }
             for ancestor in node.ancestors().skip(1).filter(|n| n.is_element()) {
                 if let Some(value) =
                     crate::formats::svg::cascaded_property(ancestor, &sheet, property)
                 {
-                    attributes.insert((*property).into(), value);
-                    break;
+                    if !matches!(value.as_str(), "inherit" | "unset") {
+                        attributes.insert((*property).into(), value);
+                        break;
+                    }
                 }
             }
         }
@@ -549,7 +572,9 @@ fn write_nodes(
                 {
                     continue;
                 }
-                let value = if key == "font-family"
+                let value = if key == "xml:space" {
+                    "preserve".into()
+                } else if key == "font-family"
                     && root
                     && run
                         .svg_text
