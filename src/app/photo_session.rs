@@ -262,6 +262,11 @@ impl PhotoSession {
         &self.import_errors
     }
 
+    #[cfg(test)]
+    pub(crate) fn import_token(&self,path:&Path)->Option<crate::formats::raw::Cancellation> {
+        self.import_jobs.iter().find(|job|job.path==path).map(|job|job.cancel.clone())
+    }
+
     pub fn queued_imports(&self) -> usize {
         self.import_queue.len() + self.import_jobs.len()
     }

@@ -50,11 +50,16 @@ fn active_native_interpolation_cancels_promptly_then_next_decode_succeeds() {
         std::thread::sleep(Duration::from_millis(1));
     }
     let phase = token.native_progress();
+    let active = token.native_active();
     let cancelled = Instant::now();
     token.cancel();
     let result = rx.recv().unwrap();
     let latency = cancelled.elapsed();
     worker.join().unwrap();
+    assert!(
+        active,
+        "cancellation must be requested during the native call"
+    );
     assert_eq!(
         phase,
         1 << 11,
@@ -68,6 +73,93 @@ fn active_native_interpolation_cancels_promptly_then_next_decode_succeeds() {
     let next = decode(DNG).unwrap();
     assert_eq!((next.width, next.height), (64, 48));
     eprintln!("active native AHD cancellation: {latency:?}; immediate next decode 64x48 succeeded");
+}
+
+#[test]
+#[ignore = "pinned real camera source; scheduled with the strict corpus and shared heavy lock"]
+fn real_camera_active_cancel_keeps_edits_and_immediately_opens_next() {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+    fn hash(path: &std::path::Path) -> String {
+        let mut file = std::fs::File::open(path).unwrap();
+        let mut digest = Sha256::new();
+        let mut bytes = [0u8; 65536];
+        loop {
+            let n = file.read(&mut bytes).unwrap();
+            if n == 0 {
+                break;
+            }
+            digest.update(&bytes[..n]);
+        }
+        format!("{:x}", digest.finalize())
+    }
+    let source =
+        std::path::PathBuf::from(std::env::var_os("OMA_RAW_FIXTURE").expect("OMA_RAW_FIXTURE"));
+    let expected = std::env::var("OMA_RAW_SOURCE_SHA256").expect("OMA_RAW_SOURCE_SHA256");
+    assert_eq!(expected.len(), 64);
+    assert_eq!(hash(&source), expected);
+    let photo = crate::photo::PhotoImage::load(&source).unwrap();
+    let metadata = photo.raw.as_ref().unwrap().metadata.clone();
+    let original = photo.raw.as_ref().unwrap().pixels.clone();
+    let mut session = crate::app::PhotoSession::new();
+    session.import_photo(photo);
+    session.images[0].develop.exposure = 0.625;
+    let current = session.images[0].develop.clone();
+    session.import_file(&source);
+    let first = session.import_token(&source).expect("active import owner");
+    let opening = Instant::now();
+    while !(first.native_active() && first.native_progress() >= 8)
+        && opening.elapsed() < Duration::from_secs(30)
+    {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let active = first.native_active();
+    let stage = first.native_progress();
+    let cancelled = Instant::now();
+    session.cancel_imports();
+    let cleared = !session.is_loading();
+    session.import_file(&source);
+    let next = session
+        .import_token(&source)
+        .expect("next import starts immediately");
+    while first.native_active() {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let native_stop = cancelled.elapsed();
+    let ctx = eframe::egui::Context::default();
+    while session.is_loading() && cancelled.elapsed() < Duration::from_secs(60) {
+        session.poll(&ctx);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let next_open = cancelled.elapsed();
+    let source_after = hash(&source);
+    let source_kept =
+        std::sync::Arc::ptr_eq(&session.images[0].raw.as_ref().unwrap().pixels, &original);
+    let kept = session.images[0].develop == current && source_kept;
+    let result = serde_json::json!({"source_before_sha256":expected,"source_after_sha256":source_after,"metadata":metadata,"native_active_at_cancel":active,"native_progress_at_cancel":stage,"native_stop_ms":native_stop.as_secs_f64()*1000.,"next_open_ms":next_open.as_secs_f64()*1000.,"current_edits_and_source_kept":kept,"slots_cleared_immediately":cleared,"next_job_not_cancelled":!next.is_cancelled(),"loaded_photos":session.images.len(),"errors":session.import_errors(),"proof":"headless actual PhotoSession import/cancel/next-open; no native window/device/physical proof"});
+    if let Some(path) = std::env::var_os("OMA_RAW_CANCEL_RECEIPT") {
+        use std::io::Write;
+        let path = std::path::PathBuf::from(path);
+        assert!(path.is_absolute() && path.starts_with("/home"));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .unwrap();
+        writeln!(file, "{result}").unwrap();
+    }
+    eprintln!("RAW_CANCEL {result}");
+    assert!(active && stage >= 8, "real native stage not observed");
+    assert!(
+        native_stop < Duration::from_millis(500),
+        "active native stop took {native_stop:?}"
+    );
+    assert!(cleared && kept && !next.is_cancelled());
+    assert!(!session.is_loading());
+    assert_eq!(session.images.len(), 2, "stale result must never publish");
+    assert!(session.import_errors().is_empty());
+    assert_eq!(hash(&source), expected);
 }
 
 #[test]

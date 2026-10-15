@@ -227,6 +227,7 @@ fn native_decode(
     // SAFETY: The borrowed byte buffer remains alive through synchronous decode.
     // The C++ adapter validates input/layout, catches exceptions and writes only
     // within the exactly matching repr(C) output. It never retains input bytes.
+    let active = cancel.native_activity();
     let result = unsafe {
         oma_raw_decode(
             bytes.as_ptr(),
@@ -241,6 +242,7 @@ fn native_decode(
             i32::from(sensor_only),
         )
     };
+    drop(active);
     cancel.check()?;
     if let Some(error) = admission
         .error
