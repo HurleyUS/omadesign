@@ -240,7 +240,7 @@ fn plugin_pixel_filter_preserves_alpha_and_is_undoable() {
     let command = Cmd::Batch(out.commands);
     document::apply(&mut doc, &command);
     let after = &doc.layers[0].kind.pixels().unwrap().data;
-    assert_ne!(after, &before);
+    assert_ne!(after.as_slice(), before.as_slice());
     assert_eq!((after[3], after[7]), (128, 0));
     let mut history = document::History::default();
     history.push(command);

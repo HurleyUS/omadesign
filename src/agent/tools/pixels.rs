@@ -46,7 +46,7 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                     paint::fill_poly_mask(w, h, &pts)
                 }
                 "wand" => paint::wand_mask(
-                    &pixels.to_pixmap().ok_or("Invalid pixels")?,
+                    &*pixels.to_pixmap().ok_or("Invalid pixels")?,
                     Pt::new(x, y),
                     number(args, "tolerance", 32.)?.clamp(0., 510.),
                 ),

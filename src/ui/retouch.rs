@@ -1613,7 +1613,7 @@ mod tests {
         let image = studio.doc.layers[0].kind.pixels_mut().unwrap();
         for y in 0..16usize {
             for x in 0..16usize {
-                image.data[(y * 32 + x) * 4..(y * 32 + x) * 4 + 4]
+                image.bytes_mut().unwrap()[(y * 32 + x) * 4..(y * 32 + x) * 4 + 4]
                     .copy_from_slice(&[60, 80, 100, 255]);
             }
         }

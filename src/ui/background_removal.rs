@@ -270,7 +270,7 @@ fn commit(studio: &mut Studio, s: &Session) -> Result<(), String> {
     }
     let layer = &studio.doc.layers[i];
     if layer.kind.pixels().unwrap().data.as_slice() != s.source.rgba.as_slice()
-        || layer.mask.as_ref().map(|m| &m.data) != s.source.existing_mask.as_deref()
+        || layer.mask.as_ref().map(|m| m.data.as_slice()) != s.source.existing_mask.as_deref().map(Vec::as_slice)
     {
         return Err("The source pixels or mask changed. Open Remove Background again.".into());
     }

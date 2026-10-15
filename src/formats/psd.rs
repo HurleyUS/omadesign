@@ -604,12 +604,12 @@ mod tests {
                 assert_eq!(old.blend, new.blend);
                 assert_eq!(old.is_group, new.is_group);
                 assert_eq!(
-                    old.kind.pixels().map(|p| &p.data.as_slice()),
-                    new.kind.pixels().map(|p| &p.data.as_slice())
+                    old.kind.pixels().map(|p| p.data.as_slice()),
+                    new.kind.pixels().map(|p| p.data.as_slice())
                 );
                 assert_eq!(
-                    old.mask.as_ref().map(|p| &p.data.as_slice()),
-                    new.mask.as_ref().map(|p| &p.data.as_slice())
+                    old.mask.as_ref().map(|p| p.data.as_slice()),
+                    new.mask.as_ref().map(|p| p.data.as_slice())
                 );
             }
             assert_eq!(loaded.layers[1].parent, Some(loaded.layers[2].id));

@@ -84,7 +84,7 @@ pub(crate) fn open_with_progress(
         let data = if bytes.starts_with(&[0x1f, 0x8b]) {
             use std::io::Read;
             let mut output = Vec::new();
-            flate2::read::GzDecoder::new(bytes.as_slice())
+            flate2::read::GzDecoder::new(bytes)
                 .take(256 * 1024 * 1024 + 1)
                 .read_to_end(&mut output)
                 .map_err(|e| format!("Invalid SVGZ: {e}"))?;
@@ -94,7 +94,7 @@ pub(crate) fn open_with_progress(
             decoded = output;
             decoded.as_slice()
         } else {
-            bytes.as_slice()
+            bytes
         };
         let svg = std::str::from_utf8(data).map_err(|e| format!("Invalid SVG text: {e}"))?;
         let (doc, notes) = crate::formats::svg::read(svg, &name)?;

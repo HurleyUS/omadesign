@@ -3,6 +3,17 @@ use crate::document::LayerKind;
 use lopdf::content::Operation;
 use lopdf::dictionary;
 
+#[test]
+fn reflected_native_image_retains_samples() {
+    let values = vec![1.25,0.1234567,-0.125,0.333333, 1001. / 65535.,0.7,0.8,0.9];
+    let pixels = Pixels::from_samples(1,2,crate::deep_color::Depth::F32,values.clone()).unwrap();
+    let layer = placed_image(pixels,Matrix::IDENTITY,&mut BTreeSet::new()).unwrap();
+    let reflected = layer.kind.pixels().unwrap();
+    assert_eq!(reflected.native.as_ref().unwrap().depth,crate::deep_color::Depth::F32);
+    assert_eq!(&reflected.samples().unwrap()[..4],&values[4..]);
+    assert_eq!(&reflected.samples().unwrap()[4..],&values[..4]);
+}
+
 fn fixture(contents: &[&[u8]], resources: Dictionary, extra: Dictionary) -> Vec<u8> {
     let mut pdf = Pdf::with_version("1.7");
     let pages = pdf.new_object_id();

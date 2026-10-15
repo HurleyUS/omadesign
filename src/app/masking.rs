@@ -1104,7 +1104,7 @@ mod tests {
             studio.layer_selection_space(0).unwrap(),
         )
         .unwrap();
-        assert_eq!(&*values, expected);
+        assert_eq!(values.as_slice(), expected.as_slice());
         values
     }
 
@@ -1114,7 +1114,7 @@ mod tests {
         let first = mapped(&studio);
         assert!(std::sync::Arc::ptr_eq(&first, &mapped(&studio)));
         // Preserve the public Cow API for callers that need an owned snapshot.
-        assert_eq!(&*studio.pixel_sel_mask(0).unwrap(), &*first);
+        assert_eq!(&*studio.pixel_sel_mask(0).unwrap(), first.as_slice());
         if let LayerKind::Raster { origin, .. } = &mut studio.doc.layers[0].kind {
             origin.x += 6.0;
         }
