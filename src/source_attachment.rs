@@ -153,4 +153,44 @@ mod tests {
         );
         assert_eq!(saved, crate::project::encode(&reopened).unwrap());
     }
+
+    #[test]
+    fn source_attachment_placement_keeps_references_through_undo_redo_and_reopen() {
+        use crate::{
+            document::{Document, Layer, Shape, Style},
+            geom::Pt,
+        };
+        let mut source = Document::new("placed", 12., 12., 72.);
+        source.layers = vec![Layer::vector("art")];
+        source.layers[0].kind.shapes_mut().unwrap().push(Shape::new(
+            crate::geom::Geom::Rect {
+                origin: Pt::ZERO,
+                size: Pt::splat(12.),
+                radius: 0.,
+            },
+            Style::default(),
+        ));
+        let attachment =
+            SourceAttachment::new("original.ai", "illustrator", vec![42, 0, 255]).unwrap();
+        let id = source.retain_source(attachment.clone());
+        source.layers[0].source_attachment = Some(id.clone());
+        let mut studio = crate::app::Studio::default();
+        studio
+            .place_brand_imported(crate::import::Imported::Document(source), Pt::splat(100.))
+            .unwrap();
+        assert_eq!(studio.doc.source(&id).unwrap(), &attachment);
+        assert!(
+            studio
+                .doc
+                .layers
+                .iter()
+                .any(|l| l.source_attachment.as_deref() == Some(&id))
+        );
+        studio.undo();
+        assert!(studio.doc.sources.is_empty());
+        studio.redo();
+        let reopened =
+            crate::project::decode(&crate::project::encode(&studio.doc).unwrap()).unwrap();
+        assert_eq!(reopened.source(&id).unwrap().bytes(), &[42, 0, 255]);
+    }
 }

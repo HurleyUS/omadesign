@@ -266,6 +266,21 @@ pub struct Node {
     pub pixel_mask: Option<Image>,
     /// Bottom to top.
     pub children: Vec<Node>,
+    pub effects: Vec<LayerEffect>,
+}
+
+/// Native layer appearance values, kept separate from the editor's effect model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerEffect {
+    pub kind: Tag,
+    pub radius: f64,
+    pub offset: f64,
+    pub angle: f64,
+    pub opacity: f64,
+    pub color: Option<crate::paint::Color>,
+    pub blend: Blend,
+    pub knockout: bool,
+    pub intensity: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -446,10 +461,40 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
         let (mask, attached_mask) = self.attached_masks(id, world)?;
         let pixel_mask = attached_mask.or(child_mask);
         self.active.remove(&id);
-        if s.objs(id, b"FiEf").iter().any(|e| s.bool(*e, b"Enab") != Some(false)) {
-            self.warn("layer effects (shadows, glows, outlines, bevels…)");
+        let effects = self.effects(id, world);
+        Ok(Some(Node { class, name, visible, locked, opacity, blend, kind, mask, pixel_mask, children, effects }))
+    }
+
+    fn effects(&mut self, id: ObjId, world: Affine) -> Vec<LayerEffect> {
+        let mut out = Vec::new();
+        for e in self.s.objs(id, b"FiEf") {
+            if self.s.bool(e, b"Enab") == Some(false) { continue; }
+            let kind = self.s.class(e).unwrap_or(Tag(0));
+            if !matches!(&kind.0.to_be_bytes(), b"Shad" | b"Gaus" | b"ColO" | b"OutG") {
+                self.warn(format!("unsupported layer effect {kind}"));
+                continue;
+            }
+            let scale = if self.s.bool(e, b"SclO") == Some(true) { world.scale() } else { 1.0 };
+            let color = self.s.obj(e, b"Colr").and_then(|c| paint::color(self, c));
+            if kind != Tag::of(b"Gaus") && color.is_none() { self.warn(format!("layer effect {kind} without a supported color")); continue; }
+            let blend = self.s.enumeration(e, b"BlnM").and_then(|(id,v)| Blend::from_enum(id,v)).unwrap_or(Blend::Normal);
+            if self.s.f64(e,b"Comp").is_some_and(|v|v.abs()>1e-6) {
+                self.warn("layer effect intensity profile (uses the standard editor profile)");
+            }
+            let finite = |value: Option<f64>, default: f64| value.filter(|v|v.is_finite()).unwrap_or(default);
+            out.push(LayerEffect {
+                kind,
+                radius: (finite(self.s.f64(e,b"Radi"),0.0)*scale).clamp(0.0,100_000.0),
+                offset: (finite(self.s.f64(e,b"Offs"),0.0)*scale).clamp(-100_000.0,100_000.0),
+                angle: finite(self.s.f64(e,b"Angl"),0.0),
+                opacity: finite(self.s.f64(e,b"Opac"),1.0).clamp(0.0,1.0),
+                color, blend,
+                knockout: self.s.bool(e,b"Knck").unwrap_or(true),
+                intensity: finite(self.s.f64(e,b"Comp"),0.0).clamp(0.0,1.0),
+            });
+            if self.s.bool(e,b"PrAl") == Some(true) { self.warn("Gaussian effect preserve-alpha option (uses standard blur)"); }
         }
-        Ok(Some(Node { class, name, visible, locked, opacity, blend, kind, mask, pixel_mask, children }))
+        out
     }
 
     fn kind(&mut self, id: ObjId, class: Tag, world: Affine, parent: Affine) -> Result<Kind, Error> {
