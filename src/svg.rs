@@ -1307,6 +1307,44 @@ fn write_shape_tree(
     );
 }
 
+/// Export current pose overrides for source filter evaluation.
+/// Args: editable document and evaluated object poses. Returns vector SVG at this frame.
+pub(crate) fn export_posed(
+    doc: &Document,
+    poses: &std::collections::HashMap<u64, crate::motion::Pose>,
+) -> Result<String, String> {
+    let source = export_inner(doc, false, true)?;
+    let xml = roxmltree::Document::parse(&source).map_err(|e| e.to_string())?;
+    let mut edits = Vec::new();
+    for node in xml.descendants().filter(|n| n.is_element()) {
+        let Some(id) = node
+            .attribute("id")
+            .and_then(|id| id.strip_prefix("oma-"))
+            .and_then(|id| id.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let Some(pose) = poses.get(&id) else {
+            continue;
+        };
+        let Some(shape) = doc.layers.iter().find_map(|l| l.find(id)) else {
+            continue;
+        };
+        let transform = pose.to_skia(shape.world_bbox().center());
+        edits.push((
+            node.range().start,
+            format!("<g transform=\"{}\">", crate::svg_source::matrix(transform)),
+        ));
+        edits.push((node.range().end, "</g>".to_string()));
+    }
+    edits.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    let mut output = source;
+    for (at, text) in edits {
+        output.insert_str(at, &text);
+    }
+    Ok(output)
+}
+
 fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<String, String> {
     doc.validate_hierarchy()?;
     let mut body = String::new();

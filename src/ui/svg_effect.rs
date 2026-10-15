@@ -2,8 +2,8 @@
 use eframe::egui::{self, Ui};
 
 pub(super) fn show(ui: &mut Ui, studio: &mut crate::app::Studio) {
-    let Some(index) = std::iter::once(studio.active)
-        .chain(studio.doc.layer_ancestors(studio.active))
+    let Some(index) = std::iter::once(studio.active_layer.unwrap_or(0))
+        .chain(studio.doc.layer_ancestors(studio.active_layer.unwrap_or(0)))
         .find(|&i| {
             studio
                 .doc
