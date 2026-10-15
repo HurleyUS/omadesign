@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Inspect a publishing export independently with Node and libxml2.
- * Args: output IDML; optional --master-source IDML --native OMA. Returns a JSON receipt or rejects broken references and payloads.
+ * Args: output IDML; optional --master-source IDML --native OMA, --master-image FILE --unavailable-source DIR. Returns a JSON receipt or rejects broken references and payloads.
  */
 import fs from 'node:fs';
 import zlib from 'node:zlib';
@@ -46,10 +46,18 @@ function xpath(text, query) {
 }
 const attrs = (text, query) => [...xpath(text, query).matchAll(/="([^"]+)"/g)].map(m => m[1].replaceAll('&amp;', '&'));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+const literal = value => value.includes("'") ? `concat(${value.split("'").map(p => `'${p}'`).join(`,"'",`)})` : `'${value}'`;
+const inlineBytes = (xml, uri) => {
+  const data = xpath(xml, `string(//Link[@LinkResourceURI=${literal(uri)}]/ancestor::*[self::Image or self::PDF or self::EPS][1]/Properties/Contents)`).replace(/\s/g, '');
+  return data ? Buffer.from(data, 'base64') : undefined;
+};
 const file = process.argv[2], args = process.argv.slice(3);
 const option = name => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
 const sourceFile = option('--master-source'), nativeFile = option('--native');
+const externalImage = option('--master-image'), unavailableSource = option('--unavailable-source');
 assert.equal(Boolean(sourceFile), Boolean(nativeFile), 'master inspection needs both source and native project');
+assert.equal(Boolean(externalImage), Boolean(unavailableSource), 'source-folder inspection needs an image and the unavailable original source directory');
+if (unavailableSource) assert(!fs.existsSync(unavailableSource), 'original source folder must be unavailable');
 const {bytes, parts, entries} = zipParts(file);
 assert(parts.has('META-INF/container.xml')); assert(parts.has('designmap.xml'));
 const xmls = [...parts].filter(([name]) => name.endsWith('.xml'));
@@ -92,25 +100,36 @@ if (sourceFile) {
   }
   assert(layerRefs >= 2, 'fixture must exercise master ItemLayer references');
   const payloads = [];
+  const nativeXmls = native.doc.publishing.masters.map(m => m.xml).concat(Object.values(native.doc.publishing.master_stories));
   for (const [name, text] of source) if (name.startsWith('MasterSpreads/')) {
     for (const uri of attrs(text, '//Link/@LinkResourceURI')) {
       const path = source.has(uri) ? uri : `Links/${uri.split('/').at(-1)}`;
-      if (!source.has(path)) continue;
-      assert(parts.has(path), `lost package master payload ${path}`);
-      assert(parts.get(path).equals(source.get(path)), `changed package master payload ${path}`);
-      assert(Buffer.from(native.doc.publishing.master_assets[path]).equals(source.get(path)), `native payload ${path}`);
+      const expected = source.get(path) ?? (externalImage ? fs.readFileSync(externalImage) : undefined);
+      assert(expected, `source master dependency ${uri} needs an explicit source-folder image`);
+      const exported = parts.get(path) ?? masters.map(([, xml]) => inlineBytes(xml, uri)).find(Boolean);
+      const nativePayload = native.doc.publishing.master_assets[path] ? Buffer.from(native.doc.publishing.master_assets[path]) : nativeXmls.map(xml => inlineBytes(xml, uri)).find(Boolean);
+      assert(exported, `lost master payload ${uri}`);
+      assert(exported.equals(expected), `changed master payload ${uri}`);
+      assert(nativePayload?.equals(expected), `native payload ${uri}`);
       assert(masters.some(([, xml]) => attrs(xml, '//Link/@LinkResourceURI').includes(uri)), `lost master URI ${uri}`);
-      payloads.push({uri, path, bytes:source.get(path).length, sha256:sha(source.get(path))});
+      if (!source.has(path)) assert(masters.some(([, xml]) => xpath(xml, `string(//Link[@LinkResourceURI=${literal(uri)}]/@StoredState)`) === 'Embedded'), `loaded master link must be marked embedded: ${uri}`);
+      payloads.push({uri, path, source:source.has(path) ? 'package' : 'source-folder', storage:parts.has(path) ? 'ZIP part' : 'inline Contents', bytes:expected.length, sha256:sha(expected)});
     }
   }
   assert(payloads.some(p => p.path === 'Links/logo.png'));
   assert.equal(Object.keys(native.doc.publishing.inherited_pages).length, 4);
+  if (externalImage) {
+    const previews = native.doc.layers.filter(l => l.kind.Raster && native.doc.publishing.inherited_layers.includes(l.id));
+    assert.equal(previews.length, 2);
+    assert(previews.every(l => l.visible === false && l.locked === true), 'hidden inherited rasters must stay hidden and locked');
+  }
   for (const note of [
     'IDML Table is unsupported and was omitted; retain the source document.',
     'IDML Note is unsupported and was omitted; retain the source document.',
   ]) assert(native.doc.import_notes.includes(note), `saved conversion note: ${note}`);
   masterChecks = {nativeFile, nativeSha256:sha(fs.readFileSync(nativeFile)), nativeSchema:native.version,
-    layerReferences:layerRefs, ownedPayloads:payloads, exactSavedTableAndNoteWarnings:true};
+    layerReferences:layerRefs, ownedPayloads:payloads, unavailableOriginalSource:unavailableSource,
+    hiddenInheritedRasterStatePreserved:externalImage ? true : undefined, exactSavedTableAndNoteWarnings:true};
 }
 console.log(JSON.stringify({file, sha256:sha(bytes), zipEntries:entries.length, xmlParts:xmls.length, pages,
   stories:stories.length, masterSpreads:masters.length, uniqueIds:ids.size, checkedReferences:refs,
