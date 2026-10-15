@@ -492,7 +492,8 @@ fn field_input_actual_size_copy_cut_paste_and_local_undo_for_control_and_command
         assert_eq!(bounds(&studio).height(), 35.);
         studio.redo();
         assert_eq!(bounds(&studio).height(), 120.);
-        assert!(studio.clipboard_jobs.is_empty());
+        assert_eq!(studio.doc.layers.len(), 1);
+        assert_eq!(studio.doc.layers[0].kind.shapes().unwrap().len(), 1);
     }
 }
 
@@ -574,7 +575,8 @@ fn field_input_actual_hex_preserves_selection_browser_paste_and_text_undo() {
                 .solid_or(crate::color::Rgba::TRANSPARENT),
             crate::color::Rgba::from_hex(0x12ABEF)
         );
-        assert!(studio.clipboard_jobs.is_empty());
+        assert_eq!(studio.doc.layers.len(), 1);
+        assert_eq!(studio.doc.layers[0].kind.shapes().unwrap().len(), 1);
     }
 }
 

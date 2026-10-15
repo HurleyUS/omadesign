@@ -62,7 +62,11 @@ impl Studio {
         let ctx = ui.ctx().clone();
         let owner = self.field_history_owner().with(property);
         let previous = self.field_history_context.replace(ctx.clone());
-        let pending = ctx.data_mut(|data| data.remove_temp::<(Id, u64)>(Id::new(PENDING)));
+        let pending = ctx.data_mut(|data| {
+            let pending = data.get_temp::<(Id, u64)>(Id::new(PENDING));
+            data.remove::<(Id, u64)>(Id::new(PENDING));
+            pending
+        });
         let result = ui.push_id(owner, |ui| draw(ui, self)).inner;
         ctx.data_mut(|data| {
             data.remove::<(Id, u64)>(Id::new(PENDING));
@@ -92,7 +96,11 @@ impl Studio {
     /// Args: none. Returns its gesture identity, or none for ordinary commands.
     pub(super) fn take_field_history_key(&mut self) -> Option<u64> {
         let ctx = self.field_history_context.as_ref()?;
-        let field = ctx.data_mut(|data| data.remove_temp::<(Id, u64)>(Id::new(PENDING)))?;
+        let field = ctx.data_mut(|data| {
+            let pending = data.get_temp::<(Id, u64)>(Id::new(PENDING));
+            data.remove::<(Id, u64)>(Id::new(PENDING));
+            pending
+        })?;
         if self.field_history_generation != Some(self.canvas_gen) {
             self.history.finish_field();
         }
