@@ -82,7 +82,7 @@ impl Seat {
         self.labels
             .iter()
             .find(|(t, _)| {
-                t == text || number.is_some_and(|number| t.parse::<f64>() == Ok(number))
+                t == text || number.is_some_and(|number| t.parse::<f64>().ok() == Some(number))
             })
             .unwrap_or_else(|| panic!("{text:?} missing: {:?}", self.labels))
             .1
