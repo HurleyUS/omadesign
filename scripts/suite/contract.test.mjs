@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import { asset, canonical, gate, hash, select, validate } from './contract.mjs';
 import { runProcess } from './process.mjs';
 
@@ -81,4 +82,19 @@ test('process groups time out, bound output and terminate descendants', async ()
   const flood = await runProcess(process.execPath,['-e','process.stdout.write("x".repeat(65536));setInterval(()=>{},1000)'],{cwd:scratch,env:process.env,deadline_ms:1000,output_bytes:256});
   assert.equal(flood.reason,'output limit exceeded');
   assert.ok(flood.output.length<=256);
+  const cancelledPids=path.join(scratch,'cancelled-pids.json');
+  const cancelledResult=path.join(scratch,'cancelled-result.json');
+  const worker=`const fs=require('fs');const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'});fs.writeFileSync(${JSON.stringify(cancelledPids)},JSON.stringify({leader:process.pid,descendant:c.pid}));setInterval(()=>{},1000)`;
+  const harness=`import fs from 'node:fs';import {runProcess} from ${JSON.stringify(new URL('./process.mjs',import.meta.url).href)};const result=await runProcess(process.execPath,['-e',${JSON.stringify(worker)}],{cwd:${JSON.stringify(scratch)},env:process.env,deadline_ms:2000});fs.writeFileSync(${JSON.stringify(cancelledResult)},JSON.stringify(result));`;
+  const controller=spawn(process.execPath,['--input-type=module','-e',harness],{stdio:'ignore'});
+  const exit=new Promise(resolve=>controller.once('exit',resolve));
+  const until=Date.now()+1500;
+  while (!fs.existsSync(cancelledPids) && Date.now()<until) await new Promise(resolve=>setTimeout(resolve,10));
+  controller.kill('SIGTERM');
+  await exit;
+  assert.equal(JSON.parse(fs.readFileSync(cancelledResult,'utf8')).reason,'cancelled');
+  const stopped=JSON.parse(fs.readFileSync(cancelledPids,'utf8'));
+  assert.equal(fs.existsSync(`/proc/${stopped.leader}`),false,'direct child must be reaped');
+  const descendant=fs.existsSync(`/proc/${stopped.descendant}/stat`)?fs.readFileSync(`/proc/${stopped.descendant}/stat`,'utf8'):'';
+  assert.ok(!descendant || descendant.split(' ')[2]==='Z','cancelled descendant must be stopped');
 });
