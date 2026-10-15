@@ -19,6 +19,7 @@ struct Record {
     channels: Vec<(i16, Arc<Allocation<u8>>)>,
     overlay: Option<super::effects::Overlay>,
     type_data: Option<Vec<u8>>,
+    smart_data: Option<Vec<u8>>,
 }
 
 fn u16(out: &mut impl Write, value: u16) -> Result<(), String> {out.write_all(&value.to_be_bytes()).map_err(|e| e.to_string())}
@@ -157,6 +158,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             channels: Vec::new(),
             overlay: None,
             type_data: None,
+            smart_data: None,
         };
         add_pixels(
             &mut record,
@@ -200,6 +202,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             channels: Vec::new(),
             overlay: None,
             type_data: None,
+            smart_data: None,
         });
     }
     let mut layer_info = storage::Builder::new()?;
@@ -305,6 +308,7 @@ fn collect(
                 channels: Vec::new(),
                 overlay: None,
                 type_data: None,
+                smart_data: None,
             });
             collect(
                 doc,
@@ -340,6 +344,7 @@ fn collect(
             channels: Vec::new(),
             overlay: super::effects::overlay(&layer.filters),
             type_data: None,
+            smart_data: None,
         };
         if let Some(shape) = layer
             .kind
@@ -355,6 +360,9 @@ fn collect(
             )?);
             record.opacity =
                 (record.opacity as f32 * shape.opacity * shape.fill_opacity).round() as u8;
+        }
+        if layer.psd_smart.is_some() {
+            record.smart_data = Some(super::smart::encode(layer)?);
         }
         if layer.is_group {
             if layer.filters.active() && record.overlay.is_none() {
@@ -666,6 +674,9 @@ fn write_record(out: &mut impl Write, record: &Record, large: bool) -> Result<()
     }
     if let Some(data) = &record.type_data {
         tagged(&mut extra, b"TySh", data)?;
+    }
+    if let Some(data) = &record.smart_data {
+        tagged(&mut extra, b"SoLd", data)?;
     }
     section(out, &extra, false)
 }
