@@ -143,22 +143,25 @@ impl Reader<'_> {
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            Fill::Gradient(crate::gradient::Gradient {
-                kind: if kind == 3 {
+            let mut gradient = crate::gradient::Gradient::new(
+                if kind == 3 {
                     crate::gradient::GradientKind::Radial
                 } else {
                     crate::gradient::GradientKind::Linear
                 },
-                from: [
-                    (from.x - bounds.min.x) / bounds.width(),
-                    (from.y - bounds.min.y) / bounds.height(),
-                ],
-                to: [
-                    (to.x - bounds.min.x) / bounds.width(),
-                    (to.y - bounds.min.y) / bounds.height(),
-                ],
-                stops,
-            })
+                color0,
+                color1,
+            );
+            gradient.from = [
+                (from.x - bounds.min.x) / bounds.width(),
+                (from.y - bounds.min.y) / bounds.height(),
+            ];
+            gradient.to = [
+                (to.x - bounds.min.x) / bounds.width(),
+                (to.y - bounds.min.y) / bounds.height(),
+            ];
+            gradient.stops = stops;
+            Fill::Gradient(gradient)
         };
         if shading
             .get(b"Extend")

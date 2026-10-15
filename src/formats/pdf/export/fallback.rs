@@ -162,12 +162,10 @@ fn needs_pixels(layer: &Layer) -> bool {
                         s.alignment != crate::document::StrokeAlignment::Center
                             || s.gradient.as_ref().is_some_and(unsupported_gradient)
                     })
-                    || shape
-                        .style
-                        .fill
-                        .gradient()
-                        .as_ref()
-                        .is_some_and(unsupported_gradient)
+                    || shape.style.fill.gradient().as_ref().map_or(
+                        !matches!(shape.style.fill, Fill::None | Fill::Solid(_)),
+                        unsupported_gradient,
+                    )
             })
         })
 }
