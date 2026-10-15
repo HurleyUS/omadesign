@@ -130,3 +130,49 @@ stricter required native/product gates; a narrow partial test log is insufficien
 The shared baseline cannot imply all 25 features or approved follow-ons qualify.
 Historical receipts, including native plugin and audio safety checks, stay useful
 only at their original revisions/executables until the owner qualifies integration.
+
+Read reviewed partial owner evidence without launching any product:
+
+```
+node scripts/qualify-suite.mjs evidence --producer-roots /home/.../PRIVATE_ROOTS.json
+```
+
+`owner-sources.json` pins the original AUDIO04, stereo routing and video packets,
+immutable compiler records, logs, authored native inputs, outputs, references and
+inspectors. Reviewed JSON packets are retained by content hash locally; later edits
+to a producer's handoff do not rewrite these observations. New packet pins require
+review. The private roots map supplies `evidence` (the craft artifact root),
+`video` (the producer receipt directory), `system` (`/usr`), `omatainer` and
+`editbay` (existing Git checkouts containing the pinned commits). It creates no
+corpus, exports or binary copies. JSON output contains logical evidence IDs and
+hashes; private bindings and packet contents remain local.
+
+This command verifies retained bytes, committed Git trees, original clean compiler
+records, actual recorded invocations/counts, helper/module/queue/config bytes,
+source generators, native input manifests and reference tool/font dependencies.
+It reads no shared product target. Compiler-captured binary identities are original
+records, never a hash taken after another job could overwrite the target. Test
+counts exclude nested fresh-process summaries; editorial and caption routes share
+one generator group each. Clippy has no fixture-execution credit. Inspection binds
+its own Node executable, host hash, runner Git source and current checkout dirtiness.
+
+`integrity_passed` means these reviewed records verified. It does **not** qualify a
+candidate. Missing or corrupt records leave named cases/routes unavailable and
+exit nonzero. Generated AUDIO04 input bytes that were not retained stay unavailable;
+their recorded hashes are not present-byte verification. The abrupt-edge result
+stays `characterized`, with certified true-peak ceiling false. The 7cf/d72 routing
+jobs remain failed despite specific passing cases. The 3f8 correction proves only
+its four UI checks, including when the owner packet names a later candidate.
+Editorial6 and captions34 tests retain their exact original sources/executables.
+Retained SRT/VTT timing/Unicode and numeric oracles do not establish independent
+FFmpeg codec conformance. Original editorial/ffprobe inspection tool hashes absent
+from their records and original compiler-host identity remain explicit gaps.
+
+Pass `--producer-roots` to `gate` to attach the same inspection. A failed evidence
+import also fails that gate; a valid partial import cannot satisfy or replace any
+required owner acceptance check. RAW80, UI appearance/common fixture/font/theme,
+caption native burn-in/master QC, current scopes/multicam/viewer runtime, stereo
+full-cohort/surround and stricter product gates remain required and unavailable.
+The eleven baseline fixtures/52 checks remain historical at Omadesign123dd7c5,
+Omatainer23d0b3ee and EditBay29238c2. Future execution still requires actual binary
+SHA verification immediately before launch under the global lock.
