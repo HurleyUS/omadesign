@@ -88,13 +88,18 @@ pub(super) fn inspector(ui: &mut Ui, studio: &mut Studio, index: usize) {
         let mut enabled = filter.enabled;
         let changed = ui.checkbox(&mut enabled, &filter.name).changed();
         let mut parameter = filter.settings.as_ref().map(|s| s.values[0]);
+        let range = if filter
+            .settings
+            .as_ref()
+            .is_some_and(|s| s.kind == crate::raster::Kind::BrightnessContrast)
+        {
+            -1.0..=1.0
+        } else {
+            0.0..=1000.0
+        };
         let parameter_changed = if let Some(value) = &mut parameter {
-            ui.add(
-                eframe::egui::DragValue::new(value)
-                    .speed(0.1)
-                    .range(0.0..=1000.0),
-            )
-            .changed()
+            ui.add(eframe::egui::DragValue::new(value).speed(0.1).range(range))
+                .changed()
         } else {
             ui.small("Saved preview · retained Photoshop filter");
             false
