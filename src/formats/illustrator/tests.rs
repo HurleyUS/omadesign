@@ -119,7 +119,7 @@ fn illustrator_private_streams_override_preview_and_work_without_it() {
 #[test]
 fn illustrator_eps_ascii85_and_legacy_editable_type() {
     let native = program(
-        "0 0 1 0 0 1 0 Xa\n0 To\n1 0 0 1 25 70 Tp\n(Helvetica) 14 Tf\n(Hello \\050AI\\051) Tx\nTO",
+        "0 0 1 0 0 1 0 Xa\n1 Xw\n1 A\n0 To\n1 0 0 1 25 70 Tp\n(Helvetica) 14 Tf\n(Hello \\050AI\\051) Tx\nTO",
     );
     for (codec, packed) in [
         ("AI9", zlib(&native)),
@@ -146,6 +146,9 @@ fn illustrator_eps_ascii85_and_legacy_editable_type() {
         assert_eq!(text.px, 14.);
         assert_eq!(text.origin, crate::geom::Pt::new(25., 30.));
         assert_eq!(shape.style.fill, Fill::Solid(Rgba::rgb(0, 255, 0)));
+        assert!(!shape.visible);
+        assert!(shape.locked);
+        assert!(text.contours.iter().any(|c| !c.is_empty()));
     }
     assert!(read(&native, "Legacy").is_ok());
 }
