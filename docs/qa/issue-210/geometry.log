@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running unittests src/lib.rs (/home/michael/Projects/omadesign/target/debug/deps/omadesign-63b806eabdd00bb1)
+
+running 17 tests
+test geom::tests::ellipse_to_path_is_closed_four ... ok
+test geom::tests::break_open_path_splits ... ok
+test geom::tests::ellipse_bbox_and_area ... ok
+test geom::tests::inverted_bounds_width_is_zero_so_flip_must_not_use_it ... ok
+test geom::tests::map_into_scales_rect ... ok
+test geom::tests::path_svg_junk_handles_are_lines ... ok
+test geom::tests::path_svg_emits_cubic ... ok
+test geom::tests::pen_alt_breaks_handle_symmetry ... ok
+test geom::tests::pen_click_stays_corner_under_threshold ... ok
+test geom::tests::poly_area_square ... ok
+test geom::tests::per_corner_radii_change_outline ... ok
+test geom::tests::rect_contains_center_not_outside ... ok
+test geom::tests::rotate_keeps_rect_primitive ... ok
+test geom::tests::split_cubic_joins ... ok
+test geom::tests::star_has_ten_vertices ... ok
+test geom::tests::flip_h_keeps_path_width ... ok
+test geom::tests::simplify_drops_points_that_sit_on_the_line ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 1028 filtered out; finished in 0.00s

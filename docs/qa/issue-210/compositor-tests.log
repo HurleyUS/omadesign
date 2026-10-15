@@ -73,4 +73,3 @@ test compositor::surface_cache::tests::above_budget_sequential_scene_keeps_a_use
 test compositor::surface_cache::tests::switching_tabs_admits_new_surfaces_after_a_saturated_large_group ... ok
 
 test result: ok. 68 passed; 0 failed; 1 ignored; 0 measured; 973 filtered out; finished in 19.17s
-

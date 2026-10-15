@@ -1,0 +1,96 @@
+{
+  "date": "2026-10-15",
+  "platform": "aarch64",
+  "rust": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "baseCommit": "5ee2d592b4b765836c101c67aee5077d9e854c7f",
+  "implementationCommit": "90b8118f81defa2a2066f1200c3f4a1d923384a7",
+  "binary": {
+    "version": "omadesign 0.6.3-nightly.20261013.0001",
+    "sha256": "f658e5668882b042c7c66950c114e8d1c1d06289ab9c0f12d81dc56dc308c36b",
+    "profile": "debug",
+    "installed": false
+  },
+  "libraryCoverage": {
+    "total": 1045,
+    "passed": 1036,
+    "ignored": 9,
+    "unresolvedFailures": [],
+    "missingTests": []
+  },
+  "runs": [
+    {
+      "label": "broad-library",
+      "passed": 1032,
+      "failed": 3,
+      "ignored": 9,
+      "result": "FAILED",
+      "log": "broad-library.log.gz"
+    },
+    {
+      "label": "mask-regressions",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "result": "ok",
+      "log": "focused-tests.log"
+    },
+    {
+      "label": "svg-regressions",
+      "passed": 48,
+      "failed": 0,
+      "ignored": 0,
+      "result": "ok",
+      "log": "svg.log"
+    },
+    {
+      "label": "geometry-regressions",
+      "passed": 17,
+      "failed": 0,
+      "ignored": 0,
+      "result": "ok",
+      "log": "geometry.log"
+    },
+    {
+      "label": "compositor-regressions",
+      "passed": 68,
+      "failed": 0,
+      "ignored": 1,
+      "result": "ok",
+      "log": "compositor-tests.log"
+    },
+    {
+      "label": "agent-context",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result": "ok",
+      "log": "agent-context.log"
+    },
+    {
+      "label": "photo-tab-rerun",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result": "ok",
+      "log": "tabs-check.log"
+    },
+    {
+      "label": "project-font-rerun",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result": "ok",
+      "log": "project-check.log"
+    },
+    {
+      "label": "portable-font-rerun",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result": "ok",
+      "log": "typography-check.log"
+    }
+  ],
+  "rerunReason": "Three tests launch current_exe(). An incremental rebuild unlinked the executable used by the broad run; all three failed with OS error 2 and passed when rerun using the frozen final executable. Original logs are retained.",
+  "nativePointerEditingHumanQa": false
+}
