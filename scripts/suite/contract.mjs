@@ -55,6 +55,11 @@ export function validate(index) {
     }
     if (!f.input || (f.required.includes('appearance') && !f.reference)) throw Error(`${f.id}: required input/reference missing from contract`);
     if (!f.adapter?.path || f.adapter.path.startsWith('/') || f.adapter.path.split('/').includes('..')) throw Error(`${f.id}: invalid adapter`);
+    if (f.cohort==='ui') {
+      const references=[f.reference,...(f.dependencies ?? [])];
+      const checks=['editability','undo','save_reopen','keyboard','focus','mixed','invalid','error','appearance','preservation'];
+      if (!checks.every(c=>f.required.includes(c)) || canonical(f.ui?.scales)!==canonical([1,1.5,2]) || references.length!==3 || references.some((r,i)=>r.scale!==[1,1.5,2][i]) || canonical(f.ui?.appearance_references)!==canonical(references) || ![f.ui?.font_sha256,f.ui?.theme_sha256].every(v=>v===null || sha.test(v))) throw Error(`${f.id}: UI checks/reference/font/theme contract incomplete or inconsistent`);
+    }
   }
   if (!index.candidate.length || new Set(index.candidate).size !== index.candidate.length || index.candidate.some(x => !ids.has(x))) throw Error('candidate cohort must be fixed, nonempty and known');
   if (canonical([...index.candidate].sort())!==canonical(index.fixtures.filter(f=>f.candidate_required!==false).map(f=>f.id).sort())) throw Error('candidate must include every required fixture');
@@ -72,7 +77,7 @@ export function select(index, lane, changed = [], product) {
   const fixtures=product?index.fixtures.filter(f=>f.product===product):index.fixtures;
   if (!fixtures.length) throw Error('unknown affected product');
   const all = fixtures.map(f => f.id);
-  const shared = ['scripts/suite/', 'scripts/qualify-suite.mjs', 'qualification/suite/'];
+  const shared = ['scripts/suite/', 'scripts/qualify-suite.mjs', 'qualification/suite/', 'scripts/serialized-cargo.mjs', 'scripts/cargo-receipt.mjs', 'scripts/serialized-cargo.test.mjs', '.github/workflows/suite-contract.yml'];
   if ((!product || product==='omadesign') && changed.some(p => shared.some(s => p.startsWith(s)))) return { ids:index.fixtures.map(f=>f.id), full:true, reason:'shared suite dependency changed' };
   const native=['Cargo.','.github/','build.rs','src/document.rs','src/project.rs','src/compositor','src/import.rs'];
   if (changed.some(p=>native.some(s=>p.startsWith(s)))) return {ids:all,full:true,reason:'shared product dependency changed'};

@@ -16,7 +16,9 @@ for (const check of request.fixture.required) {
       for (const ref of refs) {
         const capture=request.ui_captures?.[String(ref.scale)];
         if (!capture || !/^[a-f0-9]{64}$/.test(capture.host_sha256) || capture.revision!==binding.source.revision || capture.binary_sha256!==binding.binary.sha256 || capture.fixture_sha256!==binding.inputs.input.sha256 || fingerprint(capture.path).sha256!==ref.sha256 || capture.font_sha256!==request.fixture.ui.font_sha256 || capture.theme_sha256!==request.fixture.ui.theme_sha256) throw Error('Current pinned appearance capture unavailable');
-        records.push({scale:ref.scale,...fingerprint(capture.path),producer_host_sha256:capture.host_sha256});
+        const font=fingerprint(capture.font_path),theme=fingerprint(capture.theme_path);
+        if (!font.bytes || !theme.bytes || font.sha256!==request.fixture.ui.font_sha256 || theme.sha256!==request.fixture.ui.theme_sha256) throw Error('Pinned font/theme dependency bytes unavailable');
+        records.push({scale:ref.scale,...fingerprint(capture.path),font,theme,producer_host_sha256:capture.host_sha256});
       }
       if (!request.fixture.ui.font_sha256 || !request.fixture.ui.theme_sha256 || records.length!==3) throw Error('Actual font/theme/scale binding unavailable');
       fs.writeFileSync(path.join(request.output,'appearance.json'),JSON.stringify({comparison:'exact encoded PNG bytes against pinned reference; conservative equality',captures:records,boundary:'headless appearance only; no functionality/native-window/human proof'}));

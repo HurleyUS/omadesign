@@ -2,7 +2,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hash } from './contract.mjs';
+import { canonical, hash } from './contract.mjs';
+
+/** Check compiler helper/config digests and the actual structured Cargo argument binding.
+ * Args: immutable compiler record. Returns whether all required tool hashes and executed arguments are present.
+ */
+function compilerIdentity(r) {
+  if (!Array.isArray(r.cargo_args)) return false;
+  const sha=/^[a-f0-9]{64}$/;
+  const separator=r.cargo_args.indexOf('--');
+  const options=r.cargo_args.slice(0,separator<0?undefined:separator);
+  return [r.helper_sha256,r.receipt_helper_sha256,r.config_sha256].every(value=>sha.test(value)) && ['build','test'].includes(r.cargo_args[0]) && r.cargo_args.every(value=>typeof value==='string') && options.includes('--locked') && canonical(r.executed_cargo_args)===canonical([r.cargo_args[0],'--message-format=json-render-diagnostics',...r.cargo_args.slice(1)]);
+}
 
 /** Convert a locked compiler receipt into a local suite binding without hashing a reused executable later.
  * Args: validated build config, immutable receipt path and optional exact artifact digest.
@@ -13,6 +24,7 @@ export function buildBinding(config, receiptPath, artifactSha) {
   const digest=hash(bytes);
   if (path.basename(receiptPath)!==`${digest}.json`) throw Error('Compiler receipt integrity mismatch');
   const r=JSON.parse(bytes);
+  if (!compilerIdentity(r)) throw Error('Required compiler helper/config/argument binding unavailable');
   if (r.schema!==1 || !config.repositories[r.repository] || !/^[a-f0-9]{40}$/.test(r.revision) || !/^[a-f0-9]{40}$/.test(r.source_tree) || r.dirty_before!==false || r.dirty_after!==false || r.exit_code!==0 || r.signal || !Array.isArray(r.receipt_errors) || r.receipt_errors.length) throw Error('Clean successful locked compiler receipt required');
   const artifacts=(r.executables ?? []).filter(a=>!artifactSha || a.sha256===artifactSha);
   if (artifacts.length!==1) throw Error('Select exactly one compiler-emitted executable');
@@ -31,6 +43,7 @@ export function verifyCompilerReceipt(build) {
   const digest=hash(bytes);
   if (digest!==build.compiler_receipt.sha256 || path.basename(file)!==`${digest}.json`) throw Error('required compiler receipt integrity mismatch');
   const r=JSON.parse(bytes);
+  if (!compilerIdentity(r)) throw Error('Required compiler helper/config/argument binding unavailable');
   if (r.schema!==1 || r.revision!==build.revision || r.source_tree!==build.tree || r.dirty_before!==false || r.dirty_after!==false || r.exit_code!==0 || r.signal || r.receipt_errors?.length!==0 || !r.executables?.some(a=>a.path===build.binary && a.sha256===build.sha256 && a.size>0)) throw Error('required compiler executable binding unavailable');
   return r;
 }

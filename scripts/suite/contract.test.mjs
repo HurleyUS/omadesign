@@ -38,6 +38,12 @@ test('cohort, reference and duplicate contract failures are closed', () => {
   const unavailable={root:'references',path:'required.png',sha256:null,bytes:null,unavailable_reason:'Independent UI reference not yet qualified'};
   assert.equal(validate({...index,fixtures:[{...f,reference:unavailable}]}).fixtures.length,1);
   assert.throws(()=>asset(unavailable,{}),/required asset unavailable/);
+  const refs=[1,1.5,2].map(scale=>({...unavailable,path:`scale-${scale}.png`,scale}));
+  const ui={...f,cohort:'ui',required:['editability','undo','save_reopen','keyboard','focus','mixed','invalid','error','appearance','preservation'],reference:refs[0],dependencies:refs.slice(1),ui:{scales:[1,1.5,2],appearance_references:refs,font_sha256:null,theme_sha256:null}};
+  assert.equal(validate({...index,fixtures:[ui]}).fixtures.length,1);
+  const divergent=structuredClone(ui);divergent.ui.appearance_references[0]={...divergent.ui.appearance_references[0],sha256:'4'.repeat(64)};
+  assert.throws(()=>validate({...index,fixtures:[divergent]}),/inconsistent/);
+  assert.throws(()=>validate({...index,fixtures:[{...ui,required:ui.required.filter(c=>c!=='focus')}]}),/incomplete/);
 });
 
 test('affected lane includes rename/deletion old paths, shared changes and unknown mappings', () => {
@@ -48,6 +54,7 @@ test('affected lane includes rename/deletion old paths, shared changes and unkno
   assert.deepEqual(select(i,'affected',[]).ids,[]);
   assert.equal(gate([],[],{}).passed,false);
   const cross={...other,product:'editbay'};
+  for(const p of ['scripts/serialized-cargo.mjs','scripts/cargo-receipt.mjs','scripts/serialized-cargo.test.mjs','.github/workflows/suite-contract.yml']) assert.deepEqual(select({...i,fixtures:[f,cross]},'affected',[p],'omadesign').ids,['layered','vector']);
   assert.deepEqual(select({...i,fixtures:[f,cross]},'affected',['unmapped.rs'],'editbay').ids,['vector']);
 });
 

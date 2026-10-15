@@ -27,6 +27,9 @@ Use `node scripts/suite/build.mjs CONFIG LOCKED_CARGO_RECEIPT /home/.../BUILD.js
 receipt. It does not start Cargo or hash a possibly overwritten target later.
 The suite checks the actual executable against that locked digest before use.
 A build binding, including `--no-run`, is explicitly not fixture execution proof.
+Required compiler records include strict helper/module/config SHA-256 identities and
+the original and actual structured Cargo arguments, with `--locked` before any test
+argument separator. Missing identities or mismatched executed arguments fail.
 
 Cross-product adapter qualification uses one held global lock for the entire
 build/bind/execute group:
@@ -109,7 +112,10 @@ dependencies. `builds[FIXTURE_ID].ui_receipts` maps semantic check IDs to compac
 owner packets `{check,status,revision,binary_sha256,fixture_sha256,host_sha256,artifact:{path,
 sha256,bytes}}`. The referenced artifact must exist and match. `ui_captures` maps
 each scale to `{path,revision,binary_sha256,fixture_sha256,font_sha256,theme_sha256,
-host_sha256}`. Captures must bind the current app source, executable and fixture.
+font_path,theme_path,host_sha256}`. Captures must bind the current app source,
+executable and fixture. The runner independently hashes the actual nonempty font
+and theme dependency bytes; matching claimed hashes alone cannot pass. Private
+dependency paths and licensed font content stay local.
 All 100/150/200 percent captures
 must exactly match their pinned PNG bytes and font/theme identity. This conservative
 appearance check is independent of semantic proof and establishes no native-window,
