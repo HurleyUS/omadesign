@@ -327,6 +327,12 @@ fn png(pixels: &Pixels) -> Result<Vec<u8>, String> {
 }
 
 pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
+    if !doc.mask_sources().is_empty() {
+        let prepared=crate::compositor::raster_export_document(doc)?;
+        let (bytes,mut notes)=write(&prepared)?;
+        notes.push("Live artwork masks were rendered into their affected layers or groups. Save .oma or export SVG to retain editable mask sources.".into());
+        return Ok((bytes,notes));
+    }
     if !doc.width.is_finite() || !doc.height.is_finite() || doc.width < 1. || doc.height < 1. {
         return Err("OpenRaster needs a finite, positive canvas size.".into());
     }

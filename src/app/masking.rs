@@ -1,4 +1,5 @@
 use super::*;
+use crate::artwork_mask::{ArtworkMask, MaskMode, MaskSource};
 use crate::document::Pixels;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -375,18 +376,139 @@ impl Studio {
 
     pub fn begin_item_mask(&mut self, layer: usize, id: Option<u64>) {
         self.end_pixel_stroke(false);
-        self.pending_item_mask = self.item_mask(layer, id);
-        self.status = "Mask from item · click the target layer or object · Esc cancels".into();
+        self.pending_item_mask = self
+            .doc
+            .layers
+            .get(layer)
+            .filter(|l| {
+                id.is_none()
+                    || l.kind
+                        .shapes()
+                        .is_some_and(|ss| ss.iter().any(|s| Some(s.id) == id))
+            })
+            .map(|l| MaskSource {
+                layer: l.id,
+                shape: id,
+            });
+        self.status = "Use as mask · click the target layer or object · Esc cancels".into();
     }
 
     pub fn apply_pending_item_mask(&mut self, layer: usize, id: Option<u64>) -> bool {
-        let Some(mask) = self.pending_item_mask.clone() else {
+        let Some(mask) = self.pending_item_mask else {
             return false;
         };
-        if self.apply_item_mask(layer, id, &mask) {
+        if self.link_artwork_mask(layer, id, mask) {
             self.pending_item_mask = None;
         }
         true
+    }
+
+    fn link_artwork_mask(&mut self, layer: usize, id: Option<u64>, source: MaskSource) -> bool {
+        if !self.layer_unlocked(layer)
+            || id.is_some_and(|id| self.doc.find_shape(layer, id).is_none_or(|s| s.locked))
+        {
+            self.status = "Unlock the target to apply its mask".into();
+            return false;
+        }
+        if !self
+            .doc
+            .layers
+            .iter()
+            .any(|l| l.id == source.layer && source.shape.is_none_or(|id| l.find(id).is_some()))
+        {
+            self.status = "The mask source was removed".into();
+            return false;
+        }
+        let mut candidate = self.doc.clone();
+        let masks = if let Some(id) = id {
+            &mut candidate.find_shape_mut(layer, id).unwrap().artwork_masks
+        } else {
+            &mut candidate.layers[layer].artwork_masks
+        };
+        let before = masks.clone();
+        let after = vec![ArtworkMask::new(source)];
+        *masks = after.clone();
+        if let Err(error) = candidate.validate_artwork_masks() {
+            self.status = error;
+            return false;
+        }
+        self.commit(Cmd::SetArtworkMasks {
+            layer,
+            id,
+            before,
+            after,
+        });
+        self.status = "Live mask applied · edit its source in Layers".into();
+        true
+    }
+
+    pub fn remove_artwork_masks(&mut self, layer: usize, id: Option<u64>) {
+        if !self.layer_unlocked(layer) {
+            return;
+        }
+        let masks = if let Some(id) = id {
+            self.doc
+                .find_shape(layer, id)
+                .filter(|s| !s.locked)
+                .map(|s| &s.artwork_masks)
+        } else {
+            self.doc.layers.get(layer).map(|l| &l.artwork_masks)
+        };
+        if let Some(before) = masks.filter(|m| !m.is_empty()).cloned() {
+            self.commit(Cmd::SetArtworkMasks {
+                layer,
+                id,
+                before,
+                after: Vec::new(),
+            });
+            self.status = "Live mask released · source artwork restored".into();
+        }
+    }
+
+    pub fn set_artwork_mask_mode(&mut self, layer: usize, id: Option<u64>, mode: MaskMode) {
+        if !self.layer_unlocked(layer) {
+            return;
+        }
+        let masks = if let Some(id) = id {
+            self.doc
+                .find_shape(layer, id)
+                .filter(|s| !s.locked)
+                .map(|s| &s.artwork_masks)
+        } else {
+            self.doc.layers.get(layer).map(|l| &l.artwork_masks)
+        };
+        if let Some(before) = masks.filter(|m| !m.is_empty()).cloned() {
+            let mut after = before.clone();
+            for mask in &mut after {
+                mask.mode = mode;
+            }
+            self.commit(Cmd::SetArtworkMasks {
+                layer,
+                id,
+                before,
+                after,
+            });
+        }
+    }
+
+    pub fn select_mask_source(&mut self, source: MaskSource) {
+        let Some((index, _)) = source.resolve(&self.doc) else {
+            return;
+        };
+        if let Some(id) = source.shape {
+            self.selection = vec![(index, id)];
+            self.active_layer = Some(index);
+            self.selected_layer = None;
+        } else {
+            self.activate_layer_tree(index);
+        }
+        self.paint_mask = false;
+        self.node_sel.clear();
+        self.layer_expanded.insert(self.doc.layers[index].id);
+        for ancestor in self.doc.layer_ancestors(index) {
+            self.layer_expanded.insert(self.doc.layers[ancestor].id);
+        }
+        self.tool = Tool::Select;
     }
 
     pub fn mask_object_from_selection(&mut self, layer: usize, id: u64) {

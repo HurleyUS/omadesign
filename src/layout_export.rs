@@ -60,6 +60,7 @@ pub fn frame_document(doc: &Document, layer: usize, frame_id: u64) -> Result<Doc
             l
         })
         .collect();
+    retain_mask_sources(&mut output, doc, delta)?;
     let referenced: HashSet<_> = output
         .layers
         .iter()
@@ -78,6 +79,158 @@ pub fn frame_document(doc: &Document, layer: usize, frame_id: u64) -> Result<Doc
         .cloned()
         .collect();
     Ok(output)
+}
+
+fn retain_mask_sources(
+    output: &mut Document,
+    original: &Document,
+    delta: Pt,
+) -> Result<(), String> {
+    let mut pending: Vec<_> = output.mask_sources().into_iter().collect();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let mut visited = HashSet::new();
+    let mut full_layers = HashSet::new();
+    let mut required: HashMap<usize, HashSet<u64>> = HashMap::new();
+    let mut artwork = HashSet::new();
+    while let Some(source) = pending.pop() {
+        if !visited.insert(source) {
+            continue;
+        }
+        let (index, id) = source
+            .resolve(original)
+            .ok_or("The frame's mask source was removed")?;
+        let indices: Vec<_> = if id.is_some() {
+            vec![index]
+        } else {
+            (0..original.layers.len())
+                .filter(|&i| i == index || original.layer_ancestors(i).contains(&index))
+                .collect()
+        };
+        for index in indices {
+            let layer = &original.layers[index];
+            if let Some(id) = id {
+                let mut shapes = crate::layout::descendants(original, index, id);
+                shapes.push(id);
+                for id in shapes {
+                    required.entry(index).or_default().insert(id);
+                    artwork.insert(id);
+                    pending.extend(
+                        original
+                            .find_shape(index, id)
+                            .unwrap()
+                            .artwork_masks
+                            .iter()
+                            .map(|m| m.source),
+                    );
+                    let mut parent = original.find_shape(index, id).and_then(|s| s.layout.parent);
+                    for _ in 0..64 {
+                        let Some(id) = parent else {
+                            break;
+                        };
+                        required.entry(index).or_default().insert(id);
+                        parent = original.find_shape(index, id).and_then(|s| s.layout.parent);
+                    }
+                }
+            } else {
+                full_layers.insert(index);
+                pending.extend(layer.artwork_masks.iter().map(|m| m.source));
+                for shape in layer.kind.shapes().unwrap_or(&[]) {
+                    pending.extend(shape.artwork_masks.iter().map(|m| m.source));
+                }
+            }
+        }
+    }
+    let mut indices: HashSet<_> = full_layers
+        .iter()
+        .copied()
+        .chain(required.keys().copied())
+        .collect();
+    for index in indices.clone() {
+        indices.extend(original.layer_ancestors(index));
+    }
+    let mut ordered: Vec<_> = indices.into_iter().collect();
+    ordered.sort_unstable();
+    for index in ordered {
+        let source = &original.layers[index];
+        let position = output
+            .layers
+            .iter()
+            .position(|l| l.id == source.id)
+            .unwrap_or_else(|| {
+                let mut layer = crate::document::Layer::group(&source.name);
+                layer.id = source.id;
+                layer.parent = source.parent;
+                layer.is_group = source.is_group;
+                if full_layers.contains(&index) {
+                    layer = source.clone();
+                    layer.kind = crate::document::LayerKind::Vector { shapes: vec![] };
+                }
+                output.layers.push(layer);
+                output.layers.len() - 1
+            });
+        let target = &mut output.layers[position];
+        if let Some(shapes) = source.kind.shapes() {
+            let selected = required.get(&index);
+            for shape in shapes.iter().filter(|s| {
+                full_layers.contains(&index) || selected.is_some_and(|ids| ids.contains(&s.id))
+            }) {
+                let list = target
+                    .kind
+                    .shapes_mut()
+                    .ok_or("Invalid mask source layer")?;
+                if list.iter().any(|s| s.id == shape.id) {
+                    continue;
+                }
+                let mut shape = shape.clone();
+                if !full_layers.contains(&index) && !artwork.contains(&shape.id) {
+                    shape.style = crate::document::Style {
+                        fill: Fill::None,
+                        stroke: None,
+                    };
+                    shape.layout.image = None;
+                    shape.layout.clip = false;
+                    shape.opacity = 1.;
+                    shape.fill_opacity = 1.;
+                    shape.filters = Default::default();
+                    shape.mask = None;
+                    shape.artwork_masks.clear();
+                }
+                shape.geom.translate(delta);
+                list.push(shape);
+            }
+        } else if full_layers.contains(&index) {
+            target.kind = source.kind.clone();
+            if let crate::document::LayerKind::Raster { origin, .. } = &mut target.kind {
+                *origin += delta;
+            }
+        }
+        if full_layers.contains(&index) {
+            target.mask_origin = source.mask_origin + delta;
+        }
+    }
+    let layer_ids = output.layers.iter().map(|l| (l.id, l.id)).collect();
+    let shape_ids = output
+        .layers
+        .iter()
+        .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+        .map(|s| (s.id, s.id))
+        .collect();
+    let placement = tiny_skia::Transform::from_translate(delta.x, delta.y);
+    for layer in &mut output.layers {
+        for mask in layer.artwork_masks.iter_mut().chain(
+            layer
+                .kind
+                .shapes_mut()
+                .into_iter()
+                .flatten()
+                .flat_map(|s| &mut s.artwork_masks),
+        ) {
+            mask.remap(&layer_ids, &shape_ids, placement);
+        }
+    }
+    output.validate_artwork_masks()
 }
 
 fn escape(value: &str) -> String {
@@ -498,9 +651,22 @@ impl<'a> Html<'a> {
             );
         }
         if let Geom::Text(run) = &shape.geom {
-            if run.on_path.is_some() || run.frame.is_some() || !run.manual_kern.is_empty()||run.spans.iter().any(|s|s.kerning==Some(crate::geom::KernMode::Optical)||s.hscale.is_some()||s.vscale.is_some()) {
-                let mut art=shape.clone();art.rotation=0.;art.opacity=1.;art.blend=crate::color::Blend::Normal;
-                out.push_str(&crate::svg::shape_fragment(&art));out.push_str("</div>");return Ok(());
+            if run.on_path.is_some()
+                || run.frame.is_some()
+                || !run.manual_kern.is_empty()
+                || run.spans.iter().any(|s| {
+                    s.kerning == Some(crate::geom::KernMode::Optical)
+                        || s.hscale.is_some()
+                        || s.vscale.is_some()
+                })
+            {
+                let mut art = shape.clone();
+                art.rotation = 0.;
+                art.opacity = 1.;
+                art.blend = crate::color::Blend::Normal;
+                out.push_str(&crate::svg::shape_fragment(&art));
+                out.push_str("</div>");
+                return Ok(());
             }
             let (font, asc, desc) = self.font(run);
             let b = shape.geom.bbox();
@@ -525,7 +691,13 @@ impl<'a> Html<'a> {
                     u8::from(run.smcp)
                 );
                 for line in crate::text::compose(run).iter() {
-                    let _=write!(out,"<tspan x=\"{}\" y=\"{}\">{}</tspan>",run.origin.x+line.offset,run.origin.y+line.baseline,escape(&line.text));
+                    let _ = write!(
+                        out,
+                        "<tspan x=\"{}\" y=\"{}\">{}</tspan>",
+                        run.origin.x + line.offset,
+                        run.origin.y + line.baseline,
+                        escape(&line.text)
+                    );
                 }
                 out.push_str("</text></svg></div>");
                 return Ok(());
@@ -557,11 +729,22 @@ impl<'a> Html<'a> {
                         crate::geom::TextAlign::Start => "left",
                         crate::geom::TextAlign::Center => "center",
                         crate::geom::TextAlign::End => "right",
-                        crate::geom::TextAlign::Justify{..} => "justify",
+                        crate::geom::TextAlign::Justify { .. } => "justify",
                     }
                 );
             }
-            if let crate::geom::TextAlign::Justify{last}=run.align { let _=write!(text_style,"text-align-last:{};", match last {crate::geom::LastLine::Start=>"left",crate::geom::LastLine::Center=>"center",crate::geom::LastLine::End=>"right",crate::geom::LastLine::Justify=>"justify"}); }
+            if let crate::geom::TextAlign::Justify { last } = run.align {
+                let _ = write!(
+                    text_style,
+                    "text-align-last:{};",
+                    match last {
+                        crate::geom::LastLine::Start => "left",
+                        crate::geom::LastLine::Center => "center",
+                        crate::geom::LastLine::End => "right",
+                        crate::geom::LastLine::Justify => "justify",
+                    }
+                );
+            }
             let _ = write!(
                 out,
                 "<span style=\"{}\">{}</span>",

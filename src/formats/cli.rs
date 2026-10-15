@@ -110,7 +110,7 @@ pub fn run(args: &[String]) -> Option<Result<(), String>> {
             None => document(Path::new(input))?,
         };
         if inspect.is_some() {
-            let layers=doc.layers.iter().map(|l|serde_json::json!({"id":l.id,"parent":l.parent,"name":l.name,"kind":if l.is_group{"group"}else{l.kind.tag()},"visible":l.visible,"opacity":l.opacity,"mask":l.mask.is_some(),"objects":l.kind.shapes().map_or(0,|s|s.len())})).collect::<Vec<_>>();
+            let layers=doc.layers.iter().map(|l|serde_json::json!({"id":l.id,"parent":l.parent,"name":l.name,"kind":if l.is_group{"group"}else{l.kind.tag()},"visible":l.visible,"opacity":l.opacity,"mask":l.mask.is_some() || !l.artwork_masks.is_empty(),"artwork_masks":l.artwork_masks,"objects":l.kind.shapes().map_or(0,|s|s.len())})).collect::<Vec<_>>();
             println!("{}",serde_json::to_string_pretty(&serde_json::json!({"name":doc.name,"width":doc.width,"height":doc.height,"pages":doc.artboards.len(),"layers":layers,"notes":doc.import_notes})).map_err(|e|e.to_string())?);
         } else {
             let output = args

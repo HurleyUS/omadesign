@@ -552,7 +552,7 @@ pub fn execute_prepared(
                 .take(50)
                 .map(|(i, l)| {
                     json!({"index":i,"id":l.id,"kind":if l.is_group{"group"}else if l.kind.pixels().is_some(){"raster"}else{"vector"},"visible":l.visible,"locked":l.locked,"opacity":l.opacity,"parent":l.parent,"raster":raster_summary(l),"name":l.name.chars().take(200).collect::<String>(),
-                    "editable":studio.doc.layer_editable(i),"vector":l.kind.shapes().is_some(),
+                    "editable":studio.doc.layer_editable(i),"vector":l.kind.shapes().is_some(),"artwork_masks":l.artwork_masks,
                     "objects":l.kind.shapes().map_or(0,|s|s.len()),
                     "items":l.kind.shapes().map(|s|s.iter().take(20).map(|s|json!({
                         "id":s.id,"name":s.name.chars().take(200).collect::<String>(),
@@ -597,7 +597,7 @@ pub fn execute_prepared(
                     "bounds":shape.world_bbox(),"geom":(points<=4096).then_some(&shape.geom),
                     "geometry_omitted":points>4096,"style":shape.style,"rotation":shape.rotation,
                     "opacity":shape.opacity,"fill_opacity":shape.fill_opacity,"blend_interior":shape.blend_interior,"text_wrap":shape.text_wrap,"blend":shape.blend,"visible":shape.visible,
-                    "locked":shape.locked,"guide":shape.guide,"filters":shape.filters,
+                    "locked":shape.locked,"guide":shape.guide,"filters":shape.filters,"artwork_masks":shape.artwork_masks,
                     "corners":shape.corners,"layout":layout_summary(&shape.layout),
                     "mask":shape.mask.as_ref().map(|m|json!({"width":m.w,"height":m.h}))});
                 let size = serde_json::to_vec(&item).map_err(|e| e.to_string())?.len();

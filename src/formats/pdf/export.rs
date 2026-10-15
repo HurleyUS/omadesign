@@ -11,6 +11,12 @@ mod fallback;
 /// Write a PDF 1.7 document with one page per artboard and named optional-content
 /// layers. Diagnostics describe document features that PDF export approximates.
 pub fn write(document: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
+    if !document.mask_sources().is_empty() {
+        let prepared=crate::compositor::raster_export_document(document)?;
+        let (bytes,mut notes)=write(&prepared)?;
+        notes.push("Live artwork masks were rendered into their affected layers or groups. Save .oma or export SVG to retain editable mask sources.".into());
+        return Ok((bytes,notes));
+    }
     let (prepared, warnings) = fallback::prepare(document)?;
     let document = prepared.as_ref();
     let mut writer = Writer {

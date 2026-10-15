@@ -179,6 +179,7 @@ fn snapshot(doc: &Document) -> Document {
     out.motion = doc.motion.clone();
     for (source, target) in doc.layers.iter().zip(&mut out.layers) {
         target.pass_through = source.pass_through;
+        target.artwork_masks = source.artwork_masks.clone();
         target.filters = source.filters.clone();
         target.mask_origin = source.mask_origin;
         target.mask_size = source.mask_size;

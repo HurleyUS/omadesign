@@ -419,7 +419,7 @@ fn write_shape(
         && run.frame.is_none()
         && !run.font.starts_with("omatype:")
         && run.paragraphs.is_empty()
-        && !matches!(run.align,crate::geom::TextAlign::Justify{..})
+        && !matches!(run.align, crate::geom::TextAlign::Justify { .. })
         && !run.content.contains('\u{ad}')
         && run.spans.is_empty()
         && run.features.is_empty()
@@ -429,8 +429,18 @@ fn write_shape(
         body.push_str(&format!("  <text id=\"oma-{}\" font-family=\"{}\" font-size=\"{:.2}\" {fill_attr}{stroke_attr} opacity=\"{:.3}\"{extra} xml:space=\"preserve\">",shape.id,xml_escape(&family),run.px,shape.opacity));
         for line in crate::text::compose(run).iter() {
             // Absolute character positions preserve wrapping and justification.
-            let positions=line.text.chars().enumerate().map(|(i,_)|format!("{:.3}",run.origin.x+line.caret_x(line.start+i))).collect::<Vec<_>>().join(" ");
-            body.push_str(&format!("<tspan x=\"{positions}\" y=\"{:.3}\">{}</tspan>",run.origin.y+line.baseline,xml_escape(&line.text.replace('\u{ad}',""))));
+            let positions = line
+                .text
+                .chars()
+                .enumerate()
+                .map(|(i, _)| format!("{:.3}", run.origin.x + line.caret_x(line.start + i)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            body.push_str(&format!(
+                "<tspan x=\"{positions}\" y=\"{:.3}\">{}</tspan>",
+                run.origin.y + line.baseline,
+                xml_escape(&line.text.replace('\u{ad}', ""))
+            ));
         }
         body.push_str("</text>\n");
         return;
@@ -624,10 +634,7 @@ fn gradient_motion(
     let values = times
         .iter()
         .map(|time| {
-            let offset = motion
-                .pose(shape.id, *time)
-                .gradient_angle
-                .unwrap_or(0.0);
+            let offset = motion.pose(shape.id, *time).gradient_angle.unwrap_or(0.0);
             format!("{offset:.6} {:.4} {:.4}", center.x, center.y)
         })
         .collect::<Vec<_>>()
@@ -999,7 +1006,76 @@ pub(crate) fn shape_fragment(shape: &Shape) -> String {
     )
 }
 
+fn artwork_mask_wrap(
+    defs: &mut String,
+    doc: &Document,
+    masks: &[crate::artwork_mask::ArtworkMask],
+    content: String,
+    key: &str,
+    parent: tiny_skia::Transform,
+) -> String {
+    let mut content = content;
+    for (index, mask) in masks.iter().enumerate() {
+        let id = format!("oma-live-mask-{key}-{index}");
+        let source = mask.source.shape.map_or_else(
+            || format!("oma-source-layer-{}", mask.source.layer),
+            |id| format!("oma-source-shape-{id}"),
+        );
+        let t = parent
+            .invert()
+            .unwrap_or_default()
+            .pre_concat(mask.placement());
+        let local = mask.region.unwrap_or_else(|| {
+            doc.layers
+                .iter()
+                .filter_map(layer_bounds)
+                .fold(
+                    Bounds::from_min_size(Pt::ZERO, Pt::new(doc.width, doc.height)),
+                    |a, b| a.union(b),
+                )
+                .inflate(2.)
+        });
+        let mut points = [
+            tiny_skia::Point::from_xy(local.min.x, local.min.y),
+            tiny_skia::Point::from_xy(local.max.x, local.min.y),
+            tiny_skia::Point::from_xy(local.max.x, local.max.y),
+            tiny_skia::Point::from_xy(local.min.x, local.max.y),
+        ];
+        t.pre_concat(if mask.region.is_some() {
+            mask.region_placement()
+        } else {
+            tiny_skia::Transform::identity()
+        })
+        .map_points(&mut points);
+        let min_x = points.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+        let min_y = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        let max_x = points.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+        let max_y = points.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+        let min_x = min_x - 2.;
+        let min_y = min_y - 2.;
+        let max_x = max_x + 2.;
+        let max_y = max_y + 2.;
+        let kind = if mask.mode == crate::artwork_mask::MaskMode::Luminance {
+            "luminance"
+        } else {
+            "alpha"
+        };
+        let mut source_content = format!("<use href=\"#{source}\"/>");
+        if let Some(region) = mask.region {
+            let clip = format!("{id}-region");
+            let r = mask.region_placement();
+            defs.push_str(&format!("<clipPath id=\"{clip}\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" transform=\"matrix({} {} {} {} {} {})\"/></clipPath>",region.min.x,region.min.y,region.width(),region.height(),r.sx,r.ky,r.kx,r.sy,r.tx,r.ty));
+            source_content = format!("<g clip-path=\"url(#{clip})\">{source_content}</g>");
+        }
+        defs.push_str(&format!("<mask id=\"{id}\" maskUnits=\"userSpaceOnUse\" maskContentUnits=\"userSpaceOnUse\" mask-type=\"{}\" color-interpolation=\"sRGB\" x=\"{min_x}\" y=\"{min_y}\" width=\"{}\" height=\"{}\"><g transform=\"matrix({} {} {} {} {} {})\">{source_content}</g></mask>",kind,(max_x-min_x).max(0.001),(max_y-min_y).max(0.001),t.sx,t.ky,t.kx,t.sy,t.tx,t.ty));
+        content = format!("<g mask=\"url(#{id})\">{content}</g>");
+    }
+    content
+}
+
 fn write_shape_tree(
+    doc: &Document,
+    layer_index: usize,
     shapes: &[Shape],
     body: &mut String,
     defs: &mut String,
@@ -1023,6 +1099,8 @@ fn write_shape_tree(
             .push(shape);
     }
     fn visit(
+        doc: &Document,
+        layer_index: usize,
         parent: Option<u64>,
         children: &std::collections::HashMap<Option<u64>, Vec<&Shape>>,
         body: &mut String,
@@ -1123,6 +1201,8 @@ fn write_shape_tree(
                     body.push_str(&format!("<g clip-path=\"url(#{clip_id})\">\n"));
                 }
                 visit(
+                    doc,
+                    layer_index,
                     Some(shape.id),
                     children,
                     body,
@@ -1172,9 +1252,31 @@ fn write_shape_tree(
                     original.blend_interior,
                 ));
             }
+            if !original.artwork_masks.is_empty() {
+                let content = body.split_off(appearance_start);
+                body.push_str(&artwork_mask_wrap(
+                    defs,
+                    doc,
+                    &original.artwork_masks,
+                    content,
+                    &format!("s{}", original.id),
+                    crate::compositor::shape_parent_transform(doc, layer_index, original.id),
+                ));
+            }
+            if doc
+                .mask_sources()
+                .iter()
+                .any(|source| source.shape == Some(original.id))
+            {
+                let content = body.split_off(appearance_start);
+                let t = crate::compositor::shape_parent_transform(doc, layer_index, original.id);
+                defs.push_str(&format!("<g id=\"oma-source-shape-{}\" transform=\"matrix({} {} {} {} {} {})\">{content}</g>",original.id,t.sx,t.ky,t.kx,t.sy,t.tx,t.ty));
+            }
         }
     }
     visit(
+        doc,
+        layer_index,
         None,
         &children,
         body,
@@ -1272,6 +1374,15 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
         let mut layer_body = String::new();
         if layer.is_group {
             for child in children.get(&layer.id).into_iter().flatten() {
+                if doc
+                    .mask_sources()
+                    .contains(&crate::artwork_mask::MaskSource {
+                        layer: child.id,
+                        shape: None,
+                    })
+                {
+                    continue;
+                }
                 if let Some(output) = layer_outputs.get(&child.id) {
                     layer_body.push_str(output);
                 }
@@ -1280,6 +1391,8 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
         match &layer.kind {
             LayerKind::Vector { shapes } => {
                 write_shape_tree(
+                    doc,
+                    doc.layers.iter().position(|l| l.id == layer.id).unwrap(),
                     shapes,
                     &mut layer_body,
                     &mut defs,
@@ -1350,13 +1463,21 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
             layer_outputs.insert(
                 layer.id,
                 wrap_motion(format!(
-                    "<g inkscape:label=\"{}\"{}>{composed}</g>",
+                    "<g inkscape:label=\"{}\"{}>{}</g>",
                     xml_escape(&layer.name),
                     if layer.visible {
                         ""
                     } else {
                         " visibility=\"hidden\""
-                    }
+                    },
+                    artwork_mask_wrap(
+                        &mut defs,
+                        doc,
+                        &layer.artwork_masks,
+                        composed,
+                        &format!("l{}", layer.id),
+                        tiny_skia::Transform::identity()
+                    )
                 )),
             );
             continue;
@@ -1377,10 +1498,38 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
             output.push_str(&layer_body);
         }
         output.push_str("</g>\n");
+        let output = artwork_mask_wrap(
+            &mut defs,
+            doc,
+            &layer.artwork_masks,
+            output,
+            &format!("l{}", layer.id),
+            tiny_skia::Transform::identity(),
+        );
         layer_outputs.insert(layer.id, wrap_motion(output));
     }
 
-    for layer in doc.layers.iter().filter(|layer| layer.parent.is_none()) {
+    let sources = doc.mask_sources();
+    for layer in &doc.layers {
+        if sources.contains(&crate::artwork_mask::MaskSource {
+            layer: layer.id,
+            shape: None,
+        }) {
+            if let Some(output) = layer_outputs.get(&layer.id) {
+                defs.push_str(&format!(
+                    "<g id=\"oma-source-layer-{}\">{output}</g>",
+                    layer.id
+                ));
+            }
+        }
+    }
+    for layer in doc.layers.iter().filter(|layer| {
+        layer.parent.is_none()
+            && !sources.contains(&crate::artwork_mask::MaskSource {
+                layer: layer.id,
+                shape: None,
+            })
+    }) {
         if let Some(output) = layer_outputs.get(&layer.id) {
             body.push_str(output);
         }
@@ -1589,8 +1738,13 @@ mod tests {
         apply(&mut doc, &Cmd::AddShape { layer: 1, shape });
         doc.layers[1].name = "Art".into();
         doc.motion.duration = 1.0;
-        doc.motion
-            .set_key(id, crate::motion::Prop::GradientAngle, 0.0, 0.0, crate::motion::Ease::Linear);
+        doc.motion.set_key(
+            id,
+            crate::motion::Prop::GradientAngle,
+            0.0,
+            0.0,
+            crate::motion::Ease::Linear,
+        );
         doc.motion.set_key(
             id,
             crate::motion::Prop::GradientAngle,
@@ -1631,7 +1785,9 @@ mod tests {
             .filter_map(|sample| sample.split_whitespace().next()?.parse().ok())
             .collect();
         assert!(
-            angles.windows(2).any(|pair| (pair[0] - pair[1]).abs() > 1.0),
+            angles
+                .windows(2)
+                .any(|pair| (pair[0] - pair[1]).abs() > 1.0),
             "values must change: {angles:?}"
         );
         assert!(angles.iter().any(|angle| angle.abs() < 0.01), "{angles:?}");
@@ -1664,8 +1820,16 @@ mod tests {
             .split(';')
             .filter_map(|sample| sample.split_whitespace().next()?.parse().ok())
             .collect();
-        assert!(angles.windows(2).any(|pair| (pair[0] - pair[1]).abs() > 1.0), "{values}");
-        assert!(values.contains("50.0000") && values.contains("30.0000"), "{values}");
+        assert!(
+            angles
+                .windows(2)
+                .any(|pair| (pair[0] - pair[1]).abs() > 1.0),
+            "{values}"
+        );
+        assert!(
+            values.contains("50.0000") && values.contains("30.0000"),
+            "{values}"
+        );
     }
 
     #[test]
@@ -1688,24 +1852,30 @@ mod tests {
         });
         apply(&mut doc, &Cmd::AddShape { layer: 1, shape });
         doc.layers[1].name = "Art".into();
-        doc.layers[1].filters.items.push(crate::filter::Fx::Displacement {
-            scale: 12.0,
-            x_ch: 0,
-            y_ch: 1,
-        });
+        doc.layers[1]
+            .filters
+            .items
+            .push(crate::filter::Fx::Displacement {
+                scale: 12.0,
+                x_ch: 0,
+                y_ch: 1,
+            });
         let report = animated_export(&doc).unwrap();
         roxmltree::Document::parse(&report.svg).expect("svg");
         assert!(
             report.warnings.iter().any(|warning| {
-                warning.contains("Turbulence") && warning.contains("Badge") && warning.contains("Art")
+                warning.contains("Turbulence")
+                    && warning.contains("Badge")
+                    && warning.contains("Art")
             }),
             "{:?}",
             report.warnings
         );
         assert!(
-            report.warnings.iter().any(|warning| {
-                warning.contains("Displacement") && warning.contains("Art")
-            }),
+            report
+                .warnings
+                .iter()
+                .any(|warning| { warning.contains("Displacement") && warning.contains("Art") }),
             "{:?}",
             report.warnings
         );
@@ -1726,9 +1896,10 @@ mod tests {
         let id = shape.id;
         apply(&mut doc, &Cmd::AddShape { layer: 1, shape });
         doc.layers[1].name = "Art".into();
-        doc.layers[1].filters.items.push(crate::filter::Fx::ColorMatrix {
-            values: [0.0; 20],
-        });
+        doc.layers[1]
+            .filters
+            .items
+            .push(crate::filter::Fx::ColorMatrix { values: [0.0; 20] });
         doc.motion.set_key(
             id,
             crate::motion::Prop::StrokeWidth,
@@ -1753,9 +1924,10 @@ mod tests {
             report.warnings
         );
         assert!(
-            report.warnings.iter().any(|warning| {
-                warning.contains("Photo") && warning.contains("flattened")
-            }),
+            report
+                .warnings
+                .iter()
+                .any(|warning| { warning.contains("Photo") && warning.contains("flattened") }),
             "{:?}",
             report.warnings
         );

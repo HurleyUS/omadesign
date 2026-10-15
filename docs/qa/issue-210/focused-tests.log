@@ -1,0 +1,16 @@
+   Compiling omadesign v0.6.3-nightly.20261013.1 (/home/michael/Projects/omadesign/.worktrees/artwork-masks)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.25s
+     Running unittests src/lib.rs (/home/michael/Projects/omadesign/target/debug/deps/omadesign-63b806eabdd00bb1)
+
+running 9 tests
+test artwork_mask::tests::mask_cycles_are_rejected_and_history_restores_the_binding ... ok
+test artwork_mask::tests::imported_bounding_box_mask_nodes_use_document_coordinates ... ok
+test artwork_mask::tests::selected_frame_exports_include_mask_sources_and_exclude_unrelated_artwork ... ok
+test artwork_mask::tests::raster_interchange_keeps_masked_appearance_and_reports_the_conversion ... ok
+test artwork_mask::tests::shared_svg_definition_edits_update_every_target ... ok
+test artwork_mask::tests::sources_stay_live_for_layers_objects_frames_images_and_groups ... ok
+test artwork_mask::tests::svg_masks_keep_editable_sources_and_match_independent_rendering ... ok
+test artwork_mask::tests::editor_binding_move_and_release_keep_sources_live_through_undo ... ok
+test artwork_mask::tests::rotated_frame_placement_keeps_svg_masks_editable_and_aligned ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1036 filtered out; finished in 15.97s

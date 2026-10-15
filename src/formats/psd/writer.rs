@@ -74,6 +74,12 @@ fn zip_channel(data: &[u8]) -> Result<Vec<u8>, String> {
 /// Export a standards-compliant RGB/8 PSD or PSB, with a compatibility composite.
 /// Vectors and native filters are rendered per layer; groups and pixel masks stay separate.
 pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
+    if !doc.mask_sources().is_empty() {
+        let prepared=crate::compositor::raster_export_document(doc)?;
+        let mut result=encode(&prepared,large)?;
+        result.warnings.push("Live artwork masks were rendered into their affected layers or groups. Save .oma or export SVG to retain editable mask sources.".into());
+        return Ok(result);
+    }
     if !doc.width.is_finite() || !doc.height.is_finite() || doc.width < 1.0 || doc.height < 1.0 {
         return Err("Photoshop export needs a finite, nonempty canvas".into());
     }
