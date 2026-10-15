@@ -82,7 +82,7 @@ impl View {
 
     pub fn zoom_at(&mut self, screen: Pt, factor: f32) {
         let world = self.to_world(screen);
-        self.scale = (self.scale * factor).clamp(0.02, 64.0);
+        self.scale = (self.scale * factor).clamp(0.000001, 64.0);
         self.offset = screen - world * self.scale;
     }
 
@@ -91,7 +91,7 @@ impl View {
             return;
         }
         self.scale =
-            ((viewport.width() / doc.x).min(viewport.height() / doc.y) * 0.90).clamp(0.02, 64.0);
+            ((viewport.width() / doc.x).min(viewport.height() / doc.y) * 0.90).clamp(0.000001, 64.0);
         let scaled = doc * self.scale;
         self.offset = viewport.center() - scaled * 0.5;
     }
@@ -105,7 +105,7 @@ impl View {
         }
         self.scale = (viewport.width() / ww)
             .min(viewport.height() / wh)
-            .clamp(0.02, 64.0);
+            .clamp(0.000001, 64.0);
         self.offset = viewport.center() - world.center() * self.scale;
     }
 
@@ -1900,6 +1900,30 @@ mod tests {
         let o = v.to_screen(Pt::ZERO);
         assert!(o.x >= 0.0 && o.x < 400.0, "origin x {o:?} left the canvas");
         assert!(o.y >= 0.0 && o.y < 300.0, "origin y {o:?} left the canvas");
+    }
+
+    #[test]
+    fn large_canvas_fit_and_zoom_keep_the_artwork_in_view() {
+        let mut view = View::default();
+        let size = Pt::new(100000., 80000.);
+        let viewport = crate::geom::Bounds::from_min_size(Pt::ZERO, Pt::new(1000., 800.));
+        view.fit(size, viewport);
+        assert!(view.scale < 0.02);
+        let first = view.to_screen(Pt::ZERO);
+        let last = view.to_screen(size);
+        assert!(first.x >= 0. && first.y >= 0.);
+        assert!(last.x <= viewport.max.x && last.y <= viewport.max.y);
+        let center = viewport.center();
+        let world = view.to_world(center);
+        let scale = view.scale;
+        view.zoom_at(center, 1.25);
+        view.zoom_at(center, 0.8);
+        assert!((view.scale - scale).abs() < 0.000001);
+        assert!((view.to_world(center) - world).length() < 0.01);
+        view.zoom_to(crate::geom::Bounds::from_min_size(Pt::ZERO, size), viewport);
+        assert!(view.scale < 0.02);
+        assert!(view.to_screen(size).x <= viewport.max.x);
+        assert!(view.to_screen(size).y <= viewport.max.y);
     }
 
     #[test]
