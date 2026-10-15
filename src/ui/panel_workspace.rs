@@ -115,7 +115,7 @@ mod tests {
                 ("layers", Place::Left),
                 ("timeline", Place::Bottom),
             ]);
-            let _ = ctx.run_ui(input, |ui| {
+            let _ = crate::ui::shared_fields_tests::headless(&ctx, input, |ui| {
                 let center = layout.show(ui, "test", PANELS, |ui, _| {
                     ui.label("Panel body");
                 });
@@ -170,7 +170,8 @@ mod persistence_tests {
         studio.show_welcome = false;
         let before = crate::project::encode(&studio.doc).unwrap();
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(
+        let _ = crate::ui::shared_fields_tests::headless(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -200,7 +201,8 @@ mod persona_tests {
             (crate::tools::Persona::Pixel, "Pixel"),
         ] {
             studio.persona = persona;
-            let _ = ctx.run_ui(
+            let _ = crate::ui::shared_fields_tests::headless(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -222,7 +224,8 @@ mod persona_tests {
             }
         }
         studio.panel_workspaces.active = "Design".into();
-        let _ = ctx.run_ui(
+        let _ = crate::ui::shared_fields_tests::headless(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
