@@ -11,6 +11,17 @@ const id = /^[a-z0-9][a-z0-9_.-]*$/;
 /** Hash bytes. Args: buffer or text. Returns a SHA-256 hex digest. */
 export function hash(bytes) { return crypto.createHash('sha256').update(bytes).digest('hex'); }
 
+/** Hash a file with bounded memory. Args: filename. Returns actual SHA-256 and byte count. */
+export function fingerprint(file) {
+  const digest = crypto.createHash('sha256');
+  const fd = fs.openSync(file,'r');
+  const buffer = Buffer.alloc(512*1024);
+  let bytes = 0;
+  try { for (;;) { const n = fs.readSync(fd,buffer,0,buffer.length,null); if (!n) break; digest.update(buffer.subarray(0,n)); bytes+=n; } }
+  finally { fs.closeSync(fd); }
+  return {sha256:digest.digest('hex'),bytes};
+}
+
 /** Encode stable JSON. Args: a JSON value. Returns sorted, compact JSON. */
 export function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -38,7 +49,7 @@ export function validate(index) {
     if (!Array.isArray(f.required) || !f.required.length || new Set(f.required).size !== f.required.length || f.required.some(x => !dimensions.includes(x))) throw Error(`${f.id}: invalid required checks`);
     if (!Array.isArray(f.required_tiers) || !f.required_tiers.length || f.required_tiers.some(x => !tiers.includes(x))) throw Error(`${f.id}: invalid evidence tiers`);
     if (!Number.isSafeInteger(f.limits?.deadline_ms) || f.limits.deadline_ms < 1 || f.limits.deadline_ms > 300000 || !Number.isSafeInteger(f.limits?.max_input_bytes) || f.limits.max_input_bytes < 1) throw Error(`${f.id}: invalid limits`);
-    for (const asset of [f.input, f.reference].filter(Boolean)) {
+    for (const asset of [f.input, f.reference, ...(f.dependencies ?? [])].filter(Boolean)) {
       if (!id.test(asset.root) || !sha.test(asset.sha256) || !Number.isSafeInteger(asset.bytes) || asset.bytes < 1 || typeof asset.path !== 'string' || path.isAbsolute(asset.path) || asset.path.split(/[\\/]/).includes('..')) throw Error(`${f.id}: unpinned/unsafe asset`);
     }
     if (!f.input || (f.required.includes('appearance') && !f.reference)) throw Error(`${f.id}: required input/reference missing from contract`);
@@ -78,7 +89,7 @@ export function asset(asset, roots) {
   const file = contained(roots[asset.root], asset.path);
   const st = fs.statSync(file);
   if (!st.isFile() || st.size !== asset.bytes) throw Error('asset byte length mismatch');
-  const digest = hash(fs.readFileSync(file));
+  const digest = fingerprint(file).sha256;
   if (digest !== asset.sha256) throw Error('asset SHA-256 mismatch');
   return { sha256: digest, bytes: st.size };
 }

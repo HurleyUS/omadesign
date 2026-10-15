@@ -59,6 +59,9 @@ pub fn export(doc: &Document, path: &Path) -> Result<Vec<String>, String> {
 }
 
 pub fn run(args: &[String]) -> Option<Result<(), String>> {
+    if let Some(index) = args.iter().position(|a| a == "--qualify-fixture") {
+        return Some(args.get(index + 1).ok_or_else(|| "Use --qualify-fixture REQUEST.json".to_owned()).and_then(|p| super::suite_qualification::qualify(Path::new(p))));
+    }
     let inspect = args.iter().position(|a| a == "--inspect");
     let convert = args.iter().position(|a| a == "--convert");
     let index = inspect.or(convert)?;
