@@ -348,20 +348,50 @@ impl Builder {
         } else {
             (text.anchor.x, text.anchor.y)
         };
-        write!(out,"<text x=\"{x}\" y=\"{y}\" transform=\"{}\" text-anchor=\"{anchor}\" xml:space=\"preserve\">",matrix(text.transform)).unwrap();
+        let mut flow = String::new();
+        if let Some(frame) = text.frame {
+            let id = self.id();
+            write!(
+                self.defs,
+                "<rect id=\"{id}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/>",
+                frame.x0,
+                frame.y0,
+                frame.x1 - frame.x0,
+                frame.y1 - frame.y0
+            )
+            .unwrap();
+            let leading = text
+                .runs
+                .first()
+                .and_then(|r| r.leading)
+                .unwrap_or_else(|| text.runs.first().map_or(14.4, |r| r.size * 1.2));
+            flow = format!("shape-inside:url(#{id});line-height:{leading}px;");
+        }
+        write!(out,"<text x=\"{x}\" y=\"{y}\" transform=\"{}\" text-anchor=\"{anchor}\" style=\"{flow}\" xml:space=\"preserve\">",matrix(text.transform)).unwrap();
         for run in &text.runs {
             let fill = self.paint(&run.fill);
-            let content = if run.all_caps {
-                run.text.to_uppercase()
-            } else {
-                run.text.clone()
-            };
+            let content = &run.text;
+            if run.all_caps {
+                self.warn("Affinity all-caps display is retained in original data; original editable characters are preserved.");
+            }
             let family = if run.family.is_empty() {
                 &run.postscript
             } else {
                 &run.family
             };
-            write!(out,"<tspan font-family=\"{}\" font-size=\"{}\" font-weight=\"{}\" font-style=\"{}\" letter-spacing=\"{}\" fill=\"{fill}\">{}</tspan>",escape(family),run.size,run.weight,if run.italic{"italic"}else{"normal"},run.tracking*run.size,escape(&content)).unwrap();
+            let features = run
+                .features
+                .iter()
+                .map(|f| {
+                    if let Some(tag) = f.strip_prefix('-') {
+                        format!("'{tag}' 0")
+                    } else {
+                        format!("'{f}' 1")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            write!(out,"<tspan font-family=\"{}\" font-size=\"{}\" font-weight=\"{}\" font-style=\"{}\" letter-spacing=\"{}\" style=\"font-feature-settings:{}\" fill=\"{fill}\">{}</tspan>",escape(family),run.size,run.weight,if run.italic{"italic"}else{"normal"},run.tracking*run.size,escape(&features),escape(content)).unwrap();
             if !run.features.is_empty() {
                 self.warn("Affinity OpenType overrides are retained in original data; exact feature mapping depends on shared type integration.");
             }
@@ -550,6 +580,59 @@ fn blend(b: af::Blend) -> &'static str {
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn native_affinity_effects_remain_editable_after_reopen_and_export() {
+        let Ok(root) = std::env::var("OMADESIGN_AFFINITY_FIXTURES") else {
+            return;
+        };
+        let root = std::path::Path::new(&root);
+        let bytes = std::fs::read(root.join("patchy-fx.af")).unwrap();
+        let (mut doc, notes) = read(&bytes, "effects.af").unwrap();
+        doc.import_notes = notes;
+        let effects = doc
+            .layers
+            .iter()
+            .flat_map(|l| &l.filters.items)
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(effects.iter().any(|f| matches!(f,crate::filter::Fx::Shadow{dx,dy,opacity,..} if dx.abs()<0.001 && (*dy-10.).abs()<0.001 && (*opacity-0.5).abs()<0.001)));
+        assert!(
+            effects
+                .iter()
+                .any(|f| matches!(f, crate::filter::Fx::ColorOverlay { .. }))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|f| matches!(f, crate::filter::Fx::OuterGlow { .. }))
+        );
+        assert!(doc.import_notes.iter().any(|n| n.contains("BevE")));
+        assert!(doc.import_notes.iter().any(|n| n.contains("Strk")));
+        let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        assert_eq!(
+            effects,
+            reopened
+                .layers
+                .iter()
+                .flat_map(|l| &l.filters.items)
+                .copied()
+                .collect::<Vec<_>>()
+        );
+        let (pdf, _) = crate::formats::pdf::write(&reopened).unwrap();
+        let svg = crate::svg::export(&reopened).unwrap();
+        assert!(svg.contains("feGaussianBlur"));
+        let png = crate::compositor::export_png(&reopened, 1).unwrap();
+        let recovered = root.join("recovered-source.af");
+        reopened.sources[0].write_original(&recovered).unwrap();
+        assert_eq!(std::fs::read(&recovered).unwrap(), bytes);
+        std::fs::remove_file(recovered).unwrap();
+        std::fs::write(root.join("effects-export.pdf"), pdf).unwrap();
+        std::fs::write(root.join("effects-export.svg"), svg).unwrap();
+        std::fs::write(root.join("effects-native.png"), png).unwrap();
+        let preview = omadesign_affinity::preview(&bytes).unwrap();
+        std::fs::write(root.join("effects-affinity-preview.png"), preview.png).unwrap();
+    }
 
     #[test]
     fn native_affinity_real_files_preserve_editable_artwork_and_original_bytes() {
