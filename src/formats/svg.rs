@@ -352,10 +352,10 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
     let tree = usvg::Tree::from_str(&normalized, &options)
         .map_err(|e| format!("Could not parse SVG: {e}"))?;
     let (w, h) = (tree.size().width(), tree.size().height());
-    if w as f64 * h as f64 > MAX_PIXELS as f64 {
-        return Err("SVG canvas exceeds 64 megapixels".into());
-    }
-    let mut doc = Document::new(name, w, h, 96.);
+    let mut doc = Document::new(name, 1., 1., 96.);
+    doc.width = w;
+    doc.height = h;
+    doc.artboards = crate::document::Artboard::tiled(1, w, h);
     doc.transparent = true;
     doc.layers.clear();
     let mut reader = Reader {
@@ -988,6 +988,85 @@ fn path_geom(path: &tiny_skia::Path, winding: bool) -> Option<Geom> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_vector_canvas_keeps_thousands_of_objects_editable() {
+        use std::fmt::Write;
+
+        let mut source = String::from(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="80000"><g fill="#168f72">"##,
+        );
+        for index in 0..2000 {
+            let x = index % 50 * 2000;
+            let y = index / 50 * 2000;
+            write!(
+                source,
+                r#"<rect x="{x}" y="{y}" width="800" height="800"/>"#
+            )
+            .unwrap();
+        }
+        source.push_str("</g></svg>");
+        assert!(source.len() < 128 * 1024);
+
+        let (doc, notes) = read(&source, "Large vector canvas").unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(doc.size(), Pt::new(100000., 80000.));
+        assert!(doc.layers.iter().all(|layer| layer.kind.pixels().is_none()));
+        assert_eq!(
+            doc.layers
+                .iter()
+                .map(|layer| layer.kind.shapes().map_or(0, <[Shape]>::len))
+                .sum::<usize>(),
+            2000,
+        );
+        let restored = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        assert_eq!(restored.size(), doc.size());
+        assert_eq!(restored.layers.len(), doc.layers.len());
+
+        let mut view = crate::compositor::View::default();
+        view.fit(
+            doc.size(),
+            crate::geom::Bounds::from_min_size(Pt::ZERO, Pt::new(1000., 800.)),
+        );
+        let rendered = crate::compositor::render_view(
+            &restored,
+            view,
+            1000,
+            800,
+            crate::compositor::Draft::none(),
+        )
+        .unwrap();
+        assert_eq!((rendered.width(), rendered.height()), (1000, 800));
+        assert!(
+            rendered
+                .pixels()
+                .iter()
+                .any(|pixel| u16::from(pixel.green()) > u16::from(pixel.red()) + 20)
+        );
+    }
+
+    #[test]
+    fn large_vector_canvas_budgets_raster_fallbacks_by_object_size() {
+        let source = |size| {
+            format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="80000"><path d="M10 10h{size}v{size}H10Z" fill="none" stroke="black" stroke-width="4" stroke-miterlimit="8"/></svg>"#,
+            )
+        };
+        let (doc, notes) = read(&source(30), "Small fallback").unwrap();
+        assert_eq!(doc.size(), Pt::new(100000., 80000.));
+        let pixels = doc
+            .layers
+            .iter()
+            .find_map(|layer| layer.kind.pixels())
+            .unwrap();
+        assert!(pixels.w < 100 && pixels.h < 100);
+        assert_eq!(notes.len(), 1);
+        assert!(
+            read(&source(9000), "Large fallback")
+                .unwrap_err()
+                .contains("SVG layer exceeds 64 megapixels")
+        );
+    }
 
     #[test]
     fn svg_11_doctype_keeps_transformed_artwork_editable() {
