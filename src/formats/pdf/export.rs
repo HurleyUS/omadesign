@@ -408,7 +408,11 @@ impl Writer {
                 _ => None,
             }
         };
-        let alpha = solid.map_or(1., |c| c.a as f32 / 255.);
+        let alpha = if gradient.is_some() {
+            1.
+        } else {
+            solid.map_or(1., |c| c.a as f32 / 255.)
+        };
         let mut scene = Scene::default();
         let state = self.state(byte(alpha), byte(alpha), Blend::Normal);
         scene.invoke("gs", "ExtGState", state);

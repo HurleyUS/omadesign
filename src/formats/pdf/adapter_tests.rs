@@ -70,6 +70,7 @@ fn fields() -> Document {
         s.rotation = 0.07;
         s.style.stroke = Some(Stroke {
             width: 5.,
+            color: Rgba::new(0, 0, 0, 40),
             gradient: Some(g),
             ..Default::default()
         });
@@ -191,8 +192,13 @@ fn filtered(source_mask: bool) -> Document {
 /// Render and inspect the actual exported file before applying strict comparison checks.
 /// Args: authored fixture and receipt name. Returns the PDF object store and mean channel difference.
 fn inspect(doc: &Document, name: &str, limit: f64) -> (Pdf, f64) {
-    let folder =
-        std::env::temp_dir().join(format!("pdf-adapter-{name}-{}", crate::document::next_id()));
+    let persistent = std::env::var_os("OMA_PDF_EXCHANGE_RECEIPTS");
+    let folder = persistent
+        .as_ref()
+        .map(|p| std::path::PathBuf::from(p).join(format!("adapter-{name}")))
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("pdf-adapter-{name}-{}", crate::document::next_id()))
+        });
     std::fs::create_dir_all(&folder).unwrap();
     let source = folder.join("source.oma");
     crate::project::save_to(doc, &source).unwrap();
@@ -271,14 +277,6 @@ fn inspect(doc: &Document, name: &str, limit: f64) -> (Pdf, f64) {
     native.save(folder.join("native.png")).unwrap();
     let mean = total as f64 / f64::from(actual.width() * actual.height() * 3);
     std::fs::write(folder.join("result.json"),serde_json::to_vec_pretty(&serde_json::json!({"name":name,"bytes":bytes.len(),"mean_channel_error":mean,"max_channel_error":max,"notes":notes})).unwrap()).unwrap();
-    if let Some(root) = std::env::var_os("OMA_PDF_EXCHANGE_RECEIPTS") {
-        let target = std::path::PathBuf::from(root).join(format!("adapter-{name}"));
-        std::fs::create_dir_all(&target).unwrap();
-        for entry in std::fs::read_dir(&folder).unwrap() {
-            let path = entry.unwrap().path();
-            std::fs::copy(&path, target.join(path.file_name().unwrap())).unwrap();
-        }
-    }
     eprintln!(
         "PDF adapter {name}: {} bytes, native/Cairo mean {mean:0.4}/255, max {max}, notes {notes:?}",
         bytes.len()
@@ -289,13 +287,15 @@ fn inspect(doc: &Document, name: &str, limit: f64) -> (Pdf, f64) {
         folder.display()
     );
     let pdf = Pdf::load_mem(&bytes).unwrap();
-    std::fs::remove_dir_all(folder).unwrap();
+    if persistent.is_none() {
+        std::fs::remove_dir_all(folder).unwrap();
+    }
     (pdf, mean)
 }
 
 #[test]
 #[ignore = "independent PDF adapter qualification requires qpdf and Poppler"]
-fn pdf_adapter_affine_periodic_patterns_and_mixed_type_real_output() {
+fn pdf_adapter_affine_periodic_fields_stroke_alpha_real_output() {
     let (pdf, _) = inspect(&fields(), "fields", 1.5);
     assert!(
         !pdf.objects
@@ -384,4 +384,20 @@ fn pdf_adapter_source_text_keeps_actual_range_paints() {
     let (_, notes) = write(&doc).unwrap();
     assert!(notes.iter().any(|s| s.contains("outlines")), "{notes:?}");
     inspect(&doc, "source-text", 2.);
+}
+
+#[test]
+fn pdf_adapter_rejects_invalid_graphs_without_dropping_the_effect() {
+    let mut doc = filtered(false);
+    let index = doc
+        .layers
+        .iter()
+        .position(|l| l.svg_filter.is_some())
+        .unwrap();
+    let saved = doc.layers[index].svg_filter.clone();
+    doc.layers[index].svg_filter.as_mut().unwrap().transform = [0.; 6];
+    assert!(write(&doc).unwrap_err().contains("Edited filter graph"));
+    doc.layers[index].svg_filter = saved;
+    doc.layers[index].svg_filter.as_mut().unwrap().filters = vec!["missing-effect".into()];
+    assert!(write(&doc).unwrap_err().contains("missing-effect"));
 }
