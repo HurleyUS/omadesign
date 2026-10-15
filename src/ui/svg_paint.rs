@@ -27,7 +27,7 @@ pub(super) fn editor(ui: &mut Ui, pattern: &mut SvgPattern) -> bool {
                     ui.data_mut(|d| d.remove::<String>(id.with("error")));
                     changed = true;
                 }
-                _ => ui.data_mut(|d| d.insert_temp(id.with("error"), "Keep a valid pattern with the same ID.".to_string())),
+                _ => { ui.data_mut(|d| d.insert_temp(id.with("error"), "Keep a valid pattern with the same ID.".to_string())); },
             }
         }
         if let Some(error) = ui.data(|d| d.get_temp::<String>(id.with("error"))) { ui.label(error); }
