@@ -1,6 +1,9 @@
 //! Small property controls. Applications own themes, values and commands.
 use eframe::egui::{self, Response, Ui};
 use std::cell::RefCell;
+#[path = "native_scope.rs"]
+mod scope;
+pub use scope::native_scope;
 
 #[derive(Clone, Copy, Default)]
 pub struct FieldState<'a> {
@@ -50,7 +53,7 @@ pub fn number<N: egui::emath::Numeric>(
     let arrow_step = ui.input(|input| input.events.iter().any(|event| matches!(event,
         egui::Event::Key { key: egui::Key::ArrowUp | egui::Key::ArrowDown, pressed: true, modifiers, .. }
             if !modifiers.any())));
-    ui.push_id(key, |ui| {
+    native_scope(ui, key, |ui| {
         ui.vertical(|ui| {
             ui.set_min_width(0.0);
             let label_response = ui.add(egui::Label::new(label).wrap());

@@ -29,6 +29,12 @@ directly; an egui 0.32 app enables the oma-ui-egui032 compile feature to subtrac
 its public frame/title margins. Omadesign and EditBay leave that feature disabled.
 All consumers retain identical canonical source and manifest bytes.
 
+`fields::native_scope(ui, absolute_id, body)` preserves native control identity
+when earlier conditional rows change. It uses egui 0.36's absolute child scope
+and egui 0.32's public Ui constructor with inherited presentation and allocation.
+It is for native controls; the application retains their precision and behavior.
+Fields and panel tabs share this small adapter in `native_scope.rs`.
+
 `fields::number` accepts a stable ID, units, optional reset and mixed/locked/error
 state. It returns change/focus/commit/cancel signals; applications decide when to
 preview and commit typed commands. A field never owns undo or a document.

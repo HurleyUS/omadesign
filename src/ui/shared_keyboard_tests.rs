@@ -1,6 +1,49 @@
 use super::{fields::*, welcome::keyboard_tests as keys, workspace::*};
 use eframe::egui::{self, Event, Key, Modifiers};
 
+#[test]
+fn keyboard_shared_native_ids_survive_conditional_rows_and_keep_owner_boundaries() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let mut value = 1.234567_f64;
+    let mut ids: Option<(i32, Vec<egui::Id>)> = None;
+    for (preceding, owner) in [(false, 1), (true, 1), (false, 2), (true, 2)] {
+        let mut current = Vec::new();
+        keys::render(&ctx, vec![], |ui| {
+            if preceding {
+                ui.label("Conditional property");
+                ui.button("Conditional action").clicked();
+            }
+            let result = number(
+                ui,
+                ("property", owner),
+                "Stable amount",
+                &mut value,
+                -10.0..=10.0,
+                "",
+                None,
+                Default::default(),
+            );
+            current.push(result.response.id);
+            native_scope(ui, egui::Id::new(("precise-property", owner)), |ui| {
+                current.push(
+                    ui.add(egui::DragValue::new(&mut value).speed(0.01).max_decimals(6))
+                        .id,
+                );
+            });
+        });
+        if let Some((previous_owner, previous)) = &ids {
+            if *previous_owner == owner {
+                assert_eq!(*previous, current);
+            } else {
+                assert!(previous.iter().zip(&current).all(|(a, b)| a != b));
+            }
+        }
+        ids = Some((owner, current));
+        assert_eq!(value, 1.234567);
+    }
+}
+
 fn field_frame(
     ctx: &egui::Context,
     value: &mut f32,

@@ -2,6 +2,8 @@
 use eframe::egui::{self, Rect, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+#[path = "native_scope.rs"]
+mod scope;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Place {
@@ -391,13 +393,12 @@ impl Workspace {
                 ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
                 ui.horizontal_wrapped(|ui| {
                     for (tab, panel) in saved.panels.iter().enumerate() {
-                        let response = ui
-                            .scope_builder(
-                                egui::UiBuilder::new()
-                                    .id(egui::Id::new(id).with(("panel-tab", panel))),
-                                |ui| ui.selectable_label(tab == group.active, panel_label(panel)),
-                            )
-                            .inner;
+                        let response = scope::native_scope(
+                            ui,
+                            egui::Id::new(id).with(("panel-tab", panel)),
+                            |ui| ui.selectable_label(tab == group.active, panel_label(panel)),
+                        )
+                        .inner;
                         if response.has_focus() {
                             ui.painter().rect_stroke(
                                 response.rect.expand(2.),
