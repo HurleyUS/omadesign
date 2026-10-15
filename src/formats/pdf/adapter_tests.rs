@@ -501,7 +501,7 @@ fn pdf_adapter_mixed_type_real_output() {
         .get_pages()
         .values()
         .flat_map(|id| {
-            Content::decode(&pdf.get_page_content(*id).unwrap())
+            Content::decode(&pdf.get_page_content(*id))
                 .unwrap()
                 .operations
         })
