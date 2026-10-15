@@ -15,24 +15,62 @@ pub struct SvgPattern {
 /// Rebind definition IDs for an independent exported object.
 /// Args: normalized SVG definitions and a unique prefix. Returns collision-free XML.
 pub fn namespace(source: &str, prefix: &str) -> String {
-    let mut output = source.to_string();
-    let wrapper = format!("<svg>{source}</svg>");
+    let header = "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\">";
+    let wrapper = format!("{header}{source}</svg>");
     let Ok(xml) = roxmltree::Document::parse(&wrapper) else {
-        return output;
+        return source.to_string();
     };
-    let ids: Vec<_> = xml
+    let ids: std::collections::HashSet<_> = xml
         .descendants()
         .filter_map(|n| n.attribute("id"))
-        .map(str::to_string)
         .collect();
-    for id in ids {
-        output = output
-            .replace(&format!("id=\"{id}\""), &format!("id=\"{prefix}{id}\""))
-            .replace(&format!("url(#{id})"), &format!("url(#{prefix}{id})"))
-            .replace(
-                &format!("href=\"#{id}\""),
-                &format!("href=\"#{prefix}{id}\""),
-            );
+    let mut edits = Vec::new();
+    for node in xml.descendants().filter(|n| n.is_element()) {
+        for attr in node.attributes() {
+            let value = attr.value();
+            let replacement = if attr.name() == "id" {
+                format!("{prefix}{value}")
+            } else if attr.name() == "href"
+                && value.strip_prefix('#').is_some_and(|id| ids.contains(id))
+            {
+                format!("#{prefix}{}", &value[1..])
+            } else {
+                let lower = value.to_ascii_lowercase();
+                let mut output = String::new();
+                let mut cursor = 0;
+                while let Some(start) = lower[cursor..].find("url(").map(|i| cursor + i) {
+                    let Some(end) = lower[start + 4..].find(')').map(|i| start + 4 + i) else {
+                        break;
+                    };
+                    output.push_str(&value[cursor..start]);
+                    let argument = value[start + 4..end].trim().trim_matches(['\'', '"']);
+                    if let Some(id) = argument.strip_prefix('#').filter(|id| ids.contains(id)) {
+                        output.push_str(&format!("url(#{prefix}{id})"));
+                    } else {
+                        output.push_str(&value[start..=end]);
+                    }
+                    cursor = end + 1;
+                }
+                output.push_str(&value[cursor..]);
+                output
+            };
+            if replacement != value && attr.range_value().start >= header.len() {
+                let escaped = replacement
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('"', "&quot;")
+                    .replace('\'', "&apos;");
+                edits.push((
+                    attr.range_value().start - header.len()..attr.range_value().end - header.len(),
+                    escaped,
+                ));
+            }
+        }
+    }
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    let mut output = source.to_string();
+    for (range, text) in edits {
+        output.replace_range(range, &text);
     }
     output
 }
@@ -596,5 +634,27 @@ mod independent_tests {
             mean < 1.5,
             "independent librsvg SVG paint mean channel error={mean}"
         );
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    #[test]
+    fn svg_resource_namespaces_preserve_quoted_urls_and_linked_patterns() {
+        let defs = r##"<linearGradient id="g"><stop stop-color="#28a"/><stop offset="1" stop-color="#fa6"/></linearGradient><pattern id="p" patternUnits="userSpaceOnUse" width="12" height="12"><rect width="8" height="12" style="fill: url( '#g' )"/></pattern><pattern id="alias" xlink:href="#p"/>"##;
+        let draw = |defs: &str, id: &str| {
+            let source = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="48" height="36"><defs>{defs}</defs><path d="M0 0H48V36H0Z" fill="url(#{id})"/></svg>"##
+            );
+            let tree = usvg::Tree::from_str(&source, &options()).unwrap();
+            let mut pixels = tiny_skia::Pixmap::new(48, 36).unwrap();
+            resvg::render(&tree, Transform::identity(), &mut pixels.as_mut());
+            pixels
+        };
+        let expected = draw(defs, "alias");
+        assert!(expected.pixels().iter().any(|p| p.alpha() > 0));
+        let actual = draw(&namespace(defs, "copy-"), "copy-alias");
+        assert_eq!(expected.data(), actual.data());
     }
 }
