@@ -1209,9 +1209,58 @@ fn draw_shape_inner(
             _ => FillRule::EvenOdd,
         };
         if let Fill::Pattern(pattern) = &shape.style.fill {
-            let rotation = Transform::from_rotate_at(shape.rotation.to_degrees(), shape.geom.bbox().center().x, shape.geom.bbox().center().y);
-            let local_path = path.as_ref().clone().transform(rotation.invert().unwrap_or_default());
-            if let Some(local_path) = local_path { pattern.draw(pm, &local_path, shape.geom.bbox(), xf.pre_concat(rotation), op, blend, mask, shape.geom.nonzero_winding()); }
+            let rotation = Transform::from_rotate_at(
+                shape.rotation.to_degrees(),
+                shape.geom.bbox().center().x,
+                shape.geom.bbox().center().y,
+            );
+            let local_path = path
+                .as_ref()
+                .clone()
+                .transform(rotation.invert().unwrap_or_default());
+            if let Some(local_path) = local_path {
+                let mut reveal = None;
+                if fill_reveal < 1. {
+                    let bounds = shape.world_bbox();
+                    if let Some(rect) = tiny_skia::Rect::from_xywh(
+                        bounds.min.x,
+                        bounds.max.y - bounds.height() * fill_reveal,
+                        bounds.width().max(1e-5),
+                        (bounds.height() * fill_reveal).max(1e-5),
+                    ) {
+                        reveal = mask
+                            .cloned()
+                            .or_else(|| tiny_skia::Mask::new(pm.width(), pm.height()));
+                        if let Some(clip) = &mut reveal {
+                            if mask.is_some() {
+                                clip.intersect_path(
+                                    &PathBuilder::from_rect(rect),
+                                    FillRule::Winding,
+                                    true,
+                                    xf,
+                                );
+                            } else {
+                                clip.fill_path(
+                                    &PathBuilder::from_rect(rect),
+                                    FillRule::Winding,
+                                    true,
+                                    xf,
+                                );
+                            }
+                        }
+                    }
+                }
+                pattern.draw(
+                    pm,
+                    &local_path,
+                    shape.geom.bbox(),
+                    xf.pre_concat(rotation),
+                    op,
+                    blend,
+                    reveal.as_ref().or(mask),
+                    shape.geom.nonzero_winding(),
+                );
+            }
         } else if fill_reveal < 1.0 {
             let bounds = shape.world_bbox();
             if let Some(rect) = tiny_skia::Rect::from_xywh(
