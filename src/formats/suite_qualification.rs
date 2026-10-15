@@ -10,7 +10,7 @@ fn structure(doc: &Document) -> Value {
         "layers":doc.layers.iter().map(|l| json!({
             "name":l.name,"kind":if l.is_group {"group"} else if l.kind.pixels().is_some() {"raster"} else {"vector"},
             "visible":l.visible,"parent":l.parent.and_then(|id|doc.layers.iter().position(|p|p.id==id)),
-            "opacity":l.opacity,"mask":l.mask.is_some(),"objects":l.kind.shapes().map_or(0,|s|s.len()),
+            "opacity":l.opacity,"blend":l.blend,"pass_through":l.pass_through,"mask":l.mask.is_some(),"objects":l.kind.shapes().map_or(0,|s|s.len()),
             "offset":l.kind.raster_xform().map(|(p,_,_)|[p.x,p.y]),
             "artwork_masks":l.artwork_masks,
             "pixels":l.kind.pixels().map(|p|json!({"width":p.w,"height":p.h,"rgba":p.data})),
