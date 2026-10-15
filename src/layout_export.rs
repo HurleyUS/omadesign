@@ -1077,7 +1077,7 @@ mod tests {
             });
         let html = export_html(&doc, 0, frame).unwrap();
         assert!(html.contains(&format!("id=\"screen-{target}\"")));
-        assert!(html.contains("\"Navigate\":{\"target\":"));
+        assert!(html.contains("&quot;Navigate&quot;:{&quot;target&quot;:"));
         assert!(!html.contains("PRIVATE SIBLING"));
         assert_eq!(html.matches("<template ").count(), 2);
     }
