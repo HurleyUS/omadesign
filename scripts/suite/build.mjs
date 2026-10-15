@@ -21,6 +21,20 @@ export function buildBinding(config, receiptPath, artifactSha) {
   return {revision:r.revision,tree:r.source_tree,binary:a.path,sha256:a.sha256,runtime_root:config.repositories[r.repository].worktree,driver:a.profile?.test?'libtest':'cli',tools:{},compiler_receipt:{path:receiptPath,sha256:digest,helper_sha256:r.helper_sha256,receipt_helper_sha256:r.receipt_helper_sha256},test_execution_proven:false};
 }
 
+/** Check the locked compiler record behind a local binding.
+ * Args: build binding. Returns its immutable receipt or throws; never infers old bytes from today's executable.
+ */
+export function verifyCompilerReceipt(build) {
+  const file=build.compiler_receipt?.path;
+  if (!file) throw Error('required locked compiler receipt unavailable');
+  const bytes=fs.readFileSync(file);
+  const digest=hash(bytes);
+  if (digest!==build.compiler_receipt.sha256 || path.basename(file)!==`${digest}.json`) throw Error('required compiler receipt integrity mismatch');
+  const r=JSON.parse(bytes);
+  if (r.schema!==1 || r.revision!==build.revision || r.source_tree!==build.tree || r.dirty_before!==false || r.dirty_after!==false || r.exit_code!==0 || r.signal || r.receipt_errors?.length!==0 || !r.executables?.some(a=>a.path===build.binary && a.sha256===build.sha256 && a.size>0)) throw Error('required compiler executable binding unavailable');
+  return r;
+}
+
 if (process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
   const [configPath,receiptPath,output,artifactSha]=process.argv.slice(2);
   if (!output?.startsWith('/home/')) throw Error('Use build.mjs CONFIG LOCKED_RECEIPT /home/.../BUILD.json [EXACT_ARTIFACT_SHA]');

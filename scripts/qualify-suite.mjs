@@ -8,6 +8,7 @@ import { asset, canonical, contained, fingerprint, gate, hash, libraries, select
 import { runProcess } from './suite/process.mjs';
 import { rawEvidence } from './suite/raw-evidence.mjs';
 import { ownerEvidence } from './suite/owner-evidence.mjs';
+import { verifyCompilerReceipt } from './suite/build.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [command, ...args] = process.argv.slice(2);
@@ -87,6 +88,15 @@ if (command === 'plan') {
           if (!build.runtime_root || canonical(source(build.runtime_root)) !== canonical(actualSource)) throw Error('build runtime fixture checkout unavailable or changed');
           binary = { ...fingerprint(build.binary), driver: build.driver };
           if (binary.sha256 !== build.sha256) throw Error('build executable hash changed');
+          if (build.compiler_receipt) verifyCompilerReceipt(build);
+          else {
+            let pid=process.ppid, live=false;
+            for(let n=0;pid>1 && n<32;n++) {
+              if (pid===build.live_test_pid && fingerprint(`/proc/${pid}/exe`).sha256===binary.sha256) {live=true;break;}
+              pid=Number(fs.readFileSync(`/proc/${pid}/status`,'utf8').match(/^PPid:\s+(\d+)/m)?.[1] ?? 0);
+            }
+            if (command!=='run' || !live) throw Error('current locked compiler receipt or live Cargo test binding unavailable');
+          }
         }
         const tools = [];
         for (const name of f.tools ?? []) {

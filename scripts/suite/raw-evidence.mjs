@@ -3,6 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import { asset, canonical, contained, fingerprint, hash, source } from './contract.mjs';
+import { verifyCompilerReceipt } from './build.mjs';
 
 /** Verify PHOTO-03's pinned per-case receipts without decoding or acquiring anything.
  * Args: pinned producer contract and private local roots/builds/bindings/receipt directory.
@@ -21,7 +22,8 @@ export async function rawEvidence(cohort, { roots, builds, bindings = {}, receip
     if (!required.length) throw Error('zero required camera cases');
     const build = builds[cohort.id];
     const binary = build?.binary ? fingerprint(build.binary) : null;
-    const currentBuild = binary && binary.sha256===build.sha256 && build.revision===current.revision && build.tree===current.tree;
+    let currentBuild=false;
+    try {verifyCompilerReceipt(build);currentBuild=binary && binary.sha256===build.sha256 && build.revision===current.revision && build.tree===current.tree;}catch {}
     const rows = [];
     for (const entry of required) {
       const inspected = await inspector.inspectCase(entry,bindings.cases?.[entry.id] ?? {},corpus ?? path.join(root,'.artifacts/unavailable-camera-corpus'));

@@ -36,6 +36,11 @@ test('owner proofs reject altered artifacts, old source and absent acceptance ch
   const file=path.join(scratch,'UI-03.omadesign.json');
   const requirements=[{id:'UI-03',product:'omadesign',checks:['UI-03']}];
   const local={directory:scratch,roots:{omadesign:root},builds:{omadesign:{...current,binary:process.execPath,...binary}}};
+  const compile={schema:1,repository:'omadesign',revision:current.revision,source_tree:current.tree,dirty_before:false,dirty_after:false,exit_code:0,signal:null,receipt_errors:[],executables:[{path:process.execPath,sha256:binary.sha256,size:binary.bytes}]};
+  const compileBytes=JSON.stringify(compile)+'\n';
+  const compileFile=path.join(scratch,`${hash(compileBytes)}.json`);
+  fs.writeFileSync(compileFile,compileBytes);
+  local.builds.omadesign.compiler_receipt={path:compileFile,sha256:hash(compileBytes)};
   const check=p=>{fs.writeFileSync(file,JSON.stringify(p));return ownerEvidence(requirements,local)[0].status};
   assert.equal(check(packet),'passed');
   assert.equal(check({...packet,revision:'0'.repeat(40)}),'unqualified');
