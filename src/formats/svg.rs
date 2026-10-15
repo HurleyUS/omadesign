@@ -399,6 +399,7 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
         pixel_bytes: 0,
         mask_sources: HashMap::new(),
         rich_text,
+        transform: Transform::identity(),
     };
     reader.children(tree.root(), None, 0)?;
     if reader.doc.layers.is_empty() {
@@ -420,8 +421,9 @@ struct Reader<'a> {
     definition_cache: HashMap<String, std::sync::Arc<str>>,
     effect_sources: std::collections::HashSet<String>,
     pixel_bytes: u64,
-    mask_sources: HashMap<usize, MaskSource>,
+    mask_sources: HashMap<usize, (MaskSource, Transform)>,
     rich_text: HashMap<String,(crate::text::svg_type::SvgText,String,std::collections::BTreeMap<usize,f32>)>,
+    transform: Transform,
 }
 impl Reader<'_> {
     fn paint(
@@ -565,7 +567,7 @@ impl Reader<'_> {
                             definitions,
                             original_definitions: self.original_definitions.clone(),
                             filters,
-                            transform: matrix(g.abs_transform()),
+                            transform: matrix(self.transform.pre_concat(g.abs_transform())),
                             reductions: crate::svg_source::reductions(&format!(
                                 "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\">{}</svg>",
                                 self.original_definitions
@@ -576,14 +578,14 @@ impl Reader<'_> {
                     if let Some(clip) = g.clip_path() {
                         layer.artwork_masks.extend(self.clip_masks(
                             clip,
-                            g.abs_transform(),
+                            self.transform.pre_concat(g.abs_transform()),
                             depth + 1,
                         )?);
                     }
                     if let Some(mask) = g.mask() {
                         layer.artwork_masks.extend(self.svg_masks(
                             mask,
-                            g.abs_transform(),
+                            self.transform.pre_concat(g.abs_transform()),
                             depth + 1,
                         )?);
                     }
@@ -623,21 +625,26 @@ impl Reader<'_> {
         root: &usvg::Group,
         name: &str,
         depth: usize,
-    ) -> Result<MaskSource, String> {
+        transform: Transform,
+    ) -> Result<(MaskSource, Transform), String> {
         let key = root as *const usvg::Group as usize;
         if let Some(source) = self.mask_sources.get(&key) {
             return Ok(*source);
         }
         let mut layer = Layer::group(name);
         layer.pass_through = false;
-        self.children(root, Some(layer.id), depth + 1)?;
+        let previous = self.transform;
+        self.transform = transform;
+        let children = self.children(root, Some(layer.id), depth + 1);
+        self.transform = previous;
+        children?;
         let source = MaskSource {
             layer: layer.id,
             shape: None,
         };
         self.doc.layers.push(layer);
-        self.mask_sources.insert(key, source);
-        Ok(source)
+        self.mask_sources.insert(key, (source, transform));
+        Ok((source, transform))
     }
     fn clip_masks(
         &mut self,
@@ -648,15 +655,19 @@ impl Reader<'_> {
         if depth > 64 {
             return Err("SVG clip nesting exceeds 64 levels".into());
         }
-        let mut mask = ArtworkMask::new(self.mask_source(
-            clip.root(),
-            &self.name(clip.id(), "Clip"),
-            depth,
-        )?);
-        mask.transform = matrix(transform.pre_concat(clip.transform()));
+        let parent_transform = transform;
+        let transform = transform.pre_concat(clip.transform());
+        let (source, base) =
+            self.mask_source(clip.root(), &self.name(clip.id(), "Clip"), depth, transform)?;
+        let mut mask = ArtworkMask::new(source);
+        mask.transform = matrix(if transform == base {
+            Transform::identity()
+        } else {
+            transform.pre_concat(base.invert().ok_or("Singular SVG clip transform")?)
+        });
         let mut masks = vec![mask];
         if let Some(other) = clip.clip_path() {
-            masks.extend(self.clip_masks(other, transform, depth + 1)?);
+            masks.extend(self.clip_masks(other, parent_transform, depth + 1)?);
         }
         Ok(masks)
     }
@@ -669,17 +680,24 @@ impl Reader<'_> {
         if depth > 64 {
             return Err("SVG mask nesting exceeds 64 levels".into());
         }
-        let mut mask = ArtworkMask::new(self.mask_source(
+        let (reference, base) = self.mask_source(
             source.root(),
             &self.name(source.id(), "Mask"),
             depth,
-        )?);
+            transform,
+        )?;
+        let mut mask = ArtworkMask::new(reference);
         mask.mode = if source.kind() == usvg::MaskType::Alpha {
             MaskMode::Alpha
         } else {
             MaskMode::Luminance
         };
-        mask.transform = matrix(transform);
+        mask.transform = matrix(if transform == base {
+            Transform::identity()
+        } else {
+            transform.pre_concat(base.invert().ok_or("Singular SVG mask transform")?)
+        });
+        mask.region_transform = matrix(base);
         let r = source.rect();
         mask.region = Some(crate::geom::Bounds::from_min_size(
             Pt::new(r.x(), r.y()),
@@ -692,7 +710,7 @@ impl Reader<'_> {
         Ok(masks)
     }
     fn path(&mut self, path: &usvg::Path, parent: Option<u64>) -> Result<bool, String> {
-        let transform = path.abs_transform();
+        let transform = self.transform.pre_concat(path.abs_transform());
         let Some(transformed) = path.data().clone().transform(transform) else {
             return Ok(false);
         };
@@ -824,7 +842,7 @@ impl Reader<'_> {
         let Some(stroke) = path.stroke() else {
             return Ok(false);
         };
-        let transform = path.abs_transform();
+        let transform = self.transform.pre_concat(path.abs_transform());
         let scale = tiny_skia::PathStroker::compute_resolution_scale(&transform);
         let settings = stroke.to_tiny_skia();
         let dashed = settings
@@ -892,7 +910,7 @@ impl Reader<'_> {
         image: &usvg::Image,
         parent: Option<u64>,
     ) -> Result<(), String> {
-        let t = image.abs_transform();
+        let t = self.transform.pre_concat(image.abs_transform());
         let data = match image.kind() {
             usvg::ImageKind::JPEG(d)
             | usvg::ImageKind::PNG(d)
@@ -939,7 +957,7 @@ impl Reader<'_> {
             }
         }}
 
-        let t=text.abs_transform();
+        let t=self.transform.pre_concat(text.abs_transform());
         let mut run=TypeRun{content,font,px,manual_kern,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
         crate::text::svg_type::restore_scales(&mut run)?;
         crate::text::svg_type::restore_offsets(&mut run)?;
@@ -960,7 +978,7 @@ impl Reader<'_> {
         let mut layer=Layer::vector(shape.name.clone());layer.parent=parent;self.meta(&mut layer,text.id());layer.kind.shapes_mut().unwrap().push(shape);self.doc.layers.push(layer);Ok(true)
     }
     fn text(&mut self, text: &usvg::Text, parent: Option<u64>) -> Result<bool, String> {
-        let t = text.abs_transform();
+        let t = self.transform.pre_concat(text.abs_transform());
         if t.kx.abs() > 0.0001
             || t.ky.abs() > 0.0001
             || t.sx <= 0.
@@ -1160,12 +1178,34 @@ impl Reader<'_> {
         };
         // Raster buffers sit on the document pixel grid. A fractional buffer
         // origin would resample the same antialiased edge again on placement.
-        let left = b.x().floor();
-        let top = b.y().floor();
-        let (w, h) = (
-            (b.right().ceil() - left).max(1.) as u32,
-            (b.bottom().ceil() - top).max(1.) as u32,
-        );
+        let mut corners = [
+            tiny_skia::Point::from_xy(b.x(), b.y()),
+            tiny_skia::Point::from_xy(b.right(), b.y()),
+            tiny_skia::Point::from_xy(b.right(), b.bottom()),
+            tiny_skia::Point::from_xy(b.x(), b.bottom()),
+        ];
+        self.transform.map_points(&mut corners);
+        let left = corners
+            .iter()
+            .map(|p| p.x)
+            .fold(f32::INFINITY, f32::min)
+            .floor();
+        let top = corners
+            .iter()
+            .map(|p| p.y)
+            .fold(f32::INFINITY, f32::min)
+            .floor();
+        let right = corners
+            .iter()
+            .map(|p| p.x)
+            .fold(f32::NEG_INFINITY, f32::max)
+            .ceil();
+        let bottom = corners
+            .iter()
+            .map(|p| p.y)
+            .fold(f32::NEG_INFINITY, f32::max)
+            .ceil();
+        let (w, h) = ((right - left).max(1.) as u32, (bottom - top).max(1.) as u32);
         if u64::from(w) * u64::from(h) > MAX_PIXELS {
             return Err("SVG layer exceeds 64 megapixels".into());
         }
@@ -1190,6 +1230,7 @@ impl Reader<'_> {
             _ => node.abs_transform(),
         };
         let root_transform = Transform::from_translate(-left, -top)
+            .pre_concat(self.transform)
             .pre_concat(ancestors)
             .pre_translate(b.x(), b.y());
         resvg::render_node(node, root_transform, &mut pm.as_mut())
