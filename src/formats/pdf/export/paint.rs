@@ -18,8 +18,8 @@ pub(super) fn local_bounds(bounds: Bounds, center: Pt, rotation: f32) -> Bounds 
     result
 }
 
-/// Encode a periodic native paint field without a pixel surface.
-/// Args: object store, normalized gradient, object bounds and channel selection. Returns a PDF shading.
+/// Encode every visible period as explicit axial or two-circle vector shading segments.
+/// Args: object store, normalized gradient, object and page bounds, channel selection. Returns a PDF shading.
 pub(super) fn field(
     pdf: &mut Pdf,
     g: &Gradient,
@@ -27,108 +27,154 @@ pub(super) fn field(
     extent: Bounds,
     alpha: bool,
 ) -> Result<ObjectId, String> {
-    let mut domain = extent;
-    let position = if g.kind == GradientKind::Radial {
+    let corners = [
+        extent.min,
+        Pt::new(extent.max.x, extent.min.y),
+        extent.max,
+        Pt::new(extent.min.x, extent.max.y),
+    ];
+    let radial = g.kind == GradientKind::Radial;
+    let (start, end, coords) = if radial {
         let inverse = g
             .radial_transform(bounds)
             .invert()
+            .filter(|t| t.is_finite())
             .ok_or("PDF radial paint matrix is singular")?;
-        let mut corners = [
-            tiny_skia::Point::from_xy(domain.min.x, domain.min.y),
-            tiny_skia::Point::from_xy(domain.max.x, domain.min.y),
-            tiny_skia::Point::from_xy(domain.max.x, domain.max.y),
-            tiny_skia::Point::from_xy(domain.min.x, domain.max.y),
-        ];
-        inverse.map_points(&mut corners);
-        domain = Bounds::from_pt(Pt::new(corners[0].x, corners[0].y));
-        for p in corners {
-            domain.union_pt(Pt::new(p.x, p.y));
-        }
-        let [x, y] = g.focal;
+        let mut points = corners.map(|p| tiny_skia::Point::from_xy(p.x, p.y));
+        inverse.map_points(&mut points);
+        let f = Pt::from_array(g.focal);
         let r = g.inner_radius.max(0.);
-        let a = x * x + y * y - (1. - r).powi(2);
-        let c = format!("{y} sub dup mul exch {x} sub dup mul add {} sub", r * r);
-        let b = format!(
-            "{y} sub {y} mul exch {x} sub {x} mul add {} sub 2 mul",
-            r * (1. - r)
-        );
-        if a.abs() < 1e-6 {
-            format!("2 copy {c} 3 1 roll {b} div neg")
-        } else {
-            format!(
-                "2 copy {c} 3 1 roll {b} dup dup mul 3 -1 roll {} mul sub dup 0 lt {{pop 0}} if sqrt exch neg exch {} {} div",
-                4. * a,
-                if a < 0. { "sub" } else { "add" },
-                2. * a
+        let dr = 1. - r;
+        let distance = points
+            .iter()
+            .map(|p| (Pt::new(p.x, p.y) - f).length())
+            .fold(0., f32::max);
+        let (start, end) = if dr.abs() < 1e-6 {
+            let length = f.length();
+            if length < 1e-6 {
+                return Err("PDF periodic radial circles are coincident".into());
+            }
+            let positions = points.map(|p| 1. - Pt::new(p.x, p.y).dot(f) / f.length_sq());
+            (
+                (positions.into_iter().fold(f32::INFINITY, f32::min) - r / length).floor(),
+                (positions.into_iter().fold(f32::NEG_INFINITY, f32::max) + r / length).ceil(),
             )
-        }
+        } else {
+            let a = f.length_sq() - dr * dr;
+            if a.abs() < 1e-6 {
+                return Err("PDF periodic radial field has an unbounded tangent cone".into());
+            }
+            let b = 2. * (distance * f.length() + r * dr.abs());
+            let c = distance * distance + r * r;
+            let reach = ((b + (b * b + 4. * a.abs() * c).sqrt()) / (2. * a.abs())).ceil() + 1.;
+            if dr > 0. {
+                (-r / dr, reach)
+            } else {
+                (-reach, -r / dr)
+            }
+        };
+        let first = f * (1. - start);
+        let last = f * (1. - end);
+        (
+            start,
+            end,
+            vec![
+                first.x,
+                first.y,
+                (r + start * dr).max(0.),
+                last.x,
+                last.y,
+                (r + end * dr).max(0.),
+            ],
+        )
     } else {
         let (a, b) = g.endpoints(bounds);
         let d = b - a;
         if d.length_sq() < 1e-12 {
             return Err("PDF periodic linear paint has coincident endpoints".into());
         }
-        format!(
-            "exch {} sub {} mul exch {} sub {} mul add {} div",
-            a.x,
-            d.x,
-            a.y,
-            d.y,
-            d.length_sq()
-        )
+        let positions = corners.map(|p| (p - a).dot(d) / d.length_sq());
+        let start = positions.into_iter().fold(f32::INFINITY, f32::min).floor();
+        let end = positions
+            .into_iter()
+            .fold(f32::NEG_INFINITY, f32::max)
+            .ceil()
+            .max(start + 1.);
+        let first = a + d * start;
+        let last = a + d * end;
+        (start, end, vec![first.x, first.y, last.x, last.y])
     };
-    let spread = match g.spread {
-        Spread::Repeat => "dup floor sub",
-        Spread::Reflect => "dup 2 div floor 2 mul sub dup 1 gt {2 exch sub} if",
-        Spread::Pad => "dup 0 lt {pop 0} if dup 1 gt {pop 1} if",
-    };
-    let channel = |component: fn(Rgba) -> u8| {
-        let mut code = format!(
-            "pop {}",
-            component(g.stops.last().unwrap().color) as f32 / 255.
-        );
-        for pair in g.stops.windows(2).rev() {
-            if pair[1].offset <= pair[0].offset {
-                continue;
-            }
-            let first = component(pair[0].color) as f32 / 255.;
-            let delta = component(pair[1].color) as f32 / 255. - first;
-            code = format!(
-                "dup {} lt {{{} sub {} div {delta} mul {first} add}} {{{code}}} ifelse",
-                pair[1].offset,
-                pair[0].offset,
-                pair[1].offset - pair[0].offset
-            );
-        }
-        format!(
-            "dup {} lt {{pop {}}} {{{code}}} ifelse",
-            g.stops[0].offset,
-            component(g.stops[0].color) as f32 / 255.
-        )
-    };
-    let channels = if alpha {
-        channel(|c| c.a)
-    } else {
-        format!(
-            "dup {} exch dup {} exch {}",
-            channel(|c| c.r),
-            channel(|c| c.g),
-            channel(|c| c.b)
-        )
-    };
-    let domain = vec![domain.min.x, domain.max.x, domain.min.y, domain.max.y];
-    if domain.iter().any(|v| !v.is_finite()) {
-        return Err("PDF paint field must have finite bounds".into());
+    if !start.is_finite()
+        || !end.is_finite()
+        || end <= start
+        || end - start > 4096.
+        || coords.iter().any(|v| !v.is_finite())
+    {
+        return Err("PDF periodic paint exceeds 4096 finite vector periods".into());
     }
-    let domain = domain.into_iter().map(Object::Real).collect::<Vec<_>>();
-    let range = (0..if alpha { 1 } else { 3 })
-        .flat_map(|_| [Object::Integer(0), Object::Integer(1)])
-        .collect::<Vec<_>>();
-    let function = pdf.add_object(Stream::new(
-        dictionary! {"FunctionType"=>4,"Domain"=>domain.clone(),"Range"=>range},
-        format!("{{ {position} {spread} {channels} }}").into_bytes(),
-    ));
-    Ok(pdf.add_object(dictionary!{"ShadingType"=>1,"ColorSpace"=>if alpha{"DeviceGray"}else{"DeviceRGB"},"Domain"=>domain,"Function"=>function}))
+    let channels = |color: Rgba| {
+        if alpha {
+            vec![color.a as f32 / 255.]
+        } else {
+            vec![
+                color.r as f32 / 255.,
+                color.g as f32 / 255.,
+                color.b as f32 / 255.,
+            ]
+        }
+    };
+    let sample = |position: f32| {
+        let first = &g.stops[0];
+        if position <= first.offset {
+            return channels(first.color);
+        }
+        for pair in g.stops.windows(2) {
+            if position <= pair[1].offset && pair[1].offset > pair[0].offset {
+                let t =
+                    ((position - pair[0].offset) / (pair[1].offset - pair[0].offset)).clamp(0., 1.);
+                return channels(pair[0].color)
+                    .into_iter()
+                    .zip(channels(pair[1].color))
+                    .map(|(a, b)| a + (b - a) * t)
+                    .collect();
+            }
+        }
+        channels(g.stops.last().unwrap().color)
+    };
+    let mut functions = vec![];
+    let mut cuts = vec![];
+    for cycle in start.floor() as i64..end.ceil() as i64 {
+        let cycle = cycle as f32;
+        let reverse = g.spread == Spread::Reflect && (cycle as i64).rem_euclid(2) == 1;
+        let lower = (start - cycle).max(0.);
+        let upper = (end - cycle).min(1.);
+        if upper <= lower {
+            continue;
+        }
+        let mut stops = vec![lower, upper];
+        stops.extend(
+            g.stops
+                .iter()
+                .map(|s| if reverse { 1. - s.offset } else { s.offset })
+                .filter(|p| *p > lower && *p < upper),
+        );
+        stops.sort_by(f32::total_cmp);
+        stops.dedup();
+        for pair in stops.windows(2) {
+            let from = sample(if reverse { 1. - pair[0] } else { pair[0] });
+            let to = sample(if reverse { 1. - pair[1] } else { pair[1] });
+            if !functions.is_empty() {
+                cuts.push(Object::Real((cycle + pair[0] - start) / (end - start)));
+            }
+            functions.push(Object::Reference(pdf.add_object(dictionary!{"FunctionType"=>2,"Domain"=>vec![0.into(),1.into()],"C0"=>from.into_iter().map(Object::Real).collect::<Vec<_>>(),"C1"=>to.into_iter().map(Object::Real).collect::<Vec<_>>(),"N"=>1})));
+        }
+    }
+    let encode = functions
+        .iter()
+        .flat_map(|_| [0.into(), 1.into()])
+        .collect::<Vec<Object>>();
+    let function=pdf.add_object(dictionary!{"FunctionType"=>3,"Domain"=>vec![0.into(),1.into()],"Functions"=>functions,"Bounds"=>cuts,"Encode"=>encode});
+    Ok(pdf.add_object(dictionary!{"ShadingType"=>if radial{3}else{2},"ColorSpace"=>if alpha{"DeviceGray"}else{"DeviceRGB"},"Coords"=>coords.into_iter().map(Object::Real).collect::<Vec<_>>(),"Function"=>function,"Extend"=>vec![Object::Boolean(false),Object::Boolean(false)]}))
 }
 
 impl Writer {
@@ -230,8 +276,6 @@ impl Writer {
         let encoded = scene.encode()?;
         let id=self.pdf.add_object(Stream::new(dictionary!{"Type"=>"Pattern","PatternType"=>1,"PaintType"=>1,"TilingType"=>1,"BBox"=>vec![0.into(),0.into(),Object::Real(rect.width()),Object::Real(rect.height())],"XStep"=>rect.width(),"YStep"=>rect.height(),"Matrix"=>vec![t.sx,t.ky,t.kx,t.sy,t.tx,t.ty].into_iter().map(Object::Real).collect::<Vec<_>>(),"Resources"=>scene.resources},encoded));
         let mut painted = Scene::default();
-        let state = self.state(byte(pattern.opacity), byte(pattern.opacity), Blend::Normal);
-        painted.invoke("gs", "ExtGState", state);
         painted.ops.push(Operation::new(
             "cs",
             vec![Object::Name(b"Pattern".to_vec())],
@@ -248,7 +292,11 @@ impl Writer {
             &[],
         );
         let form = self.form(painted, bounds, true)?;
+        let state = self.state(byte(pattern.opacity), byte(pattern.opacity), Blend::Normal);
+        op(&mut out.ops, "q", &[]);
+        out.invoke("gs", "ExtGState", state);
         out.invoke("Do", "XObject", form);
+        op(&mut out.ops, "Q", &[]);
         Ok(())
     }
 }

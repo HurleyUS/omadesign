@@ -18,7 +18,7 @@ pub(super) fn prepare(
         if graph.transform.iter().any(|v| !v.is_finite())
             || crate::svg_source::transform(graph.transform)
                 .invert()
-                .is_none()
+                .is_none_or(|t| !t.is_finite())
         {
             return Err(format!(
                 "PDF layer '{}' ({}) has an invalid retained filter transform",
@@ -142,34 +142,48 @@ pub(super) fn prepare(
             .collect::<HashSet<_>>();
         let mut isolated = document.clone();
         isolated.transparent = true;
-        for layer in &mut isolated.layers {
+        for (layer_index, layer) in isolated.layers.iter_mut().enumerate() {
+            let source_layer = document.mask_source_member(layer_index, None, &sources);
+            let source_shapes = sources
+                .iter()
+                .any(|s| s.layer == layer.id && s.shape.is_some());
             if layer.id == original.id {
                 layer.parent = None;
                 layer.visible = true;
                 layer.blend = Blend::Normal;
-            } else if !ids.contains(&layer.id) && layer.parent.is_none() {
+            } else if !ids.contains(&layer.id)
+                && layer.parent.is_none()
+                && !source_layer
+                && !source_shapes
+            {
                 layer.visible = false;
             }
-            if !ids.contains(&layer.id) {
+            if !ids.contains(&layer.id) && !source_layer {
                 layer.artwork_masks.clear();
                 if let Some(shapes) = layer.kind.shapes_mut() {
                     for shape in shapes {
-                        shape.artwork_masks.clear();
+                        if !sources.contains(&MaskSource {
+                            layer: layer.id,
+                            shape: Some(shape.id),
+                        }) {
+                            shape.artwork_masks.clear();
+                            if source_shapes {
+                                shape.visible = false;
+                            }
+                        }
                     }
                 }
             }
-            if bake_masks
-                && !sources.contains(&MaskSource {
-                    layer: original.id,
-                    shape: None,
-                })
-                && let Some(shapes) = layer.kind.shapes_mut()
-            {
+        }
+        let active_sources = isolated.mask_sources();
+        for layer in &mut isolated.layers {
+            if let Some(shapes) = layer.kind.shapes_mut() {
                 for shape in shapes {
-                    if sources.contains(&MaskSource {
+                    let source = MaskSource {
                         layer: layer.id,
                         shape: Some(shape.id),
-                    }) {
+                    };
+                    if sources.contains(&source) && !active_sources.contains(&source) {
                         shape.visible = false;
                     }
                 }
@@ -389,7 +403,8 @@ fn scene(
     mut layers: Vec<Layer>,
     transparent: bool,
 ) -> Document {
-    let mut scene = Document::new("PDF appearance", 1., 1., document.dpi);
+    let mut scene = document.clone();
+    scene.name = "PDF appearance".into();
     scene.width = bounds.width();
     scene.height = bounds.height();
     scene.transparent = transparent;
