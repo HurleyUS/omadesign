@@ -72,6 +72,7 @@ impl Join {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Fill {
+    Pattern(crate::svg_source::SvgPattern),
     Gradient(crate::gradient::Gradient),
     None,
     Solid(Rgba),
@@ -119,7 +120,7 @@ impl Fill {
             Fill::Solid(c) => c,
             Fill::Gradient(g) => g.sample(0.),
             Fill::Linear { c0, .. } | Fill::Radial { c0, .. } => c0,
-            Fill::None => fallback,
+            Fill::None | Fill::Pattern(_) => fallback,
         }
     }
 }
@@ -441,7 +442,13 @@ impl Shape {
                 }
             }
         }
-        if matches!(geometry, Geom::Path { .. } | Geom::Paths { .. }) {
+        if let Geom::Text(run) = &geometry
+            && let Some(path) = crate::text::outline_path(run)
+        {
+            let center = self.geom.bbox().center();
+            let rotation = tiny_skia::Transform::from_rotate_at(self.rotation.to_degrees(), center.x, center.y);
+            pb.push_path(&path.transform(rotation)?);
+        } else if matches!(geometry, Geom::Path { .. } | Geom::Paths { .. }) {
             // Path bounds sample every contour. Compute the unchanged rotation
             // center once, not once for every cubic control point (quadratic on
             // detailed imported paths). Keep world_point's exact arithmetic.
@@ -785,6 +792,8 @@ impl LayerKind {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub svg_filter: Option<crate::svg_source::SvgFilterGraph>,
     pub id: u64,
     pub name: String,
     pub visible: bool,
@@ -835,6 +844,7 @@ impl Layer {
             fill_opacity: 1.0,
             blend_interior: false,
             blend: Blend::Normal,
+            svg_filter: None,
             parent: None,
             is_group: false,
             pass_through: false,
@@ -858,6 +868,7 @@ impl Layer {
             fill_opacity: 1.0,
             blend_interior: false,
             blend: Blend::Normal,
+            svg_filter: None,
             parent: None,
             is_group: false,
             pass_through: false,
@@ -887,6 +898,7 @@ impl Layer {
             fill_opacity: 1.0,
             blend_interior: false,
             blend: Blend::Normal,
+            svg_filter: None,
             parent: None,
             is_group: false,
             pass_through: false,
@@ -1192,6 +1204,8 @@ fn deserialize_artboards<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Artboard
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Document {
+    #[serde(default, skip_serializing_if = "crate::publishing::Publishing::is_empty")]
+    pub publishing: crate::publishing::Publishing,
     #[serde(default)]
     pub text_wrap_above_only: bool,
     pub name: String,
@@ -1252,6 +1266,7 @@ impl Document {
         copy.workspace = self.workspace;
         copy.layout_tokens = self.layout_tokens.clone();
         copy.text_wrap_above_only = self.text_wrap_above_only;
+        copy.publishing = self.publishing.clone();
         copy.layers = self
             .layers
             .iter()
@@ -1365,6 +1380,7 @@ impl Document {
         let w = total_w.round().max(1.0) as u32;
         let h = page_h.round().max(1.0) as u32;
         let mut doc = Self {
+            publishing: Default::default(),
             text_wrap_above_only: false,
             name: name.into(),
             workspace: None,
@@ -1695,6 +1711,7 @@ impl RasterState {
 
 #[derive(Clone, Debug)]
 pub enum Cmd {
+    SetSvgFilter { index: usize, before: Option<crate::svg_source::SvgFilterGraph>, after: Option<crate::svg_source::SvgFilterGraph> },
     SetCanvas { before: CanvasSettings, after: CanvasSettings },
     SetFillOpacity {
         layer: usize,
@@ -2188,6 +2205,7 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
             before: after,
             after: before,
         },
+        Cmd::SetSvgFilter { index, before, after } => Cmd::SetSvgFilter { index, before: after, after: before },
         Cmd::SetLayerParent {
             index,
             before,
@@ -2520,6 +2538,7 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
                 shape.blend = *after;
             }
         }
+        Cmd::SetSvgFilter { index, after, .. } => { if let Some(layer) = doc.layers.get_mut(*index) { layer.svg_filter = after.clone(); } },
         Cmd::SetLayerParent { index, after, .. } => {
             if let Some(layer) = doc.layers.get_mut(*index) {
                 layer.parent = *after;
@@ -3082,6 +3101,12 @@ mod tests {
                 contours: contours.clone(),
                 winding: false,
             },
+            Geom::Text(crate::geom::TypeRun {
+                content: "A".into(),
+                font: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/assets/fonts/EBGaramond.ttf").into(),
+                contours: contours.clone(),
+                ..Default::default()
+            }),
             Geom::Text(crate::geom::TypeRun {
                 contours,
                 ..Default::default()

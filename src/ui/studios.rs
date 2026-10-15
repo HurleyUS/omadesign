@@ -386,6 +386,7 @@ fn color_row(ui: &mut Ui, studio: &mut Studio, fill: bool) {
             Fill::Solid(c) | Fill::Linear { c0: c, .. } | Fill::Radial { c0: c, .. } => Some(*c),
             Fill::Gradient(g) => Some(g.sample(0.)),
             Fill::None => None,
+            Fill::Pattern(_) => Some(crate::color::Rgba::BLACK),
         }
     } else {
         source_stroke.as_ref().map(|stroke| {
@@ -420,7 +421,7 @@ fn color_row(ui: &mut Ui, studio: &mut Studio, fill: bool) {
                     | Fill::Linear { c0: color, .. }
                     | Fill::Radial { c0: color, .. } => *color,
                     Fill::Gradient(g) => g.sample(0.),
-                    Fill::None => studio.brush.color,
+                    Fill::None | Fill::Pattern(_) => studio.brush.color,
                 }
             };
             color.a = 255;
@@ -610,17 +611,19 @@ fn color_studio(ui: &mut Ui, studio: &mut Studio) {
             .color(fg_weak()),
         );
         let current = gradient.as_ref().map(|g| g.kind);
+        let pattern = matches!(style.fill, Fill::Pattern(_));
+        let mut replace_pattern = false;
         let mut chosen = current;
         ComboBox::from_id_salt("paint-type")
-            .selected_text(current.map(|k| k.name()).unwrap_or("Solid"))
+            .selected_text(if pattern { "Pattern" } else { current.map(|k| k.name()).unwrap_or("Solid") })
             .width(108.)
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut chosen, None, "Solid");
+                replace_pattern = ui.selectable_value(&mut chosen, None, "Solid").clicked() && pattern;
                 for kind in crate::gradient::GradientKind::ALL {
                     ui.selectable_value(&mut chosen, Some(kind), kind.name());
                 }
             });
-        if chosen != current {
+        if chosen != current || replace_pattern {
             gradient = chosen.map(|kind| {
                 let mut g = gradient.clone().unwrap_or_else(|| {
                     crate::gradient::Gradient::new(
@@ -651,6 +654,7 @@ fn color_studio(ui: &mut Ui, studio: &mut Studio) {
             apply_gradient(studio, gradient.clone());
         }
     });
+    super::svg_paint::show(ui, studio);
     if let Some(mut gradient) = gradient {
         let bounds = studio
             .primary()
@@ -787,7 +791,7 @@ fn color_grid(ui: &mut Ui, studio: &mut Studio, recent: bool) {
                         | Fill::Linear { c0: current, .. }
                         | Fill::Radial { c0: current, .. } => *current,
                         Fill::Gradient(gradient) => gradient.sample(0.),
-                        Fill::None => color,
+                        Fill::None | Fill::Pattern(_) => color,
                     };
                     if studio.is_motion()
                         && !style.fill.is_none()
@@ -951,9 +955,10 @@ pub(super) fn character_studio(ui: &mut Ui, studio: &mut Studio) {
     super::text_geometry::frame_inspector(ui, studio);
     super::text_geometry::path_inspector(ui, studio);
     let live = studio.selected_type();
-    let font = live
+    let metrics=studio.selected_character_metrics();
+    let font = metrics.first().and_then(|s|s.font.clone()).or_else(||live
         .as_ref()
-        .map(|t| t.font.clone())
+        .map(|t| t.font.clone()))
         .unwrap_or_else(|| studio.text_font.clone());
     let label = crate::text::label_for(&font);
     let mut chosen = font.clone();
@@ -1032,7 +1037,7 @@ pub(super) fn character_studio(ui: &mut Ui, studio: &mut Studio) {
     if chosen != font {
         let path = chosen.clone();
         studio.remember_font(&path);
-        studio.patch_type(|t| t.font = path.clone());
+        if live.is_some(){studio.patch_character(|s|s.font=Some(path.clone()));}else{studio.patch_type(|t| t.font = path.clone());}
         studio.text_font = path;
         studio.font_scroll_once = true;
     }
@@ -1040,9 +1045,9 @@ pub(super) fn character_studio(ui: &mut Ui, studio: &mut Studio) {
         .default_open(false)
         .show(ui, |ui| google_fonts_ui(ui, studio));
 
-    let mut px = live.as_ref().map(|t| t.px).unwrap_or(studio.text_px);
+    let mut px = metrics.first().and_then(|s|s.px).or_else(||live.as_ref().map(|t|t.px)).unwrap_or(studio.text_px);
     if number_field(ui, "Size", &mut px, 8.0..=400.0, " px") {
-        studio.patch_type(|t| t.px = px);
+        if live.is_some(){studio.patch_character(|s|s.px=Some(px));}else{studio.patch_type(|t| t.px = px);}
     }
     super::character_spacing::show(ui,studio);
     super::opentype::show(ui, studio, &font);
@@ -1967,6 +1972,7 @@ fn fx_stack_editor(ui: &mut Ui, stack: &mut crate::filter::FilterStack, salt: &s
 }
 
 fn fx_studio(ui: &mut Ui, studio: &mut Studio) {
+    super::svg_effect::show(ui, studio);
     let group_active = studio
         .active_layer
         .and_then(|i| studio.doc.layers.get(i))
