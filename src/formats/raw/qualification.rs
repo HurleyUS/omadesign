@@ -15,6 +15,8 @@ mod tests;
 mod workflow;
 #[path = "qualification/reference.rs"]
 mod reference;
+#[path = "qualification/storage.rs"]
+mod storage;
 
 const MANIFEST: &str = include_str!("../../../docs/qa/raw-camera-manifest.json");
 const SOURCE_BUDGET: u64 = 512 * 1024 * 1024;
