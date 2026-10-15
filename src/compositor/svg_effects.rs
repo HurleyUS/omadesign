@@ -42,8 +42,15 @@ pub(super) fn render(
             break;
         }
     }
-    let mut isolated = doc.clone();
-    isolated.layers.retain(|l| ids.contains(&l.id));
+    let mut isolated = Document::new("SVG effect source", 1., 1., doc.dpi);
+    isolated.width = doc.width;
+    isolated.height = doc.height;
+    isolated.layers = doc
+        .layers
+        .iter()
+        .filter(|l| ids.contains(&l.id))
+        .cloned()
+        .collect();
     isolated.transparent = true;
     let mut poses = HashMap::new();
     for layer in &mut isolated.layers {
