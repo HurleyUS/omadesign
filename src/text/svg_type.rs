@@ -1,0 +1,945 @@
+//! Editable SVG type keeps text, styles and character positioning together.
+use crate::geom::{Pt, TypeRun};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex, OnceLock},
+};
+use tiny_skia::Transform;
+
+#[cfg(test)]
+mod tests;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum TextNode {
+    Element {
+        name: String,
+        attributes: BTreeMap<String, String>,
+        children: Vec<TextNode>,
+    },
+    Characters {
+        count: usize,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SvgText {
+    pub root: TextNode,
+    pub definitions: String,
+    pub base_font: String,
+    pub base_px: f32,
+    #[serde(default)]
+    pub flow: Option<Flow>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Flow {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub leading: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct FlowSource {
+    root: TextNode,
+    content: String,
+}
+
+pub(crate) struct Layout {
+    pub tree: usvg::Tree,
+    pub contours: Vec<Vec<Pt>>,
+    pub carets: Vec<(usize, Pt, Pt, Pt)>,
+    pub styles: Vec<(usize, crate::geom::CharSpan)>,
+}
+
+pub(crate) fn escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn attributes(
+    node: roxmltree::Node<'_, '_>,
+    sheet: &simplecss::StyleSheet<'_>,
+) -> BTreeMap<String, String> {
+    let mut attrs = BTreeMap::new();
+    for a in node.attributes() {
+        let name = if a.namespace() == Some("http://www.w3.org/1999/xlink") {
+            "href"
+        } else if a.namespace() == Some("http://www.w3.org/XML/1998/namespace") {
+            "xml:space"
+        } else {
+            a.name()
+        };
+        if name.starts_with("on") || matches!(name, "id" | "class" | "style") {
+            continue;
+        }
+        if name == "href" && !a.value().starts_with('#') {
+            continue;
+        }
+        attrs.insert(name.into(), a.value().into());
+    }
+    for property in PROPERTIES {
+        if let Some(value) = crate::formats::svg::cascaded_property(node, sheet, property) {
+            attrs.insert((*property).into(), value);
+        }
+    }
+    attrs
+}
+
+const PROPERTIES: &[&str] = &[
+    "font-family",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "font-stretch",
+    "font-variant",
+    "font-variation-settings",
+    "font-optical-sizing",
+    "font-kerning",
+    "font-feature-settings",
+    "fill",
+    "fill-opacity",
+    "stroke",
+    "stroke-width",
+    "stroke-opacity",
+    "stroke-linecap",
+    "stroke-linejoin",
+    "paint-order",
+    "letter-spacing",
+    "word-spacing",
+    "text-anchor",
+    "direction",
+    "unicode-bidi",
+    "writing-mode",
+    "text-orientation",
+    "dominant-baseline",
+    "alignment-baseline",
+    "baseline-shift",
+    "text-decoration",
+    "visibility",
+    "color",
+    "white-space",
+    "inline-size",
+    "shape-inside",
+    "line-height",
+];
+
+fn collect(
+    node: roxmltree::Node<'_, '_>,
+    sheet: &simplecss::StyleSheet<'_>,
+    content: &mut String,
+    preserve: bool,
+) -> Option<TextNode> {
+    if node.is_text() {
+        let text = node.text().unwrap_or("");
+        let text = if preserve {
+            text.replace(['\n', '\r', '\t'], " ")
+        } else {
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+        let text = if !preserve {
+            let leading = text.len() > 0
+                && node.text().unwrap_or("").starts_with(char::is_whitespace)
+                && !content.is_empty()
+                && !content.ends_with(' ');
+            let trailing = node.text().unwrap_or("").ends_with(char::is_whitespace);
+            format!(
+                "{}{}{}",
+                if leading { " " } else { "" },
+                text,
+                if trailing && !text.is_empty() {
+                    " "
+                } else {
+                    ""
+                }
+            )
+        } else {
+            text
+        };
+        let count = text.chars().count();
+        content.push_str(&text);
+        return Some(TextNode::Characters { count });
+    }
+    if !node.is_element()
+        || !matches!(
+            node.tag_name().name(),
+            "text" | "tspan" | "textPath" | "a" | "flowRoot" | "flowPara" | "flowSpan"
+        )
+    {
+        return None;
+    }
+    let attrs = attributes(node, sheet);
+    let preserve = attrs.get("xml:space").map_or(preserve, |v| v == "preserve")
+        || attrs
+            .get("white-space")
+            .is_some_and(|v| v.starts_with("pre"));
+    let mut children = Vec::new();
+    let mut paragraph = false;
+    for child in node.children() {
+        if child.has_tag_name("flowPara") {
+            if paragraph {
+                content.push('\n');
+                children.push(TextNode::Characters { count: 1 });
+            }
+            paragraph = true;
+        }
+        if let Some(child) = collect(child, sheet, content, preserve) {
+            children.push(child);
+        }
+    }
+    Some(TextNode::Element {
+        name: match node.tag_name().name() {
+            "flowRoot" => "text",
+            "flowPara" | "flowSpan" | "a" => "tspan",
+            other => other,
+        }
+        .into(),
+        attributes: attrs,
+        children,
+    })
+}
+
+fn sheet<'a>(xml: &'a roxmltree::Document<'_>) -> simplecss::StyleSheet<'a> {
+    let mut sheet = simplecss::StyleSheet::new();
+    for node in xml.descendants().filter(|n| n.has_tag_name("style")) {
+        if let Some(text) = node.text() {
+            sheet.parse_more(text);
+        }
+    }
+    sheet
+}
+
+fn definition(node: roxmltree::Node<'_, '_>, sheet: &simplecss::StyleSheet<'_>, out: &mut String) {
+    if !node.is_element()
+        || !matches!(
+            node.tag_name().name(),
+            "defs"
+                | "g"
+                | "path"
+                | "rect"
+                | "circle"
+                | "ellipse"
+                | "line"
+                | "polyline"
+                | "polygon"
+                | "linearGradient"
+                | "radialGradient"
+                | "stop"
+                | "pattern"
+                | "clipPath"
+                | "mask"
+        )
+    {
+        return;
+    }
+    let tag = node.tag_name().name();
+    out.push_str(&format!("<{tag}"));
+    if let Some(id) = node.attribute("id") {
+        out.push_str(&format!(" id=\"{}\"", escape(id)));
+    }
+    for (key, value) in attributes(node, sheet) {
+        out.push_str(&format!(" {key}=\"{}\"", escape(&value)));
+    }
+    out.push('>');
+    for child in node.children() {
+        definition(child, sheet, out);
+    }
+    out.push_str(&format!("</{tag}>"));
+}
+
+/// Capture SVG type without discarding its nested attributes.
+/// Args: source XML, text node, normalized text and selected font. Returns editable type metadata.
+pub(crate) fn capture(
+    xml: &roxmltree::Document<'_>,
+    node: roxmltree::Node<'_, '_>,
+    font: String,
+    px: f32,
+) -> (SvgText, String) {
+    let sheet = sheet(xml);
+    let mut content = String::new();
+    let mut root = collect(node, &sheet, &mut content, false).unwrap();
+    if let Some(saved) = node
+        .attribute("data-oma-flow-source")
+        .and_then(|value| serde_json::from_str::<FlowSource>(value).ok())
+    {
+        root = saved.root;
+        content = saved.content;
+    }
+    if let TextNode::Element { attributes, .. } = &mut root {
+        for property in PROPERTIES {
+            if attributes.contains_key(*property) {
+                continue;
+            }
+            for ancestor in node.ancestors().skip(1).filter(|n| n.is_element()) {
+                if let Some(value) =
+                    crate::formats::svg::cascaded_property(ancestor, &sheet, property)
+                {
+                    attributes.insert((*property).into(), value);
+                    break;
+                }
+            }
+        }
+        for key in [
+            "transform",
+            "opacity",
+            "filter",
+            "clip-path",
+            "mask",
+            "mix-blend-mode",
+        ] {
+            attributes.remove(key);
+        }
+        attributes.insert("xml:space".into(), "preserve".into());
+    }
+    let mut definitions = String::new();
+    for defs in xml
+        .root_element()
+        .children()
+        .filter(|n| n.has_tag_name("defs"))
+    {
+        definition(defs, &sheet, &mut definitions);
+    }
+    for path in xml.descendants().filter(|n| {
+        n.has_tag_name("path")
+            && n.attribute("id").is_some()
+            && !n.ancestors().any(|n| n.has_tag_name("defs"))
+    }) {
+        definition(path, &sheet, &mut definitions);
+    }
+    let flow = node
+        .attribute("data-oma-flow")
+        .and_then(|v| serde_json::from_str(v).ok());
+    (
+        SvgText {
+            root,
+            definitions,
+            base_font: font,
+            base_px: px,
+            flow,
+        },
+        content,
+    )
+}
+
+impl SvgText {
+    /// Preserve each source text leaf across a character edit.
+    /// Args: replaced range and inserted character count. Returns nothing; source ranges are updated.
+    pub fn replace_range(&mut self, start: usize, end: usize, inserted: usize) {
+        fn visit(
+            node: &mut TextNode,
+            cursor: &mut usize,
+            start: usize,
+            end: usize,
+            inserted: usize,
+            done: &mut bool,
+        ) {
+            match node {
+                TextNode::Characters { count } => {
+                    let a = *cursor;
+                    let b = a + *count;
+                    *cursor = b;
+                    let removed = b.min(end).saturating_sub(a.max(start));
+                    let add = if !*done && start <= b {
+                        *done = true;
+                        inserted
+                    } else {
+                        0
+                    };
+                    *count = *count - removed + add;
+                }
+                TextNode::Element { children, .. } => {
+                    for child in children {
+                        visit(child, cursor, start, end, inserted, done)
+                    }
+                }
+            }
+        }
+        visit(&mut self.root, &mut 0, start, end, inserted, &mut false);
+    }
+}
+
+fn family(path: &str) -> String {
+    let probe = TypeRun {
+        font: path.into(),
+        ..Default::default()
+    };
+    super::font_bytes_for(&probe)
+        .and_then(|bytes| {
+            let face = rustybuzz::ttf_parser::Face::parse(&bytes, 0).ok()?;
+            face.names()
+                .into_iter()
+                .filter(|n| n.name_id == 1)
+                .find_map(|n| n.to_string())
+        })
+        .unwrap_or_else(|| super::label_for(path))
+}
+
+fn write_nodes(
+    node: &TextNode,
+    run: &TypeRun,
+    cursor: &mut usize,
+    range: std::ops::Range<usize>,
+    out: &mut String,
+    root: bool,
+) {
+    match node {
+        TextNode::Characters { count } => {
+            let start = *cursor;
+            let end = (start + *count).min(run.content.chars().count());
+            *cursor = start + *count;
+            let a = start.max(range.start);
+            let b = end.min(range.end);
+            if a >= b {
+                return;
+            }
+            for span in run.character_style_runs(a, b) {
+                let text = &run.content[super::char_to_byte(&run.content, span.start)
+                    ..super::char_to_byte(&run.content, span.end)];
+                let mut attrs = String::new();
+                if let Some(font) = &span.font {
+                    attrs.push_str(&format!(" font-family=\"{}\"", escape(&family(font))));
+                }
+                if let Some(px) = span.px {
+                    attrs.push_str(&format!(" font-size=\"{px}\""));
+                }
+                if let Some(fill) = &span.fill {
+                    match fill {
+                        crate::document::Fill::Solid(c) => {
+                            attrs.push_str(&format!(" fill=\"{}\"", c.css()))
+                        }
+                        crate::document::Fill::None => attrs.push_str(" fill=\"none\""),
+                        _ => {}
+                    }
+                }
+                if let Some(shift) = span.baseline_shift {
+                    attrs.push_str(&format!(" baseline-shift=\"{shift}\""));
+                }
+                if let Some(tracking) = span.tracking {
+                    attrs.push_str(&format!(
+                        " letter-spacing=\"{}\"",
+                        tracking * span.px.unwrap_or(run.px) / 1000.
+                    ));
+                }
+                if span.kerning == Some(crate::geom::KernMode::None) {
+                    attrs.push_str(" style=\"font-kerning:none\"");
+                }
+                if attrs.is_empty() {
+                    out.push_str(&escape(text));
+                } else {
+                    out.push_str(&format!("<tspan{attrs}>{}</tspan>", escape(text)));
+                }
+            }
+        }
+        TextNode::Element {
+            name,
+            attributes,
+            children,
+        } => {
+            out.push_str(&format!("<{name}"));
+            for (key, value) in attributes {
+                if matches!(
+                    key.as_str(),
+                    "data-oma-flow" | "data-oma-flow-source" | "inline-size" | "shape-inside"
+                ) || root && key == "transform"
+                    || run.svg_text.as_ref().is_some_and(|svg| svg.flow.is_some())
+                        && matches!(key.as_str(), "x" | "y" | "dx" | "dy" | "visibility")
+                {
+                    continue;
+                }
+                let value = if key == "font-family"
+                    && root
+                    && run
+                        .svg_text
+                        .as_ref()
+                        .is_some_and(|svg| run.font != svg.base_font)
+                {
+                    family(&run.font)
+                } else {
+                    value.clone()
+                };
+                out.push_str(&format!(" {key}=\"{}\"", escape(&value)));
+            }
+
+            out.push('>');
+            for child in children {
+                write_nodes(child, run, cursor, range.clone(), out, false);
+            }
+            out.push_str(&format!("</{name}>"));
+        }
+    }
+}
+
+fn options() -> usvg::Options<'static> {
+    static DB: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
+    let mut options = usvg::Options::default();
+    options.fontdb = DB
+        .get_or_init(|| {
+            let mut db = usvg::fontdb::Database::new();
+            db.load_system_fonts();
+            Arc::new(db)
+        })
+        .clone();
+    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    options
+}
+
+fn plain_fragment(run: &TypeRun, range: std::ops::Range<usize>) -> String {
+    let mut out = String::new();
+    write_nodes(
+        &run.svg_text.as_ref().unwrap().root,
+        run,
+        &mut 0,
+        range,
+        &mut out,
+        true,
+    );
+    out
+}
+
+fn wrap(fragment: &str, definitions: &str, matrix: [f32; 6]) -> String {
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"100000\" height=\"100000\"><defs>{definitions}</defs><g transform=\"matrix({} {} {} {} {} {})\">{fragment}</g></svg>",
+        matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]
+    )
+}
+
+/// Write editable standard SVG for a native SVG type object.
+/// Args: authoritative text run. Returns a self-contained SVG, or None for ordinary native type.
+pub fn source(run: &TypeRun) -> Option<String> {
+    let svg = run.svg_text.as_ref()?;
+    let fragment = if let Some(flow) = &svg.flow {
+        flow_fragment(run, flow)
+    } else {
+        plain_fragment(run, 0..run.content.chars().count())
+    };
+    let mut matrix = Transform::from_row(1., 0., 0., 1., 0., 0.);
+    if let Some(m) = run.transform {
+        matrix = Transform::from_row(m[0], m[1], m[2], m[3], m[4], m[5]);
+    }
+    let scale = run.px / svg.base_px.max(0.001);
+    matrix = matrix
+        .pre_translate(run.origin.x, run.origin.y)
+        .pre_scale(scale, scale);
+    Some(wrap(
+        &fragment,
+        &svg.definitions,
+        [
+            matrix.sx, matrix.ky, matrix.kx, matrix.sy, matrix.tx, matrix.ty,
+        ],
+    ))
+}
+
+pub(crate) fn export_fragment(run: &TypeRun, id: u64, outlines: bool) -> Option<String> {
+    let original = source(run)?;
+    let source = if outlines {
+        layout(run)?.tree.to_string(&usvg::WriteOptions::default())
+    } else {
+        original
+    };
+    let xml = roxmltree::Document::parse(&source).ok()?;
+    let prefix = format!("oma-type-{id}-");
+    let mut edits = Vec::new();
+    let ids: Vec<_> = xml
+        .descendants()
+        .filter_map(|n| n.attribute("id"))
+        .collect();
+    for node in xml.descendants().filter(|n| n.is_element()) {
+        for attr in node.attributes() {
+            let mut value = attr.value().to_owned();
+            if attr.name() == "id" {
+                value = format!("{prefix}{value}");
+            } else {
+                for id in &ids {
+                    value = value.replace(&format!("url(#{id})"), &format!("url(#{prefix}{id})"));
+                    if value == format!("#{id}") {
+                        value = format!("#{prefix}{id}");
+                    }
+                }
+            }
+            if value != attr.value() {
+                edits.push((attr.range_value(), escape(&value)));
+            }
+        }
+    }
+    let root = xml.root_element();
+    let range = root.children().next()?.range().start..root.children().last()?.range().end;
+    let mut fragment = source[range.clone()].to_owned();
+    for (r, value) in edits.into_iter().rev() {
+        if r.start >= range.start && r.end <= range.end {
+            fragment.replace_range(r.start - range.start..r.end - range.start, &value);
+        }
+    }
+    Some(fragment)
+}
+
+pub(crate) fn caret_segment(run: &TypeRun, index: usize) -> (Pt, Pt) {
+    let Some(layout) = layout(run) else {
+        return (run.origin, run.origin);
+    };
+    let Some(caret) = layout.carets.iter().min_by_key(|c| c.0.abs_diff(index)) else {
+        return (run.origin, run.origin);
+    };
+    (caret.1 + caret.3 * 0.9, caret.1 - caret.3 * 0.2)
+}
+
+pub(crate) fn selection_quads(run: &TypeRun, a: usize, b: usize) -> Vec<[Pt; 4]> {
+    let Some(layout) = layout(run) else {
+        return vec![];
+    };
+    let mut result = Vec::new();
+    for index in a.min(b)..a.max(b) {
+        let Some(start) = layout.carets.iter().find(|c| c.0 == index) else {
+            continue;
+        };
+        let end = layout
+            .carets
+            .iter()
+            .find(|c| c.0 == index + 1)
+            .map_or(start.1 + start.2 * start.3.length() * 0.5, |c| c.1);
+        result.push([
+            start.1 + start.3 * 0.9,
+            end + start.3 * 0.9,
+            end - start.3 * 0.2,
+            start.1 - start.3 * 0.2,
+        ]);
+    }
+    result
+}
+
+fn texts(group: &usvg::Group, out: &mut Vec<usvg::Text>) {
+    for node in group.children() {
+        match node {
+            usvg::Node::Text(t) => out.push((**t).clone()),
+            usvg::Node::Group(g) => texts(g, out),
+            _ => {}
+        }
+    }
+}
+
+pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<Layout>>>> = OnceLock::new();
+    let source = source(run)?;
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(found) = cache.lock().unwrap().get(&source).cloned() {
+        return Some(found);
+    }
+    let tree = usvg::Tree::from_str(&source, &options()).ok()?;
+    let mut text_nodes = Vec::new();
+    texts(tree.root(), &mut text_nodes);
+    let mut contours = Vec::new();
+    let mut carets = Vec::new();
+    let mut styles = Vec::new();
+    let mut used = vec![false; run.content.chars().count()];
+    fn paths(group: &usvg::Group, contours: &mut Vec<Vec<Pt>>) {
+        for node in group.children() {
+            match node {
+                usvg::Node::Path(p) => {
+                    if let Some(path) = p.data().clone().transform(p.abs_transform())
+                        && let Some(geom) = crate::formats::svg::path_geom(&path, true)
+                    {
+                        contours.extend(geom.contours(96));
+                    }
+                }
+                usvg::Node::Group(g) => paths(g, contours),
+                _ => {}
+            }
+        }
+    }
+    for text in &text_nodes {
+        paths(text.flattened(), &mut contours);
+        for span in text.layouted() {
+            for glyph in &span.positioned_glyphs {
+                let chars: Vec<_> = glyph.text.chars().collect();
+                let all: Vec<_> = run.content.chars().collect();
+                let at = (0..all.len())
+                    .find(|&at| !used[at] && all[at..].starts_with(&chars))
+                    .unwrap_or(0);
+                for value in used.iter_mut().skip(at).take(chars.len()) {
+                    *value = true;
+                }
+                let transform = text.abs_transform().pre_concat(glyph.transform());
+                let font = tree
+                    .fontdb()
+                    .face(glyph.font)
+                    .and_then(|f| match &f.source {
+                        usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _) => {
+                            Some(p.to_string_lossy().into_owned())
+                        }
+                        _ => None,
+                    });
+                let fill = span.fill.as_ref().and_then(|fill| {
+                    if let usvg::Paint::Color(c) = fill.paint() {
+                        Some(crate::document::Fill::Solid(crate::color::Rgba::new(
+                            c.red,
+                            c.green,
+                            c.blue,
+                            (fill.opacity().get() * 255.).round() as u8,
+                        )))
+                    } else {
+                        None
+                    }
+                });
+                for i in 0..chars.len() {
+                    styles.push((
+                        at + i,
+                        crate::geom::CharSpan {
+                            font: font.clone(),
+                            px: Some(glyph.font_size()),
+                            fill: fill.clone(),
+                            ..Default::default()
+                        },
+                    ));
+                }
+                let point = Pt::new(transform.tx, transform.ty);
+                let tangent = Pt::new(transform.sx, transform.ky).normalized();
+                let height = glyph.font_size() * text.abs_transform().get_scale().1;
+                let units = tree
+                    .fontdb()
+                    .with_face_data(glyph.font, |bytes, index| {
+                        rustybuzz::ttf_parser::Face::parse(bytes, index)
+                            .map_or(1000., |f| f.units_per_em() as f32)
+                    })
+                    .unwrap_or(1000.);
+                let advance = tree
+                    .fontdb()
+                    .with_face_data(glyph.font, |bytes, index| {
+                        rustybuzz::ttf_parser::Face::parse(bytes, index)
+                            .ok()
+                            .map(|font| {
+                                font.glyph_hor_advance(glyph.id)
+                                    .unwrap_or(font.units_per_em())
+                                    as f32
+                                    / font.units_per_em() as f32
+                                    * glyph.font_size()
+                            })
+                    })
+                    .flatten()
+                    .unwrap_or(height * 0.5);
+                for i in 0..chars.len().max(1) {
+                    carets.push((
+                        at + i,
+                        point + tangent * advance * i as f32 / chars.len().max(1) as f32,
+                        tangent,
+                        Pt::new(-transform.kx, -transform.sy)
+                            * tree
+                                .fontdb()
+                                .with_face_data(glyph.font, |bytes, index| {
+                                    rustybuzz::ttf_parser::Face::parse(bytes, index)
+                                        .map_or(1000., |f| f.units_per_em() as f32)
+                                })
+                                .unwrap_or(1000.),
+                    ));
+                }
+                carets.push((
+                    at + chars.len(),
+                    point + tangent * advance,
+                    tangent,
+                    Pt::new(-transform.kx, -transform.sy) * units,
+                ));
+            }
+        }
+    }
+    let result = Arc::new(Layout {
+        tree,
+        contours,
+        carets,
+        styles,
+    });
+    let mut cache = cache.lock().unwrap();
+    if cache.len() >= 64 {
+        cache.clear();
+    }
+    cache.insert(source, result.clone());
+    Some(result)
+}
+
+fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
+    let mut out = String::new();
+    let mut start = 0;
+    let count = run.content.chars().count();
+    let mut row = 0;
+    let svg = run.svg_text.as_ref().unwrap();
+    let TextNode::Element { attributes, .. } = &svg.root else {
+        return out;
+    };
+    out.push_str("<text");
+    for (key, value) in attributes {
+        if !matches!(
+            key.as_str(),
+            "x" | "y"
+                | "dx"
+                | "dy"
+                | "data-oma-flow"
+                | "data-oma-flow-source"
+                | "inline-size"
+                | "shape-inside"
+                | "transform"
+        ) {
+            out.push_str(&format!(" {key}=\"{}\"", escape(value)));
+        }
+    }
+    out.push_str(&format!(
+        " data-oma-flow=\"{}\" data-oma-flow-source=\"{}\">",
+        escape(&serde_json::to_string(flow).unwrap()),
+        escape(
+            &serde_json::to_string(&FlowSource {
+                root: svg.root.clone(),
+                content: run.content.clone()
+            })
+            .unwrap()
+        )
+    ));
+    while start < count {
+        let remaining = &run.content[super::char_to_byte(&run.content, start)..];
+        let paragraph = remaining.split('\n').next().unwrap_or("");
+        let mut ends: Vec<_> = unicode_linebreak::linebreaks(paragraph)
+            .map(|(byte, _)| start + paragraph[..byte].chars().count())
+            .collect();
+        if ends.is_empty() {
+            ends.push(start + paragraph.chars().count());
+        }
+        let measure = |end| {
+            let fragment = plain_fragment(run, start..end);
+            usvg::Tree::from_str(
+                &wrap(&fragment, &svg.definitions, [1., 0., 0., 1., 0., 0.]),
+                &options(),
+            )
+            .ok()
+            .and_then(|tree| {
+                let mut nodes = Vec::new();
+                texts(tree.root(), &mut nodes);
+                nodes.first().map(|t| t.bounding_box().width())
+            })
+            .unwrap_or(0.)
+        };
+        let mut lo = 0;
+        let mut hi = ends.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if measure(ends[mid]) <= flow.width {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let end = ends[lo.saturating_sub(1)];
+        let fragment = plain_fragment(run, start..end);
+        if let Ok(xml) = roxmltree::Document::parse(&fragment) {
+            let node = xml.root_element();
+            let inner = node
+                .children()
+                .next()
+                .zip(node.children().last())
+                .map_or("", |(first, last)| {
+                    &fragment[first.range().start..last.range().end]
+                });
+            out.push_str(&format!(
+                "<tspan x=\"{}\" y=\"{}\"{}>{inner}</tspan>",
+                flow.x,
+                flow.y + run.px + row as f32 * flow.leading,
+                if run.px + row as f32 * flow.leading > flow.height {
+                    " visibility=\"hidden\""
+                } else {
+                    ""
+                }
+            ));
+        }
+        row += 1;
+        let previous = start;
+        start = end;
+        if run.content.chars().nth(start) == Some('\n') || start == previous {
+            start += 1;
+        }
+    }
+    out.push_str("</text>");
+    out
+}
+
+/// Normalize rectangular flowed SVG into ordinary positioned SVG text.
+/// Args: source SVG. Returns a rewritten source when flow is present, otherwise None.
+pub(crate) fn prepare_flow(source: &str) -> Result<Option<String>, String> {
+    let xml = roxmltree::Document::parse_with_options(
+        source,
+        roxmltree::ParsingOptions {
+            allow_dtd: true,
+            nodes_limit: 400000,
+            entity_resolver: None,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    let sheet = sheet(&xml);
+    let mut changes = Vec::new();
+    for node in xml
+        .descendants()
+        .filter(|n| n.has_tag_name("flowRoot") || n.has_tag_name("text"))
+    {
+        let attrs = attributes(node, &sheet);
+        let rect = if node.has_tag_name("flowRoot") {
+            node.descendants().find(|n| n.has_tag_name("rect"))
+        } else {
+            attrs
+                .get("shape-inside")
+                .and_then(|v| {
+                    v.trim()
+                        .strip_prefix("url(#")
+                        .and_then(|v| v.strip_suffix(')'))
+                })
+                .and_then(|id| {
+                    xml.descendants()
+                        .find(|n| n.attribute("id") == Some(id) && n.has_tag_name("rect"))
+                })
+        };
+        let number = |name: &str, default: f32| {
+            attrs
+                .get(name)
+                .and_then(|v| v.trim_end_matches("px").parse::<f32>().ok())
+                .unwrap_or(default)
+        };
+        let width = rect
+            .and_then(|r| r.attribute("width").and_then(|v| v.parse::<f32>().ok()))
+            .unwrap_or_else(|| number("inline-size", 0.));
+        if width <= 0. {
+            continue;
+        }
+        let px = number("font-size", 16.);
+        let read = |name, default| {
+            rect.and_then(|r| r.attribute(name).and_then(|v| v.parse::<f32>().ok()))
+                .unwrap_or(default)
+        };
+        let flow = Flow {
+            x: read("x", number("x", 0.)),
+            y: read("y", number("y", 0.) - px),
+            width,
+            height: read("height", 100000.),
+            leading: number("line-height", px * 1.2),
+        };
+        let (mut svg, content) = capture(&xml, node, String::new(), px);
+        svg.flow = Some(flow.clone());
+        let mut run = TypeRun {
+            content,
+            px,
+            svg_text: Some(svg),
+            ..Default::default()
+        };
+        let mut fragment = flow_fragment(&run, &flow);
+
+        if let Some(transform) = node.attribute("transform") {
+            fragment = format!("<g transform=\"{}\">{fragment}</g>", escape(transform));
+        }
+        changes.push((node.range(), fragment));
+        run.content.clear();
+    }
+    if changes.is_empty() {
+        return Ok(None);
+    }
+    let mut result = source.to_owned();
+    for (range, text) in changes.into_iter().rev() {
+        result.replace_range(range, &text);
+    }
+    Ok(Some(result))
+}

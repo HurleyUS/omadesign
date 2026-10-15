@@ -652,6 +652,8 @@ pub struct TypeRun {
     pub origin: Pt,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<[f32; 6]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub svg_text: Option<crate::text::svg_type::SvgText>,
     pub content: String,
     pub px: f32,
     pub tracking: f32,
@@ -699,6 +701,7 @@ impl Default for TypeRun {
         Self {
             origin: Pt::ZERO,
             transform: None,
+            svg_text: None,
             content: String::new(),
             px: 72.0,
             tracking: 0.0,
