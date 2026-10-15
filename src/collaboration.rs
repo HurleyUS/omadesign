@@ -248,12 +248,26 @@ impl Replica {
     /// Record only properties changed locally since the last merged view.
     /// Args: edited native document. Returns whether a transaction was created.
     pub fn record(&mut self, doc: &Document) -> Result<bool, String> {
+        let raw = self.cells();
         let before = snapshot(&self.document(doc)?)?;
         let after = snapshot(doc)?;
+        if before == after {
+            return Ok(false);
+        }
         let keys: BTreeSet<_> = before.keys().chain(after.keys()).collect();
         let writes: Vec<_> = keys
             .into_iter()
-            .filter(|key| before.get(*key) != after.get(*key))
+            .filter(|key| {
+                before.get(*key) != after.get(*key)
+                    || (after.contains_key(*key) && raw.get(*key) != after.get(*key))
+            })
+            .filter(|key| {
+                if after.contains_key(*key) || !key.starts_with("/@entities/") {
+                    return true;
+                }
+                let id = key["/@entities/".len()..].split('/').next().unwrap();
+                after.contains_key(&format!("/@entities/{id}"))
+            })
             .map(|key| Write {
                 path: key.clone(),
                 value: after.get(key).cloned(),
@@ -365,9 +379,22 @@ impl Replica {
 
     fn cells(&self) -> Snapshot {
         let mut cells = self.base.clone();
+        let mut parents: BTreeMap<&str, (&Change, &Option<Cell>)> = BTreeMap::new();
         for change in self.active() {
             if let Edit::Write { writes } = &change.edit {
                 for write in writes {
+                    if write.path.starts_with("/@parent/") {
+                        if let Some((old, value)) = parents.get(write.path.as_str()) {
+                            let concurrent = change.seen.get(&old.id.actor).copied().unwrap_or(0)
+                                < old.id.seq
+                                && old.seen.get(&change.id.actor).copied().unwrap_or(0)
+                                    < change.id.seq;
+                            if concurrent && value.is_some() && write.value.is_none() {
+                                continue;
+                            }
+                        }
+                        parents.insert(&write.path, (change, &write.value));
+                    }
                     if let Some(value) = &write.value {
                         cells.insert(write.path.clone(), value.clone());
                     } else {
@@ -886,5 +913,104 @@ mod tests {
                 .all(|c| c.id.actor == a.actor)
         );
         assert_eq!(names(&a.document(&doc).unwrap()).len(), 2);
+    }
+    #[test]
+    fn moving_an_object_out_of_a_concurrently_deleted_layer_preserves_its_payload() {
+        let (mut doc, mut a, mut b) = pair();
+        doc.layers[1]
+            .kind
+            .shapes_mut()
+            .unwrap()
+            .push(shape("Moved out"));
+        doc.layers
+            .push(crate::document::Layer::vector("Destination"));
+        a.base = snapshot(&doc).unwrap();
+        b.base = a.base.clone();
+        let mut left = doc.clone();
+        left.layers.remove(1);
+        let mut right = doc.clone();
+        let moved = right.layers[1].kind.shapes_mut().unwrap().remove(0);
+        right.layers[2].kind.shapes_mut().unwrap().push(moved);
+        a.record(&left).unwrap();
+        b.record(&right).unwrap();
+        exchange(&mut a, &mut b);
+        let merged = a.document(&doc).unwrap();
+        assert!(
+            merged
+                .layers
+                .iter()
+                .flat_map(|l| l.kind.shapes().unwrap_or_default())
+                .any(|s| s.name == "Moved out")
+        );
+        assert_eq!(
+            snapshot(&merged).unwrap(),
+            snapshot(&b.document(&doc).unwrap()).unwrap()
+        );
+    }
+    #[test]
+    fn authored_order_after_concurrent_insertions_matches_the_editor() {
+        let (mut doc, mut a, mut b) = pair();
+        let mut first = shape("3");
+        first.id = 1003;
+        doc.layers[1].kind.shapes_mut().unwrap().push(first);
+        a.base = snapshot(&doc).unwrap();
+        b.base = a.base.clone();
+        let mut left = doc.clone();
+        let mut right = doc.clone();
+        let mut one = shape("1");
+        one.id = 1001;
+        let mut two = shape("2");
+        two.id = 1002;
+        left.layers[1].kind.shapes_mut().unwrap().push(one);
+        right.layers[1].kind.shapes_mut().unwrap().push(two);
+        a.record(&left).unwrap();
+        b.record(&right).unwrap();
+        exchange(&mut a, &mut b);
+        let mut merged = a.document(&doc).unwrap();
+        assert_eq!(names(&merged), ["3", "1", "2"]);
+        merged.layers[1].kind.shapes_mut().unwrap().rotate_left(1);
+        a.record(&merged).unwrap();
+        exchange(&mut a, &mut b);
+        assert_eq!(names(&a.document(&doc).unwrap()), ["1", "2", "3"]);
+        assert_eq!(
+            snapshot(&merged).unwrap(),
+            snapshot(&b.document(&doc).unwrap()).unwrap()
+        );
+    }
+    #[test]
+    fn recovered_containers_remain_editable_and_durable() {
+        let (doc, mut a, mut b) = pair();
+        let mut left = doc.clone();
+        left.layers.remove(1);
+        let mut right = doc.clone();
+        right.layers[1]
+            .kind
+            .shapes_mut()
+            .unwrap()
+            .push(shape("Recovered"));
+        a.record(&left).unwrap();
+        b.record(&right).unwrap();
+        exchange(&mut a, &mut b);
+        let mut merged = a.document(&doc).unwrap();
+        let layer = merged
+            .layers
+            .iter_mut()
+            .find(|l| l.kind.shapes().is_some())
+            .unwrap();
+        layer.name = "Renamed recovery".into();
+        layer.kind.shapes_mut().unwrap().push(shape("New sibling"));
+        a.record(&merged).unwrap();
+        exchange(&mut a, &mut b);
+        let output = b.document(&doc).unwrap();
+        assert!(
+            output
+                .layers
+                .iter()
+                .any(|l| l.name == "Renamed recovery" && l.kind.shapes().unwrap().len() == 2)
+        );
+        assert_eq!(
+            snapshot(&output).unwrap(),
+            snapshot(&a.document(&doc).unwrap()).unwrap()
+        );
     }
 }
