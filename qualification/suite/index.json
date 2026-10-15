@@ -1,0 +1,281 @@
+{
+  "version": 1,
+  "candidate": [
+    "oma-layered-psd",
+    "oma-layered-psb",
+    "oma-layered-ora",
+    "oma-vector-masks",
+    "oma-pdf-rectangle"
+  ],
+  "optional_evidence_tiers": [
+    "native-window",
+    "device",
+    "physical",
+    "human"
+  ],
+  "fixtures": [
+    {
+      "product": "omadesign",
+      "provenance": {
+        "license": "MIT",
+        "source": "Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md",
+        "authoring": "Independent fixture generator or published SVG/PDF specification; pinned bytes"
+      },
+      "losses": [],
+      "required": [
+        "appearance",
+        "editability",
+        "undo",
+        "save_reopen",
+        "failure",
+        "preservation"
+      ],
+      "required_tiers": [
+        "headless"
+      ],
+      "adapter": {
+        "root": "omadesign",
+        "path": "scripts/suite/omadesign.mjs",
+        "kind": "product"
+      },
+      "limits": {
+        "deadline_ms": 30000,
+        "max_input_bytes": 1048576,
+        "max_render_pixels": 65536
+      },
+      "tools": [],
+      "id": "oma-layered-psd",
+      "input": {
+        "root": "omadesign",
+        "path": "src/formats/psd/fixtures/independent-rle.psd",
+        "bytes": 934,
+        "sha256": "e0d1fe1561d7d33fe83ac7422879a41720981c5b9b3d874bb77bceee6df4d661"
+      },
+      "reference": {
+        "root": "omadesign",
+        "path": "qualification/suite/fixtures/psd-reference.json",
+        "bytes": 385,
+        "sha256": "ba88bea9e974f9efb9af3068fee26965c9b11deb8c4840bd39fb84b33787011a"
+      },
+      "affected": [
+        "src/formats/psd",
+        "src/formats/suite_qualification.rs",
+        "scripts/suite/omadesign.mjs"
+      ],
+      "expected": {}
+    },
+    {
+      "product": "omadesign",
+      "provenance": {
+        "license": "MIT",
+        "source": "Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md",
+        "authoring": "Independent fixture generator or published SVG/PDF specification; pinned bytes"
+      },
+      "losses": [],
+      "required": [
+        "appearance",
+        "editability",
+        "undo",
+        "save_reopen",
+        "failure",
+        "preservation"
+      ],
+      "required_tiers": [
+        "headless"
+      ],
+      "adapter": {
+        "root": "omadesign",
+        "path": "scripts/suite/omadesign.mjs",
+        "kind": "product"
+      },
+      "limits": {
+        "deadline_ms": 30000,
+        "max_input_bytes": 1048576,
+        "max_render_pixels": 65536
+      },
+      "tools": [],
+      "id": "oma-layered-psb",
+      "input": {
+        "root": "omadesign",
+        "path": "src/formats/psd/fixtures/independent-rle.psb",
+        "bytes": 1054,
+        "sha256": "a3f48e6c54c889880867a6c7ecfc2cd93ec41767765f16fe87145ca3421195fc"
+      },
+      "reference": {
+        "root": "omadesign",
+        "path": "qualification/suite/fixtures/psd-reference.json",
+        "bytes": 385,
+        "sha256": "ba88bea9e974f9efb9af3068fee26965c9b11deb8c4840bd39fb84b33787011a"
+      },
+      "affected": [
+        "src/formats/psd",
+        "src/formats/suite_qualification.rs",
+        "scripts/suite/omadesign.mjs"
+      ],
+      "expected": {}
+    },
+    {
+      "product": "omadesign",
+      "provenance": {
+        "license": "MIT",
+        "source": "Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md",
+        "authoring": "Independent fixture generator or published SVG/PDF specification; pinned bytes"
+      },
+      "losses": [],
+      "required": [
+        "appearance",
+        "editability",
+        "undo",
+        "save_reopen",
+        "failure",
+        "preservation"
+      ],
+      "required_tiers": [
+        "headless"
+      ],
+      "adapter": {
+        "root": "omadesign",
+        "path": "scripts/suite/omadesign.mjs",
+        "kind": "product"
+      },
+      "limits": {
+        "deadline_ms": 30000,
+        "max_input_bytes": 1048576,
+        "max_render_pixels": 65536
+      },
+      "tools": [],
+      "id": "oma-layered-ora",
+      "input": {
+        "root": "omadesign",
+        "path": "src/formats/openraster/fixtures/independent.ora",
+        "bytes": 1177,
+        "sha256": "0aa786f66611064d22270074b34ae519cf5e51991afdadb71dd0560f84cc01ef"
+      },
+      "reference": {
+        "root": "omadesign",
+        "path": "qualification/suite/fixtures/ora-reference.json",
+        "bytes": 417,
+        "sha256": "99c131fc14a34dc8bb98da07bccd84af08bbb65705797da9f96e79a0635dd584"
+      },
+      "affected": [
+        "src/formats/openraster",
+        "src/formats/suite_qualification.rs",
+        "scripts/suite/omadesign.mjs"
+      ],
+      "expected": {}
+    },
+    {
+      "product": "omadesign",
+      "provenance": {
+        "license": "MIT",
+        "source": "Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md",
+        "authoring": "Independent fixture generator or published SVG/PDF specification; pinned bytes"
+      },
+      "losses": [],
+      "required": [
+        "appearance",
+        "editability",
+        "undo",
+        "save_reopen",
+        "failure",
+        "preservation"
+      ],
+      "required_tiers": [
+        "headless"
+      ],
+      "adapter": {
+        "root": "omadesign",
+        "path": "scripts/suite/omadesign.mjs",
+        "kind": "product"
+      },
+      "limits": {
+        "deadline_ms": 30000,
+        "max_input_bytes": 1048576,
+        "max_render_pixels": 65536
+      },
+      "tools": [
+        "rsvg-convert"
+      ],
+      "id": "oma-vector-masks",
+      "input": {
+        "root": "omadesign",
+        "path": "qualification/suite/fixtures/vector-masks.svg",
+        "bytes": 531,
+        "sha256": "8031c67bb159e4f929ff032c3ae593dc75f96cadf17499b8372879a1f5b36c89"
+      },
+      "reference": {
+        "root": "omadesign",
+        "path": "qualification/suite/fixtures/vector-masks.svg",
+        "bytes": 531,
+        "sha256": "8031c67bb159e4f929ff032c3ae593dc75f96cadf17499b8372879a1f5b36c89"
+      },
+      "affected": [
+        "src/formats/svg",
+        "src/formats/suite_qualification.rs",
+        "scripts/suite/omadesign.mjs"
+      ],
+      "expected": {
+        "min_vector_objects": 3,
+        "max_raster_layers": 0,
+        "artwork_masks": 2
+      }
+    },
+    {
+      "product": "omadesign",
+      "provenance": {
+        "license": "MIT",
+        "source": "Omadesign original tiny fixtures; see adjacent README and qualification/suite/README.md",
+        "authoring": "Independent fixture generator or published SVG/PDF specification; pinned bytes"
+      },
+      "losses": [
+        "Single-page, unprofiled vector geometry only; fonts, color profiles and layered interchange are owned by PDF feature qualification."
+      ],
+      "required": [
+        "appearance",
+        "editability",
+        "undo",
+        "save_reopen",
+        "failure",
+        "preservation"
+      ],
+      "required_tiers": [
+        "headless"
+      ],
+      "adapter": {
+        "root": "omadesign",
+        "path": "scripts/suite/omadesign.mjs",
+        "kind": "product"
+      },
+      "limits": {
+        "deadline_ms": 30000,
+        "max_input_bytes": 1048576,
+        "max_render_pixels": 65536
+      },
+      "tools": [
+        "pdftoppm"
+      ],
+      "id": "oma-pdf-rectangle",
+      "input": {
+        "root": "omadesign",
+        "path": "qualification/suite/fixtures/rectangle.pdf",
+        "bytes": 459,
+        "sha256": "0a81466f5be9661e84ba21923c20262f04d4bab3a201c206b0882589d5576f5e"
+      },
+      "reference": {
+        "root": "omadesign",
+        "path": "qualification/suite/fixtures/rectangle.pdf",
+        "bytes": 459,
+        "sha256": "0a81466f5be9661e84ba21923c20262f04d4bab3a201c206b0882589d5576f5e"
+      },
+      "affected": [
+        "src/formats/pdf",
+        "src/formats/suite_qualification.rs",
+        "scripts/suite/omadesign.mjs"
+      ],
+      "expected": {
+        "min_vector_objects": 1,
+        "max_raster_layers": 0
+      }
+    }
+  ]
+}
