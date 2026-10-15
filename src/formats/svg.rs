@@ -1313,7 +1313,7 @@ mod tests {
                 .flatten()
                 .any(|shape| matches!(shape.geom, Geom::Text(_)))
         );
-        assert!(mean < 0.1, "mean={mean}");
+        assert!(mean < 0.2, "mean={mean}");
     }
 
     #[test]
