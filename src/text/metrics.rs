@@ -159,13 +159,13 @@ mod tests {
         r.replace_text(0,0,"é",None);
         assert_eq!(r.character_style(6).px,Some(70.));
         let mut doc=Document::new("Affine type",300.,180.,96.);
-        doc.layers[0].kind.shapes_mut().unwrap().push(Shape::new(geom,Style::default()));
+        doc.layers.clear();let mut layer=crate::document::Layer::vector("Type");layer.kind.shapes_mut().unwrap().push(Shape::new(geom,Style::default()));doc.layers.push(layer);
         let encoded=crate::project::encode(&doc).unwrap();
         assert!(encoded.contains("\"version\":14"));
         let decoded=crate::project::decode(&encoded).unwrap();
         assert_eq!(serde_json::to_value(&doc).unwrap(),serde_json::to_value(&decoded).unwrap());
         let image=crate::compositor::render_export(&decoded,1).unwrap();
-        assert!(image.pixels().iter().any(|p|p.red()>p.blue()+20 && p.red()>p.green()+20));
+        assert!(image.pixels().iter().any(|p|u16::from(p.red())>u16::from(p.blue())+20 && u16::from(p.red())>u16::from(p.green())+20));
     }
     fn near(a: f32, b: f32) {
         assert!((a - b).abs() < 0.02, "{a} != {b}");

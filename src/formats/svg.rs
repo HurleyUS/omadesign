@@ -65,6 +65,15 @@ impl simplecss::Element for CssElement<'_, '_> {
     }
 }
 
+pub(crate) fn cascaded_property(node:roxmltree::Node<'_, '_>,sheet:&simplecss::StyleSheet<'_>,property:&str)->Option<String> {
+    let mut winner:Option<(String,bool)>=None;
+    let mut set=|value:&str,important:bool|{if !winner.as_ref().is_some_and(|(_,old)|*old && !important){winner=Some((value.trim().into(),important));}};
+    if let Some(value)=node.attribute(property){set(value,false);}
+    for rule in &sheet.rules {if rule.selector.matches(&CssElement(node)){for d in &rule.declarations {if d.name.eq_ignore_ascii_case(property){set(d.value,d.important);}}}}
+    for d in simplecss::DeclarationTokenizer::from(node.attribute("style").unwrap_or("")){if d.name.eq_ignore_ascii_case(property){set(d.value,d.important);}}
+    winner.map(|(value,_)|value)
+}
+
 fn cascaded_visibility(
     node: roxmltree::Node<'_, '_>,
     sheet: &simplecss::StyleSheet<'_>,
@@ -258,6 +267,8 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
     if svg.len() > 256 * 1024 * 1024 {
         return Err("SVG exceeds the 256 MiB import limit".into());
     }
+    let flowed=crate::text::svg_type::prepare_flow(svg)?;
+    let svg=flowed.as_deref().unwrap_or(svg);
     // Desktop design tools commonly include the SVG 1.1 DOCTYPE. Accept that
     // declaration, as usvg does, without fetching its DTD or external entities.
     // Bound the initial XML parse as well as the editable-element count below.
@@ -351,6 +362,8 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
     options.image_href_resolver.resolve_string = Box::new(|_, _| None);
     let tree = usvg::Tree::from_str(&normalized, &options)
         .map_err(|e| format!("Could not parse SVG: {e}"))?;
+    let type_xml=roxmltree::Document::parse_with_options(&normalized,roxmltree::ParsingOptions{allow_dtd:true,nodes_limit:400000,entity_resolver:None}).map_err(|e|e.to_string())?;
+    let rich_text=type_xml.descendants().filter(|n|n.has_tag_name("text")).filter_map(|node|node.attribute("id").map(|id|(id.to_owned(),crate::text::svg_type::capture(&type_xml,node,String::new(),16.)))).collect();
     let (w, h) = (tree.size().width(), tree.size().height());
     let mut doc = Document::new(name, 1., 1., 96.);
     doc.width = w;
@@ -365,6 +378,7 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
         tree: &tree,
         pixel_bytes: 0,
         mask_sources: HashMap::new(),
+        rich_text,
     };
     reader.children(tree.root(), None, 0)?;
     if reader.doc.layers.is_empty() {
@@ -381,6 +395,7 @@ struct Reader<'a> {
     tree: &'a usvg::Tree,
     pixel_bytes: u64,
     mask_sources: HashMap<usize, MaskSource>,
+    rich_text: HashMap<String,(crate::text::svg_type::SvgText,String)>,
 }
 impl Reader<'_> {
     fn reserve(&mut self, w: u32, h: u32) -> Result<(), String> {
@@ -474,7 +489,8 @@ impl Reader<'_> {
                 }
                 usvg::Node::Image(image) => self.image(node, image, parent)?,
                 usvg::Node::Text(text) => {
-                    if !self.text(text, parent)? {
+                    let native=!self.rich_text.get(text.id()).is_some_and(|(svg,_)|svg.flow.is_some()) && text.chunks().iter().all(|c|c.text().is_ascii()) && self.text(text,parent)?;
+                    if !native && !self.rich_type(text,parent)? {
                         warn(&mut self.warnings,"Complex SVG text retained as editable outlines; text content cannot be edited as type.".into());
                         self.children(text.flattened(), parent, depth + 1)?;
                     }
@@ -760,6 +776,22 @@ impl Reader<'_> {
         self.meta(&mut layer, image.id());
         self.doc.layers.push(layer);
         Ok(())
+    }
+    fn rich_type(&mut self,text:&usvg::Text,parent:Option<u64>)->Result<bool,String> {
+        let Some((mut svg,content))=self.rich_text.get(text.id()).cloned() else {return Ok(false);};
+        let glyph=text.layouted().iter().flat_map(|s|&s.positioned_glyphs).next();
+        let font=glyph.and_then(|g|self.tree.fontdb().face(g.font)).and_then(|face|match &face.source{usvg::fontdb::Source::File(p)|usvg::fontdb::Source::SharedFile(p,_)=>Some(p.to_string_lossy().into_owned()),_=>None}).unwrap_or_default();
+        let px=text.chunks().iter().flat_map(|c|c.spans()).next().map_or(16.,|s|s.font_size().get());
+        svg.base_font=font.clone();svg.base_px=px;
+        for chunk in text.chunks(){for span in chunk.spans(){for family in span.font().families(){if let usvg::FontFamily::Named(requested)=family && !self.tree.fontdb().faces().any(|face|face.families.iter().any(|(name,_)|name.eq_ignore_ascii_case(requested))){
+            let actual=glyph.and_then(|g|self.tree.fontdb().face(g.font)).and_then(|face|face.families.first()).map_or("system sans",|(name,_)|name.as_str());
+            warn(&mut self.warnings,format!("SVG font '{requested}' substituted with '{actual}'."));
+        }}}}
+        let t=text.abs_transform();
+        let mut run=TypeRun{content,font,px,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
+        run.contours=crate::text::shape(&run);
+        let mut shape=Shape::new(Geom::Text(run),Style::default());shape.name=self.name(text.id(),"Text");
+        let mut layer=Layer::vector(shape.name.clone());layer.parent=parent;self.meta(&mut layer,text.id());layer.kind.shapes_mut().unwrap().push(shape);self.doc.layers.push(layer);Ok(true)
     }
     fn text(&mut self, text: &usvg::Text, parent: Option<u64>) -> Result<bool, String> {
         let t = text.abs_transform();
@@ -1176,7 +1208,7 @@ fn closed_fill(mut geom: Geom) -> Geom {
     geom
 }
 
-fn path_geom(path: &tiny_skia::Path, winding: bool) -> Option<Geom> {
+pub(crate) fn path_geom(path: &tiny_skia::Path, winding: bool) -> Option<Geom> {
     let mut paths = Vec::<(Vec<Anchor>, bool)>::new();
     let mut anchors = Vec::<Anchor>::new();
     let mut closed = false;

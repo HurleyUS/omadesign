@@ -303,7 +303,7 @@ pub fn compose(run: &TypeRun) -> Arc<Vec<LayoutLine>> {
                     _ => 0.,
                 };
             }
-            let height=(start..end).map(|i|super::character_metrics(run,i).leading.unwrap().pixels(run.px)).fold(0.,f32::max).max(if start==end{run.line_height()}else{1.});
+            let height=(start..end).map(|i|{let m=super::character_metrics(run,i);m.leading.unwrap().pixels(m.px.unwrap_or(run.px))}).fold(0.,f32::max).max(if start==end{run.line_height()}else{1.});
             let baseline=lines.last().map_or(0.,|previous|previous.baseline+height);
 
             for glyph in &mut glyphs {
@@ -422,6 +422,12 @@ fn shape_line(
         let width = next.last().map_or(0., |g| g.x + g.advance);
         for glyph in &mut next {
             glyph.x += pen;
+        }
+        if pair[0]>0 {
+            let index=start+pair[0];
+            let previous=run.character_style(index-1).px.unwrap_or(run.px);
+            let boundary=run.manual_kern.get(&index).copied().unwrap_or(0.)*part.px/1000.+previous*paragraph_style(run,index).letter_spacing[1]/100.;
+            for glyph in &mut next{glyph.x+=boundary;} pen+=boundary;
         }
         glyphs.extend(next);
         pen += width;
@@ -593,10 +599,10 @@ pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
             contour
                 .into_iter()
                 .map(|p| {
-                    run.map_point(Pt::new(
+                    Pt::new(
                         run.origin.x + glyph.x + p.x * glyph.hscale,
                         run.origin.y + glyph.y + p.y * glyph.vscale,
-                    ))
+                    )
                 })
                 .collect()
         })
