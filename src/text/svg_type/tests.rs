@@ -16,7 +16,7 @@ fn types(doc: &Document) -> Vec<&TypeRun> {
         .collect()
 }
 fn render(source: &str) -> tiny_skia::Pixmap {
-    let tree = usvg::Tree::from_str(source, &options()).unwrap();
+    let tree = usvg::Tree::from_str(&renderer_source(source), &options()).unwrap();
     let mut pm =
         tiny_skia::Pixmap::new(tree.size().width() as u32, tree.size().height() as u32).unwrap();
     resvg::render(&tree, Transform::identity(), &mut pm.as_mut());
@@ -204,5 +204,24 @@ fn svg_type_independent_librsvg_appearance_and_editable_export() {
         error(&independent(&exported), &expected) < 1.5,
         "independent exported mean={}",
         error(&independent(&exported), &expected)
+    );
+}
+
+#[test]
+fn svg_type_rtl_repeated_letters_keep_logical_carets_and_source_direction() {
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="300" height="100"><text x="270" y="55" font-family="DejaVu Sans" font-size="30" direction="rtl" unicode-bidi="bidi-override">مرحبا بالعالم</text></svg>"##;
+    let (doc, _) = crate::formats::svg::read(source, "Logical RTL").unwrap();
+    let run = types(&doc)[0];
+    assert_eq!(run.content, "مرحبا بالعالم");
+    let first = crate::text::caret_pt(run, 0);
+    let last = crate::text::caret_pt(run, run.content.chars().count());
+    assert!(first.x > last.x, "{first:?}, {last:?}");
+    assert_eq!(crate::text::hit_char(run, first), 0);
+    let exported = crate::svg::export(&doc).unwrap();
+    assert!(exported.contains("direction=\"rtl\""));
+    assert!(!exported.contains('\u{202e}'));
+    assert_eq!(
+        types(&crate::formats::svg::read(&exported, "RTL").unwrap().0)[0].content,
+        run.content
     );
 }
