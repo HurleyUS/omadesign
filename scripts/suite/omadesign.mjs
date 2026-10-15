@@ -23,5 +23,11 @@ const args = request.driver === 'libtest' ? ['--exact','formats::suite_qualifica
 const result = spawnSync(request.binary,args,{env:{...process.env,OMA_SUITE_REQUEST:driverRequest},encoding:'utf8',timeout:20000,maxBuffer:32768});
 fs.rmSync(driverRequest);
 if (result.error) throw result.error;
+const report = path.join(request.output,'result.json');
+if (reference !== request.reference && fs.existsSync(report)) {
+  const json = JSON.parse(fs.readFileSync(report,'utf8'));
+  json.checks.appearance.artifacts.push(path.basename(reference));
+  fs.writeFileSync(report,JSON.stringify(json));
+}
 if (result.status !== 0) process.stderr.write('Product fixture check failed; see result.json and facts.json\n');
 process.exitCode = result.status ?? 1;

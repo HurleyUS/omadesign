@@ -215,6 +215,19 @@ pub fn qualify(request: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn required_public_fixture_cohort() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let out = root.join(".artifacts/suite/omadesign");
+        let status = std::process::Command::new("node")
+            .arg(root.join("scripts/suite/omadesign-test.mjs"))
+            .arg(std::env::current_exe().unwrap())
+            .arg(out)
+            .status()
+            .unwrap();
+        assert!(status.success(), "Required headless fixture cohort failed");
+    }
+
+    #[test]
     #[ignore = "explicit suite request, no implicit private fixture pass"]
     fn qualification_driver() {
         let request = std::env::var_os("OMA_SUITE_REQUEST").expect("OMA_SUITE_REQUEST required");
