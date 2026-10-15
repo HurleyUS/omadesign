@@ -54,13 +54,37 @@ export function discoverCloud() {
 }
 
 export async function handleCloud(request: Request) {
-  if (Number(request.headers.get("content-length")) > 768000)
+  const maximum = 1_100_000;
+  if (Number(request.headers.get("content-length")) > maximum)
     return json({ error: "Request too large" }, 413);
-  const body = await request.text();
-  if (body.length > 768000) return json({ error: "Request too large" }, 413);
+  let body = "";
+  let bytes = 0;
+  const reader = request.body?.getReader();
+  if (reader) {
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        bytes += chunk.value.byteLength;
+        if (bytes > maximum) {
+          await reader.cancel();
+          return json({ error: "Request too large" }, 413);
+        }
+        body += decoder.decode(chunk.value, { stream: true });
+      }
+      body += decoder.decode();
+    } catch {
+      return json({ error: "Invalid request body" }, 400);
+    } finally {
+      reader.releaseLock();
+    }
+  }
   try {
     const { operation, args } = JSON.parse(body);
-    if (!operation.startsWith("live:") && body.length > 16384)
+    if (typeof operation !== "string")
+      return json({ error: "Invalid operation" }, 400);
+    if (!operation.startsWith("live:") && bytes > 16384)
       return json({ error: "Request too large" }, 413);
     if (!queries.has(operation) && !mutations.has(operation))
       return json(

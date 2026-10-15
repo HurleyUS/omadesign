@@ -218,6 +218,15 @@ describe("Authenticated live sessions", () => {
         changes: [write(alice, 1, "changed")],
       }),
     ).rejects.toThrow("reused");
+    const impossibleClock = write(alice, 2, "Impossible clock");
+    impossibleClock.clock = Number.MAX_SAFE_INTEGER;
+    await expect(
+      owner.mutation(api.live.exchange, {
+        ...left,
+        ...exchange,
+        changes: [impossibleClock],
+      }),
+    ).rejects.toThrow("logical clock");
     const meta = write(alice, 2, "token");
     meta.edit.writes[0].path = "/collaboration/actor";
     await expect(

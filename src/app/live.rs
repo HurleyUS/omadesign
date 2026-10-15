@@ -37,7 +37,6 @@ fn fingerprint(identity: &crate::cloud::Identity) -> String {
 }
 
 fn lease(actor: &str) -> Result<std::fs::File, String> {
-    use std::os::unix::fs::OpenOptionsExt;
     if actor.len() != 64 || !actor.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("Invalid live actor ID".into());
     }
@@ -46,7 +45,12 @@ fn lease(actor: &str) -> Result<std::fs::File, String> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
         .ok_or("No home directory for live client ownership")?
         .join("omadesign/live-clients");
-    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    lease_at(&root, actor)
+}
+
+fn lease_at(root: &std::path::Path, actor: &str) -> Result<std::fs::File, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -73,6 +77,9 @@ impl Studio {
             return;
         };
         let project = link.project_id.clone();
+        self.commit_type_edit();
+        self.end_pixel_stroke(true);
+        self.end_deform(true);
         let base = match collaboration::snapshot(&self.doc) {
             Ok(base) => base,
             Err(e) => {
@@ -251,34 +258,55 @@ impl Studio {
         &self.live_runtime.presence
     }
 
+    fn prepare_live_ownership(
+        &mut self,
+        claim: impl Fn(&str) -> Result<std::fs::File, String>,
+    ) -> Result<(), String> {
+        if !crate::cloud::connected(&self.cloud_identity) {
+            return Ok(());
+        }
+        let Some(state) = &self.doc.collaboration else {
+            return Ok(());
+        };
+        let device = fingerprint(&self.cloud_identity);
+        if state.device == device && self.live_runtime.lease.is_some() {
+            return Ok(());
+        }
+        let mut state = self.doc.collaboration.take().unwrap();
+        self.live_runtime = Default::default();
+        let lock = if state.device == device {
+            claim(&state.actor).ok()
+        } else {
+            None
+        };
+        let result = if let Some(lock) = lock {
+            self.live_runtime.lease = Some(lock);
+            Ok(())
+        } else {
+            crate::cloud::client::random_token()
+                .and_then(|actor| state.fork(actor, device, &self.doc))
+                .and_then(|_| claim(&state.actor))
+                .map(|lock| self.live_runtime.lease = Some(lock))
+        };
+        self.doc.collaboration = Some(state);
+        self.dirty = true;
+        result
+    }
+
     pub(super) fn poll_live(&mut self, ctx: &egui::Context) {
         let Some(_) = &self.doc.collaboration else {
             return;
         };
         ctx.request_repaint_after(Duration::from_millis(150));
-        if self.live_runtime.lease.is_none() {
-            let mut state = self.doc.collaboration.take().unwrap();
-            let device = fingerprint(&self.cloud_identity);
-            let lock = if state.device == device {
-                lease(&state.actor).ok()
-            } else {
-                None
-            };
-            let result = if let Some(lock) = lock {
-                self.live_runtime.lease = Some(lock);
-                Ok(())
-            } else {
-                crate::cloud::client::random_token()
-                    .and_then(|actor| state.fork(actor, device, &self.doc))
-                    .and_then(|_| lease(&state.actor))
-                    .map(|lock| self.live_runtime.lease = Some(lock))
-            };
-            self.doc.collaboration = Some(state);
-            if let Err(error) = result {
-                self.live_runtime.status = error;
-                return;
-            }
-            self.dirty = true;
+        if let Err(error) = self.prepare_live_ownership(lease) {
+            self.live_runtime.status = error;
+            return;
+        }
+        if !crate::cloud::connected(&self.cloud_identity) {
+            self.live_runtime.job = None;
+            self.live_runtime.joined = false;
+            self.live_runtime.presence.clear();
+            self.live_runtime.status = "Offline · sign in to resume live edits".into();
         }
         if ctx.input(|input| input.pointer.any_down())
             || self.op.is_some()
@@ -309,6 +337,8 @@ impl Studio {
                 Ok(reply) => {
                     let mut state = self.doc.collaboration.take().unwrap();
                     let before = state.changes.len();
+                    let old_cursor = state.cursor;
+                    let old_pending = state.pending.len();
                     let received = state.receive(reply.changes);
                     if received.is_ok() {
                         for id in reply.acknowledged {
@@ -317,6 +347,8 @@ impl Studio {
                         state.cursor = reply.cursor;
                     }
                     let changed = state.changes.len() != before;
+                    let checkpoint =
+                        state.cursor != old_cursor || state.pending.len() != old_pending;
                     if let Err(error) = received {
                         self.doc.collaboration = Some(state);
                         self.live_runtime.status = error;
@@ -362,7 +394,7 @@ impl Studio {
                         } else {
                             500
                         });
-                    self.dirty = true;
+                    self.dirty |= changed || checkpoint;
                 }
                 Err(error) => {
                     self.live_runtime.joined = false;
@@ -491,6 +523,36 @@ mod tests {
         b.mark();
         exchange(&mut a, &mut b);
         assert_eq!(a.selection, [(0, id)]);
+    }
+
+    #[test]
+    fn live_collaboration_account_changes_release_the_actor_and_preserve_pending_artwork() {
+        let (mut studio, _) = studio_pair();
+        studio.cloud_identity.token = "a".repeat(64);
+        let device = fingerprint(&studio.cloud_identity);
+        studio.doc.collaboration.as_mut().unwrap().device = device;
+        let root = std::env::temp_dir().join(format!("live-lease-{}", crate::document::next_id()));
+        let claim = |actor: &str| lease_at(&root, actor);
+        studio.prepare_live_ownership(claim).unwrap();
+        let actor = studio.doc.collaboration.as_ref().unwrap().actor.clone();
+        assert!(claim(&actor).is_err());
+        add(&mut studio, "Unsent artwork");
+        studio.record_live().unwrap();
+        studio.cloud_identity.token = "b".repeat(64);
+        studio.prepare_live_ownership(claim).unwrap();
+        let state = studio.doc.collaboration.as_ref().unwrap();
+        assert_ne!(state.actor, actor);
+        assert!(
+            state
+                .changes
+                .iter()
+                .filter(|c| state.pending.contains(&c.id))
+                .all(|c| c.id.actor == state.actor)
+        );
+        assert_eq!(count(&studio), 1);
+        assert!(claim(&actor).is_ok());
+        drop(studio);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn barrier(root: &std::path::Path, role: &str, step: &str) {

@@ -206,6 +206,7 @@ export const exchange = mutation({
       }
       if (operation.id.seq !== seq + 1)
         fail("Live operations must be submitted in order.");
+      if (operation.clock > revision + 1) fail("Invalid live logical clock.");
       if (operation.edit.type === "toggle") {
         if (operation.edit.target.actor !== a.actor)
           fail("Cannot undo another client's changes.");
