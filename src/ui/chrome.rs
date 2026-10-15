@@ -1150,6 +1150,14 @@ mod keyboard_tests {
     }
 
     fn frame(ctx: &egui::Context, studio: &mut Studio, events: Vec<Event>) -> egui::FullOutput {
+        let events = events.into_iter().flat_map(|event| {
+            if let Event::Key { key, physical_key, pressed: true, modifiers, .. } = &event {
+                let release = Event::Key { key: *key, physical_key: *physical_key, pressed: false, repeat: false, modifiers: *modifiers };
+                vec![event, release]
+            } else {
+                vec![event]
+            }
+        }).collect();
         let mut output = ctx.run_ui(egui::RawInput {
             events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(640., 480.))),
             ..Default::default()
@@ -1175,7 +1183,8 @@ mod keyboard_tests {
         studio.doc.name = "Same name".into();
         let output = frame(&ctx, &mut studio, vec![]);
         let tree = output.platform_output.accesskit_update.unwrap();
-        let close: Vec<_> = tree.nodes.iter().filter(|(_, node)| node.label().is_some_and(|s| s.starts_with("Close Same name"))).collect();
+        let mut close: Vec<_> = tree.nodes.iter().filter(|(_, node)| node.label().is_some_and(|s| s.starts_with("Close Same name"))).collect();
+        close.sort_by_key(|(_, node)| node.label());
         assert_eq!(close.len(), 2);
         assert_ne!(close[0].0, close[1].0);
         assert_ne!(close[0].1.label(), close[1].1.label());

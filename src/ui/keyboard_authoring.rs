@@ -240,6 +240,14 @@ mod tests {
         studio: &mut Studio,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
+        let events = events.into_iter().flat_map(|event| {
+            if let egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } = &event {
+                let release = egui::Event::Key { key: *key, physical_key: *physical_key, pressed: false, repeat: false, modifiers: *modifiers };
+                vec![event, release]
+            } else {
+                vec![event]
+            }
+        }).collect();
         let mut output = ctx.run_ui(
             egui::RawInput {
                 events,
