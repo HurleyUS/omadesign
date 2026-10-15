@@ -510,6 +510,7 @@ fn field_input_actual_hex_preserves_selection_browser_paste_and_text_undo() {
         assert_eq!(
             inspected_style(&studio)
                 .fill
+                .clone()
                 .solid_or(crate::color::Rgba::TRANSPARENT),
             crate::color::Rgba::from_hex(0x12ABEF)
         );
@@ -565,6 +566,7 @@ fn field_input_actual_hex_preserves_selection_browser_paste_and_text_undo() {
         assert_eq!(
             inspected_style(&studio)
                 .fill
+                .clone()
                 .solid_or(crate::color::Rgba::TRANSPARENT),
             crate::color::Rgba::from_hex(0x445566)
         );
@@ -572,6 +574,7 @@ fn field_input_actual_hex_preserves_selection_browser_paste_and_text_undo() {
         assert_eq!(
             inspected_style(&studio)
                 .fill
+                .clone()
                 .solid_or(crate::color::Rgba::TRANSPARENT),
             crate::color::Rgba::from_hex(0x12ABEF)
         );
