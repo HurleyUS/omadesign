@@ -341,6 +341,14 @@ impl Writer {
         {
             return Err("PDF object opacity and rotation must be finite".into());
         }
+        if shape.style.stroke.as_ref().is_some_and(|s| {
+            !s.width.is_finite()
+                || !s.dash_offset.is_finite()
+                || s.dash
+                    .is_some_and(|(a, b)| !a.is_finite() || !b.is_finite())
+        }) {
+            return Err("PDF stroke geometry must be finite".into());
+        }
         if let Geom::Text(run) = &shape.geom {
             text::validate(run)?;
             let mut scene = Scene::default();

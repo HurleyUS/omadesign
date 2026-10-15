@@ -989,7 +989,11 @@ impl Reader<'_> {
             ..TypeRun::default()
         };
         run.contours = crate::text::shape(&run);
-        let mapped_glyph = font.and_then(|font| self.cid_glyph(font, bytes));
+        let mapped_glyph = run
+            .font
+            .starts_with("omatype:")
+            .then(|| font.and_then(|font| self.cid_glyph(font, bytes)))
+            .flatten();
         let mapped_outline = mapped_glyph.is_some_and(|id| {
             let lines = crate::text::compose(&run);
             let glyphs = lines.iter().flat_map(|l| &l.glyphs).collect::<Vec<_>>();

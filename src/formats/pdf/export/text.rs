@@ -129,7 +129,7 @@ pub(super) fn write(
         );
         stroke_style(&mut out.ops, shape);
     }
-    let state=pdf.add_object(dictionary!{"Type"=>"ExtGState","ca"=>color.map_or(1.,|c|c.a as f32/255.)*shape.fill_opacity,"CA"=>shape.style.stroke.as_ref().map_or(1.,|s|s.color.a as f32/255.)*shape.fill_opacity});
+    let state=pdf.add_object(dictionary!{"Type"=>"ExtGState","ca"=>(color.map_or(1.,|c|c.a as f32/255.)*shape.fill_opacity).clamp(0.,1.),"CA"=>(shape.style.stroke.as_ref().map_or(1.,|s|s.color.a as f32/255.)*shape.fill_opacity).clamp(0.,1.)});
     out.invoke("gs", "ExtGState", state);
     let mode = match (
         color.is_some(),

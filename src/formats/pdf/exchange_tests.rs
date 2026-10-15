@@ -877,3 +877,33 @@ fn pdf_exchange_ligatures_preserve_embedded_glyphs_on_import() {
         "ligature glyph appearance changed during import"
     );
 }
+
+#[test]
+fn pdf_exchange_rejects_infinite_stroke_and_never_uses_source_gids_after_font_substitution() {
+    let mut doc = text_document();
+    doc.layers[0].kind.shapes_mut().unwrap()[0].style.stroke = Some(Stroke {
+        width: f32::INFINITY,
+        ..Default::default()
+    });
+    assert!(write(&doc).unwrap_err().contains("finite"));
+    let (bytes, _) = write(&text_document()).unwrap();
+    let mut pdf = Pdf::load_mem(&bytes).unwrap();
+    for object in pdf.objects.values_mut() {
+        if let Ok(dict) = object.as_dict_mut() {
+            if dict.get(b"Type").and_then(Object::as_name).ok() == Some(b"FontDescriptor") {
+                dict.remove(b"FontFile2");
+            }
+            if dict.get(b"Type").and_then(Object::as_name).ok() == Some(b"Font") {
+                dict.set("BaseFont", "UnavailableSourceFont");
+            }
+        }
+    }
+    let mut bytes = vec![];
+    pdf.save_to(&mut bytes).unwrap();
+    let (_, notes) = read(&bytes, "missing-font.pdf").unwrap();
+    assert!(notes.iter().any(|n| n.contains("substituted")), "{notes:?}");
+    assert!(
+        notes.iter().all(|n| !n.contains("exact embedded glyph")),
+        "source glyph IDs were applied to a substitute face: {notes:?}"
+    );
+}
