@@ -580,4 +580,20 @@ mod svg_type_native_acceptance {
         let mut story=sample("MMMM WWWW");story.frame=Some(crate::text_geometry::TextFrame{size:Pt::new(240.,100.),..Default::default()});story.set_character_style(5,9,|s|s.font=Some("/usr/share/fonts/liberation/LiberationSans-Bold.ttf".into()));let plain=crate::text_geometry::layout_frame(&story,&story,0,&[],false);assert!(!plain.contours.is_empty());story.transform=Some([1.,0.2,0.3,1.,20.,10.]);let mapped=crate::text_geometry::layout_frame(&story,&story,0,&[],false);assert!((mapped.contours[0][0]-story.map_point(plain.contours[0][0])).length()<0.001);assert!((mapped.selections[0].2[0]-story.map_point(plain.selections[0].2[0])).length()<0.001);
         let mut geom=Geom::Text(story);let bounds=geom.bbox();geom.map_into_with_text_scale(bounds,crate::geom::Bounds::from_min_size(bounds.min,bounds.size()*2.));let Geom::Text(run)=geom else{unreachable!()};assert_eq!(run.px,32.);assert!((run.transform.unwrap()[0]-2.).abs()<0.001);
     }
+    #[test]
+    fn native_type_frame_path_paints_sizes_obstacles_and_wrapped_ink(){
+        use crate::text_geometry::{TextFrame,TextOnPath,ArcPath,Obstacle,TextWrap,WrapMode};
+        use crate::geom::Bounds;
+        let red=Fill::Solid(Rgba::rgb(220,20,40));
+        let mut story=sample("MMMM WWWW");story.px=20.;story.origin=Pt::new(20.,80.);story.wrap_width=Some(230.);story.set_character_style(0,1,|s|{s.px=Some(96.);s.fill=Some(red.clone());});story.contours=crate::text::shape(&story);
+        let bounds=Geom::Text(story.clone()).bbox();assert!(story.contours.iter().flatten().all(|p|p.y>=bounds.min.y-0.01));
+        let doc=document(story.clone());let image=crate::compositor::render_export(&doc,1).unwrap();assert!(image.pixels().iter().enumerate().any(|(i,p)|i/320<50 && p.red().saturating_sub(p.blue())>20));
+        story.frame=Some(TextFrame{size:Pt::new(250.,150.),..Default::default()});
+        let obstacle=Obstacle{id:7,order:(0,0),bounds:Bounds::from_min_size(Pt::new(20.,60.),Pt::new(90.,100.)),contours:vec![],wrap:TextWrap{mode:WrapMode::BoundingBox,..Default::default()},locked:false};
+        let plain=crate::text_geometry::layout_frame(&story,&story,0,&[obstacle.clone()],false);assert!(!plain.contours.is_empty());assert!(plain.caret_heights.iter().any(|(i,h)|*i==0&&*h>95.));
+        let mut shifted=obstacle;shifted.bounds.min.x+=100.;shifted.bounds.max.x+=100.;story.transform=Some([1.,0.,0.,1.,100.,0.]);let mapped=crate::text_geometry::layout_frame(&story,&story,0,&[shifted],false);assert_eq!(plain.contours.len(),mapped.contours.len());assert!((mapped.contours[0][0]-story.map_point(plain.contours[0][0])).length()<0.01);
+        story.transform=None;story.layout=Some(crate::text_geometry::layout_frame(&story,&story,0,&[],false));assert!(crate::text::paint_groups(&story,&Fill::None).iter().any(|(f,c)|*f==red&&!c.is_empty()));let doc=document(story.clone());assert!(compare(&crate::svg::export(&doc).unwrap(),&doc)<0.1);
+        story.frame=None;story.layout=None;story.on_path=Some(TextOnPath{cache:Some(ArcPath::new(vec![[Pt::new(10.,100.),Pt::new(110.,100.),Pt::new(210.,100.),Pt::new(310.,100.)]],false)),..Default::default()});let path=crate::text_geometry::layout_on_path(&story);assert!(path.caret_heights.iter().any(|(i,h)|*i==0&&*h>95.));assert!(crate::text::paint_groups(&story,&Fill::None).iter().any(|(f,c)|*f==red&&!c.is_empty()));let doc=document(story);assert!(compare(&crate::svg::export(&doc).unwrap(),&doc)<0.1);
+    }
+
 }

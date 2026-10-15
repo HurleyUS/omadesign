@@ -157,6 +157,7 @@ pub fn guide_path(shape: &Shape) -> Option<ArcPath> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextGeometryLayout {
     pub contours: Vec<Vec<Pt>>,
+    pub paint_ranges: Vec<(Option<crate::document::Fill>, std::ops::Range<usize>)>,
     pub caret_heights: Vec<(usize, f32)>,
     pub carets: Vec<(usize, Pt, Pt)>, // story index, baseline position, tangent
     pub selections: Vec<(usize, usize, [Pt; 4])>,
@@ -240,6 +241,7 @@ pub fn layout_on_path(run: &TypeRun) -> TextGeometryLayout {
             let Some((point, tangent)) = path_position(run, center) else {
                 continue;
             };
+            let paint_start=result.contours.len();
             for contour in crate::text::glyph_contours(&plain, glyph) {
                 result.contours.push(
                     contour
@@ -252,6 +254,7 @@ pub fn layout_on_path(run: &TypeRun) -> TextGeometryLayout {
                         .collect(),
                 );
             }
+            result.paint_ranges.push((plain.character_style(glyph.cluster).fill,paint_start..result.contours.len()));
             result.visible_end = result.visible_end.max(glyph.cluster + 1);
         }
         for &(index, x) in &line.carets {
@@ -268,7 +271,7 @@ pub fn layout_on_path(run: &TypeRun) -> TextGeometryLayout {
                 ));
                 result
                     .caret_heights
-                    .push((index, run.px * metrics.vscale.unwrap() / 100.));
+                    .push((index, metrics.px.unwrap_or(run.px) * metrics.vscale.unwrap() / 100.));
             }
         }
         for pair in line.carets.windows(2) {
@@ -282,7 +285,7 @@ pub fn layout_on_path(run: &TypeRun) -> TextGeometryLayout {
                 path_position(run, (offset + y).min(span)),
             ) {
                 let metrics = crate::text::character_metrics(run, a);
-                let height = run.px * metrics.vscale.unwrap() / 100.;
+                let height = metrics.px.unwrap_or(run.px) * metrics.vscale.unwrap() / 100.;
                 let p = p - t.perp() * metrics.baseline_shift.unwrap();
                 let q = q - u.perp() * metrics.baseline_shift.unwrap();
                 result.selections.push((

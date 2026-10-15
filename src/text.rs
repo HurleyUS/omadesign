@@ -532,8 +532,14 @@ pub use composer::{compose, compose_plain, glyph_contours, paragraph_style, Layo
 
 pub fn fill_contours(geom: &mut crate::geom::Geom) { if let crate::geom::Geom::Text(run)=geom {run.contours=shape(run);} }
 
+pub(crate) fn has_character_paint(run:&TypeRun)->bool{run.spans.iter().any(|s|s.fill.is_some()) || run.layout.as_ref().is_some_and(|layout|layout.paint_ranges.iter().any(|(fill,_)|fill.is_some()))}
+
 pub(crate) fn paint_groups(run:&TypeRun,inherited:&crate::document::Fill)->Vec<(crate::document::Fill,Vec<Vec<Pt>>)> {
     let mut groups:Vec<(crate::document::Fill,Vec<Vec<Pt>>)>=Vec::new();
+    if run.frame.is_some() || run.on_path.is_some(){
+        let computed;let layout=if let Some(layout)=&run.layout{layout}else{computed=if run.on_path.is_some(){crate::text_geometry::layout_on_path(run)}else{crate::text_geometry::layout_frame(run,run,0,&[],false)};&computed};
+        for (fill,range) in &layout.paint_ranges{let fill=fill.clone().unwrap_or_else(||inherited.clone());let contours=layout.contours[range.clone()].to_vec();if let Some((_,all))=groups.last_mut().filter(|(old,_)|*old==fill){all.extend(contours);}else{groups.push((fill,contours));}}return groups;
+    }
     for line in compose(run).iter(){for glyph in &line.glyphs {
         let fill=run.character_style(glyph.cluster).fill.unwrap_or_else(||inherited.clone());
         let mut contours=glyph_contours(run,glyph);

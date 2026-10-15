@@ -919,10 +919,12 @@ impl Geom {
             Geom::Text(run) if run.frame.is_some() => return crate::text_geometry::frame_bounds(run).unwrap(),
             Geom::Text(run) if run.transform.is_none() && run.on_path.is_none() && run.wrap_width.is_some() => {
                 let (width, height) = crate::text::measure(run);
-                return Bounds::from_min_size(
+                let mut bounds=Bounds::from_min_size(
                     Pt::new(run.origin.x, run.origin.y - run.px * 0.85),
                     Pt::new(width.max(1.0), height.max(1.0)),
                 );
+                for point in crate::text::shape(run).iter().flatten(){bounds.union_pt(*point);}
+                return bounds;
             }
             Geom::Rect { origin, size, .. } => {
                 return Bounds {

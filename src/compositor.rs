@@ -1187,7 +1187,7 @@ fn draw_shape_inner(
         t.pre_concat(pose.to_skia(shape.world_bbox().center()))
     };
     let fill_reveal = pose.fill_reveal.unwrap_or(1.0).clamp(0.0, 1.0);
-    let painted=if let Geom::Text(run)=&shape.geom {run.spans.iter().any(|s|s.fill.is_some()) && run.on_path.is_none() && run.frame.is_none()}else{false};
+    let painted=if let Geom::Text(run)=&shape.geom {crate::text::has_character_paint(run)}else{false};
     if painted && fill_reveal>0. {
         let Geom::Text(run)=&shape.geom else{unreachable!()};
         for (fill,mut contours) in crate::text::paint_groups(run,&shape.style.fill) {
