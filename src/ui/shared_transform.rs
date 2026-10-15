@@ -357,31 +357,47 @@ mod idle_render_tests {
             for locked in [false, true] {
                 let mut studio = Studio::new();
                 studio.show_welcome = false;
-                studio.doc = crate::document::Document::new(
-                    "Large imported artwork",
-                    3_000_000.0,
-                    2_000_000.0,
-                    72.0,
+                let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"
+                    width="3000000" height="2000000" viewBox="0 0 3000000 2000000">
+                    <rect x="12000000" y="-6000000" width="2000000" height="800000"/>
+                    <rect x="12000100" y="-6000000" width="2000000" height="800000"/>
+                    </svg>"#;
+                studio.doc = crate::formats::svg::read(svg, "Large imported artwork")
+                    .unwrap()
+                    .0;
+                assert_eq!(
+                    (studio.doc.width, studio.doc.height),
+                    (3_000_000.0, 2_000_000.0)
                 );
-                let mut layer = crate::document::Layer::vector("Vectors");
-                for index in 0..2 {
-                    let mut shape = crate::document::Shape::new(
-                        crate::geom::Geom::Rect {
-                            origin: Pt::new(12_000_000.0 + index as f32 * 100.0, -6_000_000.0),
-                            size: Pt::new(2_000_000.0, 800_000.0),
-                            radius: 0.0,
-                        },
-                        Default::default(),
+                let imported: Vec<_> = studio
+                    .doc
+                    .layers
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(layer, row)| {
+                        row.kind
+                            .shapes()
+                            .unwrap_or(&[])
+                            .iter()
+                            .map(move |shape| (layer, shape.id))
+                    })
+                    .collect();
+                assert_eq!(imported.len(), 2);
+                for (index, &(layer, id)) in imported.iter().enumerate() {
+                    let shape = studio.doc.find_shape_mut(layer, id).unwrap();
+                    let bounds = shape.geom.bbox();
+                    assert_eq!(
+                        bounds.min,
+                        Pt::new(12_000_000.0 + index as f32 * 100.0, -6_000_000.0)
                     );
+                    assert_eq!((bounds.width(), bounds.height()), (2_000_000.0, 800_000.0));
                     shape.rotation = (720.0 + index as f32 * 30.0).to_radians();
                     if index < count {
-                        studio.selection.push((0, shape.id));
+                        studio.selection.push((layer, id));
                     }
-                    layer.kind.shapes_mut().unwrap().push(shape);
+                    studio.doc.layers[layer].locked = locked;
                 }
-                layer.locked = locked;
-                studio.doc.layers = vec![layer];
-                studio.active_layer = Some(0);
+                studio.active_layer = Some(imported[0].0);
                 let before = crate::project::encode(&studio.doc).unwrap();
                 let ctx = eframe::egui::Context::default();
                 for _ in 0..3 {
