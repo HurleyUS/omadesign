@@ -1,0 +1,44 @@
+{
+  "implementation_commit": "1be38deebafea01180410554b94364b4b4786be1",
+  "library": {
+    "passed": 1033,
+    "failed": 0,
+    "ignored": 9,
+    "seconds": 41.44,
+    "retouch_passed": 22,
+    "log_sha256": "a1879b095a2bb4fa474f1c8b0b4fba597086696384d6adfc96fec1e19c2a86b3",
+    "profile": "Isolated home and XDG directories; system fixture tools precede version-manager shims."
+  },
+  "all_targets": {
+    "result": "passed",
+    "command": "cargo check --all-targets",
+    "log_sha256": "798c428cd40f7c655bb9f955b78e3c8cb9b9d62dd4a9f3dc91debebfd5ea4796"
+  },
+  "native": {
+    "canvas_bounds": true,
+    "frames": 45,
+    "import": "built-in Square",
+    "input": "egui pointer down, 20 drag samples, pointer up",
+    "original_grid": [
+      320,
+      180
+    ],
+    "packs_after_reload": 2,
+    "painted_grid": [
+      640,
+      448
+    ],
+    "painted_pixels": 60790,
+    "renderer": "native WGPU",
+    "save_reopen_exact": true,
+    "seconds": 9.563703536987305,
+    "undo_redo_exact": true
+  },
+  "native_screenshot_sha256": "37056eb2ccfaa891ecbca78ac78a1a5dafab16f3e1850175a28792583a614ab5",
+  "secret_scan": {
+    "result": "passed",
+    "scope": "staged implementation and documentation diff",
+    "log_sha256": "d18fe309211698fbc8926672d7139961fe28c0c32515d85e68da4822f2e9dea9"
+  },
+  "scope": "Unreleased source fix. Scripted egui input on native WGPU and an isolated headless Wayland display. Published release and owner editor unchanged."
+}
