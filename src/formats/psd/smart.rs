@@ -767,6 +767,7 @@ pub fn refresh(doc: &Document, index: usize, mut smart: SmartObject) -> Result<C
     let pixels = crate::deep_color::composite(&source, 1)?.in_document_color(
         &crate::deep_color::cms::DocumentColor {
             depth: crate::deep_color::Depth::F32,
+            intent: source.color.intent,
             ..Default::default()
         },
     )?;
@@ -1373,6 +1374,31 @@ mod tests {
         assert_eq!(mask.native.as_ref().unwrap().icc_profile.as_slice(), profile.as_slice());
         let saved = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
         assert_eq!(saved.layers[0].mask.as_ref().unwrap().native, mask.native);
+    }
+
+    #[test]
+    fn placed_cmyk_source_retains_its_rendering_intent_and_native_color() {
+        use crate::deep_color::{Depth,cms::{DocumentColor,Model}};
+        let profile = include_bytes!("fixtures/fogra39l-cc0.icc").to_vec();
+        let original = Pixels::from_cmyk(1,1,Depth::F32,vec![1.,0.,0.,0.,1.],profile.clone(),1).unwrap();
+        let expected = original.sample(0);
+        let mut source = Document::new("CMYK source",1.,1.,72.);
+        source.transparent = true;
+        source.color = DocumentColor {model:Model::Cmyk,depth:Depth::F32,icc_profile:profile,intent:1};
+        source.layers=vec![Layer::placed_raster("Source",original,Pt::ZERO,Pt::new(1.,1.))];
+        let bytes=crate::project::encode(&source).unwrap().into_bytes();
+        let mut doc=super::super::decode(FIXTURE,"Placed CMYK").unwrap().document;
+        doc.layers[0].psd_smart=Some(doc.layers[0].psd_smart.as_ref().unwrap().with_filter(0,false,None).unwrap());
+        let command=replace_source(&doc,0,"source.oma",bytes.clone()).unwrap();
+        crate::document::apply(&mut doc,&command);
+        let placed=doc.layers[0].kind.pixels().unwrap();
+        let native=placed.native.as_ref().unwrap();
+        assert_eq!(native.intent,1);
+        assert!(native.cmyk.is_none() && native.icc_profile.is_empty());
+        let center=placed.sample((placed.h as usize/2)*placed.w as usize+placed.w as usize/2);
+        assert!(center[3]>0.);
+        for c in 0..3 {assert!((center[c]-expected[c]).abs()<0.00001,"{center:?} != {expected:?}");}
+        assert_eq!(doc.source(doc.layers[0].source_attachment.as_deref().unwrap()).unwrap().bytes(),bytes);
     }
 
     #[test]
