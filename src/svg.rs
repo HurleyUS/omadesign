@@ -190,6 +190,16 @@ fn gradient_reference(
                 "x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"",
                 a.x, a.y, b.x, b.y
             )
+        } else if gradient.radial_axis.is_none()
+            && gradient.focal == [0., 0.]
+            && gradient.inner_radius == 0.
+        {
+            format!(
+                "cx=\"{}\" cy=\"{}\" r=\"{}\"",
+                a.x,
+                a.y,
+                (b - a).length().max(0.001)
+            )
         } else {
             format!(
                 "cx=\"0\" cy=\"0\" r=\"1\" fx=\"{}\" fy=\"{}\" fr=\"{}\" gradientTransform=\"matrix({} {} {} {} {} {})\"",
