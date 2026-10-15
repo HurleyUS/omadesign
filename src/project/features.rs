@@ -265,6 +265,37 @@ mod tests {
             &span_paint.definitions
         ));
         assert!(span_paint.definitions.contains("<pattern"));
+        let directory = std::env::current_dir()
+            .unwrap()
+            .join(".artifacts")
+            .join(format!(
+                "project-source-preview-{}",
+                crate::document::next_id()
+            ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("pooled.oma");
+        std::fs::write(&path, &encoded).unwrap();
+        let preview = crate::brand::load_preview_document(&path, false).unwrap();
+        let preview_shapes = preview
+            .layers
+            .iter()
+            .find_map(|layer| layer.kind.shapes())
+            .unwrap();
+        let Fill::Pattern(preview_paint) = &preview_shapes[0].style.fill else {
+            panic!("library preview lost its pattern")
+        };
+        assert!(preview_paint.definitions.contains("<pattern"));
+        let Geom::Text(preview_run) = &preview_shapes[1].geom else {
+            panic!("library preview lost editable text")
+        };
+        let Some(Fill::Pattern(preview_span)) = &preview_run.spans[0].fill else {
+            panic!("library preview lost range paint")
+        };
+        assert!(Arc::ptr_eq(
+            &preview_paint.definitions,
+            &preview_span.definitions
+        ));
+        std::fs::remove_dir_all(directory).unwrap();
         let plain = super::super::encode(&plain()).unwrap();
         let mut legacy: serde_json::Value = serde_json::from_str(&plain).unwrap();
         legacy["version"] = 1.into();
