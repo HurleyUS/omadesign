@@ -320,6 +320,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                                 ui.data_mut(|d| d.insert_temp(key, index));
                                 let mut node = object.model.nodes[index].clone();
                                 ui.label(&node.name);
+                        if node.matrix.is_some() {ui.label("Use the model position, rotation and scale controls for this node.");return;}
                                 let mut node_changed =
                                     triple(ui, "Position", &mut node.translation);
                                 node_changed |= triple(ui, "Scale", &mut node.scale);

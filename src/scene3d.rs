@@ -242,7 +242,7 @@ impl Scene {
                 || !finite(&l.color)
                 || l.color.iter().any(|v| *v < 0.)
                 || !l.intensity.is_finite()
-                || l.intensity < 0.
+                || !(0.0..=1e12).contains(&l.intensity)
                 || l.range.is_some_and(|r| !r.is_finite() || r <= 0.)
                 || Vec3::from(l.direction).length() < 1e-10
             {
@@ -252,7 +252,7 @@ impl Scene {
                 && (!inner.is_finite()
                     || !outer.is_finite()
                     || inner < 0.
-                    || outer <= inner
+                    || outer < inner
                     || outer > std::f64::consts::FRAC_PI_2)
             {
                 return Err("SceneLight: invalid spot cone".into());

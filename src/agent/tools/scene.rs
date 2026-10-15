@@ -43,7 +43,7 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
             else {let o=scene.objects.iter_mut().find(|o|o.id==id).ok_or("SceneObject: missing object")?;
                 match operation.as_str() {
                     "object"=>patch(o,&args["patch"],&["name","translation","rotation","scale","animation","time_offset","time_scale","looped","opacity","visible"] )?,
-                    "node"=> {let n=index(args,"node")?;let model=std::sync::Arc::make_mut(&mut o.model);let node=model.nodes.get_mut(n).ok_or("SceneNode: missing node")?;patch(node,&args["patch"],&["name","translation","rotation","scale"])?;node.matrix=None;},
+                    "node"=> {let n=index(args,"node")?;let model=std::sync::Arc::make_mut(&mut o.model);let node=model.nodes.get_mut(n).ok_or("SceneNode: missing node")?;if node.matrix.is_some() && args["patch"].as_object().is_some_and(|p|p.keys().any(|k|k!="name")) {return Err("SceneNodeTransform: this node uses a matrix; edit its model object transform to preserve it".into());}patch(node,&args["patch"],&["name","translation","rotation","scale"])?;},
                     "material"=> {let i=index(args,"material")?;let model=std::sync::Arc::make_mut(&mut o.model);let material=model.materials.get_mut(i).ok_or("SceneMaterial: missing material")?;patch(material,&args["patch"],&["name","base_color","base_color_tex","metallic","roughness","metallic_roughness_tex","normal_tex","normal_scale","occlusion_tex","occlusion_strength","emissive","emissive_tex","alpha_mode","alpha_cutoff","double_sided","unlit"])?;},_=>{}
                 }
             }

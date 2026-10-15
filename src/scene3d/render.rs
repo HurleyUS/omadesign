@@ -33,7 +33,7 @@ impl LinearFrame {
                     0.
                 };
                 let color = src[k] as f64 + back * (1. - src[3] as f64);
-                dst[k] = (encode((color / a).max(0.)) * a * 255.)
+                dst[k] = (encode((color / a).max(0.)).clamp(0., 1.) * a * 255.)
                     .round()
                     .clamp(0., 255.) as u8;
             }
@@ -254,6 +254,12 @@ impl Vertex {
 fn finite(v: Vec3) -> bool {
     [v.x, v.y, v.z].iter().all(|x| x.is_finite())
 }
+fn determinant(m: Mat4) -> f64 {
+    let m = m.0;
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+}
 fn matrix_finite(m: Mat4) -> bool {
     m.0.iter().flatten().all(|x| x.is_finite())
 }
@@ -398,7 +404,7 @@ pub fn render(
                             view: camera.position(p),
                             n,
                             t,
-                            hand: tangent[3] as f64,
+                            hand: tangent[3] as f64 * determinant(m).signum(),
                             uv: uv.map(|v| v as f64),
                         };
                         if !matrix_finite(m)
@@ -418,9 +424,16 @@ pub fn render(
                             v.n = geometric.normalize();
                         }
                     }
+                    if !finite(geometric) {
+                        return Err("SceneTransform: triangle normal overflow".into());
+                    }
                     let normals = vertices.iter().fold(Vec3::ZERO, |a, v| a + v.n);
                     let sign = if geometric.dot(normals) < 0. { -1. } else { 1. };
-                    let front = (geometric * sign).dot(camera.eye - vertices[0].p) > 0.;
+                    let toward_camera = match camera.projection {
+                        CameraProjection::Orthographic { .. } => -camera.forward,
+                        _ => camera.eye - vertices[0].p,
+                    };
+                    let front = (geometric * sign).dot(toward_camera) > 0.;
                     if !front && !material.double_sided {
                         continue;
                     }
@@ -578,8 +591,22 @@ impl Raster {
                     normal = (tangent * map.x + bitangent * map.y + normal * map.z).normalize();
                 }
                 let color = shade(
-                    material, model, uv, point, normal, camera.eye, ambient, lights, opacity,
+                    material,
+                    model,
+                    uv,
+                    point,
+                    normal,
+                    match camera.projection {
+                        CameraProjection::Orthographic { .. } => -camera.forward,
+                        _ => (camera.eye - point).normalize(),
+                    },
+                    ambient,
+                    lights,
+                    opacity,
                 );
+                if color.iter().any(|v| !v.is_finite()) {
+                    return Err("SceneColor: shading exceeded finite float range".into());
+                }
                 if color[3] <= 0. {
                     continue;
                 }
@@ -662,7 +689,7 @@ fn shade(
     uv: [f64; 2],
     p: Vec3,
     n: Vec3,
-    eye: Vec3,
+    view: Vec3,
     ambient: [f64; 3],
     lights: &[Light],
     opacity: f32,
@@ -714,7 +741,6 @@ fn shade(
         for k in 0..3 {
             color[k] = base[k] * ambient[k] * ao;
         }
-        let view = (eye - p).normalize();
         let nv = n.dot(view).max(1e-6);
         for light in lights {
             let (l, mut attenuation) = match light.kind {
@@ -730,7 +756,11 @@ fn shade(
             };
             if let LightKind::Spot { inner, outer } = light.kind {
                 let theta = (-l).dot(Vec3::from(light.direction).normalize());
-                let u = ((theta - outer.cos()) / (inner.cos() - outer.cos())).clamp(0., 1.);
+                let u = if inner == outer {
+                    if theta >= outer.cos() { 1. } else { 0. }
+                } else {
+                    ((theta - outer.cos()) / (inner.cos() - outer.cos())).clamp(0., 1.)
+                };
                 attenuation *= u * u * (3. - 2. * u);
             }
             let nl = n.dot(l).max(0.);
@@ -986,5 +1016,174 @@ mod tests {
         };
         let sampled = sample(&texture, [0.5, 0.5], true);
         assert_eq!(sampled, [0.5, 0.5, 0.5, 1.]);
+    }
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+    #[test]
+    fn hdr_output_preserves_premultiplied_alpha_and_rejects_overflow() {
+        let frame = LinearFrame {
+            width: 1,
+            height: 1,
+            pixels: vec![[2., 1., 0.5, 0.5]],
+        };
+        let mut pm = tiny_skia::Pixmap::new(1, 1).unwrap();
+        frame.composite(&mut pm).unwrap();
+        assert!(pm.data()[..3].iter().all(|v| *v <= pm.data()[3]));
+        assert_eq!(pm.data(), [128, 128, 128, 128]);
+        let mut scene = Scene::default();
+        scene.lights[0].intensity = f64::MAX;
+        assert!(scene.validate().unwrap_err().contains("SceneLight"));
+    }
+    #[test]
+    fn mirrored_normal_map_keeps_the_transformed_bitangent() {
+        let mut primitive = model::Primitive {
+            positions: vec![[-1., -1., 0.], [1., -1., 0.], [0., 1., 0.]],
+            normals: vec![[0., 0., 1.]; 3],
+            tangents: vec![[1., 0., 0., 1.]; 3],
+            uvs: vec![[0., 0.]; 3],
+            indices: vec![0, 1, 2],
+            material: Some(0),
+            ..Default::default()
+        };
+        primitive.compute_normals();
+        let mut material = model::Material::plain([1.; 4], 0., 1.);
+        material.normal_tex = Some(model::TexRef {
+            texture: 0,
+            uv_set: 0,
+        });
+        let mut model = Model::single(
+            model::Mesh {
+                name: "Normal mapped".into(),
+                primitives: vec![primitive],
+            },
+            vec![material],
+        );
+        model
+            .textures
+            .push(Arc::new(Texture::solid([0.5, 1., 0.5, 1.])));
+        let mut scene = Scene::default();
+        scene.add(model, "Mirror".into()).unwrap();
+        scene.camera = Camera {
+            position: [0., 0., 3.],
+            projection: Projection::Orthographic { height: 2. },
+            ..Camera::default()
+        };
+        scene.ambient = [0.; 3];
+        scene.lights[0].direction = [0., -1., 0.];
+        let a = render(&scene, View::image(32, 32), 0., &mut || true).unwrap();
+        scene.objects[0].scale = [-1., 1., 1.];
+        let b = render(&scene, View::image(32, 32), 0., &mut || true).unwrap();
+        let index = 16 * 32 + 16;
+        assert!(a.pixels[index][0] > 0.1);
+        assert!((a.pixels[index][0] - b.pixels[index][0]).abs() < 1e-5);
+    }
+}
+
+#[cfg(test)]
+mod qualification_tests {
+    use super::*;
+    fn cube() -> Scene {
+        let params = model::prim::PrimParams {
+            size: [2.; 3],
+            radius: 1.,
+            tube: 0.25,
+            height: 2.,
+            segments: 12,
+            rings: 8,
+        };
+        let mut m = model::prim::model(
+            model::prim::PrimitiveKind::Cube,
+            &params,
+            model::Material::plain([0.8, 0.12, 0.04, 0.7], 0., 0.7),
+        );
+        m.materials[0].alpha_mode = AlphaMode::Blend;
+        m.animations.push(model::Animation {
+            name: "Move".into(),
+            channels: vec![model::Channel {
+                node: 0,
+                path: model::ChannelPath::Translation,
+                interp: model::Interp::Linear,
+                times: vec![0., 1.],
+                values: vec![-0.5, 0., 0., 0.5, 0., 0.],
+            }],
+        });
+        let mut s = Scene::default();
+        s.add(m, "Cube".into()).unwrap();
+        s.objects[0].looped = false;
+        s
+    }
+    #[test]
+    fn orthographic_off_axis_faces_use_parallel_view_rays() {
+        let mut s = cube();
+        s.camera = Camera {
+            position: [0., 0., 3.],
+            projection: Projection::Orthographic { height: 12. },
+            ..Camera::default()
+        };
+        s.objects[0].translation = [4., 0., 0.];
+        s.objects[0].rotation = [0., 53., 0.];
+        let f = render(&s, View::image(64, 64), 0., &mut || true).unwrap();
+        assert!(f.pixels.iter().any(|p| p[3] > 0.));
+    }
+    #[test]
+    fn independent_output_receipt_and_native_disk_reopen() {
+        let s = cube();
+        let mut doc = crate::document::Document::new("Craft motion qualification", 96., 64., 96.);
+        doc.layers.clear();
+        doc.artboards.clear();
+        doc.artboardless = true;
+        doc.transparent = true;
+        doc.motion.scene3d = Some(s);
+        let a = crate::anim_export::render_frame(&doc, 0., 1., true).unwrap();
+        let b = crate::anim_export::render_frame(&doc, 1., 1., true).unwrap();
+        assert_ne!(a, b);
+        let output = std::env::var_os("CRAFT_MOTION_QA_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!("craft-motion-{}", crate::document::next_id()))
+            });
+        assert!(output.starts_with("/home/"));
+        std::fs::create_dir_all(&output).unwrap();
+        let path = output.join("scene.oma");
+        crate::project::save_to(&doc, &path).unwrap();
+        let reopened = crate::project::load_from(&path).unwrap();
+        assert_eq!(reopened.motion, doc.motion);
+        assert_eq!(
+            crate::anim_export::render_frame(&reopened, 1., 1., true).unwrap(),
+            b
+        );
+        std::fs::write(output.join("scene-start.png"), &a).unwrap();
+        std::fs::write(output.join("scene-end.png"), &b).unwrap();
+        std::fs::write(
+            output.join("scene.omamotion"),
+            crate::motion::compositions::export(&doc).unwrap(),
+        )
+        .unwrap();
+        let settings = crate::anim_export::AnimSettings {
+            scale: 1.,
+            fps: 4.,
+            start: 0.,
+            end: 1.,
+            looped: true,
+            transparent: true,
+        };
+        let apng = crate::anim_export::export_animation(
+            &doc,
+            crate::anim_export::AnimKind::Apng,
+            &settings,
+            |_, _| true,
+        )
+        .unwrap();
+        std::fs::write(output.join("scene-animation.png"), apng).unwrap();
+        let decoded = image::load_from_memory(&b).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), (96, 64));
+        assert!(decoded.pixels().any(|p| p.0[3] > 0 && p.0[3] < 255));
+        std::fs::write(output.join("receipt.json"),serde_json::to_vec_pretty(&serde_json::json!({"width":96,"height":64,"samples":[0,1],"frames_differ":a!=b,"native_disk_reopen":true,"independent_decoder":"image PNG decoder","linear_float_before_encoding":true,"physical_or_installed_runtime_proof":false})).unwrap()).unwrap();
+        if std::env::var_os("CRAFT_MOTION_QA_DIR").is_none() {
+            std::fs::remove_dir_all(output).unwrap();
+        }
     }
 }
