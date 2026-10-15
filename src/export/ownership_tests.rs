@@ -1,5 +1,5 @@
 use super::*;
-use crate::deep_color::{Depth, cms};
+use crate::deep_color::Depth;
 use crate::document::{Layer, Pixels};
 use crate::geom::Pt;
 use crate::ml::NoProgress;

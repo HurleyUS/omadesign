@@ -238,6 +238,21 @@ struct AllocationBudget {
     allowance: usize,
 }
 impl AllocationBudget {
+    /// Count retained image allocations. Args: decoded pixels. Returns an error above the import allowance.
+    fn charge_pixels(&mut self, pixels: &crate::document::Pixels) -> Result<(), String> {
+        let (samples, cmyk, profile) = pixels.native.as_ref().map_or((0, 0, 0), |native| {
+            (
+                native.samples.bytes(),
+                native.cmyk.as_ref().map_or(0, |inks| inks.bytes()),
+                native.icc_profile.bytes(),
+            )
+        });
+        for bytes in [pixels.data.bytes(), samples, cmyk, profile] {
+            self.charge(usize::try_from(bytes).map_err(|_| "IDML allocation budget overflow")?)?;
+        }
+        Ok(())
+    }
+
     /// Reserve owned buffers before duplication. Args: byte count. Returns an error above the aggregate allowance.
     fn charge(&mut self, bytes: usize) -> Result<(), String> {
         self.used = self
@@ -881,7 +896,7 @@ impl Importer<'_> {
                 if let Some(bytes) = bytes {
                     match crate::formats::decode_image(&bytes) {
                         Ok(px) => {
-                            self.budget.charge(px.data.capacity())?;
+                            self.budget.charge_pixels(&px)?;
                             layer.kind = Layer::placed_raster(&name, px, b.min, b.size()).kind;
                         }
                         Err(e) => {
