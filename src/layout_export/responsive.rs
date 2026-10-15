@@ -6,6 +6,11 @@ pub(super) fn stack_css(stack: &crate::layout::AutoStack) -> String {
         StackAlign::Center => "center",
         StackAlign::End => "flex-end",
         StackAlign::Stretch => "stretch",
+        StackAlign::Baseline
+            if stack.flow != StackFlow::Grid && stack.direction == StackAxis::Vertical =>
+        {
+            "flex-start"
+        }
         StackAlign::Baseline => "baseline",
     };
     let justify = match stack.justify {

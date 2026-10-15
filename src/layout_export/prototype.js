@@ -7,11 +7,27 @@ const variantTemplate=(node,id)=>document.getElementById('variant-'+node.dataset
 const template=id=>document.getElementById('screen-'+id);
 const frame=()=>stage.firstElementChild;
 const top=()=>overlays.length?overlays[overlays.length-1].node:frame();
-const focus=node=>(node.querySelector('.interactive')||node).focus({preventScroll:true});
+function exposed(node){
+ if(node.closest('[inert]'))return false;
+ const canvas=frame().getBoundingClientRect(),target=node.getBoundingClientRect();
+ let left=canvas.left,right=canvas.right,above=canvas.top,below=canvas.bottom;
+ for(let parent=node;parent&&parent!==document.body;parent=parent.parentElement){
+  const style=getComputedStyle(parent);if(style.display==='none'||style.visibility==='hidden'||Number(style.opacity)<=0)return false;
+  if(parent===node)continue;
+  const bounds=parent.getBoundingClientRect();
+  if(/hidden|clip|auto|scroll/.test(style.overflowX)){left=Math.max(left,bounds.left);right=Math.min(right,bounds.right);}
+  if(/hidden|clip|auto|scroll/.test(style.overflowY)){above=Math.max(above,bounds.top);below=Math.min(below,bounds.bottom);}
+ }
+ return Math.min(right,target.right)>Math.max(left,target.left)&&Math.min(below,target.bottom)>Math.max(above,target.top);
+}
+function focus(node){
+ const target=[node,...node.querySelectorAll('.interactive')].find(n=>n.matches('.interactive')&&exposed(n));
+ if(target)target.focus({preventScroll:true});else{node.tabIndex=-1;node.focus({preventScroll:true});}
+}
 function restoreHover(){
  const changed=temporary.size>0;
  temporary.clear();
- for(const [node,original] of hoverRestore){if(node.isConnected){node.replaceWith(original);applyCommittedChildren(original);}}
+ for(const [node,original] of hoverRestore){if(node.isConnected){const focused=node.contains(document.activeElement)?document.activeElement.dataset.node:null;node.replaceWith(original);applyCommittedChildren(original);if(focused)(original.dataset.node===focused?original:original.querySelector('[data-node="'+focused+'"]'))?.focus({preventScroll:true});}}
  hoverRestore.clear();
  return changed;
 }
@@ -133,6 +149,8 @@ function geometry(){
   root.style.left=Math.max(0,(r.width-root.getBoundingClientRect().width)/2)+'px';
   root.style.top=Math.max(0,(r.height-root.getBoundingClientRect().height)/2)+'px';
  }
+ overlay.scrollLeft=0;overlay.scrollTop=0;
+ for(const node of document.querySelectorAll('#stage .interactive,#overlay>.overlay-layer .interactive'))node.tabIndex=exposed(node)?0:-1;
  scheduleHover();
 }
 function modal(){
@@ -146,7 +164,7 @@ function closeOverlay(){
  if(animation){const stop=animation;animation=null;stop();}
  const entry=overlays.pop();if(!entry)return false;
  entry.node.remove();modal();
- if(entry.focus&&entry.focus.isConnected&&!entry.focus.closest('[inert]'))entry.focus.focus({preventScroll:true});
+ if(entry.focus&&entry.focus.isConnected&&entry.focus.hasAttribute('tabindex')&&exposed(entry.focus))entry.focus.focus({preventScroll:true});
  else focus(top());
  return true;
 }
@@ -175,7 +193,7 @@ function transition(before,interaction){
  if(overlay.open){const r=overlay.getBoundingClientRect();before.style.left=r.left+'px';before.style.top=r.top+'px';}
  const animations=[old.animate(oldKeys,{duration,easing:'linear',fill:'both'}),next.animate(keys,{duration,easing:'linear',fill:'both'})];
  const live=[frame(),...overlays.map(e=>e.node)],opacities=live.map(n=>n.style.opacity);live.forEach(n=>n.style.opacity='0');
- let done=false;const cleanup=()=>{if(done)return;done=true;animations.forEach(a=>a.cancel());before.remove();live.forEach((n,i)=>n.style.opacity=opacities[i]);};animation=cleanup;
+ let done=false;const cleanup=()=>{if(done)return;done=true;animations.forEach(a=>a.cancel());before.remove();live.forEach((n,i)=>n.style.opacity=opacities[i]);geometry();};animation=cleanup;
  Promise.all(animations.map(a=>a.finished.catch(()=>{}))).then(()=>{cleanup();if(animation===cleanup){animation=null;settleHover();}});
 }
 function validate(node,handlers){
@@ -225,7 +243,7 @@ function act(node,i){
 function applyCommittedChildren(node){for(const child of node.querySelectorAll('[data-component]'))if(child.isConnected)applyCommitted(child);}
 function dispatch(event,trigger){
  if(animation){event.preventDefault();return;}
- const node=event.target.closest('[data-node]');if(!node||!top().contains(node)||node.closest('[inert]'))return;
+ const node=event.target.closest('[data-node]');if(!node||!top().contains(node)||!exposed(node))return;
  for(let ancestor=node;ancestor&&ancestor!==document.body;ancestor=ancestor.parentElement){
   const handlers=JSON.parse(ancestor.dataset.actions||'[]').filter(i=>i.trigger===trigger);
   if(!handlers.length)continue;
@@ -245,7 +263,7 @@ function settleHover(){
  if(animation)return;
  const target=pointer?document.elementFromPoint(pointer[0],pointer[1]):null;
  let node=target?.closest('[data-node]'),handlers=[];
- if(node&&top().contains(node)&&!node.closest('[inert]')){
+ if(node&&top().contains(node)&&exposed(node)){
   for(;node&&node!==document.body;node=node.parentElement){handlers=JSON.parse(node.dataset.actions||'[]').filter(i=>i.trigger==='Hover');if(handlers.length)break;}
  }else node=null;
  const key=handlers.length?node.dataset.node:null;if(key===hovered)return;
@@ -257,7 +275,15 @@ function settleHover(){
 for(const name of ['pointermove','pointerover','pointerout'])document.addEventListener(name,event=>{
  pointer=name==='pointerout'&&!event.relatedTarget?null:[event.clientX,event.clientY];settleHover();
 });
-document.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.matches('.interactive'))dispatch(e,'Click');});
+document.addEventListener('keydown',e=>{
+ if(e.key==='Tab'&&overlay.open&&!e.ctrlKey&&!e.altKey&&!e.metaKey){
+  e.preventDefault();const nodes=[top(),...top().querySelectorAll('.interactive')].filter(n=>n.matches('.interactive')&&exposed(n));
+  if(!nodes.length){focus(top());return;}
+  const index=nodes.indexOf(document.activeElement),next=index<0?(e.shiftKey?nodes.length-1:0):(index+(e.shiftKey?-1:1)+nodes.length)%nodes.length;
+  nodes[next].focus({preventScroll:true});return;
+ }
+ if((e.key==='Enter'||e.key===' ')&&e.target.matches('.interactive'))dispatch(e,'Click');
+});
 overlay.addEventListener('cancel',e=>{e.preventDefault();closeOverlay();});
 overlay.addEventListener('click',e=>{if(e.target===overlay||e.target===overlays.at(-1)?.node)closeOverlay();});
 new ResizeObserver(geometry).observe(stage);

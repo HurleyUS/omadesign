@@ -135,6 +135,52 @@ fn document_wide_reachable_graph_reopens_without_private_siblings_and_invalid_li
             .contains("Invalid prototype link")
     );
 }
+
+#[test]
+fn native_present_canvas_clips_an_oversized_overlay_without_changing_the_document() {
+    let (mut doc, a, b, overlay, _) = graph();
+    crate::layout::set_bounds(
+        &mut doc.find_shape_mut(2, overlay).unwrap().geom,
+        crate::geom::Bounds::from_min_size(Pt::new(0., 500.), Pt::new(800., 160.)),
+    );
+    let outside = button(
+        &mut doc,
+        2,
+        overlay,
+        "Outside canvas",
+        Action::Navigate { target: b },
+        700.,
+        510.,
+    );
+    let doc = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+    let before = crate::project::encode(&doc).unwrap();
+    let open = doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .find(|s| s.name == "Open one")
+        .unwrap()
+        .id;
+    let mut state = crate::layout_prototype::PrototypeState::default();
+    state.start(&doc, a).unwrap();
+    state.activate(&doc, open, Trigger::Click).unwrap();
+    let (_, canvas) = crate::ui::layout_presentation(&doc, &state, 600.).unwrap();
+    assert_eq!((canvas.width, canvas.height), (600., 400.));
+    let pixels = crate::compositor::render_export(&canvas, 1).unwrap();
+    assert_eq!((pixels.width(), pixels.height()), (600, 400));
+    assert!(pixels.pixel(700, 130).is_none());
+    assert_eq!(before, crate::project::encode(&doc).unwrap());
+    if let Ok(directory) = std::env::var("OMADESIGN_LAYOUT_PROOF") {
+        let path = std::path::Path::new(&directory);
+        std::fs::write(
+            path.join("wide-overlay.html"),
+            export_html(&doc, 0, a).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(path.join("headless-present.json"),serde_json::json!({"kind":"actual native Present materialization and CPU compositor; not visible native or physical acceptance","canvas":{"width":canvas.width,"height":canvas.height},"overlays":state.overlays,"outside":outside,"outsideCanvasPixel":pixels.pixel(700,130).is_none(),"sourceUnchanged":true}).to_string()).unwrap();
+    }
+}
 #[test]
 fn conflicting_variant_rules_are_scoped_to_emitted_state_and_export_deterministically() {
     let (mut doc, a, _, _, _) = graph();
@@ -311,24 +357,18 @@ fn conflicting_variant_rules_are_scoped_to_emitted_state_and_export_deterministi
         .unwrap();
         let mut expectations = Vec::new();
         for width in [390., 599., 600., 601., 768., 1440.] {
-            let mut resized = reopened.layout_snapshot();
-            let mut geometry = resized.find_shape(0, a).unwrap().geom.clone();
-            crate::layout::set_bounds(
-                &mut geometry,
-                crate::geom::Bounds::from_min_size(Pt::ZERO, Pt::new(width, 400.)),
-            );
-            crate::layout::apply_resize(&mut resized, &[(0, a, geometry)], &[(0, a)]);
             for (name, trigger) in [
                 ("base", None),
                 ("compact", Some(Trigger::Click)),
                 ("wide", Some(Trigger::Hover)),
             ] {
                 let mut state = crate::layout_prototype::PrototypeState::default();
-                state.start(&resized, a).unwrap();
+                state.start(&reopened, a).unwrap();
                 if let Some(trigger) = trigger {
-                    state.activate(&resized, instance, trigger).unwrap();
+                    state.activate(&reopened, instance, trigger).unwrap();
                 }
-                let preview = state.preview_document(&resized).unwrap();
+                let (preview, _) =
+                    crate::ui::layout_presentation(&reopened, &state, width).unwrap();
                 let mut shapes = Vec::new();
                 for id in [instance, other, label_instance] {
                     let shape = preview.find_shape(0, id).unwrap();

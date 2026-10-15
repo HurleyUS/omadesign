@@ -27,6 +27,8 @@ mod key_hud_tests;
 mod layer_drag;
 mod layout;
 mod layout_preview;
+#[cfg(test)]
+pub(crate) use layout_preview::presentation as layout_presentation;
 mod layout_properties;
 mod library;
 mod masking;
