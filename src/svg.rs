@@ -357,7 +357,9 @@ fn write_shape(
         extra
     );
     if let Geom::Text(run)=&shape.geom && run.svg_text.is_some() {
-        if let Some(fragment)=crate::text::svg_type::export_fragment(run,shape.id,text_as_paths){body.push_str(&format!("<g opacity=\"{}\"{extra}>{fragment}</g>",shape.opacity));}
+        if let Some(fragment)=crate::text::svg_type::export_fragment(run,shape.id,text_as_paths,shape.style.fill!=run.svg_text.as_ref().unwrap().base_fill){body.push_str(&format!("<g opacity=\"{}\"{extra}>{fragment}</g>",shape.opacity));}
+        let override_fill=shape.style.fill!=run.svg_text.as_ref().unwrap().base_fill;
+        if override_fill || shape.style.stroke.is_some(){let mut native=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());if !override_fill{native.style.fill=Fill::None;}body.push_str(&format!("<g opacity=\"{}\"{extra}>",shape.opacity));write_shape(body,defs,grad_id,&native,"",true);body.push_str("</g>");}
         return;
     }
     if let Geom::Text(run)=&shape.geom && crate::text::has_character_paint(run) {

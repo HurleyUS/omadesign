@@ -310,3 +310,68 @@ fn svg_type_nondefault_variable_axis_keeps_live_type_and_portable_font() {
         ) < 0.1
     );
 }
+
+#[test]
+fn svg_type_reviewed_viewport_carets_file_fonts_and_native_paints() {
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="280" height="150"><text x="50%" y="50%" font-family="DejaVu Sans" font-size="25" transform="rotate(8 140 75)">Percent</text></svg>"##;
+    let (doc, _) = crate::formats::svg::read(source, "Percentage type").unwrap();
+    assert!(
+        error(
+            &crate::compositor::render_export(&doc, 1).unwrap(),
+            &render(source)
+        ) < 0.1
+    );
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="280" height="150"><text x="20 150" y="75" font-family="DejaVu Sans" font-size="30" transform="rotate(8 20 75)">AB</text></svg>"##;
+    let (mut doc, _) = crate::formats::svg::read(source, "Positioned edits").unwrap();
+    let run = types(&doc)[0];
+    assert!((crate::text::caret_pt(run, 1) - run.map_point(Pt::new(150., 75.))).length() < 0.01);
+    let shape = doc
+        .layers
+        .iter_mut()
+        .filter_map(|l| l.kind.shapes_mut())
+        .flatten()
+        .find(|s| matches!(s.geom, Geom::Text(_)))
+        .unwrap();
+    let Geom::Text(run) = &mut shape.geom else {
+        unreachable!()
+    };
+    let before = crate::text::shape(run);
+    run.set_character_style(0, 2, |s| {
+        s.font = Some(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/assets/fonts/EBGaramond.ttf"
+            )
+            .into(),
+        )
+    });
+    run.contours = crate::text::shape(run);
+    assert_ne!(before, run.contours);
+    shape.style.fill = crate::document::Fill::Solid(crate::color::Rgba::rgb(20, 170, 60));
+    shape.style.stroke = Some(crate::document::Stroke {
+        width: 3.,
+        color: crate::color::Rgba::rgb(230, 20, 40),
+        ..Default::default()
+    });
+    let rendered = crate::compositor::render_export(&doc, 1).unwrap();
+    assert!(
+        rendered
+            .pixels()
+            .iter()
+            .any(|p| p.green().saturating_sub(p.blue()) > 40)
+    );
+    assert!(
+        rendered
+            .pixels()
+            .iter()
+            .any(|p| p.red().saturating_sub(p.green()) > 40)
+    );
+    let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+    assert!(
+        error(
+            &rendered,
+            &crate::compositor::render_export(&reopened, 1).unwrap()
+        ) < 0.001
+    );
+    assert!(error(&rendered, &render(&crate::svg::export(&doc).unwrap())) < 0.1);
+}

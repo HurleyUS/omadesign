@@ -28,8 +28,47 @@ pub struct SvgText {
     pub definitions: String,
     pub base_font: String,
     pub base_px: f32,
+    #[serde(default = "default_viewport")]
+    pub viewport: [f32; 2],
+    #[serde(default = "empty_fill")]
+    pub base_fill: crate::document::Fill,
     #[serde(default)]
     pub flow: Option<Flow>,
+}
+
+fn empty_fill() -> crate::document::Fill {
+    crate::document::Fill::None
+}
+
+fn default_viewport() -> [f32; 2] {
+    [100000., 100000.]
+}
+
+fn viewport(node: roxmltree::Node<'_, '_>) -> [f32; 2] {
+    let mut size = [300., 150.];
+    let mut ancestors: Vec<_> = node.ancestors().filter(|n| n.has_tag_name("svg")).collect();
+    ancestors.reverse();
+    for svg in ancestors {
+        for (i, key) in ["width", "height"].into_iter().enumerate() {
+            if let Some(value) = svg.attribute(key) {
+                if let Some(percent) = value.strip_suffix('%').and_then(|v| v.parse::<f32>().ok()) {
+                    size[i] *= percent / 100.;
+                } else if let Ok(value) = value.trim_end_matches("px").parse::<f32>() {
+                    size[i] = value;
+                }
+            }
+        }
+        if let Some(v) = svg.attribute("viewBox") {
+            let values: Vec<f32> = v
+                .split(|c: char| c.is_whitespace() || c == ',')
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            if values.len() == 4 {
+                size = [values[2], values[3]];
+            }
+        }
+    }
+    size
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -428,6 +467,8 @@ pub(crate) fn capture(
             definitions,
             base_font: font,
             base_px: px,
+            viewport: viewport(node),
+            base_fill: crate::document::Fill::None,
             flow,
         },
         content,
@@ -471,31 +512,18 @@ impl SvgText {
     }
 }
 
-fn family(path: &str) -> String {
-    if path.starts_with("omatype:") {
-        return path.into();
-    }
-    let probe = TypeRun {
-        font: path.into(),
-        ..Default::default()
-    };
-    super::font_bytes_for(&probe)
-        .and_then(|bytes| {
-            let face = rustybuzz::ttf_parser::Face::parse(&bytes, 0).ok()?;
-            face.names()
-                .into_iter()
-                .filter(|n| n.name_id == 1)
-                .find_map(|n| n.to_string())
-        })
-        .unwrap_or_else(|| super::label_for(path))
-}
-
 fn font_attributes(path: &str) -> String {
     let probe = TypeRun {
         font: path.into(),
         ..Default::default()
     };
-    let mut attrs = format!(" font-family=\"{}\"", escape(&css_family(path)));
+    let mut attrs = format!(
+        " font-family=\"{}\"",
+        escape(&format!(
+            "'{}'",
+            path.replace('\\', "\\\\").replace('\'', "\\'")
+        ))
+    );
     if let Some(bytes) = super::font_bytes_for(&probe)
         && let Ok(face) = rustybuzz::ttf_parser::Face::parse(&bytes, 0)
     {
@@ -506,13 +534,6 @@ fn font_attributes(path: &str) -> String {
         ));
     }
     attrs
-}
-
-fn css_family(path: &str) -> String {
-    format!(
-        "'{}'",
-        family(path).replace('\\', "\\\\").replace('\'', "\\'")
-    )
 }
 
 fn write_nodes(
@@ -594,6 +615,7 @@ fn write_nodes(
                             | "textLength"
                             | "lengthAdjust"
                             | "href"
+                            | "startOffset"
                             | "method"
                             | "spacing"
                             | "side"
@@ -623,7 +645,7 @@ fn write_nodes(
                         .as_ref()
                         .is_some_and(|svg| run.font != svg.base_font)
                 {
-                    css_family(&run.font)
+                    format!("'{}'", run.font.replace('\\', "\\\\").replace('\'', "\\'"))
                 } else {
                     value.clone()
                 };
@@ -663,7 +685,6 @@ fn options_for(run: &TypeRun) -> usvg::Options<'static> {
     let mut options = options();
     let fonts: std::collections::BTreeSet<_> = std::iter::once(&run.font)
         .chain(run.spans.iter().filter_map(|s| s.font.as_ref()))
-        .filter(|font| font.starts_with("omatype:"))
         .collect();
     for font in fonts {
         let probe = TypeRun {
@@ -700,10 +721,10 @@ fn plain_fragment(run: &TypeRun, range: std::ops::Range<usize>) -> String {
     out
 }
 
-fn wrap(fragment: &str, definitions: &str, matrix: [f32; 6]) -> String {
+fn wrap(fragment: &str, definitions: &str, matrix: [f32; 6], viewport: [f32; 2]) -> String {
     format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"100000\" height=\"100000\"><defs>{definitions}</defs><g transform=\"matrix({} {} {} {} {} {})\">{fragment}</g></svg>",
-        matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{}\" height=\"{}\" overflow=\"visible\"><defs>{definitions}</defs><g transform=\"matrix({} {} {} {} {} {})\">{fragment}</g></svg>",
+        viewport[0], viewport[1], matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]
     )
 }
 
@@ -730,17 +751,41 @@ pub fn source(run: &TypeRun) -> Option<String> {
         [
             matrix.sx, matrix.ky, matrix.kx, matrix.sy, matrix.tx, matrix.ty,
         ],
+        svg.viewport,
     ))
 }
 
-pub(crate) fn export_fragment(run: &TypeRun, id: u64, outlines: bool) -> Option<String> {
+pub(crate) fn export_fragment(
+    run: &TypeRun,
+    id: u64,
+    outlines: bool,
+    omit_fill: bool,
+) -> Option<String> {
+    let mut run = run.clone();
+    if omit_fill {
+        fn clear(node: &mut TextNode) {
+            if let TextNode::Element {
+                attributes,
+                children,
+                ..
+            } = node
+            {
+                attributes.insert("fill".into(), "none".into());
+                for child in children {
+                    clear(child);
+                }
+            }
+        }
+        clear(&mut run.svg_text.as_mut()?.root);
+        for span in &mut run.spans {
+            span.fill = None;
+        }
+    }
+    let run = &run;
     let original = source(run)?;
     let portable = run.font.starts_with("omatype:")
-        || run.spans.iter().any(|s| {
-            s.font
-                .as_ref()
-                .is_some_and(|font| font.starts_with("omatype:"))
-        });
+        || run.font != run.svg_text.as_ref()?.base_font
+        || run.spans.iter().any(|s| s.font.as_ref().is_some());
     let source = if outlines || portable {
         layout(run)?.tree.to_string(&usvg::WriteOptions::default())
     } else {
@@ -1027,6 +1072,7 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
     let all: Vec<_> = run.content.chars().collect();
     let mut contours = Vec::new();
     let mut carets = Vec::new();
+    let mut starts = std::collections::HashSet::new();
     let mut styles = Vec::new();
     let mut used = vec![false; run.content.chars().count()];
     let mut bounds: Option<crate::geom::Bounds> = None;
@@ -1141,6 +1187,10 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
                 let origin = if rtl { point + advance } else { point };
                 let advance = if rtl { -advance } else { advance };
                 for i in 0..chars.len().max(1) {
+                    if !starts.insert(at + i) {
+                        continue;
+                    }
+                    carets.retain(|caret: &(usize, Pt, Pt, Pt)| caret.0 != at + i);
                     carets.push((
                         at + i,
                         origin + advance * i as f32 / chars.len().max(1) as f32,
@@ -1155,12 +1205,14 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
                                 .unwrap_or(1000.),
                     ));
                 }
-                carets.push((
-                    at + chars.len(),
-                    origin + advance,
-                    tangent,
-                    Pt::new(-transform.kx, -transform.sy) * units,
-                ));
+                if !carets.iter().any(|c| c.0 == at + chars.len()) {
+                    carets.push((
+                        at + chars.len(),
+                        origin + advance,
+                        tangent,
+                        Pt::new(-transform.kx, -transform.sy) * units,
+                    ));
+                }
             }
         }
     }
@@ -1239,7 +1291,12 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
         let measure = |end| {
             let fragment = plain_fragment(run, start..end);
             usvg::Tree::from_str(
-                &wrap(&fragment, &svg.definitions, [1., 0., 0., 1., 0., 0.]),
+                &wrap(
+                    &fragment,
+                    &svg.definitions,
+                    [1., 0., 0., 1., 0., 0.],
+                    svg.viewport,
+                ),
                 &options_for(run),
             )
             .ok()
