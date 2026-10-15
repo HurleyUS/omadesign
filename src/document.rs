@@ -1276,6 +1276,25 @@ impl Document {
     pub fn source(&self, id: &str) -> Option<&crate::source_attachment::SourceAttachment> {
         self.sources.iter().find(|s| s.id == id)
     }
+
+    /// Validate retained original data and object references.
+    /// Args: none. Returns an error for damaged, duplicate, missing or oversized sources.
+    pub fn validate_sources(&self) -> Result<(), String> {
+        let mut bytes = 0usize;
+        let mut ids = std::collections::HashSet::new();
+        for source in &self.sources {
+            source.validate()?;
+            bytes = bytes.checked_add(source.bytes().len()).ok_or("Retained sources exceed 512 MiB")?;
+            if bytes > 512 * 1024 * 1024 { return Err("Retained sources exceed 512 MiB".into()); }
+            if !ids.insert(&source.id) { return Err("Duplicate retained source UUID".into()); }
+        }
+        for layer in &self.layers {
+            if let Some(id) = &layer.source_attachment && self.source(id).is_none() {
+                return Err(format!("Layer {} references a missing original source", layer.name));
+            }
+        }
+        Ok(())
+    }
     /// Editing layout needs vector state only. Preserve layer indices without
     /// copying image buffers or mask data into temporary solver documents.
     pub fn layout_snapshot(&self) -> Self {
