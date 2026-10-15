@@ -44,6 +44,7 @@ mod retouch;
 mod brushes;
 mod selection;
 mod studios;
+mod shared_transform;
 mod text_geometry;
 mod templates;
 pub mod theme;
@@ -377,3 +378,6 @@ fn egui_shortcuts(ui: &mut Ui, studio: &mut Studio) {
             }
         });
 }
+
+#[cfg(test)]
+mod shared_fields_tests;
