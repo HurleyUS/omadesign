@@ -56,6 +56,7 @@ mod text_geometry;
 mod templates;
 pub mod theme;
 mod timeline;
+mod timeline_keyboard;
 mod motion_compositions;
 mod scene3d;
 mod welcome;

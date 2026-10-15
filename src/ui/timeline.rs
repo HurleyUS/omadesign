@@ -44,7 +44,9 @@ fn transport(ui: &mut Ui, studio: &mut Studio) {
     let owner = eframe::egui::Id::new(("motion-transport", &studio.swap_id, &studio.selection));
     let available = !studio.file_dialog_pending() && !studio.updates.freezing;
     super::fields::native_scope(ui, owner, |ui| {
-        ui.add_enabled_ui(available, |ui| transport_controls(ui, studio));
+        studio.with_field_history(ui, "motion-transport", |ui, studio| {
+            ui.add_enabled_ui(available, |ui| transport_controls(ui, studio));
+        });
     });
 }
 
@@ -104,7 +106,7 @@ fn transport_controls(ui: &mut Ui, studio: &mut Studio) {
         "s",
         None,
     );
-    if field.changed {
+    if crate::app::input_history::record(field.response, field.changed) {
         let mut after = studio.doc.motion.clone();
         after.duration = dur;
         studio.playhead = studio.playhead.min(dur);
@@ -121,7 +123,7 @@ fn transport_controls(ui: &mut Ui, studio: &mut Studio) {
         "",
         None,
     );
-    if field.changed {
+    if crate::app::input_history::record(field.response, field.changed) {
         let mut after = studio.doc.motion.clone();
         after.fps = fps;
         studio.commit_motion(after);
@@ -130,6 +132,7 @@ fn transport_controls(ui: &mut Ui, studio: &mut Studio) {
     expression_editor(ui, studio);
     super::motion_compositions::show(ui, studio);
     super::scene3d::show(ui, studio);
+    super::timeline_keyboard::show(ui, studio);
     if ui
         .add_enabled(
             !studio.selection.is_empty(),
