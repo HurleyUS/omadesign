@@ -1733,13 +1733,13 @@ mod tests {
     }
 
     #[test]
-    fn fallback_filter_group_keeps_ancestor_transform_and_blend() {
+    fn svg_filter_graph_keeps_ancestor_transform_and_blend() {
         let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><defs><filter id="p" x="-50%" y="-50%" width="200%" height="200%"><feOffset dx="3" dy="2"/><feGaussianBlur stdDeviation="1"/></filter></defs><g transform="translate(15 7) scale(2)"><g filter="url(#p)" style="mix-blend-mode:multiply"><rect width="10" height="8" fill="red"/></g></g></svg>"##;
         let (doc, _, max, mean) = compare_render(source);
         assert!(
             doc.layers
                 .iter()
-                .any(|l| l.kind.pixels().is_some() && l.blend == Blend::Multiply)
+                .any(|l| l.svg_filter.is_some() && l.blend == Blend::Multiply)
         );
         assert!(max <= 1 && mean < 0.02, "max={max}, mean={mean}");
     }
