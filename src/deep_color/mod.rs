@@ -7,6 +7,8 @@ pub mod storage;
 pub mod surface;
 pub mod tiff;
 pub use composite::{blend_pixel, composite};
+#[cfg(test)]
+mod common_tests;
 
 use crate::document::Pixels;
 use crate::resources::{self, Allocation, CancellationCheck, Lease};

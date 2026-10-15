@@ -171,6 +171,9 @@ fn render(
         .iter()
         .filter(|l| l.parent == parent && l.visible)
     {
+        if layer.svg_filter.as_ref().is_some_and(|graph| !graph.filters.is_empty()) {
+            return Err("Native SVG filter graphs require a float effect renderer; save .oma to retain the authored document.".into());
+        }
         if layer.opacity <= 0. {
             continue;
         }

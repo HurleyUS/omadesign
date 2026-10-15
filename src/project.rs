@@ -25,6 +25,9 @@ struct File {
 
 pub fn encode(doc: &Document) -> Result<String, String> {
     doc.validate_sources()?;
+    if features::required_version(doc) > VERSION {
+        return Err("Unsupported omadesign project version".into());
+    }
     let mut packed = doc.clone();
     pack_rasters(&mut packed)?;
     let svg_sources = crate::svg_source::pack_sources(&mut packed);
@@ -48,6 +51,7 @@ pub fn decode(s: &str) -> Result<Document, String> {
 
 fn decode_admitted(s: &str) -> Result<Document, String> {
     let _parser = crate::resources::global().reserve_now(s.len() as u64, &crate::deep_color::storage::check)?;
+    validate_retained_json(s)?;
     let file: File = serde_json::from_str(s).map_err(|e| e.to_string())?;
     let mut doc = file.doc;
     restore_sources(&mut doc, file.version, &file.svg_sources)?;
@@ -67,6 +71,23 @@ fn decode_admitted(s: &str) -> Result<Document, String> {
         }
     }
     normalize_decoded_document(doc, file.version)
+}
+
+/// Inspect retained live/source properties without rebuilding pixels or color state.
+/// Args: original JSON value. Returns its greatest required retained-feature version.
+pub(crate) fn retained_feature_version(value: &serde_json::Value) -> Result<u32, String> {
+    features::value_version(value)
+}
+
+fn validate_retained_json(text: &str) -> Result<(), String> {
+    let (required, declared) = features::serialized_version(text)?;
+    if required > VERSION || declared.is_some_and(|version| !supports_version(version)) {
+        return Err("Unsupported omadesign project version".into());
+    }
+    if let Some(declared) = declared && required >= 18 && declared < required {
+        return Err(format!("Project declares version {declared}, but its retained data requires version {required}"));
+    }
+    Ok(())
 }
 
 /// Restore shared vector sources before materializing project pixels.
@@ -636,6 +657,7 @@ pub fn load_swap(path: &Path) -> Result<SwapMeta, String> {
     let bytes = read_admitted(path)?;
     let s = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
     let _parser = crate::resources::global().reserve_now(bytes.len() as u64, &crate::deep_color::storage::check)?;
+    validate_retained_json(s)?;
     let mut meta: SwapMeta = serde_json::from_str(s).map_err(|e| e.to_string())?;
     let archive = swap_font_archive(path);
     if archive.is_dir() {
