@@ -30,11 +30,16 @@ pub(super) fn prepare(
         })
         .collect::<Vec<_>>();
     let needs_backdrop = roots.iter().any(|index| {
-        let group = &document.layers[*index];
-        group.is_group
-            && group.pass_through
-            && document.layers.iter().enumerate().any(|(child, layer)| {
-                layer.blend != Blend::Normal && document.layer_ancestors(child).contains(index)
+        std::iter::once(*index)
+            .chain(document.layer_ancestors(*index))
+            .any(|ancestor| {
+                let group = &document.layers[ancestor];
+                group.is_group
+                    && group.pass_through
+                    && document.layers.iter().enumerate().any(|(child, layer)| {
+                        layer.blend != Blend::Normal
+                            && document.layer_ancestors(child).contains(&ancestor)
+                    })
             })
     });
     let effect_backdrop = document.layers.iter().any(|l| {
@@ -76,7 +81,14 @@ pub(super) fn prepare(
                 .inflate(group_pad),
         );
         check_budget(bounds, &mut byte_budget)?;
-        let mut scene = scene(document, bounds, selected, true);
+        let selected_ids = selected.iter().map(|l| l.id).collect::<HashSet<_>>();
+        let mut render_layers = document.layers.clone();
+        for layer in &mut render_layers {
+            if !selected_ids.contains(&layer.id) {
+                layer.visible = false;
+            }
+        }
+        let mut scene = scene(document, bounds, render_layers, true);
         let root = scene
             .layers
             .iter_mut()
@@ -101,7 +113,7 @@ pub(super) fn prepare(
         } else {
             original.blend
         };
-        for layer in &scene.layers {
+        for layer in &selected {
             if layer.id != original.id {
                 removed.insert(layer.id);
             }
