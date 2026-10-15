@@ -82,10 +82,27 @@ pub(super) fn breakpoints(shape: &Shape, scope: &str) -> String {
         let mut text_css = String::new();
         if let (Geom::Text(run), Some(px)) = (&shape.geom, resolved.text_size) {
             let leading = run.line_height() / run.px.max(1.) * px;
+            let ratio = px / run.px.max(1.0);
+            let metrics = crate::text::font_metrics_for(run);
+            let top = metrics
+                .map(|(asc, desc, _)| {
+                    run.origin.y
+                        - shape.geom.bbox().min.y
+                        - (run.line_height() - asc - desc) * 0.5
+                        - asc
+                })
+                .unwrap_or(0.0)
+                * ratio;
             let _ = write!(
                 text_css,
-                "[data-state=\"{scope}\"][data-node=\"{}\"]>span{{font-size:{px:.3}px!important;line-height:{leading:.3}px!important;}}",
-                shape.id
+                "[data-state=\"{scope}\"][data-node=\"{}\"]>span{{font-size:{px:.3}px!important;line-height:{leading:.3}px!important;letter-spacing:{:.3}px!important;top:{top:.3}px!important;{} }}",
+                shape.id,
+                run.tracking * ratio,
+                if shape.layout.width == Sizing::Hug {
+                    "width:max-content!important;"
+                } else {
+                    ""
+                }
             );
         }
         let _ = write!(

@@ -129,6 +129,7 @@ pub(super) fn inspector(ui: &mut Ui, studio: &mut Studio) {
                                 Ok(Value::Variant(mut current)) => {
                                     let old = current;
                                     let family = components::family_of(&studio.doc, current);
+                                    let label = ui.label(&property.name);
                                     egui::ComboBox::from_id_salt("value")
                                         .selected_text(
                                             components::definitions(&studio.doc)
@@ -150,8 +151,8 @@ pub(super) fn inspector(ui: &mut Ui, studio: &mut Studio) {
                                             }
                                         })
                                         .response
+                                        .labelled_by(label.id)
                                         .on_hover_text(&property.name);
-                                    ui.label(&property.name);
                                     if current != old {
                                         edit = Some(Edit::Set {
                                             id: property.id,

@@ -603,15 +603,15 @@ impl Tree {
         } else {
             None
         };
-        let offset = if run.wrap_width.is_some() {
-            run.origin.y - Geom::Text(run.clone()).bbox().min.y
+        let box_top = if run.wrap_width.is_some() {
+            Geom::Text(run.clone()).bbox().min.y
         } else if (run.px - old_px).abs() > 0.001 {
             run.contours = crate::text::shape(&run);
-            run.origin.y - Geom::Text(run.clone()).bbox().min.y
+            Geom::Text(run.clone()).bbox().min.y
         } else {
-            run.origin.y - node.original.min.y
+            node.original.min.y
         };
-        let baseline = crate::text::compose(&run).first()?.baseline + offset;
+        let baseline = crate::text::caret_pt(&run, 0).y - box_top;
         baseline.is_finite().then_some(baseline)
     }
 

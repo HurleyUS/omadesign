@@ -144,6 +144,32 @@ fn conflicting_variant_rules_are_scoped_to_emitted_state_and_export_deterministi
     });
     let mid = main.id;
     doc.layers[2].kind.shapes_mut().unwrap().push(main);
+    let mut label = Shape::new(
+        Geom::Text(crate::geom::TypeRun {
+            content: "Café Ω".into(),
+            px: 26.,
+            font: concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/assets/fonts/EBGaramond.ttf"
+            )
+            .into(),
+            origin: Pt::new(10., 1030.),
+            ..Default::default()
+        }),
+        Style::default(),
+    );
+    let label_id = label.id;
+    label.name = "Responsive label".into();
+    label.layout.parent = Some(mid);
+    label.layout.width = Sizing::Hug;
+    label.layout.height = Sizing::Hug;
+    label.layout.breakpoints = vec![LayoutBreakpoint {
+        max_width: 600.,
+        text_size: Some(22.),
+        ..Default::default()
+    }];
+    crate::text::fill_contours(&mut label.geom);
+    doc.layers[2].kind.shapes_mut().unwrap().push(label);
     crate::layout_components::make_component(&mut doc, 2, mid).unwrap();
     let v1 = crate::layout_components::add_variant(&mut doc, mid, "Compact", Pt::new(250., 1000.))
         .unwrap();
@@ -161,6 +187,26 @@ fn conflicting_variant_rules_are_scoped_to_emitted_state_and_export_deterministi
             ..Default::default()
         }];
     }
+    for (variant, px) in [(v1, 18.), (v2, 34.)] {
+        let target = crate::layout::descendants(&doc, 2, variant)
+            .into_iter()
+            .find(|id| matches!(doc.find_shape(2, *id).unwrap().geom, Geom::Text(_)))
+            .unwrap();
+        doc.find_shape_mut(2, target).unwrap().layout.breakpoints = vec![LayoutBreakpoint {
+            max_width: 600.,
+            text_size: Some(px),
+            ..Default::default()
+        }];
+    }
+    let property = crate::layout_components::expose_property(
+        &mut doc,
+        2,
+        mid,
+        label_id,
+        "Label",
+        crate::layout_components::PropertyKind::Text,
+    )
+    .unwrap();
     let instance =
         crate::layout_components::insert_instance(&mut doc, mid, 0, Pt::new(120., 100.), Some(a))
             .unwrap();
@@ -171,6 +217,19 @@ fn conflicting_variant_rules_are_scoped_to_emitted_state_and_export_deterministi
             ..interaction(Action::SetVariant { component: v2 })
         },
     ];
+    let other =
+        crate::layout_components::insert_instance(&mut doc, mid, 0, Pt::new(330., 100.), Some(a))
+            .unwrap();
+    crate::layout_components::set_property(
+        &mut doc,
+        0,
+        instance,
+        property,
+        crate::layout_components::PropertyValue::Text("Local café Ω".into()),
+    )
+    .unwrap();
+    let label_instance =
+        crate::layout_components::property_object(&doc, 0, instance, property).unwrap();
     let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
     let html = export_html(&reopened, 0, a).unwrap();
     assert_eq!(html, export_html(&reopened, 0, a).unwrap());
@@ -191,7 +250,7 @@ fn conflicting_variant_rules_are_scoped_to_emitted_state_and_export_deterministi
         .unwrap();
         std::fs::write(
             path.join("ids.json"),
-            serde_json::json!({"a":a,"instance":instance,"compact":v1,"wide":v2}).to_string(),
+            serde_json::json!({"a":a,"instance":instance,"other":other,"label":label_instance,"compact":v1,"wide":v2}).to_string(),
         )
         .unwrap();
     }
@@ -365,4 +424,106 @@ fn named_properties_and_tracks_use_the_provisional_gate_while_legacy_documents_s
             .contains("Advanced layout")
     );
     assert!(crate::project::decode(&plain).is_ok());
+}
+
+#[test]
+fn nested_component_variant_contexts_preserve_local_text_and_new_node_ids_deterministically() {
+    use crate::layout_components as c;
+    let (mut doc, a, _, _, _) = graph();
+    let button = make_frame(Pt::new(0., 1000.), Pt::new(140., 60.));
+    let main = button.id;
+    let mut label = Shape::new(
+        Geom::Text(crate::geom::TypeRun {
+            content: "Source".into(),
+            origin: Pt::new(10., 1030.),
+            ..Default::default()
+        }),
+        Style::default(),
+    );
+    let label_id = label.id;
+    label.name = "Nested label".into();
+    label.layout.parent = Some(main);
+    crate::text::fill_contours(&mut label.geom);
+    doc.layers[2]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .extend([button, label]);
+    c::make_component(&mut doc, 2, main).unwrap();
+    let selected = c::add_variant(&mut doc, main, "Selected", Pt::new(200., 1000.)).unwrap();
+    doc.find_shape_mut(2, selected).unwrap().opacity = 0.4;
+    let card = make_frame(Pt::new(0., 1200.), Pt::new(200., 120.));
+    let card_id = card.id;
+    doc.layers[2].kind.shapes_mut().unwrap().push(card);
+    let nested = c::insert_instance(&mut doc, main, 2, Pt::new(10., 1210.), Some(card_id)).unwrap();
+    doc.find_shape_mut(2, nested)
+        .unwrap()
+        .layout
+        .interactions
+        .push(interaction(Action::SetVariant {
+            component: selected,
+        }));
+    c::make_component(&mut doc, 2, card_id).unwrap();
+    let alternate = c::add_variant(&mut doc, card_id, "Alternate", Pt::new(250., 1200.)).unwrap();
+    doc.find_shape_mut(2, alternate).unwrap().opacity = 0.6;
+    let mut extra = make_frame(Pt::new(410., 1290.), Pt::new(10., 10.));
+    extra.name = "New variant child".into();
+    extra.layout.parent = Some(alternate);
+    doc.layers[2].kind.shapes_mut().unwrap().push(extra);
+    let instance = c::insert_instance(&mut doc, card_id, 0, Pt::new(120., 100.), Some(a)).unwrap();
+    doc.find_shape_mut(0, instance)
+        .unwrap()
+        .layout
+        .interactions
+        .push(interaction(Action::SetVariant {
+            component: alternate,
+        }));
+    let nested_instance = crate::layout::descendants(&doc, 0, instance)
+        .into_iter()
+        .find(|id| {
+            matches!(
+                doc.find_shape(0, *id).unwrap().layout.component,
+                Some(c::ComponentBinding::Instance { .. })
+            )
+        })
+        .unwrap();
+    let text = crate::layout::descendants(&doc, 0, nested_instance)
+        .into_iter()
+        .find(|id| matches!(doc.find_shape(0, *id).unwrap().geom, Geom::Text(_)))
+        .unwrap();
+    if let Geom::Text(run) = &mut doc.find_shape_mut(0, text).unwrap().geom {
+        run.content = "User retained Ω".into();
+    }
+    let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+    let html = export_html(&reopened, 0, a).unwrap();
+    assert_eq!(html, export_html(&reopened, 0, a).unwrap());
+    assert!(html.contains(&format!(
+        "variant-variant-screen-{a}-{instance}-{alternate}-{nested_instance}-{selected}"
+    )));
+    assert!(html.contains("User retained Ω"));
+    assert!(!html.contains("PRIVATE SECRET"));
+    if let Ok(directory) = std::env::var("OMADESIGN_LAYOUT_PROOF") {
+        let path = std::path::Path::new(&directory);
+        std::fs::write(path.join("components.html"), html).unwrap();
+        std::fs::write(path.join("component-ids.json"),serde_json::json!({"outer":instance,"nested":nested_instance,"label":text,"alternate":alternate,"selected":selected}).to_string()).unwrap();
+    }
+    assert!(doc.find_shape(2, label_id).is_some());
+}
+
+#[test]
+fn prototype_ids_remain_exact_above_javascript_number_precision() {
+    let mut doc = Document::new("Exact IDs", 200., 100., 96.);
+    doc.layers = vec![Layer::vector("UI")];
+    let mut a = make_frame(Pt::ZERO, Pt::new(100., 50.));
+    let mut b = make_frame(Pt::new(110., 0.), Pt::new(100., 50.));
+    a.id = 9_007_199_254_741_100;
+    b.id = a.id + 1;
+    let root = a.id;
+    a.layout
+        .interactions
+        .push(interaction(Action::Navigate { target: b.id }));
+    doc.layers[0].kind.shapes_mut().unwrap().extend([a, b]);
+    let html = export_html(&doc, 0, root).unwrap();
+    assert!(html.contains("let current=\"9007199254741100\""));
+    assert!(html.contains("&quot;target&quot;:&quot;9007199254741101&quot;"));
 }

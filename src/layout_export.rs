@@ -417,7 +417,6 @@ struct Html<'a> {
     children: HashMap<u64, Vec<u64>>,
     fonts: HashMap<String, (String, f32, f32)>,
     styles: String,
-    interactions: serde_json::Map<String, serde_json::Value>,
     visited: HashSet<u64>,
 }
 
@@ -462,7 +461,40 @@ impl<'a> Html<'a> {
         out: &mut String,
         depth: usize,
     ) -> Result<(), String> {
-        let shape = *self.shapes.get(&id).ok_or("Missing frame child")?;
+        let original = *self.shapes.get(&id).ok_or("Missing frame child")?;
+        let canonical =
+            if matches!(original.geom, Geom::Text(_)) && original.layout.text_size.is_some() {
+                let mut canonical = original.clone();
+                let Geom::Text(run) = &mut canonical.geom else {
+                    unreachable!()
+                };
+                let px = original.layout.text_size.unwrap();
+                let ratio = px / run.px.max(1.0);
+                if run.leading > 0.0 {
+                    run.leading *= ratio;
+                }
+                run.tracking *= ratio;
+                run.scale_character_metrics(ratio);
+                run.px = px;
+                if original.layout.width == Sizing::Hug {
+                    run.wrap_width = None;
+                }
+                let (width, height) = crate::text::measure(run);
+                let before = original.geom.bbox();
+                let width = if original.layout.width == Sizing::Hug {
+                    width
+                } else {
+                    before.width()
+                };
+                crate::layout::set_bounds(
+                    &mut canonical.geom,
+                    crate::geom::Bounds::from_min_size(before.min, Pt::new(width, height)),
+                );
+                Some(canonical)
+            } else {
+                None
+            };
+        let shape = canonical.as_ref().unwrap_or(original);
         if !shape.visible || shape.guide {
             return Ok(());
         }
@@ -686,8 +718,7 @@ impl<'a> Html<'a> {
         }
         if let Geom::Text(run) = &shape.geom {
             if let Some((ascent, descent, line_gap)) = crate::text::font_metrics_for(run) {
-                let baseline = run.origin.y - bounds.min.y
-                    + crate::text::compose(run).first().map_or(0., |l| l.baseline);
+                let baseline = crate::text::caret_pt(run, 0).y - bounds.min.y;
                 let _ = write!(
                     metadata,
                     " data-baseline=\"{baseline:.6},{ascent:.6},{:.6},{}\"",
@@ -697,14 +728,23 @@ impl<'a> Html<'a> {
             }
         }
         let interactive = !shape.layout.interactions.is_empty();
-        if interactive {
-            self.interactions.insert(
-                id.to_string(),
-                serde_json::to_value(&shape.layout.interactions).map_err(|e| e.to_string())?,
-            );
+        let mut actions =
+            serde_json::to_value(&shape.layout.interactions).map_err(|e| e.to_string())?;
+        for interaction in actions.as_array_mut().unwrap() {
+            for kind in ["Navigate", "OpenOverlay", "SetVariant"] {
+                let key = if kind == "SetVariant" {
+                    "component"
+                } else {
+                    "target"
+                };
+                if let Some(value) = interaction["action"][kind].get_mut(key) {
+                    if let Some(id) = value.as_u64() {
+                        *value = serde_json::Value::String(id.to_string());
+                    }
+                }
+            }
         }
-        let action_data =
-            escape(&serde_json::to_string(&shape.layout.interactions).map_err(|e| e.to_string())?);
+        let action_data = escape(&actions.to_string());
         let component = if shape.layout.component.is_some() {
             format!(" data-component=\"{id}\"")
         } else {
@@ -813,7 +853,12 @@ impl<'a> Html<'a> {
             if let Some(width) = run.wrap_width {
                 let _ = write!(
                     text_style,
-                    "width:{width:.3}px;max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere;text-align:{};",
+                    "width:{};max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere;text-align:{};",
+                    if shape.layout.width == Sizing::Fill {
+                        "100%".into()
+                    } else {
+                        format!("{width:.3}px")
+                    },
                     match run.align {
                         crate::geom::TextAlign::Start => "left",
                         crate::geom::TextAlign::Center => "center",
@@ -899,7 +944,6 @@ pub fn export_html(doc: &Document, layer: usize, frame_id: u64) -> Result<String
         children: HashMap::new(),
         fonts: HashMap::new(),
         styles: String::new(),
-        interactions: serde_json::Map::new(),
         visited: HashSet::new(),
     };
     let mut pending = std::collections::BTreeMap::new();
@@ -958,7 +1002,6 @@ pub fn export_html(doc: &Document, layer: usize, frame_id: u64) -> Result<String
                 children: HashMap::new(),
                 fonts: html.fonts.clone(),
                 styles: String::new(),
-                interactions: serde_json::Map::new(),
                 visited: HashSet::new(),
             };
             for shape in shapes {
@@ -1018,7 +1061,6 @@ pub fn export_html(doc: &Document, layer: usize, frame_id: u64) -> Result<String
             }
             html.fonts = tree.fonts;
             html.styles.push_str(&tree.styles);
-            html.interactions.extend(tree.interactions);
         }
         for ((context, instance), state) in &contexts {
             for &target in &targets {
@@ -1058,14 +1100,7 @@ pub fn export_html(doc: &Document, layer: usize, frame_id: u64) -> Result<String
             break;
         }
     }
-    let actions = serde_json::Value::Object(html.interactions)
-        .to_string()
-        .replace('<', "\\u003c")
-        .replace('>', "\\u003e")
-        .replace('&', "\\u0026");
-    let script = PROTOTYPE_RUNTIME
-        .replace("__ROOT__", &frame_id.to_string())
-        .replace("__ACTIONS__", &actions);
+    let script = PROTOTYPE_RUNTIME.replace("__ROOT__", &format!("\"{frame_id}\""));
     Ok(format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><style>{BASE_CSS}{}</style></head><body><main id=\"stage\" aria-label=\"Design prototype\"></main><dialog id=\"overlay\" aria-label=\"Prototype overlays\"></dialog><p id=\"prototype-error\" role=\"alert\"></p>{body}<script>{script}</script></body></html>",
         escape(&frame.name),

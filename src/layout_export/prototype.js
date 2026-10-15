@@ -9,7 +9,7 @@ const frame=()=>stage.firstElementChild;
 const top=()=>overlays.length?overlays[overlays.length-1].node:frame();
 const focus=node=>(node.querySelector('.interactive')||node).focus({preventScroll:true});
 function restoreHover(){
- for(const [node,original] of hoverRestore){if(node.isConnected)node.replaceWith(original);}
+ for(const [node,original] of hoverRestore){if(node.isConnected){node.replaceWith(original);applyCommittedChildren(original);}}
  hoverRestore.clear();
 }
 function replaceVariant(node,id){
@@ -20,7 +20,9 @@ function replaceVariant(node,id){
  for(const key of ['position','left','right','top','bottom','flex','alignSelf','gridColumn','gridRow'])next.style[key]=node.style[key];
  next.dataset.variant=String(id);
  next.dataset.variantContext=node.dataset.variantContext;
+ const focused=node.contains(document.activeElement)?document.activeElement.dataset.node:null;
  node.replaceWith(next);
+ if(focused)(next.dataset.node===focused?next:next.querySelector('[data-node=\"'+focused+'\"]'))?.focus({preventScroll:true});
  return next;
 }
 function applyCommitted(root){
@@ -46,18 +48,20 @@ function trackSize(track){return typeof track.size==='string'?0:Object.values(tr
 function trackLimits(track){return [Math.max(0,track.min||0),Math.max(track.min||0,track.max??1000000)];}
 function allocate(tracks,sizes,indices,total,weighted){
  let active=indices.slice(),remaining=total;
- for(let pass=0;active.length&&pass<=tracks.length;pass++){
-  const weight=active.reduce((sum,i)=>sum+(weighted?trackSize(tracks[i]):1),0),frozen=[];
-  for(const i of active){const wanted=remaining*(weighted?trackSize(tracks[i]):1)/weight,[min,max]=trackLimits(tracks[i]);if(wanted<min||wanted>max){sizes[i]=Math.min(max,Math.max(min,wanted));remaining-=sizes[i];frozen.push(i);}}
-  if(!frozen.length){for(const i of active)sizes[i]=Math.max(0,remaining)*(weighted?trackSize(tracks[i]):1)/weight;break;}
-  active=active.filter(i=>!frozen.includes(i));
+ while(active.length){
+  const weight=active.reduce((sum,i)=>sum+(weighted?trackSize(tracks[i]):1),0);
+  const candidates=active.map(i=>{const wanted=Math.max(0,remaining)*(weighted?trackSize(tracks[i]):1)/weight,[min,max]=trackLimits(tracks[i]);return {i,wanted,actual:Math.min(max,Math.max(min,weighted?0:sizes[i],wanted))};});
+  const difference=candidates.reduce((sum,c)=>sum+c.actual,0)-remaining;
+  const frozen=candidates.filter(c=>difference>0.001?c.actual>c.wanted+0.001:difference< -0.001?c.actual<c.wanted-0.001:Math.abs(c.actual-c.wanted)>0.001);
+  if(!frozen.length){for(const c of candidates)sizes[c.i]=c.actual;return;}
+  for(const c of frozen){sizes[c.i]=c.actual;remaining-=c.actual;active=active.filter(i=>i!==c.i);}
  }
 }
 function gridAxis(node,tracks,axis){
  const cs=getComputedStyle(node),column=axis==='Columns',gap=parseFloat(column?cs.columnGap:cs.rowGap)||0;
  const items=[...node.children].filter(n=>n.matches('[data-node]')&&getComputedStyle(n).position!=='absolute');
  const cells=items.map(item=>{const css=getComputedStyle(item),start=parseInt(column?css.gridColumnStart:css.gridRowStart)-1,span=parseInt((column?css.gridColumnEnd:css.gridRowEnd).replace('span',''))||1;return {item,start,span};}).filter(c=>Number.isFinite(c.start));
- const count=Math.max(tracks.length,...cells.map(c=>c.start+c.span));if(!count)return;
+ const count=Math.max(tracks.length,(column?cs.gridTemplateColumns:cs.gridTemplateRows).split(' ').filter(v=>/px$/.test(v)).length,...cells.map(c=>c.start+c.span));if(!count)return;
  tracks=Array.from({length:count},(_,i)=>tracks[i]||{size:column||cells.some(c=>c.item.dataset.heightSizing==='Fill'&&c.start<=i&&c.start+c.span>i)?{Fraction:1}:'Hug'});
  const sizes=tracks.map(track=>{const [min,max]=trackLimits(track);return trackKind(track)==='Fixed'?Math.max(min,Math.min(max,trackSize(track))):min;});
  const hug=node.dataset[column?'widthSizing':'heightSizing']==='Hug';
@@ -65,7 +69,7 @@ function gridAxis(node,tracks,axis){
  for(const cell of cells){
   const itemCss=getComputedStyle(cell.item),natural=Number(cell.item.dataset.basis.split(',')[column?0:1])+(column?0:(parseFloat(itemCss.marginTop)||0)+(parseFloat(itemCss.marginBottom)||0)),indices=Array.from({length:cell.span},(_,j)=>cell.start+j);
   const required=Math.max(0,natural-gap*(cell.span-1)),present=indices.reduce((sum,i)=>sum+sizes[i],0);if(required<=present)continue;
-  const flexible=indices.filter(i=>trackKind(tracks[i])==='Hug'||(hug&&trackKind(tracks[i])==='Fraction'));
+  const flexible=indices.filter(i=>trackKind(tracks[i])==='Hug');
   const fixed=indices.filter(i=>!flexible.includes(i)).reduce((sum,i)=>sum+sizes[i],0);
   allocate(tracks,sizes,flexible,required-fixed,false);
  }
@@ -73,6 +77,16 @@ function gridAxis(node,tracks,axis){
   const fractions=tracks.flatMap((track,i)=>trackKind(track)==='Fraction'?[i]:[]),fixed=sizes.reduce((sum,size,i)=>sum+(fractions.includes(i)?0:size),0);
   const available=(column?node.clientWidth:node.clientHeight)-(column?parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight):parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom));
   allocate(tracks,sizes,fractions,available-fixed-gap*(count-1),true);
+ }else{
+  const fractions=tracks.flatMap((t,i)=>trackKind(t)==='Fraction'?[i]:[]);
+  let unit=Math.max(0,...fractions.map(i=>sizes[i]/trackSize(tracks[i])));
+  for(const cell of cells){
+   const indices=Array.from({length:cell.span},(_,j)=>cell.start+j),flexible=indices.filter(i=>fractions.includes(i));
+   const fixed=indices.filter(i=>!flexible.includes(i)).reduce((sum,i)=>sum+sizes[i],0),natural=Number(cell.item.dataset.basis.split(',')[column?0:1]);
+   const candidate=sizes.slice();allocate(tracks,candidate,flexible,natural-fixed-gap*(cell.span-1),true);
+   unit=Math.max(unit,...flexible.map(i=>candidate[i]/trackSize(tracks[i])));
+  }
+  for(const i of fractions){const [min,max]=trackLimits(tracks[i]);sizes[i]=Math.max(min,Math.min(max,unit*trackSize(tracks[i])));}
  }
  node.style.setProperty('grid-template-'+(column?'columns':'rows'),sizes.map(v=>v+'px').join(' '),'important');
 }
@@ -81,10 +95,11 @@ function layouts(){
  for(const root of roots){
   for(const node of [root,...root.querySelectorAll('[data-grid]')]){
    if(!node.dataset.grid)continue;
+   for(const property of ['grid-template-columns','grid-template-rows']){const key=property==='grid-template-columns'?'authoredColumns':'authoredRows';if(node.dataset[key]===undefined)node.dataset[key]=node.style.getPropertyValue(property);node.style.setProperty(property,node.dataset[key]);}
    if(node.dataset.authoredAlign===undefined)node.dataset.authoredAlign=node.style.alignItems;
    node.style.setProperty('align-items',node.dataset.authoredAlign);
    const spec=JSON.parse(node.dataset.grid),cs=getComputedStyle(node);
-   if(cs.display==='grid'&&(spec.column_tracks?.length||spec.row_tracks?.length||[...node.children].some(n=>/span [2-9]/.test(n.style.gridColumn+n.style.gridRow)))){
+   if(cs.display==='grid'){
     gridAxis(node,spec.column_tracks||[],'Columns');gridAxis(node,spec.row_tracks||[],'Rows');
    }
    for(const child of node.children){if(child.dataset.baseline){child.style.marginTop='';child.style.marginBottom='';}}
@@ -131,7 +146,7 @@ function closeOverlay(){
 }
 function snapshot(){
  const r=frame().getBoundingClientRect(), canvas=document.createElement('div');
- Object.assign(canvas.style,{position:'fixed',left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px',overflow:'hidden',pointerEvents:'none',zIndex:'2147483647'});
+ Object.assign(canvas.style,{position:'fixed',left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px',overflow:'hidden',containerType:'inline-size',pointerEvents:'none',zIndex:'2147483647'});
  const base=frame().cloneNode(true);base.inert=true;canvas.append(base);
  for(const entry of overlays)canvas.append(entry.node.cloneNode(true));
  canvas.querySelectorAll('[id]').forEach(n=>n.removeAttribute('id'));
@@ -210,7 +225,7 @@ document.addEventListener('click',e=>dispatch(e,'Click'));
 document.addEventListener('pointerover',e=>dispatch(e,'Hover'));
 document.addEventListener('pointerdown',e=>dispatch(e,'Press'));
 document.addEventListener('pointerout',event=>{
- for(const [node,original] of hoverRestore)if(node.contains(event.target)&&(!event.relatedTarget||!node.contains(event.relatedTarget))){node.replaceWith(original);hoverRestore.delete(node);geometry();}
+ for(const [node,original] of hoverRestore)if(node.contains(event.target)&&(!event.relatedTarget||!node.contains(event.relatedTarget))){node.replaceWith(original);applyCommittedChildren(original);hoverRestore.delete(node);geometry();}
 });
 document.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.matches('.interactive'))dispatch(e,'Click');});
 overlay.addEventListener('cancel',e=>{e.preventDefault();closeOverlay();});
