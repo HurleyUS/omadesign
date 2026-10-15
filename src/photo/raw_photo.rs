@@ -155,7 +155,7 @@ fn development_memory(
 pub struct LinearImage {
     pub w: u32,
     pub h: u32,
-    pub pixels: Vec<u16>,
+    pub pixels: Arc<resources::Allocation<u16>>,
 }
 
 impl LinearImage {
@@ -180,14 +180,15 @@ impl LinearImage {
         let demand = u64::from(pw) * u64::from(ph) * 6
             + u64::from(w) * (12 * rayon::current_num_threads() as u64 + 32)
             + 8 * 1024 * 1024;
-        let _memory = resources::global().reserve_now(demand, cancel)?;
+        let memory = resources::global().reserve_now(demand, cancel)?;
         let mut output = photo_buffer(pw as usize * ph as usize * 3)?;
         if (pw, ph) == (w, h) {
             output.copy_from_slice(pixels);
+            memory.resize_now(output.capacity() as u64 * 2, cancel)?;
             return Ok(Self {
                 w,
                 h,
-                pixels: output,
+                pixels: resources::global().adopt(output, memory)?,
             });
         }
         let horizontal: Vec<_> = (0..pw).map(|x| triangle_weights(w, pw, x)).collect();
@@ -221,10 +222,11 @@ impl LinearImage {
                 }
                 Ok::<_, String>(())
             })?;
+        memory.resize_now(output.capacity() as u64 * 2, cancel)?;
         Ok(Self {
             w: pw,
             h: ph,
-            pixels: output,
+            pixels: resources::global().adopt(output, memory)?,
         })
     }
 }
@@ -258,7 +260,7 @@ impl PhotoImage {
         raw.admit_memory(cancel)?;
         let linear =
             LinearImage::preview_cancellable(raw.width, raw.height, &raw.pixels, 1600, cancel)?;
-        let _preview_memory = resources::global().reserve(
+        let preview_memory = resources::global().reserve(
             u64::from(linear.w) * u64::from(linear.h) * 20 + 8 * 1024 * 1024,
             cancel,
         )?;
@@ -272,7 +274,12 @@ impl PhotoImage {
             cancel,
         )?;
         let preview = Arc::new(RgbaImage { w, h, data });
+        preview_memory.resize_now(preview.data.capacity() as u64, cancel)?;
+        resources::global().retain(&preview, preview_memory);
+        let thumb_memory = resources::global().reserve_now(192 * 192 * 4, cancel)?;
         let thumb = Arc::new(preview.downscaled(192));
+        thumb_memory.resize_now(thumb.data.capacity() as u64, cancel)?;
+        resources::global().retain(&thumb, thumb_memory);
         Ok(Self {
             name,
             full: preview.clone(),
@@ -662,6 +669,42 @@ impl PhotoImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detached_raw_preview_levels_remain_admitted_after_photo_and_source_drop() {
+        let raw =
+            crate::formats::raw::decode(include_bytes!("../formats/raw/synthetic.dng")).unwrap();
+        let source = Arc::downgrade(&raw.pixels);
+        let photo = PhotoImage::from_raw("detached previews".into(), raw).unwrap();
+        let linear = photo.raw_preview.as_ref().unwrap().clone();
+        let samples = linear.pixels.clone();
+        let preview = photo.preview.clone();
+        let thumb = photo.thumb.clone();
+        let linear_lease = Arc::downgrade(samples.lease());
+        let preview_lease = Arc::downgrade(&resources::global().retained(&preview).unwrap());
+        let thumb_lease = Arc::downgrade(&resources::global().retained(&thumb).unwrap());
+        drop(photo);
+        resources::global().usage();
+        assert!(source.upgrade().is_none());
+        assert_eq!(linear_lease.upgrade().unwrap().bytes(), samples.bytes());
+        assert_eq!(
+            preview_lease.upgrade().unwrap().bytes(),
+            preview.data.capacity() as u64
+        );
+        assert_eq!(
+            thumb_lease.upgrade().unwrap().bytes(),
+            thumb.data.capacity() as u64
+        );
+        drop(linear);
+        assert!(linear_lease.upgrade().is_some());
+        drop(samples);
+        drop(preview);
+        drop(thumb);
+        resources::global().usage();
+        assert!(linear_lease.upgrade().is_none());
+        assert!(preview_lease.upgrade().is_none());
+        assert!(thumb_lease.upgrade().is_none());
+    }
 
     #[test]
     fn queued_thumbnail_retains_admission_until_its_last_consumer_drops() {
