@@ -127,3 +127,13 @@ pub mod bytes {
         deserializer.deserialize_seq(Bytes)
     }
 }
+
+/// Allocate a paint coverage surface before entering the byte renderer.
+/// Args: positive dimensions. Returns the surface and a lease retained for its complete lifetime.
+pub fn pixmap(w: u32, h: u32) -> Result<(tiny_skia::Pixmap, Arc<Lease>), String> {
+    let data = resources::global().allocate::<u8, _>(count(w, h, 4)?, &check)?;
+    let (bytes, memory) = data.into_parts();
+    let size = tiny_skia::IntSize::from_wh(w, h).ok_or("Invalid paint surface dimensions")?;
+    let pixels = tiny_skia::Pixmap::from_vec(bytes, size).ok_or("Invalid paint surface storage")?;
+    Ok((pixels, memory))
+}

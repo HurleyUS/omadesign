@@ -57,7 +57,7 @@ fn publish(
         layer.kind.pixels_mut()
     };
     if let Some(target) = target {
-        *target = Pixels::from_pixmap(buffer);
+        match Pixels::from_pixmap(buffer) {Ok(pixels)=>*target=pixels,Err(error)=>{studio.status=error;return;}}
         studio.mark();
     }
 }
@@ -193,15 +193,14 @@ pub(super) fn start(studio: &mut Studio, world: Pt) {
             return;
         }
         let before = pixels.clone();
-        let Some(coverage) = tiny_skia::Pixmap::new(before.w, before.h) else {
-            return;
-        };
+        let (coverage,memory)=match crate::deep_color::storage::pixmap(before.w,before.h) {Ok(value)=>value,Err(error)=>{studio.status=error;return;}};
         studio.op = Some(Op::NativeStroke {
             layer,
             mask,
             erase,
             before,
             coverage,
+            memory,
             last: world,
         });
         native_drag(studio, world);
@@ -1260,7 +1259,7 @@ mod tests {
                     let actual = pixels(&studio, 0, mask).unwrap();
                     assert_eq!(
                         actual.data.as_slice(),
-                        Pixels::from_pixmap(&reference).data.as_slice(),
+                        Pixels::from_pixmap(&reference).unwrap().data.as_slice(),
                         "{tool:?}, selection {selected}, {point:?}"
                     );
                     actual.with_pm(|cached| {
@@ -1966,6 +1965,7 @@ pub(super) fn native_drag(studio: &mut Studio, world: Pt) {
         erase,
         before,
         mut coverage,
+        memory,
         last,
     }) = studio.op.take()
     else {
@@ -2027,6 +2027,7 @@ pub(super) fn native_drag(studio: &mut Studio, world: Pt) {
         erase,
         before,
         coverage,
+        memory,
         last: world,
     });
     studio.mark_interaction();

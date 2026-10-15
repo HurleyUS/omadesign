@@ -123,7 +123,7 @@ impl State {
         if pm.width() == 0 || pm.height() == 0 {
             return Err(Error::runtime("Nothing visible to filter"));
         }
-        let pixels = document::Pixels::from_pixmap(&pm);
+        let pixels = document::Pixels::from_pixmap(&pm).map_err(Error::runtime)?;
         if pixels.data.len() > 512 * 1024 * 1024 {
             return Err(Error::runtime("Raster filter input exceeds 512 MiB"));
         }

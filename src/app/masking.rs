@@ -114,11 +114,10 @@ impl Studio {
                     before.restore(target);
                 } else if let Some(pixels) = target.kind.pixels_mut() {
                     if pixels.native.is_some() {
-                        let _ =
-                            pixels.paint_overlay(&Pixels::from_pixmap(&buf), self.brush.opacity);
+                        if let Err(error)=Pixels::from_pixmap(&buf).and_then(|overlay|pixels.paint_overlay(&overlay,self.brush.opacity)) {self.status=error;before.restore(target);return true;}
                     } else if let Some(mut destination) = pixels.to_pixmap() {
                         paint::blend_onto(&mut destination, &buf, self.brush.opacity);
-                        *pixels = Pixels::from_pixmap(&destination);
+                        match Pixels::from_pixmap(&destination) {Ok(after)=>*pixels=after,Err(error)=>{self.status=error;before.restore(target);return true;}}
                     }
                     if pixels.native != before.kind.pixels().unwrap().native
                         || pixels.data != before.kind.pixels().unwrap().data

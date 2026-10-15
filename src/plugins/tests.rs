@@ -197,7 +197,7 @@ fn every_starter_action_runs_in_its_context() {
 fn duotone_on_vectors_bakes_a_filtered_image() {
     let (doc, selection) = fixture();
     let before = crate::compositor::render_export(&doc, 1).unwrap();
-    let before = crate::document::Pixels::from_pixmap(&before).data;
+    let before = crate::document::Pixels::from_pixmap(&before).unwrap().data.to_vec();
     let out = exec(&starter(), "duotone", doc.clone(), selection).unwrap();
     let mut studio = crate::app::Studio::new();
     studio.doc = doc;

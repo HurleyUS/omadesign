@@ -635,9 +635,8 @@ impl Pixels {
         color
     }
 
-    pub fn from_pixmap(pm: &tiny_skia::Pixmap) -> Self {
-        // Existing bounded display callers use this compatibility constructor.
-        Self::try_from_pixmap(pm).expect("Pixmap was not admitted for pixel storage")
+    pub fn from_pixmap(pm: &tiny_skia::Pixmap) -> Result<Self, String> {
+        Self::try_from_pixmap(pm)
     }
     pub fn try_from_pixmap(pm: &tiny_skia::Pixmap) -> Result<Self, String> {
         let mut data = crate::resources::global()
@@ -2988,7 +2987,7 @@ mod tests {
         let pixels = Pixels::from_rgba(3, 1, rgba.clone()).unwrap();
         let pm = pixels.to_pixmap().unwrap();
         assert_eq!(&pm.data()[..8], &[128, 0, 0, 128, 0, 64, 0, 64]);
-        let mut restored = Pixels::from_pixmap(&pm);
+        let mut restored = Pixels::from_pixmap(&pm).unwrap();
         assert_eq!(restored.data.as_slice(), rgba);
         restored.touch();
         assert_eq!(restored.to_pixmap().unwrap().data(), pm.data());

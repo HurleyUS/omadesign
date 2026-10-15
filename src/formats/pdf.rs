@@ -1395,7 +1395,7 @@ fn placed_image(
     );
     Ok(Layer::placed_raster(
         "Image",
-        Pixels::from_pixmap(&output),
+        Pixels::from_pixmap(&output)?,
         min,
         Pt::new(w as f32, h as f32),
     ))

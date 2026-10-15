@@ -232,7 +232,7 @@ pub enum Op {
         selection_generation: u64,
     },
     NativeRetouch {layer:usize,before:crate::document::Pixels,working:crate::document::Pixels,last:Pt,offset:Pt,tool:Tool},
-    NativeStroke {layer:usize,mask:bool,erase:bool,before:crate::document::Pixels,coverage:Pixmap,last:Pt},
+    NativeStroke {layer:usize,mask:bool,erase:bool,before:crate::document::Pixels,coverage:Pixmap,memory:std::sync::Arc<crate::resources::Lease>,last:Pt},
     Retouch {
         layer: usize,
         mask: bool,
@@ -916,7 +916,7 @@ impl Studio {
                 &b,
                 false,
             );
-            *px = crate::document::Pixels::from_pixmap(&pm);
+            match crate::document::Pixels::from_pixmap(&pm) {Ok(pixels)=>*px=pixels,Err(error)=>{self.status=error;return;}}
         }
 
         self.selection.clear();

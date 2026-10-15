@@ -199,7 +199,7 @@ pub fn pixels(
     let mut output = doc.clone();
     let mut group = crate::document::Layer::group("Export selection");
     group.pass_through = false;
-    group.mask = Some(crate::document::Pixels::from_pixmap(&mask));
+    group.mask = Some(crate::document::Pixels::from_pixmap(&mask)?);
     group.mask_origin = bounds.min;
     group.mask_size = Pt::new(mw as f32, mh as f32);
     for layer in &mut output.layers {

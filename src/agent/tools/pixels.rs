@@ -205,7 +205,7 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                             .collect();
                         after.set_samples(samples)?;
                     } else {
-                        after.paint_overlay(&Pixels::from_pixmap(&overlay), 1.)?;
+                        after.paint_overlay(&Pixels::from_pixmap(&overlay)?, 1.)?;
                     }
                 }
                 studio.commit(Cmd::NativePixels {
@@ -267,7 +267,7 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
             if let Some(selection) = selection {
                 paint::feather_edit(&mut pm, &original_pm, &selection);
             }
-            let after = Pixels::from_pixmap(&pm).data;
+            let after = Pixels::from_pixmap(&pm)?.data.to_vec();
             studio.commit(Cmd::Batch(vec![Cmd::Pixels {
                 layer: li,
                 mask,
