@@ -27,6 +27,7 @@ mod key_hud_tests;
 mod layer_drag;
 mod layout;
 mod layout_preview;
+mod layout_properties;
 mod library;
 mod masking;
 mod motion_presets;
