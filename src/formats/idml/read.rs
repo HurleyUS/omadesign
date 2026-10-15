@@ -306,12 +306,14 @@ impl Importer<'_> {
             .doc
             .publishing
             .masters
-            .iter()
-            .map(|m| &m.xml)
-            .chain(self.doc.publishing.master_stories.values())
+            .iter_mut()
+            .map(|m| &mut m.xml)
+            .chain(self.doc.publishing.master_stories.values_mut())
         {
             self.budget.charge(source.capacity())?;
             let tree = parse(source.as_bytes())?;
+            let mut edits = Vec::new();
+            let mut embedded = HashSet::new();
             for n in tree.descendants() {
                 if let Some(id) = n
                     .attribute("ItemLayer")
@@ -349,8 +351,77 @@ impl Importer<'_> {
                                 .master_assets
                                 .insert(name.clone(), bytes.clone());
                         }
+                    } else if let Some(image) = n
+                        .ancestors()
+                        .find(|n| matches!(tag(*n), "Image" | "PDF" | "EPS"))
+                    {
+                        if image.descendants().any(|n| tag(n) == "Contents")
+                            || embedded.contains(&image.range().start)
+                        {
+                            continue;
+                        }
+                        if let Some(bytes) = (self.link)(uri) {
+                            if bytes.len() as u64 > MAX_PART {
+                                return Err("IDML retained master image exceeds part budget".into());
+                            }
+                            self.budget
+                                .charge(bytes.capacity() + bytes.len().div_ceil(3) * 12 + 128)?;
+                            let contents = format!(
+                                "<Contents><![CDATA[{}]]></Contents>",
+                                base64::engine::general_purpose::STANDARD.encode(&bytes)
+                            );
+                            let edit = if let Some(properties) = child(image, "Properties") {
+                                let range = properties.range();
+                                let text = &source[range.clone()];
+                                if text.ends_with("/>") {
+                                    let name = text[1..]
+                                        .split(|c: char| c.is_whitespace() || c == '/' || c == '>')
+                                        .next()
+                                        .unwrap_or("Properties");
+                                    (range.end - 2..range.end, format!(">{contents}</{name}>"))
+                                } else {
+                                    let at = range.start
+                                        + text
+                                            .rfind("</")
+                                            .ok_or("Invalid IDML master properties")?;
+                                    (at..at, contents)
+                                }
+                            } else {
+                                let at = image
+                                    .first_child()
+                                    .ok_or("IDML master image has no link")?
+                                    .range()
+                                    .start;
+                                (at..at, format!("<Properties>{contents}</Properties>"))
+                            };
+                            embedded.insert(image.range().start);
+                            edits.push(edit);
+                            if let Some(state) = n.attribute_node("StoredState") {
+                                edits.push((state.range_value(), "Embedded".into()));
+                            } else if let Some(uri) = n.attribute_node("LinkResourceURI") {
+                                let at = uri.range_qname().start;
+                                edits.push((at..at, "StoredState=\"Embedded\" ".into()));
+                            }
+                        }
                     }
                 }
+            }
+            let growth = edits
+                .iter()
+                .map(|(range, text)| text.len().saturating_sub(range.len()))
+                .sum::<usize>();
+            if source.len().saturating_add(growth) as u64 > MAX_PART {
+                return Err("IDML retained master XML exceeds part budget".into());
+            }
+            let capacity = source.capacity();
+            source
+                .try_reserve_exact(growth)
+                .map_err(|_| "IDML retained master XML allocation failed")?;
+            self.budget
+                .charge(source.capacity().saturating_sub(capacity))?;
+            edits.sort_by_key(|(range, _)| range.start);
+            for (range, text) in edits.into_iter().rev() {
+                source.replace_range(range, &text);
             }
         }
         Ok(())
@@ -734,9 +805,7 @@ impl Importer<'_> {
                     match crate::formats::decode_image(&bytes) {
                         Ok(px) => {
                             self.budget.charge(px.data.capacity())?;
-                            layer = Layer::placed_raster(&name, px, b.min, b.size());
-                            layer.locked = inherited;
-                            layer.opacity = opacity;
+                            layer.kind = Layer::placed_raster(&name, px, b.min, b.size()).kind;
                         }
                         Err(e) => {
                             warn(

@@ -5,15 +5,11 @@ use std::{
 };
 
 fn fixture(edit: impl FnOnce(&mut BTreeMap<String, Vec<u8>>)) -> Vec<u8> {
-    let mut zip = zip::ZipArchive::new(Cursor::new(FIXTURE)).unwrap();
-    let mut parts = BTreeMap::new();
-    for i in 0..zip.len() {
-        let mut file = zip.by_index(i).unwrap();
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).unwrap();
-        parts.insert(file.name().to_owned(), bytes);
-    }
+    let mut parts = zip_parts(FIXTURE);
     edit(&mut parts);
+    pack_parts(&parts)
+}
+pub(super) fn pack_parts(parts: &BTreeMap<String, Vec<u8>>) -> Vec<u8> {
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for name in std::iter::once("mimetype").chain(
         parts
@@ -40,7 +36,7 @@ fn edit_xml(
     let xml = String::from_utf8(parts[name].clone()).unwrap();
     parts.insert(name.into(), edit(xml).into_bytes());
 }
-fn master_fixture() -> Vec<u8> {
+pub(super) fn master_fixture() -> Vec<u8> {
     fixture(|parts| {
         edit_xml(parts, "designmap.xml", |s| {
             s.replace(
@@ -54,7 +50,7 @@ fn master_fixture() -> Vec<u8> {
         parts.insert("Links/logo.png".into(), parts["Links/mark.png"].clone());
     })
 }
-fn zip_parts(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
+pub(super) fn zip_parts(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
     let mut parts = BTreeMap::new();
     for i in 0..zip.len() {
@@ -118,6 +114,91 @@ fn review_thread_followers_never_allocate_story_buffers() {
         })
         .sum::<usize>();
     assert_eq!(reserved, 0, "followers retain duplicated story allocations");
+}
+
+#[test]
+fn round2_external_master_bytes_survive_native_reopen_without_link_reader() {
+    for properties in [
+        "",
+        "<Properties/>",
+        "<Properties><GraphicBounds Left=\"20\"/></Properties>",
+    ] {
+        let mut parts = zip_parts(&master_fixture());
+        let expected = parts.remove("Links/logo.png").unwrap();
+        edit_xml(&mut parts, "MasterSpreads/MasterSpread_A.xml", |s| {
+            s.replace(
+                "<Link Self=\"masterLink\"",
+                &format!("{properties}<Link StoredState=\"Normal\" Self=\"masterLink\""),
+            )
+        });
+        let (doc, _) = read_with_links(&pack_parts(&parts), "External master", &|uri| {
+            (uri == "Links/logo.png").then(|| expected.clone())
+        })
+        .unwrap();
+        let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        let (output, _) = write(&reopened).unwrap();
+        let (round, notes) = read(&output, "Detached master").unwrap();
+        assert_eq!(
+            round
+                .layers
+                .iter()
+                .filter(|l| l.kind.pixels().is_some())
+                .count(),
+            3
+        );
+        assert!(!notes.iter().any(|n| n.contains("missing: Links/logo.png")));
+        let master = roxmltree::Document::parse(&round.publishing.masters[0].xml).unwrap();
+        let image = master
+            .descendants()
+            .find(|n| n.attribute("Self") == Some("masterImage"))
+            .unwrap();
+        let contents = image
+            .descendants()
+            .find(|n| n.has_tag_name("Contents"))
+            .unwrap();
+        assert!(
+            image
+                .descendants()
+                .any(|n| n.attribute("StoredState") == Some("Embedded"))
+        );
+        assert_eq!(
+            base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                contents.text().unwrap()
+            )
+            .unwrap(),
+            expected
+        );
+        assert!(
+            image
+                .descendants()
+                .any(|n| n.attribute("LinkResourceURI") == Some("Links/logo.png"))
+        );
+    }
+}
+
+#[test]
+fn round2_decoded_rasters_keep_visibility_and_source_lock() {
+    for (visible, locked) in [(false, false), (true, true), (false, true), (true, false)] {
+        let (mut doc, _) = read(FIXTURE, "Raster state").unwrap();
+        let raster = doc
+            .layers
+            .iter_mut()
+            .find(|l| l.kind.pixels().is_some())
+            .unwrap();
+        raster.visible = visible;
+        raster.locked = locked;
+        let (output, _) = write(&doc).unwrap();
+        let (round, _) = read(&output, "Raster state round trip").unwrap();
+        let native = crate::project::decode(&crate::project::encode(&round).unwrap()).unwrap();
+        let raster = native
+            .layers
+            .iter()
+            .find(|l| l.kind.pixels().is_some())
+            .unwrap();
+        assert_eq!((raster.visible, raster.locked), (visible, locked));
+        assert_eq!(native.publishing.links[&raster.id], "Links/mark.png");
+    }
 }
 #[test]
 fn review_master_item_layers_resolve_after_native_reopen() {
