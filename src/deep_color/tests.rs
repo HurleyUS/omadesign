@@ -368,3 +368,19 @@ fn native_export_dimensions_use_checked_storage_instead_of_ai_canvas_limits() {
     doc.layers=vec![Layer::placed_raster("Source",Pixels::from_samples(1,1,Depth::F32,vec![1.25,0.1234567,-0.125,1.]).unwrap(),Pt::ZERO,Pt::new(100_000.,1.))];
     assert_eq!(export::dimensions(&Source::Document(doc),Settings {format:Format::Tiff,..Default::default()}).unwrap(),(100_000,1));
 }
+
+#[test]
+fn byte_vector_effects_are_refused_before_native_export_reduction() {
+    let mut doc = Document::new("Native vector effect boundary",2.,2.,72.);
+    let mut layer = Layer::vector("Filtered vector");
+    let mut shape = crate::document::Shape::new(crate::geom::Geom::Rect {origin:Pt::ZERO,size:Pt::new(2.,2.),radius:0.},crate::document::Style::default());
+    shape.filters.items.push(crate::filter::Fx::Blur {std:1.});
+    layer.kind.shapes_mut().unwrap().push(shape);
+    layer.mask = Some(Pixels::from_samples(2,2,Depth::F32,[0.50001,0.50001,0.50001,1.].repeat(4)).unwrap());
+    doc.layers=vec![layer];
+    let before=doc.layers[0].mask.as_ref().unwrap().sample(0);
+    assert!(composite(&doc,1).unwrap_err().contains("float paint renderer"));
+    let reopened=crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+    assert_eq!(reopened.layers[0].mask.as_ref().unwrap().sample(0),before);
+    assert!(reopened.layers[0].kind.shapes().unwrap()[0].filters.active());
+}

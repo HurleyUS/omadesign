@@ -235,6 +235,13 @@ fn render(
                 );
             }
         } else {
+            if layer.filters.active() || layer.kind.shapes().is_some_and(|shapes| shapes.iter().any(|shape| {
+                shape.filters.active()
+                    || !matches!(&shape.style.fill, crate::document::Fill::None | crate::document::Fill::Solid(_))
+                    || shape.style.stroke.as_ref().is_some_and(|stroke| stroke.gradient.is_some())
+            })) {
+                return Err("Native vector gradients, patterns and effects require a float paint renderer. Save .oma to retain the authored document; use an explicit 8-bit copy for this export.".into());
+            }
             let mut single = Document::new("Native vector coverage", 1., 1., doc.dpi);
             single.width = doc.width;
             single.height = doc.height;
