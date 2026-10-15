@@ -228,6 +228,17 @@ impl PhotoSession {
                         self.status = outcome.message;
                     }
                     if let Some(catalog) = outcome.catalog {
+                        self.ensure_saved();
+                        if outcome.sync {
+                            for (index, image) in self.images.iter().enumerate() {
+                                if let Some(entry) = catalog.entries.values().find(|entry| {
+                                    image.source.as_ref() == Some(&entry.path)
+                                        && self.catalog.bound.contains(&entry.path)
+                                }) {
+                                    self.saved[index] = entry.develop.clone();
+                                }
+                            }
+                        }
                         let previous = self
                             .catalog
                             .rows
@@ -382,6 +393,10 @@ mod tests {
         session.poll_catalog(&egui::Context::default());
         wait(&mut session);
         let expected = session.images[0].develop.clone();
+        assert!(
+            !session.has_unsaved_settings(),
+            "journaled edits must be treated as saved at quit"
+        );
         session.catalog_command(Command::Rating(vec![id.clone()], 5));
         wait(&mut session);
         session.catalog_command(Command::Keywords(vec![id.clone()], vec!["Client".into()]));
