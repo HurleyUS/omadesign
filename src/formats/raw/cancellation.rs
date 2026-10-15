@@ -86,6 +86,12 @@ impl crate::ml::Progress for Cancellation {
     }
 }
 
+impl crate::resources::CancellationCheck for Cancellation {
+    fn check(&self) -> Result<(), String> {
+        Cancellation::check(self)
+    }
+}
+
 pub(super) unsafe extern "C" fn progress(context: *const std::ffi::c_void, stage: u32) {
     // SAFETY: The same synchronous token lifetime applies as for cancelled().
     let token = unsafe { &*context.cast::<Cancellation>() };
