@@ -64,6 +64,11 @@ export function validate(index) {
   if (!index.candidate.length || new Set(index.candidate).size !== index.candidate.length || index.candidate.some(x => !ids.has(x))) throw Error('candidate cohort must be fixed, nonempty and known');
   if (canonical([...index.candidate].sort())!==canonical(index.fixtures.filter(f=>f.candidate_required!==false).map(f=>f.id).sort())) throw Error('candidate must include every required fixture');
   for (const c of index.cohorts ?? []) if (c.type!=='photo03' || c.required!==true || !id.test(c.id) || !Array.isArray(c.affected) || !c.affected.length || [c.manifest,c.inspector,c.advertised].some(a=>!a || !sha.test(a.sha256) || !id.test(a.root) || !Number.isSafeInteger(a.bytes) || a.bytes<1)) throw Error('invalid required producer cohort');
+  for (const c of index.cohorts ?? []) if (c.producer) {
+    const p=c.producer;
+    const pins=[p.packet,p.coordinator,p.original_compiler,p.workflow_compiler,p.receipt,p.outer,p.summary,p.log];
+    if (!/^[a-f0-9]{40}$/.test(c.source_revision) || !/^[a-f0-9]{40}$/.test(c.source_tree) || p.case!=='cr3-canon-m50-raw' || p.case_count!==80 || !sha.test(p.host_sha256) || !Array.isArray(c.source_pins) || c.source_pins.length!==11 || new Set(c.source_pins.map(s=>s.path)).size!==11 || c.source_pins.some(s=>!sha.test(s.sha256) || !/^[a-f0-9]{40}$/.test(s.blob) || !Number.isSafeInteger(s.bytes) || s.bytes<1 || !s.path || s.path.startsWith('/') || s.path.split('/').includes('..')) || pins.some(a=>!a || !sha.test(a.sha256) || !id.test(a.root) || !Number.isSafeInteger(a.bytes) || a.bytes<1 || a.bytes>1048576 || !a.path || a.path.startsWith('/') || a.path.split('/').includes('..'))) throw Error('invalid frozen camera producer contract');
+  }
   for (const r of index.owner_gates ?? []) if (!/^[A-Z]+-\d\d$/.test(r.id) || !['omadesign','omatainer','editbay'].includes(r.product) || !Array.isArray(r.checks) || !r.checks.length) throw Error('invalid required owner gate');
   return index;
 }

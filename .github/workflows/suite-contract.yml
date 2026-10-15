@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: node --test scripts/suite/contract.test.mjs scripts/suite/evidence.test.mjs scripts/suite/producer-evidence.test.mjs
+      - run: node --test scripts/suite/contract.test.mjs scripts/suite/evidence.test.mjs scripts/suite/producer-evidence.test.mjs scripts/suite/raw-evidence.test.mjs
       - name: Plan affected PR or complete candidate cohort
         env:
           SUITE_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
