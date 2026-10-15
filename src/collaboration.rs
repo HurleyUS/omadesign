@@ -11,6 +11,7 @@ type Snapshot = BTreeMap<String, Cell>;
 pub enum Cell {
     Object,
     List,
+    Variant(String),
     Value(Value),
 }
 
@@ -65,6 +66,12 @@ pub fn snapshot(doc: &Document) -> Result<Snapshot, String> {
     for key in ["cloud", "collaboration", "workspace"] {
         value.as_object_mut().unwrap().remove(key);
     }
+    for (index, layer) in doc.layers.iter().enumerate() {
+        for (position, shape) in layer.kind.shapes().unwrap_or_default().iter().enumerate() {
+            value["layers"][index]["kind"]["Vector"]["shapes"][position]["layout"] =
+                serde_json::to_value(&shape.layout).map_err(|e| e.to_string())?;
+        }
+    }
     let mut result = BTreeMap::new();
     flatten("", &value, &mut result)?;
     Ok(result)
@@ -76,6 +83,16 @@ fn child(path: &str, key: &str) -> String {
 
 fn flatten(path: &str, value: &Value, out: &mut Snapshot) -> Result<(), String> {
     match value {
+        Value::Object(fields)
+            if fields.len() == 1
+                && fields.keys().next().is_some_and(|key| {
+                    key.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+                }) =>
+        {
+            let (variant, payload) = fields.iter().next().unwrap();
+            out.insert(path.into(), Cell::Variant(variant.clone()));
+            flatten(&child(path, variant), payload, out)?;
+        }
         Value::Object(fields) => {
             out.insert(path.into(), Cell::Object);
             for (key, value) in fields {
@@ -83,9 +100,10 @@ fn flatten(path: &str, value: &Value, out: &mut Snapshot) -> Result<(), String> 
             }
         }
         Value::Array(items)
-            if ["layers", "shapes", "artboards", "comments", "layout_tokens"]
-                .iter()
-                .any(|key| path.ends_with(&format!("/{key}"))) =>
+            if ["/layers", "/artboards", "/comments", "/layout_tokens"].contains(&path)
+                || (path.starts_with("/@entities/")
+                    && path.ends_with("/kind/Vector/shapes")
+                    && path.split('/').count() == 6) =>
         {
             out.insert(path.into(), Cell::List);
             let mut previous = Value::Null;
@@ -96,11 +114,15 @@ fn flatten(path: &str, value: &Value, out: &mut Snapshot) -> Result<(), String> 
                     .and_then(Value::as_u64)
                     .ok_or("Live objects need stable IDs")?
                     .to_string();
-                if !ids.insert(id.clone()) {
+                if !ids.insert(id.clone()) || out.contains_key(&child("/@parent", &id)) {
                     return Err("Duplicate object IDs must be repaired before live editing".into());
                 }
-                flatten(&child(&child(path, "@items"), &id), item, out)?;
-                out.insert(child(&child(path, "@order"), &id), Cell::Value(previous));
+                out.insert(
+                    child("/@parent", &id),
+                    Cell::Value(Value::String(path.into())),
+                );
+                flatten(&child("/@entities", &id), item, out)?;
+                out.insert(child("/@position", &id), Cell::Value(previous));
                 previous = Value::String(id);
             }
         }
@@ -114,6 +136,11 @@ fn flatten(path: &str, value: &Value, out: &mut Snapshot) -> Result<(), String> 
 fn inflate(path: &str, cells: &Snapshot) -> Option<Value> {
     match cells.get(path)? {
         Cell::Value(value) => Some(value.clone()),
+        Cell::Variant(variant) => Some(Value::Object(
+            [(variant.clone(), inflate(&child(path, variant), cells)?)]
+                .into_iter()
+                .collect(),
+        )),
         Cell::Object => {
             let prefix = format!("{path}/");
             let fields = cells
@@ -131,15 +158,19 @@ fn inflate(path: &str, cells: &Snapshot) -> Option<Value> {
             Some(Value::Object(fields))
         }
         Cell::List => {
-            let prefix = child(path, "@order") + "/";
+            let prefix = "/@parent/".to_string();
             let positions: BTreeMap<String, Option<String>> = cells
                 .range(prefix.clone()..)
                 .take_while(|(key, _)| key.starts_with(&prefix))
                 .filter_map(|(key, cell)| match cell {
-                    Cell::Value(value) => Some((
-                        key[prefix.len()..].into(),
-                        value.as_str().map(str::to_owned),
-                    )),
+                    Cell::Value(value) if value.as_str() == Some(path) => {
+                        let id = &key[prefix.len()..];
+                        let after = match cells.get(&child("/@position", id)) {
+                            Some(Cell::Value(value)) => value.as_str().map(str::to_owned),
+                            _ => None,
+                        };
+                        Some((id.into(), after))
+                    }
                     _ => None,
                 })
                 .collect();
@@ -167,7 +198,7 @@ fn inflate(path: &str, cells: &Snapshot) -> Option<Value> {
             Some(Value::Array(
                 order
                     .into_iter()
-                    .filter_map(|id| inflate(&child(&child(path, "@items"), &id), cells))
+                    .filter_map(|id| inflate(&child("/@entities", &id), cells))
                     .collect(),
             ))
         }
@@ -215,7 +246,7 @@ impl Replica {
     /// Record only properties changed locally since the last merged view.
     /// Args: edited native document. Returns whether a transaction was created.
     pub fn record(&mut self, doc: &Document) -> Result<bool, String> {
-        let before = self.cells();
+        let before = snapshot(&self.document(doc)?)?;
         let after = snapshot(doc)?;
         let keys: BTreeSet<_> = before.keys().chain(after.keys()).collect();
         let writes: Vec<_> = keys
@@ -335,11 +366,98 @@ impl Replica {
     /// Materialize a converged native document, retaining this device's cloud link.
     /// Args: local document for metadata. Returns editable data or a validation error.
     pub fn document(&self, local: &Document) -> Result<Document, String> {
-        let value = inflate("", &self.cells()).ok_or("Live document has no root")?;
+        let cells = self.cells();
+        let value = inflate("", &cells).ok_or("Live document has no root")?;
         let mut doc: Document =
             serde_json::from_value(value).map_err(|e| format!("Invalid live document: {e}"))?;
         doc.cloud = local.cloud.clone();
         doc.workspace = local.workspace;
+        let mut present: BTreeSet<u64> = doc
+            .layers
+            .iter()
+            .flat_map(|layer| {
+                layer
+                    .kind
+                    .shapes()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|shape| shape.id)
+            })
+            .collect();
+        for (key, parent) in cells
+            .range("/@parent/".into()..)
+            .take_while(|(key, _)| key.starts_with("/@parent/"))
+        {
+            let Cell::Value(Value::String(parent)) = parent else {
+                continue;
+            };
+            if !parent.ends_with("/kind/Vector/shapes") {
+                continue;
+            }
+            let id = &key["/@parent/".len()..];
+            let Some(value) = inflate(&child("/@entities", id), &cells) else {
+                continue;
+            };
+            let Ok(shape) = serde_json::from_value::<crate::document::Shape>(value) else {
+                continue;
+            };
+            if !present.insert(shape.id) {
+                continue;
+            }
+            let layer = doc
+                .layers
+                .iter()
+                .enumerate()
+                .filter(|(_, layer)| layer.kind.shapes().is_some() && !layer.is_group)
+                .min_by_key(|(_, layer)| layer.id)
+                .map(|(index, _)| index)
+                .unwrap_or_else(|| {
+                    let mut layer = crate::document::Layer::vector("Recovered live objects");
+                    layer.id = (1..(1 << 53))
+                        .rev()
+                        .find(|id| !cells.contains_key(&child("/@entities", &id.to_string())))
+                        .unwrap();
+                    doc.layers.push(layer);
+                    doc.layers.len() - 1
+                });
+            doc.layers[layer].kind.shapes_mut().unwrap().push(shape);
+        }
+        let groups: BTreeMap<_, _> = doc
+            .layers
+            .iter()
+            .filter(|layer| layer.is_group)
+            .map(|layer| (layer.id, layer.parent))
+            .collect();
+        for layer in &mut doc.layers {
+            let mut seen = BTreeSet::from([layer.id]);
+            let mut parent = layer.parent;
+            while let Some(id) = parent {
+                if !seen.insert(id) || seen.len() > 64 || !groups.contains_key(&id) {
+                    layer.parent = None;
+                    break;
+                }
+                parent = groups[&id];
+            }
+            let Some(shapes) = layer.kind.shapes_mut() else {
+                continue;
+            };
+            let frames: BTreeMap<_, _> = shapes
+                .iter()
+                .filter(|shape| shape.layout.frame)
+                .map(|shape| (shape.id, shape.layout.parent))
+                .collect();
+            for shape in shapes {
+                let mut seen = BTreeSet::from([shape.id]);
+                let mut parent = shape.layout.parent;
+                while let Some(id) = parent {
+                    if !seen.insert(id) || seen.len() > 64 || !frames.contains_key(&id) {
+                        shape.layout.parent = None;
+                        break;
+                    }
+                    parent = frames[&id];
+                }
+            }
+        }
         doc.ensure_ids()?;
         doc.validate_hierarchy()?;
         Ok(doc)
@@ -351,6 +469,17 @@ impl Replica {
         let active = self.active();
         let mut writes: BTreeMap<&str, Vec<(&Change, &Option<Cell>)>> = BTreeMap::new();
         let mut conflicts = BTreeSet::new();
+        let cells = self.cells();
+        for (key, parent) in cells
+            .range("/@parent/".into()..)
+            .take_while(|(key, _)| key.starts_with("/@parent/"))
+        {
+            if let Cell::Value(Value::String(parent)) = parent
+                && !matches!(cells.get(parent), Some(Cell::List))
+            {
+                conflicts.insert(key.clone());
+            }
+        }
         for change in active {
             if let Edit::Write { writes: changes } = &change.edit {
                 for write in changes {
