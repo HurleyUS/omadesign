@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 type Snapshot = BTreeMap<String, Cell>;
+const PIXEL_BUDGET: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Cell {
@@ -70,6 +71,31 @@ pub struct Replica {
 /// Turn native editable state into stable property addresses.
 /// Args: document to share. Returns its cells, excluding device and session metadata.
 pub fn snapshot(doc: &Document) -> Result<Snapshot, String> {
+    let mut used = 0u64;
+    for pixels in doc.layers.iter().flat_map(|layer| {
+        layer
+            .kind
+            .pixels()
+            .into_iter()
+            .chain(layer.mask.as_ref())
+            .chain(
+                layer
+                    .kind
+                    .shapes()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|shape| shape.mask.as_ref()),
+            )
+    }) {
+        let expected = pixel_size(pixels)?;
+        used = used
+            .checked_add(expected)
+            .filter(|used| *used <= PIXEL_BUDGET)
+            .ok_or("Live document exceeds the total pixel budget")?;
+        if pixels.data.len() as u64 != expected {
+            return Err("Invalid live pixel buffer size".into());
+        }
+    }
     let mut packed = doc.clone();
     packed.collaboration = None;
     packed.cloud = None;
@@ -121,6 +147,46 @@ fn pixel_address(path: &str) -> bool {
     path.starts_with("/@entities/")
         && ((path.ends_with("/mask") && path.split('/').count() == 4)
             || (path.ends_with("/kind/Raster/pixels") && path.split('/').count() == 6))
+}
+
+fn pixel_size(pixels: &crate::document::Pixels) -> Result<u64, String> {
+    u64::from(pixels.w)
+        .checked_mul(u64::from(pixels.h))
+        .and_then(|n| n.checked_mul(4))
+        .filter(|n| *n > 0 && *n <= PIXEL_BUDGET)
+        .ok_or_else(|| "Live pixel dimensions exceed the decode budget".into())
+}
+
+/// Decode every shared buffer under one document memory budget.
+/// Args: materialized document, shared cells and total byte budget. Returns validated pixels or an error.
+fn unpack_pixels(doc: &mut Document, cells: &Snapshot, budget: u64) -> Result<(), String> {
+    let mut used = 0u64;
+    visit_pixels(doc, |path, pixels| {
+        use std::io::Read;
+        let expected = pixel_size(pixels)?;
+        used = used
+            .checked_add(expected)
+            .filter(|used| *used <= budget)
+            .ok_or("Live document exceeds the total pixel budget")?;
+        if let Some(Cell::Pixels { data, .. }) = cells.get(path) {
+            let compressed = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|e| e.to_string())?;
+            let decoder = zstd::stream::read::Decoder::new(compressed.as_slice())
+                .map_err(|e| e.to_string())?;
+            let mut bytes = Vec::new();
+            decoder
+                .take(expected + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            pixels.data = bytes;
+            pixels.touch();
+        }
+        if pixels.data.len() as u64 != expected {
+            return Err("Invalid live pixel buffer size".into());
+        }
+        Ok(())
+    })
 }
 
 fn child(path: &str, key: &str) -> String {
@@ -539,33 +605,7 @@ impl Replica {
                 });
             doc.layers[layer].kind.shapes_mut().unwrap().push(shape);
         }
-        visit_pixels(&mut doc, |path, pixels| {
-            use std::io::Read;
-            let Some(Cell::Pixels { w, h, data }) = cells.get(path) else {
-                return Ok(());
-            };
-            let expected = u64::from(*w)
-                .checked_mul(u64::from(*h))
-                .and_then(|n| n.checked_mul(4))
-                .filter(|n| *n > 0 && *n <= 512 * 1024 * 1024)
-                .ok_or("Live pixel dimensions exceed the decode budget")?;
-            let compressed = base64::engine::general_purpose::STANDARD
-                .decode(data)
-                .map_err(|e| e.to_string())?;
-            let decoder = zstd::stream::read::Decoder::new(compressed.as_slice())
-                .map_err(|e| e.to_string())?;
-            let mut bytes = Vec::new();
-            decoder
-                .take(expected + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|e| e.to_string())?;
-            if bytes.len() as u64 != expected {
-                return Err("Invalid live pixel buffer size".into());
-            }
-            pixels.data = bytes;
-            pixels.touch();
-            Ok(())
-        })?;
+        unpack_pixels(&mut doc, &cells, PIXEL_BUDGET)?;
         let groups: BTreeMap<_, _> = doc
             .layers
             .iter()
@@ -1276,5 +1316,84 @@ mod tests {
             doc.layers[0].kind.pixels().unwrap().data
         );
         assert_eq!(snapshot(&merged).unwrap(), snapshot(&doc).unwrap());
+    }
+    #[test]
+    fn pixel_masks_and_legacy_buffers_share_one_validated_decode_budget() {
+        let mut doc = Document::new("Masks", 1., 1., 72.);
+        doc.layers[0].mask = crate::document::Pixels::from_rgba(1, 1, vec![1, 2, 3, 4]);
+        let mut item = shape("Masked");
+        item.mask = crate::document::Pixels::from_rgba(1, 1, vec![5, 6, 7, 8]);
+        let id = item.id;
+        doc.layers[1].kind.shapes_mut().unwrap().push(item);
+        let cells = snapshot(&doc).unwrap();
+        let state = Replica::new("masks".into(), "a".repeat(64), cells.clone());
+        let merged = state.document(&doc).unwrap();
+        assert_eq!(merged.layers[0].mask.as_ref().unwrap().data, [1, 2, 3, 4]);
+        assert_eq!(
+            merged
+                .find_shape(1, id)
+                .unwrap()
+                .mask
+                .as_ref()
+                .unwrap()
+                .data,
+            [5, 6, 7, 8]
+        );
+        let mut packed: Document = serde_json::from_value(inflate("", &cells).unwrap()).unwrap();
+        assert!(
+            unpack_pixels(&mut packed, &cells, 11)
+                .unwrap_err()
+                .contains("total pixel budget")
+        );
+        let path = format!("/@entities/{}/kind/Raster/pixels", doc.layers[0].id);
+        let mut legacy = cells.clone();
+        legacy.insert(
+            path.clone(),
+            Cell::Value(json!({"w":1,"h":1,"data":[9,8,7,6]})),
+        );
+        let mut resumed = state.clone();
+        resumed.base = legacy.clone();
+        assert_eq!(
+            resumed.document(&doc).unwrap().layers[0]
+                .kind
+                .pixels()
+                .unwrap()
+                .data,
+            [9, 8, 7, 6]
+        );
+        let mut packed: Document = serde_json::from_value(inflate("", &legacy).unwrap()).unwrap();
+        assert!(unpack_pixels(&mut packed, &legacy, 11).is_err());
+        resumed
+            .base
+            .insert(path, Cell::Value(json!({"w":1,"h":1,"data":[1,2,3]})));
+        assert!(resumed.document(&doc).unwrap_err().contains("buffer size"));
+    }
+
+    #[test]
+    fn malformed_and_mis_sized_compressed_pixels_fail_before_materialization() {
+        let doc = Document::new("Malformed", 1., 1., 72.);
+        let mut state = Replica::new("pixels".into(), "a".repeat(64), snapshot(&doc).unwrap());
+        let path = format!("/@entities/{}/kind/Raster/pixels", doc.layers[0].id);
+        for bytes in [vec![1, 2, 3], vec![1, 2, 3, 4, 5]] {
+            let compressed = zstd::stream::encode_all(bytes.as_slice(), 1).unwrap();
+            state.base.insert(
+                path.clone(),
+                Cell::Pixels {
+                    w: 1,
+                    h: 1,
+                    data: base64::engine::general_purpose::STANDARD.encode(compressed),
+                },
+            );
+            assert!(state.document(&doc).unwrap_err().contains("buffer size"));
+        }
+        state.base.insert(
+            path,
+            Cell::Pixels {
+                w: 1,
+                h: 1,
+                data: "invalid base64 !".into(),
+            },
+        );
+        assert!(state.document(&doc).is_err());
     }
 }
