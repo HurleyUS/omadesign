@@ -71,6 +71,7 @@ if (command==='run' && fixtures.length===0 && cohorts.length===0) {
   } else {
     if (command==='run') assertBuildLock(options.config);
     const current = {}, receipts = [], issues = [];
+    let cancelled=false;
     for (const f of fixtures) {
       const started_at = new Date().toISOString();
       let binding, receipt;
@@ -124,6 +125,7 @@ if (command==='run' && fixtures.length===0 && cohorts.length===0) {
           fs.writeFileSync(path.join(scratch,'request.json'), JSON.stringify(request));
           const started = performance.now();
           const result = await runProcess(process.execPath, [adapter, path.join(scratch,'request.json')], { cwd: productRoot, env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch }, deadline_ms: f.limits.deadline_ms });
+          cancelled=result.reason==='cancelled';
           if (canonical(source(productRoot)) !== canonical(actualSource) || canonical(source(adapterRoot)) !== canonical(adapterSource)) throw Error('product or adapter source changed during run');
           asset(f.input, roots);
           if (f.reference) asset(f.reference, roots);
@@ -160,6 +162,7 @@ if (command==='run' && fixtures.length===0 && cohorts.length===0) {
         const bytes = canonical(receipt);
         fs.writeFileSync(path.join(out, `${hash(bytes)}.json`), bytes, { flag: 'wx' });
       }
+      if (cancelled) break;
     }
     if (command !== 'verify') {
       for (const name of fs.readdirSync(out).filter(n => /^[a-f0-9]{64}\.json$/.test(n))) {

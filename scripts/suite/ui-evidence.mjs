@@ -15,7 +15,7 @@ for (const check of request.fixture.required) {
       const records=[];
       for (const ref of refs) {
         const capture=request.ui_captures?.[String(ref.scale)];
-        if (!capture || !/^[a-f0-9]{64}$/.test(capture.host_sha256) || fingerprint(capture.path).sha256!==ref.sha256 || capture.font_sha256!==request.fixture.ui.font_sha256 || capture.theme_sha256!==request.fixture.ui.theme_sha256) throw Error('Pinned appearance capture unavailable');
+        if (!capture || !/^[a-f0-9]{64}$/.test(capture.host_sha256) || capture.revision!==binding.source.revision || capture.binary_sha256!==binding.binary.sha256 || capture.fixture_sha256!==binding.inputs.input.sha256 || fingerprint(capture.path).sha256!==ref.sha256 || capture.font_sha256!==request.fixture.ui.font_sha256 || capture.theme_sha256!==request.fixture.ui.theme_sha256) throw Error('Current pinned appearance capture unavailable');
         records.push({scale:ref.scale,...fingerprint(capture.path),producer_host_sha256:capture.host_sha256});
       }
       if (!request.fixture.ui.font_sha256 || !request.fixture.ui.theme_sha256 || records.length!==3) throw Error('Actual font/theme/scale binding unavailable');
@@ -28,7 +28,7 @@ for (const check of request.fixture.required) {
       const record=JSON.parse(fs.readFileSync(file,'utf8'));
       if (record.check!==check || record.status!=='passed' || !/^[a-f0-9]{64}$/.test(record.host_sha256) || record.revision!==binding.source.revision || record.binary_sha256!==binding.binary.sha256 || record.fixture_sha256!==binding.inputs.input.sha256) throw Error('App receipt binding mismatch');
       const actual=fingerprint(record.artifact.path);
-      if (actual.sha256!==record.artifact.sha256 || actual.bytes!==record.artifact.bytes || actual.bytes>4194304) throw Error('App receipt artifact unavailable/corrupt');
+      if (actual.sha256!==record.artifact.sha256 || actual.bytes!==record.artifact.bytes || actual.bytes===0 || actual.bytes>4194304) throw Error('App receipt artifact unavailable/corrupt');
       const filename=`${check}.proof`;
       fs.copyFileSync(record.artifact.path,path.join(request.output,filename));
       fs.writeFileSync(path.join(request.output,`${check}.json`),JSON.stringify({check,receipt_sha256:fingerprint(file).sha256,artifact:actual,producer_host_sha256:record.host_sha256,boundary:'exact source/test-executable app assertion; appearance and native-window proof separate'}));
