@@ -3,6 +3,20 @@
   "liveMaskLayers": 1,
   "pixelMasks": 0,
   "embeddedRasterImages": 0,
+  "sourceTransform": [
+    1,
+    0,
+    0,
+    1,
+    0,
+    0
+  ],
+  "sourceNodeBounds": {
+    "minX": 10,
+    "minY": 6,
+    "maxX": 22,
+    "maxY": 16
+  },
   "pngDifferentPixelsFromResvg": 0,
   "pngDifferentPixelsAfterSvgRoundtrip": 0
 }

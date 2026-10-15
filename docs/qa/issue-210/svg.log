@@ -1,0 +1,54 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running unittests src/lib.rs (/home/michael/Projects/omadesign/target/debug/deps/omadesign-63b806eabdd00bb1)
+
+running 48 tests
+test agent::attachments::tests::attachment_images_svg_objects_and_history_roundtrip ... ok
+test app::brand_assets::tests::svg_and_raster_placement_are_atomic_and_independent_of_current_fill ... ok
+test app::placement::tests::multi_path_svg_is_one_auto_layout_item_with_intact_internal_geometry_and_one_undo ... ok
+test app::clipboard_insert::tests::copied_image_and_svg_files_are_new_layers_in_one_undo ... ok
+test app::clipboard_insert::tests::svg_doctype_css_hierarchy_and_clips_survive_centered_vector_paste ... ok
+test artwork_mask::tests::shared_svg_definition_edits_update_every_target ... ok
+test artwork_mask::tests::svg_masks_keep_editable_sources_and_match_independent_rendering ... ok
+test brand::tests::previews_decode_pixels_native_svg_and_packed_project ... ok
+test clipboard::canvas_dimensions_tests::clipboard_canvas_dimensions_cover_pixels_svg_and_native_bounds ... ok
+test clipboard::tests::copied_files_decode_original_pixels_and_svg_without_rasterizing ... ok
+test clipboard::tests::image_mime_decodes_pixels_and_keeps_svg_editable ... ok
+test clipboard::tests::recognizes_svg_with_real_editor_doctype_and_preserves_text ... ok
+test compositor::appearance_tests::svg_independent_blend_siblings_match_native_without_blur_approximation ... ok
+test filter::tests::svg_emits_primitives ... ok
+test formats::svg::tests::fallback_filter_group_keeps_ancestor_transform_and_blend ... ok
+test formats::svg::tests::fallback_paths_and_images_keep_ancestor_transforms ... ok
+test formats::svg::tests::imports_css_nested_layers_hidden_content_and_cubic_handles ... ok
+test formats::svg::tests::multi_stop_gradient_and_gradient_stroke_import_stay_editable ... ok
+test formats::svg::tests::stylesheet_hidden_groups_keep_artwork_and_honor_css_cascade ... ok
+test formats::svg::tests::svg_11_doctype_keeps_transformed_artwork_editable ... ok
+test formats::svg::tests::svg_doctype_does_not_resolve_external_entities ... ok
+test formats::svg::tests::two_stop_gradient_preserves_affine_scalar_field_as_native_fill ... ok
+test formats::svg::tests::vector_clips_keep_child_geometry_and_match_svg_pixels ... ok
+test geom::tests::path_svg_emits_cubic ... ok
+test geom::tests::path_svg_junk_handles_are_lines ... ok
+test gradient::integration_tests::all_gradients_and_gradient_strokes_match_rendered_svg ... ok
+test layout_export::tests::frame_png_and_svg_exclude_overlapping_siblings_and_support_negative_origins ... ok
+test motion::tests::unsupported_lottie_masks_fail_without_losing_animated_svg_layers ... ok
+test plugins::tests::generated_patterns_svg_icons_gradients_and_effects_are_native ... ok
+test plugins::tests::invalid_parameters_and_external_svg_references_are_rejected ... ok
+test shape_browser::tests::svg_elements_keep_stroke_and_fill_none ... ok
+test shape_browser::tests::svg_rect_without_path_still_places ... ok
+test svg::mask_tests::svg_masks_preserve_luminance_alpha_placement_and_filter_order ... ok
+test svg::tests::animated_stroke_reveal_keeps_open_compound_contours_open ... ok
+test svg::tests::flattened_pixels_and_unmapped_motion_are_named ... ok
+test svg::tests::logo_oma_roundtrip_structure ... ok
+test svg::tests::opaque_fill_is_hex_not_rgba ... ok
+test svg::tests::project_type_exports_its_glyphs_without_requiring_the_brand_font ... ok
+test svg::tests::rotating_linear_gradient_is_an_animate_transform ... ok
+test svg::tests::rotating_radial_gradient_spins_around_its_center ... ok
+test svg::tests::svg_contains_path ... ok
+test svg::tests::svg_path_keeps_cubics ... ok
+test svg::tests::svg_writes_layer_fx ... ok
+test svg::tests::unsupported_effect_names_the_shape_and_layer ... ok
+test app::tests::place_svg_adds_a_shape ... ok
+test app::qa_edges_tests::a_mask_on_a_layout_frame_covers_its_entire_subtree_in_native_and_svg ... ok
+test text_geometry::lifecycle_tests::linked_save_load_copy_and_outlined_svg_preserve_positions ... ok
+test artwork_mask::tests::rotated_frame_placement_keeps_svg_masks_editable_and_aligned ... ok
+
+test result: ok. 48 passed; 0 failed; 0 ignored; 0 measured; 997 filtered out; finished in 21.28s
