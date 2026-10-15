@@ -233,10 +233,18 @@ pub fn encode(
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95)
             .encode_image(&DynamicImage::ImageRgba8(rgba).into_rgb8())
             .map_err(|e| e.to_string())?;
-    } else if let Source::Document(doc)=source && !doc.color.icc_profile.is_empty() {
+    } else if let Source::Document(doc) = source && crate::deep_color::has_native(doc) {
         use image::ImageEncoder;
-        if settings.format==Format::Png {let mut encoder=image::codecs::png::PngEncoder::new(&mut bytes);encoder.set_icc_profile(doc.color.icc_profile.clone()).map_err(|e|e.to_string())?;raster.write_with_encoder(encoder).map_err(|e|e.to_string())?;}
-        else {let mut encoder=image::codecs::tiff::TiffEncoder::new(&mut bytes);encoder.set_icc_profile(doc.color.icc_profile.clone()).map_err(|e|e.to_string())?;raster.write_with_encoder(encoder).map_err(|e|e.to_string())?;}
+        let _profile_memory = crate::resources::global().reserve_now(doc.color.icc_profile.len() as u64,&crate::deep_color::storage::check)?;
+        if settings.format == Format::Png {
+            let mut encoder = image::codecs::png::PngEncoder::new(&mut bytes);
+            if !doc.color.icc_profile.is_empty() {encoder.set_icc_profile(doc.color.icc_profile.clone()).map_err(|e| e.to_string())?;}
+            encoder.write_image(raster.as_bytes(),raster.width(),raster.height(),raster.color().into()).map_err(|e| e.to_string())?;
+        } else {
+            let mut encoder = image::codecs::tiff::TiffEncoder::new(&mut bytes);
+            if !doc.color.icc_profile.is_empty() {encoder.set_icc_profile(doc.color.icc_profile.clone()).map_err(|e| e.to_string())?;}
+            encoder.write_image(raster.as_bytes(),raster.width(),raster.height(),raster.color().into()).map_err(|e| e.to_string())?;
+        }
     } else {
         raster
             .write_to(

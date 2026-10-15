@@ -833,3 +833,21 @@ fn cmyk_float_ffi_matches_independent_transicc_reference() {
         assert!((a - b / 255.).abs() < 0.0002, "{a} != {b}/255");
     }
 }
+
+#[test]
+fn interleaved_profile_conversion_preserves_alpha_and_matches_independent_transicc() {
+    let profile = include_bytes!("../formats/psd/fixtures/srgb-cc0.icc");
+    let source = [0.1234567, 0.5, 0.9, 0.333333];
+    let got = cms::transform_alpha(&source,cms::Model::Rgb,profile,true,1).unwrap();
+    let expected = [31.5843 / 255.,127.5015 / 255.,229.4919 / 255.];
+    for (&a,b) in got[..3].iter().zip(expected) {assert!((a-b).abs() < 0.0002);}
+    assert_eq!(got[3],source[3]);
+    let profile = include_bytes!("../formats/psd/fixtures/fogra39l-cc0.icc");
+    let rgba = [0.3,0.4,0.5,0.00001];
+    let ink = cms::transform_alpha(&rgba,cms::Model::Cmyk,profile,false,1).unwrap();
+    let components = cms::transform(&rgba[..3],cms::Model::Cmyk,profile,false,1).unwrap();
+    assert_eq!(&ink[..4],components.as_slice());assert_eq!(ink[4],rgba[3]);
+    let display = cms::transform_alpha(&ink,cms::Model::Cmyk,profile,true,1).unwrap();
+    let components = cms::transform(&ink[..4],cms::Model::Cmyk,profile,true,1).unwrap();
+    assert_eq!(&display[..3],components.as_slice());assert_eq!(display[3],rgba[3]);
+}
