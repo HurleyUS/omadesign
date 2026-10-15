@@ -42,7 +42,10 @@ pub(super) fn show(ui: &mut Ui, studio: &mut crate::app::Studio) {
     let Fill::Pattern(mut pattern) = super::studios::inspected_style(studio).fill.clone() else {
         return;
     };
-    if editor(ui, &mut pattern) {
+    let changed = ui
+        .push_id(studio.primary(), |ui| editor(ui, &mut pattern))
+        .inner;
+    if changed {
         studio.set_fill(Fill::Pattern(pattern));
     }
 }
