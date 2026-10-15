@@ -1,0 +1,387 @@
+//! Real output checks for the PDF adapters on the common SVG source model.
+use super::*;
+use crate::artwork_mask::{ArtworkMask, MaskSource};
+use crate::geom::{CharSpan, TypeRun};
+use crate::gradient::{Gradient, GradientKind, GradientStop, Spread};
+
+fn rect(origin: Pt, size: Pt, fill: Fill) -> Shape {
+    Shape::new(
+        Geom::Rect {
+            origin,
+            size,
+            radius: 0.,
+        },
+        Style { fill, stroke: None },
+    )
+}
+fn backdrop(doc: &mut Document) {
+    let mut layer = Layer::vector("White backdrop");
+    layer.kind.shapes_mut().unwrap().push(rect(
+        Pt::ZERO,
+        Pt::new(doc.width, doc.height),
+        Fill::Solid(Rgba::WHITE),
+    ));
+    doc.layers.insert(0, layer);
+}
+fn radial() -> Gradient {
+    let mut g = Gradient::new(
+        GradientKind::Radial,
+        Rgba::new(245, 35, 20, 255),
+        Rgba::new(20, 70, 235, 80),
+    );
+    g.from = [0.43, 0.48];
+    g.to = [0.85, 0.64];
+    g.radial_axis = Some([-0.2, 0.58]);
+    g.focal = [0.17, -0.12];
+    g.inner_radius = 0.14;
+    g.stops.insert(
+        1,
+        GradientStop {
+            offset: 0.42,
+            color: Rgba::new(30, 230, 75, 150),
+        },
+    );
+    g
+}
+fn fields() -> Document {
+    let mut doc = Document::new("Affine focal radial and periodic fields", 300., 240., 72.);
+    doc.layers.clear();
+    backdrop(&mut doc);
+    let mut layer = Layer::vector("Editable PDF fields");
+    for (index, spread) in [Spread::Pad, Spread::Repeat, Spread::Reflect, Spread::Repeat]
+        .into_iter()
+        .enumerate()
+    {
+        let mut g = radial();
+        g.spread = spread;
+        if index == 3 {
+            g.kind = GradientKind::Linear;
+            g.from = [0.25, 0.4];
+            g.to = [0.48, 0.55];
+        }
+        let mut s = rect(
+            Pt::new(
+                15. + (index % 2) as f32 * 150.,
+                15. + (index / 2) as f32 * 120.,
+            ),
+            Pt::new(115., 85.),
+            Fill::Gradient(g.clone()),
+        );
+        s.rotation = 0.07;
+        s.style.stroke = Some(Stroke {
+            width: 5.,
+            gradient: Some(g),
+            ..Default::default()
+        });
+        layer.kind.shapes_mut().unwrap().push(s);
+    }
+    doc.layers.push(layer);
+    doc
+}
+fn native_text() -> Document {
+    let mut doc = Document::new("Native mixed face size paint affine text", 520., 190., 72.);
+    doc.layers.clear();
+    backdrop(&mut doc);
+    let mut run = TypeRun {
+        content: "office café SMALL office Ω".into(),
+        font: "/usr/share/fonts/noto/NotoSans-Regular.ttf".into(),
+        px: 25.,
+        origin: Pt::new(18., 55.),
+        transform: Some([0.94, 0.11, 0.18, 1.08, 5., -2.]),
+        ..Default::default()
+    };
+    run.spans = vec![
+        CharSpan {
+            start: 7,
+            end: 11,
+            font: Some("/usr/share/fonts/liberation/LiberationSerif-Regular.ttf".into()),
+            px: Some(37.),
+            fill: Some(Fill::Solid(Rgba::new(180, 35, 90, 185))),
+            ..Default::default()
+        },
+        CharSpan {
+            start: 12,
+            end: 17,
+            px: Some(15.),
+            fill: Some(Fill::Gradient(Gradient::new(
+                GradientKind::Linear,
+                Rgba::rgb(235, 50, 20),
+                Rgba::rgb(20, 90, 220),
+            ))),
+            ..Default::default()
+        },
+    ];
+    run.contours = crate::text::shape(&run);
+    let mut layer = Layer::vector("Native editable text");
+    layer.kind.shapes_mut().unwrap().push(Shape::new(
+        Geom::Text(run),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(15, 35, 65)),
+            stroke: None,
+        },
+    ));
+    doc.layers.push(layer);
+    doc
+}
+fn filtered(source_mask: bool) -> Document {
+    let (mut doc, notes) = crate::formats::svg::read(
+        include_str!("fixtures/filter.svg"),
+        "Edited retained filter",
+    )
+    .unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    doc.artboards = vec![crate::document::Artboard::new(
+        0,
+        Pt::new(180., 110.),
+        Pt::new(160., 120.),
+    )];
+    let graph = doc
+        .layers
+        .iter()
+        .position(|l| l.svg_filter.is_some())
+        .unwrap();
+    let graph_id = doc.layers[graph].id;
+    doc.layers[graph].name = "Edited filter graph".into();
+    for layer in &mut doc.layers {
+        for shape in layer.kind.shapes_mut().into_iter().flatten() {
+            shape.geom.translate(Pt::new(6., -3.));
+            shape.style.fill = Fill::Solid(Rgba::rgb(125, 35, 190));
+        }
+    }
+    doc.layers[graph].svg_filter.as_mut().unwrap().definitions = doc.layers[graph]
+        .svg_filter
+        .as_ref()
+        .unwrap()
+        .definitions
+        .replace("dx=\"12\"", "dx=\"18\"")
+        .into();
+    if source_mask {
+        let mut layer = Layer::vector("Target using current filtered source");
+        let mut s = rect(
+            Pt::new(190., 118.),
+            Pt::new(135., 100.),
+            Fill::Solid(Rgba::rgb(230, 150, 25)),
+        );
+        s.artwork_masks.push(ArtworkMask::new(MaskSource {
+            layer: graph_id,
+            shape: None,
+        }));
+        layer.kind.shapes_mut().unwrap().push(s);
+        doc.layers.push(layer);
+    } else {
+        let mut source = Layer::vector("Hidden live mask");
+        source.visible = false;
+        source.kind.shapes_mut().unwrap().push(rect(
+            Pt::new(200., 120.),
+            Pt::new(90., 80.),
+            Fill::Solid(Rgba::new(0, 0, 0, 160)),
+        ));
+        doc.layers[graph]
+            .artwork_masks
+            .push(ArtworkMask::new(MaskSource {
+                layer: source.id,
+                shape: None,
+            }));
+        doc.layers.push(source);
+    }
+    backdrop(&mut doc);
+    doc
+}
+
+/// Render and inspect the actual exported file before applying strict comparison checks.
+/// Args: authored fixture and receipt name. Returns the PDF object store and mean channel difference.
+fn inspect(doc: &Document, name: &str, limit: f64) -> (Pdf, f64) {
+    let folder =
+        std::env::temp_dir().join(format!("pdf-adapter-{name}-{}", crate::document::next_id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let source = folder.join("source.oma");
+    crate::project::save_to(doc, &source).unwrap();
+    let reopened = crate::project::load_from(&source).unwrap();
+    let expected = crate::compositor::render_export(&reopened, 1).unwrap();
+    let (bytes, notes) = write(&reopened).unwrap();
+    let path = folder.join("output.pdf");
+    std::fs::write(&path, &bytes).unwrap();
+    for program in ["qpdf", "pdffonts", "pdfimages", "pdftotext"] {
+        let output = std::process::Command::new(program)
+            .args(match program {
+                "qpdf" => vec!["--check"],
+                "pdfimages" => vec!["-list"],
+                "pdftotext" => vec!["-layout"],
+                _ => vec![],
+            })
+            .arg(&path)
+            .args(if program == "pdftotext" {
+                vec!["-"]
+            } else {
+                vec![]
+            })
+            .output()
+            .unwrap();
+        std::fs::write(
+            folder.join(format!("{program}.txt")),
+            [output.stdout.clone(), output.stderr.clone()].concat(),
+        )
+        .unwrap();
+        if program == "pdftotext" && name == "native-text" {
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("office café SMALL office Ω"),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+        assert!(
+            output.status.success() && output.stderr.is_empty(),
+            "{program}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let output = std::process::Command::new("pdftocairo")
+        .args(["-png", "-r", "72", "-singlefile"])
+        .arg(&path)
+        .arg(folder.join("cairo"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success() && output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let board = &doc.artboards[0];
+    let actual = image::open(folder.join("cairo.png")).unwrap().to_rgb8();
+    assert_eq!(
+        actual.dimensions(),
+        (board.size.x as u32, board.size.y as u32)
+    );
+    let mut native = image::RgbImage::new(actual.width(), actual.height());
+    let mut total = 0u64;
+    let mut max = 0u8;
+    for (x, y, p) in actual.enumerate_pixels() {
+        let n = expected
+            .pixel(x + board.origin.x as u32, y + board.origin.y as u32)
+            .unwrap()
+            .demultiply();
+        let n = [n.red(), n.green(), n.blue()];
+        native.put_pixel(x, y, image::Rgb(n));
+        for (a, b) in n.into_iter().zip(p.0) {
+            let d = a.abs_diff(b);
+            total += u64::from(d);
+            max = max.max(d);
+        }
+    }
+    native.save(folder.join("native.png")).unwrap();
+    let mean = total as f64 / f64::from(actual.width() * actual.height() * 3);
+    std::fs::write(folder.join("result.json"),serde_json::to_vec_pretty(&serde_json::json!({"name":name,"bytes":bytes.len(),"mean_channel_error":mean,"max_channel_error":max,"notes":notes})).unwrap()).unwrap();
+    if let Some(root) = std::env::var_os("OMA_PDF_EXCHANGE_RECEIPTS") {
+        let target = std::path::PathBuf::from(root).join(format!("adapter-{name}"));
+        std::fs::create_dir_all(&target).unwrap();
+        for entry in std::fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            std::fs::copy(&path, target.join(path.file_name().unwrap())).unwrap();
+        }
+    }
+    eprintln!(
+        "PDF adapter {name}: {} bytes, native/Cairo mean {mean:0.4}/255, max {max}, notes {notes:?}",
+        bytes.len()
+    );
+    assert!(
+        mean < limit,
+        "{name} native/PDF error {mean}; evidence {}",
+        folder.display()
+    );
+    let pdf = Pdf::load_mem(&bytes).unwrap();
+    std::fs::remove_dir_all(folder).unwrap();
+    (pdf, mean)
+}
+
+#[test]
+#[ignore = "independent PDF adapter qualification requires qpdf and Poppler"]
+fn pdf_adapter_affine_periodic_patterns_and_mixed_type_real_output() {
+    let (pdf, _) = inspect(&fields(), "fields", 1.5);
+    assert!(
+        !pdf.objects
+            .values()
+            .filter_map(|o| o.as_stream().ok())
+            .any(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image"))
+    );
+    for kind in [1, 3] {
+        assert!(
+            pdf.objects
+                .values()
+                .filter_map(|o| o.as_dict().ok())
+                .any(|d| d.get(b"ShadingType").and_then(Object::as_i64).ok() == Some(kind))
+        );
+    }
+}
+
+#[test]
+#[ignore = "independent PDF pattern qualification requires qpdf and Poppler"]
+fn pdf_adapter_pattern_real_output() {
+    let (mut pattern, notes) =
+        crate::formats::svg::read(include_str!("fixtures/pattern.svg"), "Vector pattern").unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    backdrop(&mut pattern);
+    let (pdf, _) = inspect(&pattern, "pattern", 2.5);
+    assert!(
+        pdf.objects
+            .values()
+            .filter_map(|o| o.as_stream().ok())
+            .any(|s| s.dict.get(b"PatternType").and_then(Object::as_i64).ok() == Some(1))
+    );
+    assert!(
+        !pdf.objects
+            .values()
+            .filter_map(|o| o.as_stream().ok())
+            .any(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image"))
+    );
+}
+
+#[test]
+#[ignore = "independent PDF type qualification requires qpdf and Poppler"]
+fn pdf_adapter_mixed_type_real_output() {
+    let (pdf, _) = inspect(&native_text(), "native-text", 2.);
+    let fonts = pdf
+        .objects
+        .values()
+        .filter_map(|o| o.as_dict().ok())
+        .filter(|d| d.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"CIDFontType2"))
+        .count();
+    assert_eq!(fonts, 2);
+}
+#[test]
+#[ignore = "independent retained filter qualification requires qpdf and Poppler"]
+fn pdf_adapter_edited_filter_graph_masks_and_offset_artboard_real_output() {
+    for source_mask in [false, true] {
+        let doc = filtered(source_mask);
+        let (_, notes) = write(&doc).unwrap();
+        assert!(
+            notes
+                .iter()
+                .any(|s| s.contains("Edited filter graph") && s.contains("RGBA8")),
+            "{notes:?}"
+        );
+        inspect(
+            &doc,
+            if source_mask {
+                "filtered-source"
+            } else {
+                "filtered-target"
+            },
+            0.5,
+        );
+    }
+}
+
+#[test]
+#[ignore = "independent PDF source type qualification requires qpdf and Poppler"]
+fn pdf_adapter_source_text_keeps_actual_range_paints() {
+    let (mut doc, notes) = crate::formats::svg::read(
+        include_str!("fixtures/source-text.svg"),
+        "Positioned path vertical source text",
+    )
+    .unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    backdrop(&mut doc);
+    let (_, notes) = write(&doc).unwrap();
+    assert!(notes.iter().any(|s| s.contains("outlines")), "{notes:?}");
+    inspect(&doc, "source-text", 2.);
+}
