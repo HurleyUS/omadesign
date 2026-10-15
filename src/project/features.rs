@@ -6,11 +6,21 @@ pub(super) const RICH_TEXT: u32 = 14;
 pub(super) const ADVANCED_GRADIENT: u32 = 15;
 pub(super) const VECTOR_PATTERN: u32 = 16;
 pub(super) const SVG_FILTER: u32 = 17;
+pub(super) const PUBLISHING: u32 = 23;
+
+/// Identify implemented project readers.
+/// Args: envelope version. Returns false for reserved formats whose models are absent.
+pub(super) fn supports_version(version: u32) -> bool {
+    (1..=SVG_FILTER).contains(&version) || version == PUBLISHING
+}
 
 /// Find the oldest reader that preserves this document.
 /// Args: document with unpacked editable objects. Returns its highest required feature version.
 pub(super) fn required_version(doc: &Document) -> u32 {
     let mut version = if doc.mask_sources().is_empty() { 5 } else { 13 };
+    if !doc.publishing.is_empty() {
+        version = version.max(PUBLISHING);
+    }
     for layer in &doc.layers {
         if layer.svg_filter.is_some() {
             version = version.max(SVG_FILTER);
@@ -43,6 +53,14 @@ pub(super) fn required_version(doc: &Document) -> u32 {
             let Geom::Text(run) = &shape.geom else {
                 continue;
             };
+            if run
+                .paragraphs
+                .iter()
+                .any(|style| style.publishing_style.is_some())
+                || run.spans.iter().any(|span| span.publishing_style.is_some())
+            {
+                version = version.max(PUBLISHING);
+            }
             if run.wrap_width.is_some()
                 || !run.paragraphs.is_empty()
                 || !run.spans.is_empty()
@@ -247,9 +265,111 @@ mod tests {
             &span_paint.definitions
         ));
         assert!(span_paint.definitions.contains("<pattern"));
+        let directory = std::env::current_dir()
+            .unwrap()
+            .join(".artifacts")
+            .join(format!(
+                "project-source-preview-{}",
+                crate::document::next_id()
+            ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("pooled.oma");
+        std::fs::write(&path, &encoded).unwrap();
+        let preview = crate::brand::load_preview_document(&path, false).unwrap();
+        let preview_shapes = preview
+            .layers
+            .iter()
+            .find_map(|layer| layer.kind.shapes())
+            .unwrap();
+        let Fill::Pattern(preview_paint) = &preview_shapes[0].style.fill else {
+            panic!("library preview lost its pattern")
+        };
+        assert!(preview_paint.definitions.contains("<pattern"));
+        let Geom::Text(preview_run) = &preview_shapes[1].geom else {
+            panic!("library preview lost editable text")
+        };
+        let Some(Fill::Pattern(preview_span)) = &preview_run.spans[0].fill else {
+            panic!("library preview lost range paint")
+        };
+        assert!(Arc::ptr_eq(
+            &preview_paint.definitions,
+            &preview_span.definitions
+        ));
+        std::fs::remove_dir_all(directory).unwrap();
         let plain = super::super::encode(&plain()).unwrap();
         let mut legacy: serde_json::Value = serde_json::from_str(&plain).unwrap();
         legacy["version"] = 1.into();
         super::super::decode(&legacy.to_string()).expect("plain legacy projects still open");
+    }
+
+    #[test]
+    fn integrated_project_publishing_requires_its_reader_and_refuses_reserved_formats() {
+        let mut doc = plain();
+        assert!(doc.publishing.is_empty());
+        assert_eq!(required_version(&doc), 5);
+        doc.publishing.bleed = [1., 2., 3., 4.];
+        doc.publishing
+            .links
+            .insert(42, "Links/retained-logo.png".into());
+        let encoded = super::super::encode(&doc).unwrap();
+        let mut envelope: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(envelope["version"], PUBLISHING);
+        assert_eq!(
+            super::super::decode(&encoded).unwrap().publishing,
+            doc.publishing
+        );
+        envelope["version"] = SVG_FILTER.into();
+        assert!(
+            super::super::decode(&envelope.to_string())
+                .unwrap_err()
+                .contains("requires version 23")
+        );
+
+        let mut doc = plain();
+        doc.layers
+            .iter_mut()
+            .find_map(|layer| layer.kind.shapes_mut())
+            .unwrap()
+            .push(Shape::new(
+                Geom::Text(TypeRun {
+                    content: "AB".into(),
+                    px: 12.,
+                    spans: vec![CharSpan {
+                        start: 0,
+                        end: 2,
+                        publishing_style: Some("CharacterStyle/Retained".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                Style::default(),
+            ));
+        assert_eq!(required_version(&doc), PUBLISHING);
+        let shapes = doc
+            .layers
+            .iter_mut()
+            .find_map(|layer| layer.kind.shapes_mut())
+            .unwrap();
+        let Geom::Text(run) = &mut shapes[1].geom else {
+            panic!("expected editable text")
+        };
+        run.spans.clear();
+        run.paragraphs.push(crate::geom::ParagraphStyle {
+            publishing_style: Some("ParagraphStyle/Retained".into()),
+            ..Default::default()
+        });
+        assert_eq!(required_version(&doc), PUBLISHING);
+        assert!(super::super::decode(&super::super::encode(&doc).unwrap()).is_ok());
+
+        let mut neutral: serde_json::Value =
+            serde_json::from_str(&super::super::encode(&plain()).unwrap()).unwrap();
+        for reserved in SVG_FILTER + 1..PUBLISHING {
+            neutral["version"] = reserved.into();
+            assert!(
+                super::super::decode(&neutral.to_string())
+                    .unwrap_err()
+                    .contains("Unsupported")
+            );
+        }
     }
 }

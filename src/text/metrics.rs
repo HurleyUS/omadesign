@@ -38,12 +38,11 @@ fn profile(run: &TypeRun, id: u16) -> Arc<Vec<Option<(f32, f32)>>> {
         .and_then(|bytes| {
             let font = ab_glyph::FontRef::try_from_slice(&bytes).ok()?;
             let outline = font.outline(GlyphId(id))?;
-            Some(flatten_outline(&map_curves(
-                &outline.curves,
-                0.,
-                0.,
-                1. / font.units_per_em().unwrap_or(1000.),
-            )))
+            let em_scale = 1. / font.units_per_em().unwrap_or(1000.);
+            Some(flatten_outline(
+                &map_curves(&outline.curves, 0., 0., em_scale),
+                em_scale / 64.,
+            ))
         })
         .unwrap_or_default();
     let bands: Vec<Option<(f32, f32)>> = (0..16)

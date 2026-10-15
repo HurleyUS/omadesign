@@ -230,18 +230,120 @@ fn gradient_reference(
     format!("url(#{id})")
 }
 
-fn fill_reference(defs:&mut String,grad_id:&mut usize,fill:&Fill,shape:&Shape)->String{
-    use crate::gradient::{Gradient,GradientKind};
-    match fill{Fill::Solid(color)=>svg_color(*color),Fill::None=>"none".into(),Fill::Gradient(g)=>gradient_reference(defs,grad_id,g,shape,0.),Fill::Linear{from,to,c0,c1}=>{let mut g=Gradient::new(GradientKind::Linear,*c0,*c1);g.from=*from;g.to=*to;gradient_reference(defs,grad_id,&g,shape,0.)},Fill::Radial{c0,c1}=>{let mut g=Gradient::new(GradientKind::Radial,*c0,*c1);if shape.geom.bbox().height()>shape.geom.bbox().width(){g.to=[0.5,1.];}gradient_reference(defs,grad_id,&g,shape,0.)}}
+fn fill_reference(defs: &mut String, grad_id: &mut usize, fill: &Fill, shape: &Shape) -> String {
+    use crate::gradient::{Gradient, GradientKind};
+    match fill {
+        Fill::Pattern(pattern) => {
+            *grad_id += 1;
+            pattern.append_definition(defs, &format!("g{grad_id}-"), shape.geom.bbox())
+        }
+        Fill::Solid(color) => svg_color(*color),
+        Fill::None => "none".into(),
+        Fill::Gradient(gradient) => gradient_reference(defs, grad_id, gradient, shape, 0.),
+        Fill::Linear { from, to, c0, c1 } => {
+            let mut gradient = Gradient::new(GradientKind::Linear, *c0, *c1);
+            gradient.from = *from;
+            gradient.to = *to;
+            gradient_reference(defs, grad_id, &gradient, shape, 0.)
+        }
+        Fill::Radial { c0, c1 } => {
+            let mut gradient = Gradient::new(GradientKind::Radial, *c0, *c1);
+            if shape.geom.bbox().height() > shape.geom.bbox().width() {
+                gradient.to = [0.5, 1.];
+            }
+            gradient_reference(defs, grad_id, &gradient, shape, 0.)
+        }
+    }
+}
+
+/// Keep paint opacity separate from its vector definitions.
+/// Args: native paint. Returns its opacity multiplier outside color stops.
+pub(crate) fn paint_opacity(fill: &Fill) -> f32 {
+    match fill {
+        Fill::Pattern(pattern) => pattern.opacity.clamp(0., 1.),
+        _ => 1.,
+    }
 }
 
 /// Encode native character paint through the shared SVG gradient writer.
 /// Args: native fill, document bounds, unique ID, document-to-type matrix and glyph contours. Returns local SVG definitions.
-pub(crate) fn type_paint_definition(fill:&Fill,b:Bounds,id:&str,inverse:tiny_skia::Transform,contours:&[Vec<Pt>])->String{
-    let geom=if contours.is_empty(){Geom::Rect{origin:b.min,size:b.size(),radius:0.}}else{Geom::Poly{contours:contours.to_vec(),winding:true}};let shape=Shape::new(geom,crate::document::Style{fill:fill.clone(),stroke:None});let mut defs=String::new();fill_reference(&mut defs,&mut 0,fill,&shape);
-    let matrix=format!("matrix({} {} {} {} {} {})",inverse.sx,inverse.ky,inverse.kx,inverse.sy,inverse.tx,inverse.ty);
-    defs=defs.replace("id=\"g1\"",&format!("id=\"{id}\""));
-    if defs.contains("patternTransform=\""){defs=defs.replace("patternTransform=\"",&format!("patternTransform=\"{matrix} "));}else{defs=defs.replace("gradientUnits=",&format!("gradientTransform=\"{matrix}\" gradientUnits="));}defs
+pub(crate) fn type_paint_definition(
+    fill: &Fill,
+    bounds: Bounds,
+    id: &str,
+    inverse: tiny_skia::Transform,
+    contours: &[Vec<Pt>],
+) -> String {
+    let geom = if contours.is_empty() {
+        Geom::Rect {
+            origin: bounds.min,
+            size: bounds.size(),
+            radius: 0.,
+        }
+    } else {
+        Geom::Poly {
+            contours: contours.to_vec(),
+            winding: true,
+        }
+    };
+    let shape = Shape::new(
+        geom,
+        crate::document::Style {
+            fill: fill.clone(),
+            stroke: None,
+        },
+    );
+    let mut definitions = String::new();
+    let reference = fill_reference(&mut definitions, &mut 0, fill, &shape);
+    let Some(generated) = reference
+        .strip_prefix("url(#")
+        .and_then(|s| s.strip_suffix(')'))
+    else {
+        return definitions;
+    };
+    let header = r#"<svg xmlns:xlink="http://www.w3.org/1999/xlink">"#;
+    let wrapped = format!("{header}{definitions}</svg>");
+    let Ok(xml) = roxmltree::Document::parse(&wrapped) else {
+        return definitions;
+    };
+    let Some(node) = xml
+        .descendants()
+        .find(|n| n.attribute("id") == Some(generated))
+    else {
+        return definitions;
+    };
+    let attribute = if node.tag_name().name() == "pattern" {
+        "patternTransform"
+    } else {
+        "gradientTransform"
+    };
+    let matrix = crate::svg_source::matrix(inverse);
+    let escape = |value: &str| {
+        value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('"', "&quot;")
+    };
+    let local =
+        |range: std::ops::Range<usize>| range.start - header.len()..range.end - header.len();
+    let mut edits = Vec::new();
+    if let Some(attr) = node.attributes().find(|a| a.name() == "id") {
+        edits.push((local(attr.range_value()), escape(id)));
+    }
+    if let Some(attr) = node.attributes().find(|a| a.name() == attribute) {
+        edits.push((
+            local(attr.range_value()),
+            escape(&format!("{matrix} {}", attr.value())),
+        ));
+    } else {
+        let position = node.range().start + 1 + node.tag_name().name().len() - header.len();
+        edits.push((position..position, format!(" {attribute}=\"{matrix}\"")));
+    }
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    for (range, replacement) in edits {
+        definitions.replace_range(range, &replacement);
+    }
+    definitions
 }
 
 fn object_mask_definition(defs: &mut String, shape: &Shape) -> Option<String> {
@@ -396,7 +498,7 @@ fn write_shape(
             let part=Shape::new(Geom::Poly{contours,winding:true},shape.style.clone());
             let id=format!("oma-type-paint-{}-{index}",shape.id);
             defs.push_str(&format!("<clipPath id=\"{id}\" clipPathUnits=\"userSpaceOnUse\"><path d=\"{}\" clip-rule=\"nonzero\"/></clipPath>",path_data(&part)));
-            let bounds=part.geom.bbox();let paint=fill_reference(defs,grad_id,&fill,shape);body.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{paint}\" clip-path=\"url(#{id})\"/>",bounds.min.x-1.,bounds.min.y-1.,bounds.width()+2.,bounds.height()+2.));
+            let bounds=part.geom.bbox();let paint=fill_reference(defs,grad_id,&fill,shape);body.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{paint}\" fill-opacity=\"{}\" clip-path=\"url(#{id})\"/>",bounds.min.x-1.,bounds.min.y-1.,bounds.width()+2.,bounds.height()+2.,paint_opacity(&fill)));
         }
         if shape.style.stroke.is_some(){let mut stroke=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());stroke.style.fill=Fill::None;write_shape(body,defs,grad_id,&stroke,"",true);}
         body.push_str("</g>");return;
@@ -1655,6 +1757,73 @@ mod tests {
     use super::*;
     use crate::document::{Cmd, Shape, Style, apply};
     use crate::geom::{Geom, Pt};
+
+    #[test]
+    fn svg_type_paint_keeps_one_outer_affine_and_nested_pattern_coordinates() {
+        use crate::gradient::{Gradient, GradientKind};
+        let bounds = Bounds::from_min_size(Pt::new(10., 20.), Pt::new(80., 40.));
+        let inverse = tiny_skia::Transform::from_row(2., 0., 0., 3., -4., 7.);
+        let mut gradient = Gradient::new(GradientKind::Radial, Rgba::BLACK, Rgba::WHITE);
+        gradient.from = [0., 0.];
+        gradient.to = [0.5, 0.];
+        gradient.radial_axis = Some([0.2, 0.8]);
+        gradient.focal = [0.1, 0.2];
+        gradient.inner_radius = 0.15;
+        let definitions = type_paint_definition(
+            &Fill::Gradient(gradient), bounds, "range-gradient", inverse, &[],
+        );
+        let wrapped = format!("<svg>{definitions}</svg>");
+        let xml = roxmltree::Document::parse(&wrapped).unwrap();
+        let root = xml.descendants().find(|n| n.attribute("id") == Some("range-gradient")).unwrap();
+        assert_eq!(root.attribute("gradientTransform"), Some("matrix(2 0 0 3 -4 7) matrix(40 0 16 32 10 20)"));
+        assert_eq!(root.attribute("fx"), Some("0.1"));
+        assert_eq!(root.attribute("fy"), Some("0.2"));
+        assert_eq!(root.attribute("fr"), Some("0.15"));
+
+        let pattern = Fill::Pattern(crate::svg_source::SvgPattern {
+            definitions: r##"<pattern id="tile" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="translate(1 0)"><rect width="4" height="8" fill="#f00"/></pattern>"##.into(),
+            id: "tile".into(),
+            transform: [1., 0., 0., 1., 0., 0.],
+            opacity: 0.4,
+        });
+        let definitions = type_paint_definition(&pattern, bounds, "range-pattern", inverse, &[]);
+        let wrapped = format!("<svg>{definitions}</svg>");
+        let xml = roxmltree::Document::parse(&wrapped).unwrap();
+        let root = xml.descendants().find(|n| n.attribute("id") == Some("range-pattern")).unwrap();
+        assert_eq!(root.attribute("patternTransform"), Some("matrix(2 0 0 3 -4 7) matrix(80 0 0 40 10 20)"));
+        let resource = root.attribute("href").unwrap().strip_prefix('#').unwrap();
+        let tile = xml.descendants().find(|n| n.attribute("id") == Some(resource)).unwrap();
+        assert_eq!(tile.attribute("patternTransform"), Some("translate(1 0)"));
+        assert_eq!(paint_opacity(&pattern), 0.4);
+    }
+
+    #[test]
+    fn svg_type_source_character_patterns_keep_opacity_through_native_and_export() {
+        let source = r#"<svg xmlns="http://www.w3.org/2000/svg" width="140" height="80"><text x="12" y="54" font-family="Liberation Sans" font-size="40">MM</text></svg>"#;
+        let (mut doc, _) = crate::formats::svg::read(source, "Pattern range").unwrap();
+        doc.transparent = true;
+        let shape = doc.layers.iter_mut().filter_map(|l| l.kind.shapes_mut()).flatten().find(|s| matches!(s.geom, Geom::Text(_))).unwrap();
+        let Geom::Text(run) = &mut shape.geom else { unreachable!() };
+        run.set_character_style(0, 2, |span| span.fill = Some(Fill::Pattern(crate::svg_source::SvgPattern {
+            definitions: r##"<pattern id="tile" patternUnits="userSpaceOnUse" width="1" height="1"><rect width="1" height="1" fill="#ff0000"/></pattern>"##.into(),
+            id: "tile".into(),
+            transform: [1., 0., 0., 1., 0., 0.],
+            opacity: 0.4,
+        })));
+        crate::text::fill_contours(&mut shape.geom);
+        let native = crate::compositor::render_export(&doc, 1).unwrap();
+        let maximum_alpha = native.pixels().iter().map(|p| p.alpha()).max().unwrap();
+        assert!((101..=103).contains(&maximum_alpha), "pattern maximum alpha={maximum_alpha}");
+        assert!(native.pixels().iter().filter(|p| p.red() > 90 && p.green() == 0).count() > 100);
+        let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        assert_eq!(native.data(), crate::compositor::render_export(&reopened, 1).unwrap().data());
+        let exported = export(&reopened).unwrap();
+        let tree = crate::svg_source::scene(&exported).unwrap();
+        let mut portable = tiny_skia::Pixmap::new(140, 80).unwrap();
+        resvg::render(&tree, tiny_skia::Transform::identity(), &mut portable.as_mut());
+        let mean = native.data().iter().zip(portable.data()).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / native.data().len() as f64;
+        assert!(mean < 0.1, "native/export mean={mean}");
+    }
 
     #[test]
     fn project_type_exports_its_glyphs_without_requiring_the_brand_font() {

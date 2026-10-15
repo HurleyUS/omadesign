@@ -7,7 +7,13 @@ use std::path::{Path, PathBuf};
 
 mod features;
 
-pub(crate) const VERSION: u32 = features::SVG_FILTER;
+pub(crate) const VERSION: u32 = features::PUBLISHING;
+
+/// Check whether this build implements a project version.
+/// Args: envelope version. Returns false for unimplemented reserved formats.
+pub(crate) fn supports_version(version: u32) -> bool {
+    features::supports_version(version)
+}
 
 #[derive(Serialize, Deserialize)]
 struct File {
@@ -31,12 +37,8 @@ pub fn encode(doc: &Document) -> Result<String, String> {
 
 pub fn decode(s: &str) -> Result<Document, String> {
     let file: File = serde_json::from_str(s).map_err(|e| e.to_string())?;
-    if !(1..=VERSION).contains(&file.version) {
-        return Err("Unsupported omadesign project version".into());
-    }
-    features::validate_version(&file.doc, file.version, !file.svg_sources.is_empty())?;
     let mut doc = file.doc;
-    crate::svg_source::unpack_sources(&mut doc, &file.svg_sources)?;
+    restore_sources(&mut doc, file.version, &file.svg_sources)?;
     for layer in &mut doc.layers {
         if let Some(px) = layer.kind.pixels_mut() { *px = decompress_pixels(px)?; }
         if let Some(mask) = layer.mask.as_mut() { *mask = decompress_pixels(mask)?; }
@@ -49,9 +51,23 @@ pub fn decode(s: &str) -> Result<Document, String> {
     normalize_decoded_document(doc, file.version)
 }
 
+/// Restore shared vector sources before materializing project pixels.
+/// Args: document, declared version and source table. Returns a version or reference error.
+pub(crate) fn restore_sources(
+    doc: &mut Document,
+    version: u32,
+    sources: &std::collections::BTreeMap<String, std::sync::Arc<str>>,
+) -> Result<(), String> {
+    if !supports_version(version) {
+        return Err("Unsupported omadesign project version".into());
+    }
+    features::validate_version(doc, version, !sources.is_empty())?;
+    crate::svg_source::unpack_sources(doc, sources)
+}
+
 /// Shared normalization after pixels have been decoded under the caller's budgets.
 pub(crate) fn normalize_decoded_document(mut doc: Document, version: u32) -> Result<Document, String> {
-    if !(1..=VERSION).contains(&version) {
+    if !supports_version(version) {
         return Err("Unsupported omadesign project version".into());
     }
     features::validate_version(&doc, version, false)?;

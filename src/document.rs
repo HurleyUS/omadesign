@@ -1198,6 +1198,8 @@ fn deserialize_artboards<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Artboard
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Document {
+    #[serde(default, skip_serializing_if = "crate::publishing::Publishing::is_empty")]
+    pub publishing: crate::publishing::Publishing,
     #[serde(default)]
     pub text_wrap_above_only: bool,
     pub name: String,
@@ -1258,6 +1260,7 @@ impl Document {
         copy.workspace = self.workspace;
         copy.layout_tokens = self.layout_tokens.clone();
         copy.text_wrap_above_only = self.text_wrap_above_only;
+        copy.publishing = self.publishing.clone();
         copy.layers = self
             .layers
             .iter()
@@ -1371,6 +1374,7 @@ impl Document {
         let w = total_w.round().max(1.0) as u32;
         let h = page_h.round().max(1.0) as u32;
         let mut doc = Self {
+            publishing: Default::default(),
             text_wrap_above_only: false,
             name: name.into(),
             workspace: None,

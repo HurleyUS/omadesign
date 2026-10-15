@@ -655,8 +655,9 @@ fn write_nodes(
                         }
                         crate::document::Fill::None => attrs.push_str(" fill=\"none\""),
                         _ => attrs.push_str(&format!(
-                            " fill=\"url(#{})\" fill-opacity=\"1\"",
-                            paint_id(fill)
+                            " fill=\"url(#{})\" fill-opacity=\"{}\"",
+                            paint_id(fill),
+                            crate::svg::paint_opacity(fill)
                         )),
                     }
                 }
@@ -998,7 +999,7 @@ pub(crate) fn object_paint(run: &TypeRun, fill: &crate::document::Fill) -> TypeR
             _ => format!("url(#{})", paint_id(fill)),
         };
         attributes.insert("fill".into(), value);
-        attributes.insert("fill-opacity".into(), "1".into());
+        attributes.insert("fill-opacity".into(), crate::svg::paint_opacity(fill).to_string());
         attributes.insert(
             "data-oma-object-paint".into(),
             serde_json::to_string(fill).unwrap(),
