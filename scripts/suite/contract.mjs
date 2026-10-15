@@ -66,21 +66,23 @@ export function validate(index) {
 /** Select fixtures. Args: index, candidate or affected lane, all old/new changed paths. Returns IDs and an explicit selection reason. */
 export function select(index, lane, changed = [], product) {
   validate(index);
-  if (lane === 'candidate') return { ids: [...index.candidate], reason: 'complete pinned candidate cohort' };
+  if (lane === 'candidate') return { ids: [...index.candidate], full:true, reason: 'complete pinned candidate cohort' };
   if (lane !== 'affected') throw Error('choose affected or candidate');
-  if (!changed.length) return { ids: [], reason: 'zero changed paths; no qualification performed' };
+  if (!changed.length) return { ids: [], full:false, reason: 'zero changed paths; no qualification performed' };
   const fixtures=product?index.fixtures.filter(f=>f.product===product):index.fixtures;
   if (!fixtures.length) throw Error('unknown affected product');
   const all = fixtures.map(f => f.id);
-  const shared = ['scripts/suite/', 'scripts/qualify-suite.mjs', 'qualification/suite/', 'Cargo.', '.github/', 'build.rs', 'src/document.rs', 'src/project.rs', 'src/compositor', 'src/import.rs'];
-  if (changed.some(p => shared.some(s => p.startsWith(s)))) return { ids: all, reason: 'shared qualification or product dependency changed' };
+  const shared = ['scripts/suite/', 'scripts/qualify-suite.mjs', 'qualification/suite/'];
+  if ((!product || product==='omadesign') && changed.some(p => shared.some(s => p.startsWith(s)))) return { ids:index.fixtures.map(f=>f.id), full:true, reason:'shared suite dependency changed' };
+  const native=['Cargo.','.github/','build.rs','src/document.rs','src/project.rs','src/compositor','src/import.rs'];
+  if (changed.some(p=>native.some(s=>p.startsWith(s)))) return {ids:all,full:true,reason:'shared product dependency changed'};
   const selected = new Set();
   for (const p of changed) {
     const matching = fixtures.filter(f => f.affected.some(prefix => p.startsWith(prefix)));
-    if (!matching.length) return { ids: all, reason: 'unmapped change; full affected lane required' };
+    if (!matching.length) return { ids: all, full:true, reason: 'unmapped change; full affected lane required' };
     matching.forEach(f => selected.add(f.id));
   }
-  return { ids: [...selected], reason: 'mapped old and new changed paths' };
+  return { ids: [...selected], full:false, reason: 'mapped old and new changed paths' };
 }
 
 /** Read source identity without trusting an adapter. Args: Git checkout. Returns commit, tree and every dirty path, including untracked files. */
