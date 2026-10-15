@@ -7,6 +7,8 @@
 //! JPEG previews are used. The source buffer is borrowed and never modified.
 
 use std::{ffi::c_void, os::raw::c_char};
+mod cancellation;
+pub use cancellation::Cancellation;
 
 // These crates provide the statically built decompression libraries consumed by
 // the C++ bridge. Referencing them retains their native link metadata.
@@ -86,7 +88,13 @@ struct NativeImage {
 }
 
 unsafe extern "C" {
-    fn oma_raw_decode(bytes: *const u8, length: usize, image: *mut NativeImage) -> i32;
+    fn oma_raw_decode(
+        bytes: *const u8,
+        length: usize,
+        image: *mut NativeImage,
+        cancelled: unsafe extern "C" fn(*const c_void) -> i32,
+        context: *const c_void,
+    ) -> i32;
     fn oma_raw_free(owner: *mut c_void);
 }
 
@@ -99,6 +107,13 @@ impl Drop for NativeImage {
 }
 
 pub fn decode(bytes: &[u8]) -> Result<RawImage, String> {
+    decode_cancellable(bytes, &Cancellation::default())
+}
+
+/// Decode untouched camera bytes with active cancellation.
+/// Args: encoded source and a job-owned token. Returns oriented linear RGB16 or a decoding/cancellation error.
+pub fn decode_cancellable(bytes: &[u8], cancel: &Cancellation) -> Result<RawImage, String> {
+    cancel.check()?;
     if bytes.is_empty() || bytes.len() > MAX_INPUT_BYTES {
         return Err("RAW input must contain between 1 byte and 512 MiB".into());
     }
@@ -108,7 +123,16 @@ pub fn decode(bytes: &[u8]) -> Result<RawImage, String> {
     // SAFETY: The borrowed byte buffer remains alive through synchronous decode.
     // The C++ adapter validates input/layout, catches exceptions and writes only
     // within the exactly matching repr(C) output. It never retains input bytes.
-    let result = unsafe { oma_raw_decode(bytes.as_ptr(), bytes.len(), &mut native) };
+    let result = unsafe {
+        oma_raw_decode(
+            bytes.as_ptr(),
+            bytes.len(),
+            &mut native,
+            cancellation::cancelled,
+            (cancel as *const Cancellation).cast(),
+        )
+    };
+    cancel.check()?;
     if result != 0 {
         let error = text(&native.error);
         return Err(format!("Could not decode camera RAW: {error}"));
@@ -137,15 +161,24 @@ pub fn decode(bytes: &[u8]) -> Result<RawImage, String> {
         // bit pattern is valid. LibRaw memory images use host byte order. Copy
         // once rather than walking millions of samples in a development build.
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                samples.as_ptr(),
-                pixels.as_mut_ptr().cast::<u8>(),
-                samples.len(),
-            );
+            for (index, chunk) in samples.chunks(4 * 1024 * 1024).enumerate() {
+                cancel.check()?;
+                std::ptr::copy_nonoverlapping(
+                    chunk.as_ptr(),
+                    pixels
+                        .as_mut_ptr()
+                        .cast::<u8>()
+                        .add(index * 4 * 1024 * 1024),
+                    chunk.len(),
+                );
+            }
             pixels.set_len(count as usize * 3);
         }
     } else {
-        for sample in samples.as_chunks::<2>().0 {
+        for (index, sample) in samples.as_chunks::<2>().0.iter().enumerate() {
+            if index % 65536 == 0 {
+                cancel.check()?;
+            }
             let value = u16::from_ne_bytes([sample[0], sample[1]]);
             pixels.extend([value; 3]);
         }
@@ -169,6 +202,7 @@ pub fn decode(bytes: &[u8]) -> Result<RawImage, String> {
             native.raw_count
         ));
     }
+    cancel.check()?;
     Ok(RawImage {
         width: native.width,
         height: native.height,

@@ -2,12 +2,16 @@
 // its complete, unchanged source and license are in vendor/libraw.
 #include "libraw/libraw.h"
 #include <chrono>
+#include <atomic>
+#include <condition_variable>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <new>
+#include <mutex>
+#include <thread>
 
 struct OmaRawImage {
     void *owner;
@@ -26,11 +30,38 @@ constexpr size_t max_input = 512ull * 1024 * 1024;
 struct DecodeState {
     std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
     bool damaged = false;
+    int (*cancelled)(const void *) = nullptr;
+    const void *context = nullptr;
+    bool stop_requested() const {
+        return (cancelled && cancelled(context)) ||
+            std::chrono::steady_clock::now() - started > std::chrono::seconds(120);
+    }
+};
+
+// Poll LibRaw's atomic fast-cancel flag as well as its coarse stage callbacks.
+// The monitor is joined before either the decoder or Rust-owned context dies.
+struct CancelMonitor {
+    std::mutex mutex;
+    std::condition_variable wake;
+    bool done = false;
+    std::thread worker;
+    CancelMonitor(LibRaw &raw, const DecodeState &state) : worker([this, &raw, &state] {
+        std::unique_lock<std::mutex> lock(mutex);
+        while (!done) {
+            if (state.stop_requested()) raw.setCancelFlag();
+            wake.wait_for(lock, std::chrono::milliseconds(2), [this] { return done; });
+        }
+    }) {}
+    ~CancelMonitor() {
+        { std::lock_guard<std::mutex> lock(mutex); done = true; }
+        wake.notify_one();
+        worker.join();
+    }
 };
 
 int progress(void *context, LibRaw_progress, int, int) {
     const auto *state = static_cast<DecodeState *>(context);
-    return std::chrono::steady_clock::now() - state->started > std::chrono::seconds(120);
+    return state->stop_requested();
 }
 void damaged(void *context, const char *, INT64) {
     static_cast<DecodeState *>(context)->damaged = true;
@@ -57,14 +88,18 @@ template <size_t N, size_t M> void copy_text(char (&to)[N], const char (&from)[M
 }
 
 extern "C" int oma_raw_decode(const unsigned char *bytes, size_t length,
-                              OmaRawImage *output) noexcept {
+                              OmaRawImage *output, int (*cancelled)(const void *),
+                              const void *context) noexcept {
     if (!output) return 1;
     *output = OmaRawImage{};
     if (!bytes || !length || length > max_input)
         return fail(output, "RAW input must contain between 1 byte and 512 MiB");
     try {
         DecodeState state;
+        state.cancelled = cancelled;
+        state.context = context;
         LibRaw raw(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK);
+        CancelMonitor monitor(raw, state);
         raw.set_progress_handler(progress, &state);
         raw.set_dataerror_handler(damaged, &state);
         raw.imgdata.rawparams.max_raw_memory_mb = 1024;

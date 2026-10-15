@@ -68,6 +68,16 @@ impl PhotoImage {
 
     /// Decode on a worker, then restore settings associated with this exact source.
     pub fn load(path: &Path) -> Result<Self, String> {
+        Self::load_cancellable(path, &crate::formats::raw::Cancellation::default())
+    }
+
+    /// Open a source and sidecar while honoring the owning job cancellation.
+    /// Args: original/settings path and token. Returns the restored photo only while its job remains current.
+    pub fn load_cancellable(
+        path: &Path,
+        cancel: &crate::formats::raw::Cancellation,
+    ) -> Result<Self, String> {
+        cancel.check()?;
         let settings = if edits::is_sidecar(path) {
             Some(
                 path.canonicalize()
@@ -89,14 +99,23 @@ impl PhotoImage {
             .as_ref()
             .map(|settings| edits::load_file(settings, &identity))
             .transpose()?;
-        let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+        let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
         if file.metadata().map_err(|e| e.to_string())?.len() > 512 * 1024 * 1024 {
             return Err("Choose a photo smaller than 512 MiB".into());
         }
         let mut bytes = Vec::new();
-        file.take(512 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
+        let mut block = [0u8; 256 * 1024];
+        loop {
+            cancel.check()?;
+            let count = file.read(&mut block).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            if bytes.len() + count > 512 * 1024 * 1024 {
+                return Err("Photo exceeds 512 MiB".into());
+            }
+            bytes.extend_from_slice(&block[..count]);
+        }
         if bytes.len() > 512 * 1024 * 1024 {
             return Err("Photo exceeds 512 MiB".into());
         }
@@ -107,7 +126,10 @@ impl PhotoImage {
             .into_owned();
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         let mut photo = if crate::formats::raw::is_extension(extension) {
-            Self::from_raw(name, crate::formats::raw::decode(&bytes)?)
+            Self::from_raw(
+                name,
+                crate::formats::raw::decode_cancellable(&bytes, cancel)?,
+            )
         } else {
             let pixels = crate::formats::decode_image(&bytes)?;
             Self::from_full(
@@ -119,6 +141,7 @@ impl PhotoImage {
                 },
             )
         };
+        cancel.check()?;
         if edits::SourceIdentity::read(&path)? != identity {
             return Err("The photo changed while it was opening. Open it again.".into());
         }
@@ -136,6 +159,7 @@ impl PhotoImage {
         photo.settings_path = Some(settings.unwrap_or_else(|| edits::sidecar_path(&path)));
         photo.source = Some(path);
         photo.source_identity = Some(identity);
+        cancel.check()?;
         Ok(photo)
     }
 
