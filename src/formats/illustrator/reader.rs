@@ -121,6 +121,7 @@ struct Reader<'a> {
     objects: usize,
     sources: HashMap<String, crate::source_attachment::SourceAttachment>,
     source_bytes: usize,
+    raster_placements: HashMap<u64, [f32; 6]>,
 }
 
 /// Reconstruct native artwork.
@@ -160,6 +161,7 @@ pub(super) fn read(
         objects: 0,
         sources: HashMap::new(),
         source_bytes: 0,
+        raster_placements: HashMap::new(),
     };
     while let Some(token) = reader.lex.next_token() {
         if reader.values.len() > 1_000_000 || reader.layers.len() > 100_000 {
@@ -1155,6 +1157,7 @@ impl Reader<'_> {
                 .map(|t| (8191.5 - (t[0] + t[2]) / 2., 8191.5 + (t[1] + t[3]) / 2.))
                 .unwrap_or((place.bounds[0], place.bounds[1]));
             let origin = Pt::new(a * ox + c * oy + tx, b * ox + d * oy + ty);
+            let (sx, sy) = (w / pixels.w.max(1) as f32, h / pixels.h.max(1) as f32);
             let mut layer = Layer::placed_raster(
                 place.path.clone(),
                 pixels,
@@ -1162,13 +1165,10 @@ impl Reader<'_> {
                 Pt::new(w * a.hypot(b), h * c.hypot(d)),
             );
             layer.source_attachment = source_id;
-            if let crate::document::LayerKind::Raster {
-                rotation, shear, ..
-            } = &mut layer.kind
-            {
-                *rotation = b.atan2(a);
-                *shear = (a * c + b * d) / (a * d - b * c).abs().max(1e-6);
-            }
+            self.raster_placements.insert(
+                layer.id,
+                [a * sx, b * sx, c * sy, d * sy, origin.x, origin.y],
+            );
             if preview_only {
                 self.note(format!("Linked picture {} uses its saved preview; relink the original file for full resolution.",place.path));
             }
@@ -1255,19 +1255,14 @@ impl Reader<'_> {
         let pixels = crate::document::Pixels::from_rgba(w, h, rgba)
             .ok_or("Invalid Illustrator image samples")?;
         let [a, b, c, d, tx, ty] = matrix;
-        let mut layer = Layer::placed_raster(
+        let layer = Layer::placed_raster(
             "Embedded picture",
             pixels,
             Pt::new(tx, ty),
             Pt::new(w as f32 * a.hypot(b), h as f32 * c.hypot(d)),
         );
-        if let crate::document::LayerKind::Raster {
-            rotation, shear, ..
-        } = &mut layer.kind
-        {
-            *rotation = b.atan2(a);
-            *shear = (a * c + b * d) / (a * d - b * c).abs().max(1e-6);
-        }
+        self.raster_placements
+            .insert(layer.id, [a, -b, c, -d, tx, ty]);
         self.add(layer)
     }
 
@@ -1336,15 +1331,10 @@ impl Reader<'_> {
                     }
                 }
             }
-            if let crate::document::LayerKind::Raster {
-                origin,
-                size,
-                rotation,
-                ..
-            } = &mut layer.kind
-            {
-                *origin = transform(*origin) - Pt::new(0., size.y);
-                *rotation = -*rotation;
+            if let Some(matrix) = self.raster_placements.get(&layer.id) {
+                if place_pixels(layer, *matrix, first)? {
+                    self.notes.insert("Sheared Illustrator pictures are resampled into placed raster layers; retained linked source bytes remain unchanged.".into());
+                }
             }
         }
         let mut doc = Document::new(name, 1., 1., 72.);
@@ -1407,4 +1397,78 @@ fn preview(data: &[u8]) -> Option<crate::document::Pixels> {
         }
     }
     crate::document::Pixels::from_rgba(w as u32, h as u32, rgba)
+}
+
+/// Place picture pixels using their exact Illustrator affine.
+/// `matrix` maps pixel coordinates to art space and `board` gives its first
+/// artboard. Returns whether shear required resampling; rotation and reflection
+/// keep the original sample grid with a native placement transform.
+fn place_pixels(layer: &mut Layer, matrix: [f32; 6], board: [f32; 4]) -> Result<bool, String> {
+    use crate::document::{LayerKind, Pixels};
+    let LayerKind::Raster {
+        pixels,
+        origin,
+        size,
+        rotation,
+        shear,
+    } = &mut layer.kind
+    else {
+        return Ok(false);
+    };
+    if !matrix.iter().all(|v| v.is_finite() && v.abs() < 1e8) {
+        return Err("Invalid Illustrator picture transform".into());
+    }
+    let [a, b, c, d, tx, ty] = matrix;
+    let top_left = Pt::new(tx - board[0], board[3] - ty);
+    let dx = Pt::new(a * pixels.w as f32, -b * pixels.w as f32);
+    let dy = Pt::new(c * pixels.h as f32, -d * pixels.h as f32);
+    let dimensions = Pt::new(dx.length(), dy.length());
+    if dimensions.x <= 0.0001 || dimensions.y <= 0.0001 || dx.cross(dy).abs() < 1e-10 {
+        return Err("Degenerate Illustrator picture transform".into());
+    }
+    if dx.dot(dy).abs() < dimensions.x * dimensions.y * 0.0001 {
+        if dx.cross(dy) < 0. {
+            let row = pixels.w as usize * 4;
+            for y in 0..pixels.h as usize / 2 {
+                let opposite = pixels.h as usize - y - 1;
+                for x in 0..row {
+                    pixels.data.swap(y * row + x, opposite * row + x);
+                }
+            }
+            pixels.touch();
+        }
+        let centre = top_left + (dx + dy) * 0.5;
+        *origin = centre - dimensions * 0.5;
+        *size = dimensions;
+        *rotation = dx.y.atan2(dx.x);
+        *shear = 0.;
+        return Ok(false);
+    }
+    let corners = [top_left, top_left + dx, top_left + dy, top_left + dx + dy];
+    let min = corners.iter().copied().reduce(Pt::min).unwrap();
+    let max = corners.iter().copied().reduce(Pt::max).unwrap();
+    let width = (max.x - min.x).ceil().max(1.) as u32;
+    let height = (max.y - min.y).ceil().max(1.) as u32;
+    if width as u64 * height as u64 > 32 << 20 {
+        return Err("Transformed Illustrator picture exceeds 32 megapixels".into());
+    }
+    let mut output = tiny_skia::Pixmap::new(width, height)
+        .ok_or("Could not allocate transformed Illustrator picture")?;
+    let input = pixels
+        .to_pixmap()
+        .ok_or("Invalid Illustrator picture pixels")?;
+    output.draw_pixmap(
+        0,
+        0,
+        input.as_ref(),
+        &tiny_skia::PixmapPaint::default(),
+        tiny_skia::Transform::from_row(a, -b, c, -d, top_left.x - min.x, top_left.y - min.y),
+        None,
+    );
+    *pixels = Pixels::from_pixmap(&output);
+    *origin = min;
+    *size = Pt::new(width as f32, height as f32);
+    *rotation = 0.;
+    *shear = 0.;
+    Ok(true)
 }

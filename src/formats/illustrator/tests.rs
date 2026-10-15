@@ -204,6 +204,58 @@ fn illustrator_damaged_containers_fail_instead_of_silent_preview_success() {
 }
 
 #[test]
+fn illustrator_embedded_picture_keeps_exact_rotation_and_labels_shear() {
+    let samples = [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0];
+    for (matrix, expected_origin, expected_size, sheared) in [
+        (
+            "0 1 -1 0 40 60",
+            crate::geom::Pt::new(38., 40.),
+            crate::geom::Pt::new(2., 2.),
+            false,
+        ),
+        (
+            "1 0 0.5 1 10 80",
+            crate::geom::Pt::new(10., 20.),
+            crate::geom::Pt::new(3., 2.),
+            true,
+        ),
+    ] {
+        let mut art=format!("%AI5_BeginRaster\n/DeviceRGB XN\n[{matrix}] 0 0 2 2 2 2 8 3 0 0 1\n%%BeginData: {}\nXI\n",samples.len()+4).into_bytes();
+        art.extend_from_slice(&samples);
+        art.extend_from_slice(b"\n%%EndData\n%AI5_EndRaster\n");
+        let mut input = program("");
+        let at = input.windows(3).position(|w| w == b"LB\n").unwrap();
+        input.splice(at..at, art);
+        let (doc, notes) = read(&input, "Picture placement").unwrap();
+        let layer = doc
+            .layers
+            .iter()
+            .find(|l| l.kind.pixels().is_some())
+            .unwrap();
+        let (origin, size, rotation) = layer.kind.raster_xform().unwrap();
+        assert_eq!(origin, expected_origin);
+        assert_eq!(size, expected_size);
+        assert_eq!(
+            notes
+                .iter()
+                .any(|n| n.contains("Sheared Illustrator pictures")),
+            sheared
+        );
+        let pixels = layer.kind.pixels().unwrap();
+        assert!(pixels.data.chunks_exact(4).any(|p| p[3] > 0));
+        if !sheared {
+            assert!((rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+            let transform = crate::compositor::layer_pixel_transform(layer);
+            assert!((transform.tx - 40.).abs() < 1e-5);
+            assert!((transform.ty - 40.).abs() < 1e-5);
+            assert!((transform.ky - 1.).abs() < 1e-5);
+            assert!((transform.kx + 1.).abs() < 1e-5);
+            assert_eq!(&pixels.data[..4], &[255, 0, 0, 255]);
+        }
+    }
+}
+
+#[test]
 fn illustrator_linked_picture_retains_original_once_and_reopens() {
     let directory = std::env::current_dir()
         .unwrap()
