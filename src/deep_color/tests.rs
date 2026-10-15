@@ -124,6 +124,48 @@ fn independent_raw_depth_fixtures_keep_adjacent_samples_and_hdr() {
 }
 
 #[test]
+fn psd_merged_alpha_uses_white_matte_without_changing_layer_samples() {
+    for depth in [Depth::U8, Depth::U16, Depth::F32] {
+        let values = if depth == Depth::F32 {
+            vec![1.25, 0.1234567, -0.125, 0.5, 0.125, 0.5, 0.75, 0.25]
+        } else {
+            vec![0.25, 0.125, 0.75, 0.5, 0.125, 0.5, 0.75, 0.25]
+        };
+        let pixels = Pixels::from_samples(2, 1, depth, values).unwrap();
+        let mut doc = Document::new("Merged alpha", 2., 1., 72.);
+        doc.transparent = true;
+        doc.layers = vec![Layer::placed_raster("Alpha", pixels.clone(), Pt::ZERO, Pt::new(2., 1.))];
+        for large in [false, true] {
+            let encoded = crate::formats::psd::encode(&doc, large).unwrap();
+            let bps = depth.bits() as usize / 8;
+            let merged = &encoded.bytes[encoded.bytes.len() - 8 * bps..];
+            let sample = |c: usize, i: usize| {
+                let at = (c * 2 + i) * bps;
+                match depth {
+                    Depth::U8 => merged[at] as f32 / 255.,
+                    Depth::U16 => u16::from_be_bytes(merged[at..at + 2].try_into().unwrap()) as f32 / 65535.,
+                    Depth::F32 => f32::from_be_bytes(merged[at..at + 4].try_into().unwrap()),
+                }
+            };
+            let tolerance = match depth {Depth::U8 => 2. / 255., Depth::U16 => 2. / 65535., Depth::F32 => 1e-7};
+            for i in 0..2 {
+                let original = pixels.sample(i);
+                for c in 0..3 {
+                    assert!((sample(c, i) - (original[c] * original[3] + 1. - original[3])).abs() < tolerance);
+                }
+                assert!((sample(3, i) - original[3]).abs() < tolerance);
+            }
+            let loaded = crate::formats::psd::decode(&encoded.bytes, "Alpha").unwrap();
+            let layer = loaded.document.layers[0].kind.pixels().unwrap();
+            for i in 0..2 {for c in 0..4 {assert!((layer.sample(i)[c] - pixels.sample(i)[c]).abs() < tolerance);}}
+            if !large && let Ok(dir) = std::env::var("OMADESIGN_DEEP_QA_DIR") {
+                std::fs::write(std::path::Path::new(&dir).join(format!("native-alpha-{}.psd", depth.bits())), encoded.bytes).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
 fn native_mask_resize_and_tiny_alpha_keep_authored_values() {
     let pixels =
         Pixels::from_samples(1, 1, Depth::F32, vec![1.25, 0.1234567, -0.125, 0.00001]).unwrap();

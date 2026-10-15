@@ -148,7 +148,7 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
                 layer.parent = stack.last().map(|g| g.id);
                 layer
             } else {
-                let rgba = rgba_channels(w, h, parsed.mode, parsed.depth, |id| {
+                let rgba = rgba_channels(w, h, parsed.mode, parsed.depth, false, |id| {
                     record
                         .pixels
                         .iter()
@@ -213,6 +213,7 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
             parsed.height,
             parsed.mode,
             parsed.depth,
+            parsed.merged_alpha,
             |id| {
                 if id == -1 && !parsed.merged_alpha {return None;}
                 let idx = if id == -1 { color_count } else { id as usize };
@@ -246,6 +247,7 @@ fn rgba_channels<'a>(
     h: u32,
     mode: u16,
     depth: u16,
+    white_matte: bool,
     channel: impl Fn(i16) -> Option<&'a [u8]>,
 ) -> Result<Pixels, String> {
     let n = dimensions(w, h)?;
@@ -282,6 +284,10 @@ fn rgba_channels<'a>(
                     .transpose()?
                     .unwrap_or(1.),
             ]);
+            if white_matte && mode == 3 {
+                let alpha = p[3];
+                for value in &mut p[..3] {*value = if alpha > 0. {(*value - (1. - alpha)) / alpha} else {0.};}
+            }
             if mode == 4 {
                 for c in &mut p[..3] {
                     *c *= k;

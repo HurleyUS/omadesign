@@ -217,7 +217,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
     };
     u16(&mut out, 0)?;
     for ch in 0..4 {
-        out.write_all(&plane(&merged, ch, depth)?).map_err(|e| e.to_string())?;
+        out.write_all(&plane(&merged, ch, depth, true)?).map_err(|e| e.to_string())?;
     }
     Ok(PsdExport {
         bytes: {let output = Arc::try_unwrap(out.finish()?).map_err(|_| "Shared Photoshop encoded storage")?; let (bytes, _memory) = output.into_parts(); bytes},
@@ -327,11 +327,12 @@ fn collect(
     Ok(())
 }
 
-fn plane(pixels: &Pixels, component: usize, depth: u16) -> Result<Arc<Allocation<u8>>, String> {
+fn plane(pixels: &Pixels, component: usize, depth: u16, white_matte: bool) -> Result<Arc<Allocation<u8>>, String> {
     let count = dimensions(pixels.w, pixels.h)?.checked_mul(depth as usize / 8).ok_or("Photoshop channel byte size overflows")?;
     let mut out = resources::global().allocate_now::<u8, _>(count, &storage::check)?;
     for (i, bytes) in out.as_mut_slice().chunks_exact_mut(depth as usize / 8).enumerate() {
-        let value = pixels.sample(i)[component];
+        let sample = pixels.sample(i);
+        let value = if white_matte && component < 3 {sample[component] * sample[3] + (1. - sample[3])} else {sample[component]};
         match depth {8 => bytes[0] = crate::deep_color::byte(value),16 => bytes.copy_from_slice(&((value.clamp(0., 1.) * 65535.).round() as u16).to_be_bytes()),_ => bytes.copy_from_slice(&value.to_be_bytes())}
     } Ok(Arc::new(out))
 }
@@ -344,6 +345,7 @@ fn add_pixels(record: &mut Record, pixels: &Pixels, depth: u16) -> Result<(), St
                 pixels,
                 if ch == -1 { 3 } else { ch as usize },
                 depth,
+                false,
             )?)?,
         ));
     }
