@@ -95,6 +95,7 @@ pub(super) struct Record {
     pub section: u32,
     pub mask: Option<Mask>,
     pub real_mask: Option<Mask>,
+    pub type_data: Option<Vec<u8>>,
     pub filters: crate::filter::FilterStack,
 }
 
@@ -402,6 +403,7 @@ fn parse_layers(
         }
         let mut name = extra.pascal(4)?;
         let mut section = 0;
+        let mut type_data = None;
         let mut record_blend = blend;
         let mut filters = crate::filter::FilterStack::default();
         while extra.remaining() >= 12 {
@@ -429,10 +431,13 @@ fn parse_layers(
                         flags |= 1;
                     }
                 }
-                b"TySh" | b"tySh" => warn(
-                    warnings,
-                    "Photoshop text layers are imported as editable pixel layers; text formatting is not converted.",
-                ),
+                b"TySh" => {
+                    if data.len() > 16 * 1024 * 1024 {
+                        return Err("Excessive PSD type data".into());
+                    }
+                    budget(allocation, data.len())?;
+                    type_data = Some(data.to_vec());
+                }
                 b"SoLd" | b"SoLE" | b"PlLd" | b"plLd" => warn(
                     warnings,
                     "Smart objects are imported from their saved layer pixels; embedded documents and smart filters are not editable.",
@@ -474,6 +479,7 @@ fn parse_layers(
             section,
             mask,
             real_mask,
+            type_data,
             filters,
         });
     }
