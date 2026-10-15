@@ -13,7 +13,12 @@ struct TextDraft {
     before: String,
 }
 
-fn text(ui: &mut Ui, id: impl std::hash::Hash, name: &str, value: &str) -> Option<String> {
+fn text(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    name: &str,
+    value: &str,
+) -> Option<String> {
     let key = ui.make_persistent_id(id);
     let mut draft = ui
         .data(|data| data.get_temp::<TextDraft>(key))
