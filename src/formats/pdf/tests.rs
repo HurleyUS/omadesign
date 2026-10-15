@@ -739,7 +739,8 @@ fn imports_cairo_generated_pdf_as_editable_vector_artwork() {
 }
 
 fn pdf_subpaths(geom: Geom, rotation: f32) -> Vec<Vec<Operation>> {
-    let mut document = Document::new("Compound", 220., 160., 72.);
+    let mut document =
+        Document::new_with_options("Compound", 220., 160., 72., true, 1, false, false);
     let mut shape = Shape::new(
         geom,
         Style {
@@ -1036,6 +1037,7 @@ fn image_integer_width_past_24_bits_keeps_every_column() {
 #[test]
 fn rejects_oversized_raster_dimensions_without_overflow() {
     let mut small = Document::new("Small", 8., 8., 72.);
+    small.layers = vec![Layer::raster("Small pixels", 8, 8).unwrap()];
     {
         let pixels = small.layers[0].kind.pixels_mut().unwrap();
         pixels.w = 2;
@@ -1049,6 +1051,7 @@ fn rejects_oversized_raster_dimensions_without_overflow() {
     assert!(write(&small).is_ok());
 
     let mut huge = Document::new("Huge", 32., 32., 72.);
+    huge.layers = vec![Layer::raster("Invalid pixel dimensions", 32, 32).unwrap()];
     {
         let pixels = huge.layers[0].kind.pixels_mut().unwrap();
         // 3e9 * 3e9 fits in u64, but * 4 does not. The length check must

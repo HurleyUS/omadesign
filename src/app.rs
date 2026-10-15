@@ -5180,6 +5180,13 @@ mod tests {
     fn place_svg_adds_a_shape() {
         let mut s = Studio::new();
         s.show_welcome = false;
+        let before: usize = s
+            .doc
+            .layers
+            .iter()
+            .filter_map(|l| l.kind.shapes())
+            .map(|ss| ss.len())
+            .sum();
         let svg = r##"<svg viewBox="0 0 10 10"><path d="M0 0 L10 0 L10 10 L0 10 Z" fill="#112233"/></svg>"##;
         s.pending_place = Some(PendingPlace::Svg {
             name: "box.svg".into(),
@@ -5193,7 +5200,7 @@ mod tests {
             .filter_map(|l| l.kind.shapes())
             .map(|ss| ss.len())
             .sum();
-        assert_eq!(n, 1);
+        assert_eq!(n, before + 1);
         assert_eq!(s.selection.len(), 1);
     }
 
