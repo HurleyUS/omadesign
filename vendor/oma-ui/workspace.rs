@@ -509,7 +509,7 @@ impl Book {
 mod tests {
     use super::*;
     #[test]
-    fn workspace_move_tab_close_restore_and_scale_safety() {
+    fn shared_workspace_move_tab_close_restore_and_scale_safety() {
         let mut layout = Workspace::preset(&[("inspector", Place::Right), ("layers", Place::Left)]);
         layout.move_panel("inspector", Place::Floating);
         assert!(layout.tab_with("layers", "inspector"));
@@ -526,7 +526,7 @@ mod tests {
         assert_eq!(layout, serde_json::from_slice(&bytes).unwrap());
     }
     #[test]
-    fn workspace_rejects_unknown_duplicate_and_nonfinite_geometry() {
+    fn shared_workspace_rejects_unknown_duplicate_and_nonfinite_geometry() {
         let mut layout = Workspace::preset(&[("a", Place::Right)]);
         layout.groups.push(layout.groups[0].clone());
         layout.groups[0].extent = f32::NAN;

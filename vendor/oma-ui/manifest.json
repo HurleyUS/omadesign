@@ -9,7 +9,7 @@
   ],
   "sha256": {
     "fields.rs": "6ec8798d70b33dcf7fbd5f644b54e50b09672d624cc3074c261b4fd5d5debe08",
-    "workspace.rs": "b4ac512464ed866ef616715c7f258cb78faa21612a90479abd09088e49acb85f"
+    "workspace.rs": "99ab81c8bf718be7563605aa550c6a9d7ee786bcfbfcd12c815cfeb8c00f31fe"
   },
   "directory": "vendor/oma-ui"
 }
