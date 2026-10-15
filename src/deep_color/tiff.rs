@@ -66,7 +66,10 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Pixels>, String> {
     limits.ifd_value_size = 16 * 1024 * 1024;
     let mut decoder = tiff::decoder::Decoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?.with_limits(limits);
     let color = decoder.colortype().map_err(|e| e.to_string())?;
-    let (channels,cmyk) = match color {tiff::ColorType::CMYK(_) => (4,true),tiff::ColorType::CMYKA(_) => (5,true),tiff::ColorType::RGB(_) => (3,false),tiff::ColorType::RGBA(_) => (4,false),_ => return Ok(None)};
+    let (channels,cmyk) = match color {tiff::ColorType::CMYK(_) => (4,true),tiff::ColorType::CMYKA(_) => (5,true),tiff::ColorType::RGB(_) => (3,false),tiff::ColorType::RGBA(_) => (4,false),_ => {
+        if decoder.image_ifd().find_entry(Tag::IccProfile).is_some() {return Err("This tagged TIFF color model has no profile-aware native decoder. Convert it to tagged RGB/CMYK before import; its ICC profile cannot be silently discarded.".into());}
+        return Ok(None);
+    }};
     let stored_channels = decoder.get_tag_u32(Tag::SamplesPerPixel).map_err(|e| e.to_string())?;
     if stored_channels as usize != channels {return Err("TIFF auxiliary samples are unsupported; original source is unchanged".into());}
     let (w,h) = decoder.dimensions().map_err(|e| e.to_string())?;

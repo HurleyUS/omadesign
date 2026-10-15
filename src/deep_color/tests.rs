@@ -907,3 +907,20 @@ fn tiff_auxiliary_samples_are_refused_before_native_pixel_decode() {
         assert!(error.contains("auxiliary samples"),"{error}");
     }
 }
+
+#[test]
+fn unsupported_tagged_tiff_models_do_not_fall_back_to_unmanaged_pixels() {
+    use ::tiff::{encoder::{TiffEncoder,colortype},tags::Tag};
+    for tagged in [false,true] {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        {
+            let mut encoder = TiffEncoder::new(&mut bytes).unwrap();
+            let mut image = encoder.new_image::<colortype::Gray16>(1,1).unwrap();
+            if tagged {image.encoder().write_tag(Tag::IccProfile,include_bytes!("../formats/psd/fixtures/srgb-cc0.icc").as_slice()).unwrap();}
+            image.write_data(&[1001]).unwrap();
+        }
+        let result = super::tiff::decode(bytes.get_ref());
+        if tagged {assert!(result.err().expect("Unsupported tagged model must not drop ICC").contains("profile-aware native decoder"));}
+        else {assert!(result.unwrap().is_none());}
+    }
+}
