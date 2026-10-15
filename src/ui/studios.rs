@@ -387,7 +387,7 @@ fn color_row(ui: &mut Ui, studio: &mut Studio, fill: bool) {
             Fill::Solid(c) | Fill::Linear { c0: c, .. } | Fill::Radial { c0: c, .. } => Some(*c),
             Fill::Gradient(g) => Some(g.sample(0.)),
             Fill::None => None,
-            Fill::Pattern(_) => Some(Rgba::BLACK),
+            Fill::Pattern(_) => Some(crate::color::Rgba::BLACK),
         }
     } else {
         source_stroke.as_ref().map(|stroke| {

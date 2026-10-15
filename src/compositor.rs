@@ -1209,7 +1209,7 @@ fn draw_shape_inner(
         };
         if let Fill::Pattern(pattern) = &shape.style.fill {
             let rotation = Transform::from_rotate_at(shape.rotation.to_degrees(), shape.geom.bbox().center().x, shape.geom.bbox().center().y);
-            let local_path = path.clone().transform(rotation.invert().unwrap_or_default());
+            let local_path = path.as_ref().clone().transform(rotation.invert().unwrap_or_default());
             if let Some(local_path) = local_path { pattern.draw(pm, &local_path, shape.geom.bbox(), xf.pre_concat(rotation), op, blend, mask, shape.geom.nonzero_winding()); }
         } else if fill_reveal < 1.0 {
             let bounds = shape.world_bbox();
