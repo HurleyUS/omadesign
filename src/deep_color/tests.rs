@@ -851,3 +851,37 @@ fn interleaved_profile_conversion_preserves_alpha_and_matches_independent_transi
     let components = cms::transform(&ink[..4],cms::Model::Cmyk,profile,true,1).unwrap();
     assert_eq!(&display[..3],components.as_slice());assert_eq!(display[3],rgba[3]);
 }
+
+#[test]
+fn cmyk_to_rgb_uses_requested_source_rendering_intent() {
+    let profile = include_bytes!("../formats/psd/fixtures/fogra39l-cc0.icc").to_vec();
+    let inks = vec![0.,0.,0.,0.,0.5, 0.1,0.2,0.3,0.4,0.333333, 1.,0.,0.,0.,0.00001];
+    let source = Pixels::from_cmyk(3,1,Depth::F32,inks.clone(),profile.clone(),1).unwrap();
+    let expected = Pixels::from_cmyk(3,1,Depth::F32,inks,profile,0).unwrap();
+    assert!(source.samples().unwrap().iter().zip(expected.samples().unwrap().iter()).any(|(a,b)| (a-b).abs() > 0.001));
+    let converted = source.in_document_color(&cms::DocumentColor {model:cms::Model::Rgb,depth:Depth::F32,icc_profile:Vec::new(),intent:0}).unwrap();
+    assert_eq!(converted.samples().unwrap().as_slice(),expected.samples().unwrap().as_slice());
+    assert_eq!(converted.native.as_ref().unwrap().intent,0);
+    for (a,b) in converted.samples().unwrap().chunks_exact(4).zip(source.samples().unwrap().chunks_exact(4)) {assert_eq!(a[3],b[3]);}
+}
+
+#[test]
+fn tiff_auxiliary_samples_are_refused_before_native_pixel_decode() {
+    use tiff::{encoder::{TiffEncoder,colortype},tags::ExtraSamples};
+    for alpha in [false,true] {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        {
+            let mut encoder = TiffEncoder::new(&mut bytes).unwrap();
+            let mut image = encoder.new_image::<colortype::RGB16>(2,1).unwrap();
+            if alpha {
+                image.extra_samples(&[ExtraSamples::UnassociatedAlpha,ExtraSamples::Unspecified]).unwrap();
+                image.write_data(&[1000,2000,3000,32768,17,4000,5000,6000,16384,29]).unwrap();
+            } else {
+                image.extra_samples(&[ExtraSamples::Unspecified]).unwrap();
+                image.write_data(&[1000,2000,3000,17,4000,5000,6000,29]).unwrap();
+            }
+        }
+        let error = super::tiff::decode(bytes.get_ref()).err().expect("Auxiliary samples must not be treated as ordinary RGB(A)");
+        assert!(error.contains("auxiliary samples"),"{error}");
+    }
+}

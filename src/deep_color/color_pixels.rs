@@ -47,14 +47,15 @@ impl Pixels {
         let display = cms::transform_alpha(&samples, cms::Model::Rgb, &profile, true, intent)?;
         let data = storage::collect(display.iter().map(|&v| super::byte(v)))?;
         let depth = self.native.as_ref().map_or(Depth::U8, |n| n.depth);
-        self.data = data;
-        self.native = Some(NativePixels {
+        let native = NativePixels {
             samples,
             depth,
             cmyk: None,
             icc_profile: storage::adopt(profile)?,
             intent,
-        });
+        };
+        self.data = data;
+        self.native = Some(native);
         self.touch();
         Ok(())
     }
@@ -75,7 +76,9 @@ impl Pixels {
         }
         let source = self.samples()?;
         let display = if let Some(native) = &self.native {
-            if native.cmyk.is_none() && !native.icc_profile.is_empty() {cms::transform_alpha(&source,cms::Model::Rgb,&native.icc_profile,true,color.intent)?} else {source}
+            if let Some(inks) = &native.cmyk {
+                if native.intent != color.intent {cms::transform_alpha(inks,cms::Model::Cmyk,&native.icc_profile,true,color.intent)?} else {source}
+            } else if !native.icc_profile.is_empty() {cms::transform_alpha(&source,cms::Model::Rgb,&native.icc_profile,true,color.intent)?} else {source}
         } else {source};
         if color.model == cms::Model::Cmyk {
             let inks = cms::transform_alpha(&display,cms::Model::Cmyk,&color.icc_profile,false,color.intent)?;
