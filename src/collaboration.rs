@@ -1010,7 +1010,7 @@ mod tests {
         shape
     }
     fn pair() -> (Document, Replica, Replica) {
-        let doc = Document::new("Live", 100., 100., 72.);
+        let doc = super::native_tests::legacy_fixture("Live", 100., 100., 72.);
         let base = snapshot(&doc).unwrap();
         (
             doc,
@@ -1519,7 +1519,7 @@ mod tests {
     }
     #[test]
     fn standard_layout_backgrounds_fit_the_live_seed_and_pixels_round_trip_losslessly() {
-        let mut doc = Document::new("Desktop layout", 1920., 1080., 72.);
+        let mut doc = super::native_tests::legacy_fixture("Desktop layout", 1920., 1080., 72.);
         let pixels = doc.layers[0].kind.pixels_mut().unwrap();
         pixels.bytes_mut().unwrap()[10..18].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
         pixels.touch();
@@ -1535,7 +1535,7 @@ mod tests {
     }
     #[test]
     fn pixel_masks_and_legacy_buffers_share_one_validated_decode_budget() {
-        let mut doc = Document::new("Masks", 1., 1., 72.);
+        let mut doc = super::native_tests::legacy_fixture("Masks", 1., 1., 72.);
         doc.layers[0].mask = crate::document::Pixels::from_rgba(1, 1, vec![1, 2, 3, 4]);
         let mut item = shape("Masked");
         item.mask = crate::document::Pixels::from_rgba(1, 1, vec![5, 6, 7, 8]);
@@ -1592,7 +1592,7 @@ mod tests {
 
     #[test]
     fn malformed_and_mis_sized_compressed_pixels_fail_before_materialization() {
-        let doc = Document::new("Malformed", 1., 1., 72.);
+        let doc = super::native_tests::legacy_fixture("Malformed", 1., 1., 72.);
         let mut state = Replica::new("pixels".into(), "a".repeat(64), snapshot(&doc).unwrap());
         let path = format!("/@entities/{}/kind/Raster/pixels", doc.layers[0].id);
         for bytes in [vec![1, 2, 3], vec![1, 2, 3, 4, 5]] {

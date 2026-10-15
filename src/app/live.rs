@@ -476,7 +476,7 @@ mod tests {
     }
     fn studio_pair() -> (Studio, Studio) {
         let mut a = Studio::new();
-        a.doc = Document::new("Acceptance", 64., 64., 72.);
+        a.doc = crate::collaboration::native_tests::legacy_fixture("Acceptance", 64., 64., 72.);
         let mut b = Studio::new();
         b.doc = a.doc.clone();
         let seed = collaboration::snapshot(&a.doc).unwrap();
@@ -626,7 +626,7 @@ mod tests {
                 Instant::now() < until,
                 "client failed to converge to {wanted} objects"
             );
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(500));
         }
     }
 

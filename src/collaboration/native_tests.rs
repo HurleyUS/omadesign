@@ -10,8 +10,33 @@ use crate::{
 };
 use std::sync::Arc;
 
+/// Build the original Live raster fixture independently of current document defaults.
+/// Args: document name, canvas dimensions and resolution. Returns the original opaque raster baseline.
+pub(crate) fn legacy_fixture(
+    name: impl Into<String>,
+    width: f32,
+    height: f32,
+    dpi: f32,
+) -> Document {
+    let mut doc = Document::new(name, width, height, dpi);
+    doc.layers[0] = Layer::raster(
+        "Background",
+        width.round().max(1.) as u32,
+        height.round().max(1.) as u32,
+    )
+    .unwrap();
+    doc.layers[0]
+        .kind
+        .pixels_mut()
+        .unwrap()
+        .bytes_mut()
+        .unwrap()
+        .fill(255);
+    doc
+}
+
 pub(crate) fn fixture() -> Document {
-    let mut doc = Document::new("Native live", 32., 32., 72.);
+    let mut doc = legacy_fixture("Native live", 32., 32., 72.);
     doc.color = DocumentColor {
         model: Model::Cmyk,
         depth: Depth::F32,
