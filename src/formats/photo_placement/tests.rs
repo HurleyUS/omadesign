@@ -184,6 +184,7 @@ fn raw_native_placement_preserves_actual_target_profile_and_intent() {
         let path = fixture.0.join(format!("cmyk-intent-{intent}.oma"));
         crate::project::save_to(&doc, &path).unwrap();
         let reopened = crate::project::load_from(&path).unwrap();
+        assert_eq!(reopened.color, doc.color);
         let restored = reopened.layers[0]
             .kind
             .pixels()
@@ -199,6 +200,7 @@ fn raw_native_placement_preserves_actual_target_profile_and_intent() {
         assert_eq!(restored.intent, intent);
         let bytes = encode(&reopened, Format::Tiff);
         let mut reader = tiff::decoder::Decoder::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(reader.dimensions().unwrap(), (2048, 2));
         assert_eq!(
             reader
                 .get_tag_u8_vec(tiff::tags::Tag::Unknown(34675))
@@ -208,7 +210,40 @@ fn raw_native_placement_preserves_actual_target_profile_and_intent() {
         let tiff::decoder::DecodingResult::F32(decoded) = reader.read_image().unwrap() else {
             panic!("CMYK TIFF lost float precision")
         };
-        assert_eq!(decoded.as_slice(), inks.as_slice());
+        assert_eq!(decoded.len(), inks.len());
+        let mut maximum = 0f64;
+        let mut total = 0f64;
+        for (actual, expected) in decoded.iter().zip(inks.iter()) {
+            assert!(actual.is_finite());
+            let difference = (f64::from(*actual) - f64::from(*expected)).abs();
+            maximum = maximum.max(difference);
+            total += difference;
+            assert!(
+                difference <= f64::from(f32::EPSILON) / 2.,
+                "CMYK composite changed float samples by {difference}"
+            );
+        }
+        assert!(decoded.chunks_exact(5).all(|pixel| pixel[4] == 1.));
+        eprintln!(
+            "CMYK intent{intent} float composite: {} samples, max{maximum}, mean{}; tolerance{}",
+            decoded.len(),
+            total / decoded.len() as f64,
+            f64::from(f32::EPSILON) / 2.
+        );
+        let direct = crate::deep_color::tiff::encode(pixels).unwrap();
+        let mut reader = tiff::decoder::Decoder::new(std::io::Cursor::new(direct)).unwrap();
+        assert_eq!(reader.dimensions().unwrap(), (2048, 2));
+        let tiff::decoder::DecodingResult::F32(exact) = reader.read_image().unwrap() else {
+            panic!("native CMYK TIFF writer reduced precision")
+        };
+        assert_eq!(exact.len(), inks.len());
+        assert!(
+            exact
+                .iter()
+                .zip(inks.iter())
+                .all(|(a, b)| a.to_bits() == b.to_bits()),
+            "direct TIFF writer changed authored ink bits"
+        );
     }
     assert!(Arc::ptr_eq(&original, &photo.raw.as_ref().unwrap().pixels));
 }
