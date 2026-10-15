@@ -64,6 +64,10 @@ pub(crate) fn open_with_progress(path: &Path, stage: impl Fn(&'static str)) -> R
         return Err("Use File → Import Lottie for that JSON".into());
     }
     if kind == "eps" {
+        let bytes = read_bounded(path)?;
+        if let Ok((doc, notes)) = crate::formats::illustrator::read_with_path(&bytes, &name, Some(path)) {
+            return document(doc, notes);
+        }
         return import_eps(path, &name);
     }
     let bytes = read_bounded(path)?;
@@ -102,12 +106,21 @@ pub(crate) fn open_with_progress(path: &Path, stage: impl Fn(&'static str)) -> R
         return document(result.document, result.warnings);
     }
     if kind == "pdf" || kind == "ai" || bytes.starts_with(b"%PDF-") {
+        let editing_error = if kind == "ai" {
+            stage("Reading Illustrator editing data");
+            match crate::formats::illustrator::read_with_path(&bytes, &name, Some(path)) {
+                Ok((doc, notes)) => return document(doc, notes),
+                Err(error) => Some(error),
+            }
+        } else { None };
         if bytes.starts_with(b"%!") {
             return import_eps(path, &name);
         }
-        let (doc, mut notes) = crate::formats::pdf::read(&bytes, &name)?;
+        let (mut doc, mut notes) = crate::formats::pdf::read(&bytes, &name)?;
         if kind == "ai" {
-            notes.insert(0,"Opened Illustrator's PDF-compatible artwork. Illustrator private data such as live effects, symbols and appearance stacks is not editable.".into());
+            let id = doc.retain_source(crate::source_attachment::SourceAttachment::new(&name, "illustrator", bytes)?);
+            for layer in &mut doc.layers { if layer.source_attachment.is_none() { layer.source_attachment = Some(id.clone()); } }
+            notes.insert(0,format!("Illustrator editing data could not be reconstructed: {}. Opened PDF-compatible artwork instead. Original bytes are retained; unsupported live structures are not editable.", editing_error.unwrap_or_default()));
         }
         return document(doc, notes);
     }
