@@ -53,105 +53,67 @@ pub fn transform(
     to_display: bool,
     intent: u32,
 ) -> Result<Arc<Allocation<f32>>, String> {
+    transform_components(samples, model, profile, to_display, intent, false)
+}
+
+/// Transform authored RGBA or CMYKA directly, preserving straight alpha.
+/// Args: interleaved color and alpha, profile, direction and intent. Returns admitted target color plus exact alpha.
+pub fn transform_alpha(samples: &[f32], model: Model, profile: &[u8], to_display: bool, intent: u32) -> Result<Arc<Allocation<f32>>, String> {
+    transform_components(samples, model, profile, to_display, intent, true)
+}
+
+fn transform_components(samples: &[f32], model: Model, profile: &[u8], to_display: bool, intent: u32, alpha: bool) -> Result<Arc<Allocation<f32>>, String> {
     validate_profile(profile, model)?;
-    let native = if model == Model::Cmyk { 4 } else { 3 };
-    let input = if to_display { native } else { 3 };
-    let output = if to_display { 3 } else { native };
-    if samples.len() % input != 0 || samples.iter().any(|v| !v.is_finite()) || intent > 3 {
-        return Err("Invalid ICC samples or rendering intent".into());
-    }
-    let pixels = samples.len() / input;
-    let count = pixels
-        .checked_mul(output)
-        .ok_or("ICC output dimensions overflow")?;
-    let mut converted = resources::global().allocate_now::<f32, _>(count, &storage::check)?;
+    let native = if model == Model::Cmyk {4} else {3};
+    let input = if to_display {native} else {3};
+    let output = if to_display {3} else {native};
+    let input_stride = input + usize::from(alpha);
+    let output_stride = output + usize::from(alpha);
+    if samples.len() % input_stride != 0 || samples.iter().any(|v| !v.is_finite()) || intent > 3 {return Err("Invalid ICC samples or rendering intent".into());}
+    let count = (samples.len() / input_stride).checked_mul(output_stride).ok_or("ICC output dimensions overflow")?;
+    let mut converted = resources::global().allocate_now::<f32,_>(count, &storage::check)?;
     if profile.is_empty() {
-        for (src, dst) in samples
-            .chunks_exact(input)
-            .zip(converted.as_mut_slice().chunks_exact_mut(output))
-        {
-            if model == Model::Rgb {
-                dst.copy_from_slice(src);
-            } else if to_display {
-                for c in 0..3 {
-                    dst[c] = (1. - src[c]) * (1. - src[3]);
-                }
-            } else {
-                let k = 1. - src[0].max(src[1]).max(src[2]).clamp(0., 1.);
+        for (src,dst) in samples.chunks_exact(input_stride).zip(converted.as_mut_slice().chunks_exact_mut(output_stride)) {
+            if model == Model::Rgb {dst[..output].copy_from_slice(&src[..input]);}
+            else if to_display {for c in 0..3 {dst[c] = (1. - src[c]) * (1. - src[3]);}}
+            else {
+                let k = 1. - src[0].max(src[1]).max(src[2]).clamp(0.,1.);
                 let d = 1. - k;
-                if d < 1e-8 {
-                    dst.copy_from_slice(&[0., 0., 0., 1.]);
-                } else {
-                    for c in 0..3 {
-                        dst[c] = (1. - src[c] - k) / d;
-                    }
-                    dst[3] = k;
-                }
+                if d < 1e-8 {dst[..4].copy_from_slice(&[0.,0.,0.,1.]);}
+                else {for c in 0..3 {dst[c] = (1. - src[c] - k) / d;}dst[3] = k;}
             }
+            if alpha {dst[output] = src[input];}
         }
         return Ok(Arc::new(converted));
     }
-    let pixels = u32::try_from(pixels)
-        .map_err(|_| "ICC transform exceeds its channel-count representation")?;
     let _engine_memory = resources::global().reserve_now(64 * 1024 * 1024, &storage::check)?;
-    let scaled = if input == 4 {
-        let mut scaled = resources::global().copy_now(samples, &storage::check)?;
-        for v in scaled.as_mut_slice() {
-            *v *= 100.;
-        }
-        Some(scaled)
-    } else {
-        None
-    };
-    let source = scaled.as_ref().map_or(samples, |v| v.as_slice());
     let api = Api::load()?;
     unsafe {
         let original = (api.open)(profile.as_ptr().cast(), profile.len() as u32);
         let srgb = (api.srgb)();
         if original.is_null() || srgb.is_null() {
-            if !original.is_null() {
-                (api.close)(original);
-            }
-            if !srgb.is_null() {
-                (api.close)(srgb);
-            }
+            if !original.is_null() {(api.close)(original);}
+            if !srgb.is_null() {(api.close)(srgb);}
             return Err("Little CMS rejected the embedded ICC profile".into());
         }
-        let format = |channels: usize| {
-            (1u32 << 22)
-                | ((if channels == 4 { 6 } else { 4 }) << 16)
-                | ((channels as u32) << 3)
-                | 4
-        };
-        let (src, dst) = if to_display {
-            (original, srgb)
-        } else {
-            (srgb, original)
-        };
-        let transform = (api.create)(src, format(input), dst, format(output), intent, 0x0100);
-        if transform.is_null() {
-            (api.close)(original);
-            (api.close)(srgb);
-            return Err("The ICC profile lacks the requested color transform".into());
+        let format = |channels:usize| (1u32 << 22) | ((if channels == 4 {6} else {4}) << 16) | ((u32::from(alpha)) << 7) | ((channels as u32) << 3) | 4;
+        let (src,dst) = if to_display {(original,srgb)} else {(srgb,original)};
+        let flags = 0x0100 | if alpha {0x04000000} else {0};
+        let transform = (api.create)(src,format(input),dst,format(output),intent,flags);
+        if transform.is_null() {(api.close)(original);(api.close)(srgb);return Err("The ICC profile lacks the requested color transform".into());}
+        let mut scaled = [0f32;5 * 1024];
+        for (src,dst) in samples.chunks(1024 * input_stride).zip(converted.as_mut_slice().chunks_mut(1024 * output_stride)) {
+            let source = if input == 4 {
+                scaled[..src.len()].copy_from_slice(src);
+                for pixel in scaled[..src.len()].chunks_exact_mut(input_stride) {for c in &mut pixel[..4] {*c *= 100.;}}
+                &scaled[..src.len()]
+            } else {src};
+            (api.apply)(transform,source.as_ptr().cast(),dst.as_mut_ptr().cast(),(src.len() / input_stride) as u32);
+            if output == 4 {for pixel in dst.chunks_exact_mut(output_stride) {for c in &mut pixel[..4] {*c /= 100.;}}}
         }
-        (api.apply)(
-            transform,
-            source.as_ptr().cast(),
-            converted.as_mut_slice().as_mut_ptr().cast(),
-            pixels,
-        );
-        (api.delete)(transform);
-        (api.close)(original);
-        (api.close)(srgb);
+        (api.delete)(transform);(api.close)(original);(api.close)(srgb);
     }
-    if output == 4 {
-        for value in converted.as_mut_slice() {
-            *value /= 100.;
-        }
-    }
-    if converted.iter().any(|v| !v.is_finite()) {
-        return Err("ICC transform produced nonfinite samples".into());
-    }
+    if converted.iter().any(|v| !v.is_finite()) {return Err("ICC transform produced nonfinite samples".into());}
     Ok(Arc::new(converted))
 }
 
@@ -224,11 +186,11 @@ impl crate::document::Document {
                 }
                 if color.depth == Depth::U8 {
                     if let Some(inks) = after.native.as_ref().and_then(|n| n.cmyk.as_ref()) {
-                        after = crate::document::Pixels::from_cmyk(
+                        after = crate::document::Pixels::from_cmyk_allocation(
                             after.w,
                             after.h,
                             Depth::U8,
-                            inks.iter().map(|v| super::byte(*v) as f32 / 255.).collect(),
+                            storage::collect(inks.iter().map(|v| super::byte(*v) as f32 / 255.))?,
                             color.icc_profile.clone(),
                             color.intent,
                         )?;
@@ -247,8 +209,7 @@ impl crate::document::Document {
                     && color.icc_profile.is_empty()
                 {
                     after =
-                        crate::document::Pixels::from_rgba(after.w, after.h, after.data.to_vec())
-                            .ok_or("Invalid RGB conversion")?;
+                        crate::document::Pixels::from_byte_allocation(after.w,after.h,after.data.clone())?;
                 }
                 commands.push(crate::document::Cmd::NativePixels {
                     layer: index,

@@ -30,14 +30,7 @@ impl Pixels {
         if inks.len() != storage::count(w, h, 5)? || inks.iter().any(|v| !v.is_finite()) {
             return Err("Invalid native CMYKA samples".into());
         }
-        let components =
-            storage::collect(inks.chunks_exact(5).flat_map(|p| p[..4].iter().copied()))?;
-        let rgb = cms::transform(&components, cms::Model::Cmyk, &profile, true, intent)?;
-        let rgba = storage::collect(
-            rgb.chunks_exact(3)
-                .enumerate()
-                .flat_map(|(i, p)| [p[0], p[1], p[2], inks[i * 5 + 4]]),
-        )?;
+        let rgba = cms::transform_alpha(&inks, cms::Model::Cmyk, &profile, true, intent)?;
         let mut out = Self::from_sample_allocation(w, h, depth, rgba)?;
         let native = out.native.as_mut().unwrap();
         native.cmyk = Some(inks);
@@ -51,16 +44,8 @@ impl Pixels {
     pub fn assign_rgb_profile(&mut self, profile: Vec<u8>, intent: u32) -> Result<(), String> {
         cms::validate_profile(&profile, cms::Model::Rgb)?;
         let samples = self.samples()?;
-        let rgb = storage::collect(samples.chunks_exact(4).flat_map(|p| p[..3].iter().copied()))?;
-        let display = cms::transform(&rgb, cms::Model::Rgb, &profile, true, intent)?;
-        let data = storage::collect(display.chunks_exact(3).enumerate().flat_map(|(i, p)| {
-            [
-                super::byte(p[0]),
-                super::byte(p[1]),
-                super::byte(p[2]),
-                super::byte(samples[i * 4 + 3]),
-            ]
-        }))?;
+        let display = cms::transform_alpha(&samples, cms::Model::Rgb, &profile, true, intent)?;
+        let data = storage::collect(display.iter().map(|&v| super::byte(v)))?;
         let depth = self.native.as_ref().map_or(Depth::U8, |n| n.depth);
         self.data = data;
         self.native = Some(NativePixels {
@@ -80,57 +65,27 @@ impl Pixels {
         if color.intent > 3 {
             return Err("Invalid document rendering intent".into());
         }
-        if self.native.as_ref().is_some_and(|n| {
-            n.cmyk.is_some() == (color.model == cms::Model::Cmyk)
-                && n.icc_profile.as_slice() == color.icc_profile.as_slice()
-        }) {
-            let mut out = self.clone();
-            out.native.as_mut().unwrap().intent = color.intent;
-            return Ok(out);
+        if let Some(native) = &self.native {
+            if native.cmyk.is_some() == (color.model == cms::Model::Cmyk) && native.icc_profile.as_slice() == color.icc_profile.as_slice() {
+                let mut out = if native.intent == color.intent || native.icc_profile.is_empty() {self.clone()}
+                else if let Some(inks) = &native.cmyk {Self::from_cmyk_allocation(self.w,self.h,color.depth,inks.clone(),color.icc_profile.clone(),color.intent)?}
+                else {let mut copy = self.clone();copy.assign_rgb_profile(color.icc_profile.clone(),color.intent)?;copy};
+                let n = out.native.as_mut().unwrap();n.intent = color.intent;n.depth = color.depth;return Ok(out);
+            }
         }
         let source = self.samples()?;
-        let rgb = storage::collect(source.chunks_exact(4).flat_map(|p| p[..3].iter().copied()))?;
-        let rgb = if let Some(native) = &self.native {
-            if native.cmyk.is_none() && !native.icc_profile.is_empty() {
-                cms::transform(
-                    &rgb,
-                    cms::Model::Rgb,
-                    &native.icc_profile,
-                    true,
-                    color.intent,
-                )?
-            } else {
-                rgb
-            }
-        } else {
-            rgb
-        };
-        let components =
-            cms::transform(&rgb, color.model, &color.icc_profile, false, color.intent)?;
+        let display = if let Some(native) = &self.native {
+            if native.cmyk.is_none() && !native.icc_profile.is_empty() {cms::transform_alpha(&source,cms::Model::Rgb,&native.icc_profile,true,color.intent)?} else {source}
+        } else {source};
         if color.model == cms::Model::Cmyk {
-            let inks = storage::collect(
-                components
-                    .chunks_exact(4)
-                    .enumerate()
-                    .flat_map(|(i, p)| [p[0], p[1], p[2], p[3], source[i * 4 + 3]]),
-            )?;
-            Self::from_cmyk_allocation(
-                self.w,
-                self.h,
-                color.depth,
-                inks,
-                color.icc_profile.clone(),
-                color.intent,
-            )
+            let inks = cms::transform_alpha(&display,cms::Model::Cmyk,&color.icc_profile,false,color.intent)?;
+            drop(display);
+            Self::from_cmyk_allocation(self.w,self.h,color.depth,inks,color.icc_profile.clone(),color.intent)
         } else {
-            let rgba = storage::collect(
-                components
-                    .chunks_exact(3)
-                    .enumerate()
-                    .flat_map(|(i, p)| [p[0], p[1], p[2], source[i * 4 + 3]]),
-            )?;
-            let mut out = Self::from_sample_allocation(self.w, self.h, color.depth, rgba)?;
-            out.assign_rgb_profile(color.icc_profile.clone(), color.intent)?;
+            let rgba = if color.icc_profile.is_empty() {display} else {cms::transform_alpha(&display,cms::Model::Rgb,&color.icc_profile,false,color.intent)?};
+            let mut out = Self::from_sample_allocation(self.w,self.h,color.depth,rgba)?;
+            if !color.icc_profile.is_empty() {out.assign_rgb_profile(color.icc_profile.clone(),color.intent)?;}
+            out.native.as_mut().unwrap().intent = color.intent;
             Ok(out)
         }
     }
@@ -141,16 +96,9 @@ impl Pixels {
         };
         if let Some(inks) = &native.cmyk {
             let rgba = out.samples()?;
-            let rgb = storage::collect(rgba.chunks_exact(4).flat_map(|p| p[..3].iter().copied()))?;
-            let converted = cms::transform(
-                &rgb,
-                cms::Model::Cmyk,
-                &native.icc_profile,
-                false,
-                native.intent,
-            )?;
+            let converted = cms::transform_alpha(&rgba,cms::Model::Cmyk,&native.icc_profile,false,native.intent)?;
             let authored =
-                storage::collect(converted.chunks_exact(4).enumerate().flat_map(|(i, c)| {
+                storage::collect(converted.chunks_exact(5).enumerate().flat_map(|(i, c)| {
                     let a = rgba[i * 4 + 3];
                     if rgba[i * 4..i * 4 + 3] == native.samples[i * 4..i * 4 + 3] {
                         [
@@ -170,6 +118,7 @@ impl Pixels {
         } else if !native.icc_profile.is_empty() {
             out.assign_rgb_profile(native.icc_profile.to_vec(), native.intent)?;
         }
+        out.native.as_mut().unwrap().intent = native.intent;
         Ok(())
     }
 
