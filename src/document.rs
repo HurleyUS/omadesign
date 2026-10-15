@@ -442,7 +442,13 @@ impl Shape {
                 }
             }
         }
-        if matches!(geometry, Geom::Path { .. } | Geom::Paths { .. }) {
+        if let Geom::Text(run) = &geometry
+            && let Some(path) = crate::text::outline_path(run)
+        {
+            let center = self.geom.bbox().center();
+            let rotation = tiny_skia::Transform::from_rotate_at(self.rotation.to_degrees(), center.x, center.y);
+            pb.push_path(&path.transform(rotation)?);
+        } else if matches!(geometry, Geom::Path { .. } | Geom::Paths { .. }) {
             // Path bounds sample every contour. Compute the unchanged rotation
             // center once, not once for every cubic control point (quadratic on
             // detailed imported paths). Keep world_point's exact arithmetic.
@@ -3091,6 +3097,12 @@ mod tests {
                 contours: contours.clone(),
                 winding: false,
             },
+            Geom::Text(crate::geom::TypeRun {
+                content: "A".into(),
+                font: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/assets/fonts/EBGaramond.ttf").into(),
+                contours: contours.clone(),
+                ..Default::default()
+            }),
             Geom::Text(crate::geom::TypeRun {
                 contours,
                 ..Default::default()

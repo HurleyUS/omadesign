@@ -1538,3 +1538,6 @@ fn placed_image(
         Pt::new(w as f32, h as f32),
     ))
 }
+
+#[cfg(test)]
+mod adapter_tests;
