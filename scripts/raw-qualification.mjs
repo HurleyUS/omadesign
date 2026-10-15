@@ -80,7 +80,8 @@ export function validateManifest(manifest, advertised) {
 /** Count explicit outcomes and reject empty required evidence. Args: reports and mode. Returns aggregate counts and pass/fail. */
 export function aggregate(reports, mode) {
   const counts = { selected: reports.length, checked: reports.filter(r => r.checked === true).length, skipped: reports.filter(r => r.status === 'skipped').length, failed: reports.filter(r => r.status === 'failed').length, passed: reports.filter(r => r.status === 'passed').length };
-  return { ...counts, success: counts.selected > 0 && counts.failed === 0 && (mode === 'optional' || (counts.checked > 0 && counts.skipped === 0 && counts.passed === counts.selected)) };
+  const outcomesValid = reports.every(report => ['passed', 'failed', 'skipped'].includes(report.status) && (report.status !== 'passed' || report.checked === true));
+  return { ...counts, success: ['required', 'optional'].includes(mode) && outcomesValid && counts.selected > 0 && counts.failed === 0 && (mode === 'optional' || (counts.checked === counts.selected && counts.skipped === 0 && counts.passed === counts.selected)) };
 }
 
 /** Stream a regular file digest. Args: path. Returns its SHA-256 without loading the source in memory. */
@@ -234,6 +235,9 @@ async function selfTest() {
   assert.equal(aggregate([{ checked: false, status: 'skipped' }], 'required').success, false);
   assert.equal(aggregate([{ checked: false, status: 'skipped' }], 'optional').success, true);
   assert.equal(aggregate([{ checked: true, status: 'failed' }], 'optional').success, false);
+  assert.equal(aggregate([{ checked: true, status: 'passed' }, { checked: false, status: 'passed' }], 'required').success, false);
+  assert.equal(aggregate([{ checked: false, status: 'passed' }], 'optional').success, false);
+  assert.equal(aggregate([{ checked: false, status: 'planned' }], 'optional').success, false);
   const scratchRoot = path.join(root, '.qa-runs');
   fs.mkdirSync(scratchRoot, { recursive: true });
   const scratch = fs.mkdtempSync(path.join(scratchRoot, 'raw-node-contract-'));
