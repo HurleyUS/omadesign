@@ -817,3 +817,19 @@ fn cmyk_native_retouch_and_all_blends_preserve_ink_authoring() {
         inks.as_slice()
     );
 }
+
+#[test]
+fn cmyk_float_ffi_matches_independent_transicc_reference() {
+    let profile = include_bytes!("../formats/psd/fixtures/fogra39l-cc0.icc");
+    let samples = [
+        0., 0., 0., 0., 0.1, 0.2, 0.3, 0.4, 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 1.,
+    ];
+    let expected = [
+        255., 255., 255., 163.3108, 148.8488, 132.5648, -590.2940, 160.5262, 227.7222, 230.1068,
+        12.1681, 128.1444, 43.0867, 42.7438, 41.8995,
+    ];
+    let transformed = cms::transform(&samples, cms::Model::Cmyk, profile, true, 1).unwrap();
+    for (a, b) in transformed.iter().zip(expected) {
+        assert!((a - b / 255.).abs() < 0.0002, "{a} != {b}/255");
+    }
+}
