@@ -94,7 +94,7 @@ pub(super) fn inspector_content(ui: &mut Ui, studio: &mut Studio) {
             let typing = studio.type_edit.is_some()
                 || studio.tool == Tool::Text
                 || studio.selected_type().is_some();
-            let properties_height = (ui.available_height() - 152.0).max(170.0);
+            let properties_height = ui.available_height().max(0.0);
             ScrollArea::vertical()
                 .id_salt("properties-scroll")
                 .max_height(properties_height)

@@ -101,3 +101,63 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    #[test]
+    fn shared_workspaces_reopen_task_choices_and_keep_artwork_unchanged() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".artifacts")
+            .join(format!("shared-ui-workspace-test-{}", std::process::id()));
+        let path = root.join("workspaces.json");
+        let mut book = super::super::workspace::Book::default();
+        book.active = "Motion".into();
+        let mut motion = Workspace::preset(&[
+            ("properties", Place::Right),
+            ("layers", Place::Left),
+            ("timeline", Place::Bottom),
+        ]);
+        motion.move_panel("properties", Place::Floating);
+        motion.tab_with("layers", "properties");
+        motion.close("timeline");
+        book.tasks.insert("Motion".into(), motion);
+        book.tasks.insert(
+            "Design".into(),
+            Workspace::preset(&[("properties", Place::Right)]),
+        );
+        book.write(&path).unwrap();
+        let mut reopened = super::super::workspace::Book::read(&path).unwrap();
+        assert_eq!(book, reopened);
+        reopened
+            .tasks
+            .get_mut("Motion")
+            .unwrap()
+            .restore("timeline");
+        assert_eq!(reopened.tasks["Design"], book.tasks["Design"]);
+        assert!(
+            reopened.tasks["Motion"]
+                .groups
+                .iter()
+                .any(|g| g.panels.iter().any(|p| p == "timeline"))
+        );
+        let mut studio = Studio::new();
+        studio.doc = crate::document::Document::new("Workspace ownership", 100.0, 100.0, 72.0);
+        studio.show_welcome = false;
+        let before = crate::project::encode(&studio.doc).unwrap();
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ui| show(ui, &mut studio),
+        );
+        assert_eq!(before, crate::project::encode(&studio.doc).unwrap());
+        assert!(!studio.dirty);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
