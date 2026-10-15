@@ -382,37 +382,6 @@ fn shape_line(
     start: usize,
     hyphen: bool,
 ) -> Vec<LayoutGlyph> {
-    if !run.spans.iter().any(|s| s.font.is_some() && s.start < start + text.chars().count() && s.end > start) {
-        return shape_line_base(run, face, text, start, hyphen);
-    }
-    let mut result = Vec::new();
-    let mut pen = 0.;
-    let mut segments: Vec<(usize, usize, Option<String>)> = Vec::new();
-    for (i, (byte, c)) in text.char_indices().enumerate() {
-        let font = run.character_style(start + i).font;
-        if let Some(last) = segments.last_mut().filter(|s| s.2 == font) { last.1 = byte + c.len_utf8(); }
-        else { segments.push((byte, byte + c.len_utf8(), font)); }
-    }
-    for (a, b, font) in segments {
-        let index = start + text[..a].chars().count();
-        let bytes = font.as_ref().and_then(|font| resolve_path(&TypeRun { font: font.clone(), ..Default::default() })).and_then(|p| font_bytes(&p));
-        let override_face = bytes.as_ref().and_then(|b| rustybuzz::Face::from_slice(b, 0));
-        let mut glyphs = shape_line_base(run, override_face.as_ref().or(face), &text[a..b], index, hyphen && b == text.len());
-        let width = glyphs.last().map_or(0., |g| g.x + g.advance);
-        for g in &mut glyphs { g.x += pen; }
-        pen += width;
-        result.extend(glyphs);
-    }
-    result
-}
-
-fn shape_line_base(
-    run: &TypeRun,
-    face: Option<&rustybuzz::Face<'_>>,
-    text: &str,
-    start: usize,
-    hyphen: bool,
-) -> Vec<LayoutGlyph> {
     let mut visible = String::new();
     let mut mapping = Vec::new();
     for (i, c) in text.chars().enumerate() {
@@ -550,9 +519,7 @@ fn justify_glyphs(glyphs: &mut [LayoutGlyph], target: f32, style: &ParagraphStyl
 }
 
 pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
-    let font = run.character_style(glyph.cluster).font;
-    let source = TypeRun { font: font.unwrap_or_else(|| run.font.clone()), ..Default::default() };
-    let Some(bytes) = resolve_path(&source).and_then(|p| font_bytes(&p)) else {
+    let Some(bytes) = resolve_path(run).and_then(|p| font_bytes(&p)) else {
         return Vec::new();
     };
     let Ok(font) = ab_glyph::FontRef::try_from_slice(&bytes) else {
