@@ -228,3 +228,81 @@ fn styled_font_ranges_shape_and_edit_with_native_character_indices() {
         Some("CharacterStyle/Emphasis")
     );
 }
+
+#[test]
+fn idml_open_native_save_reopen_and_both_export_routes() {
+    use crate::{
+        export::{Format, Settings, Source},
+        import::Imported,
+    };
+    assert_eq!(
+        crate::import::classify(std::path::Path::new("book.IDML")),
+        "idml"
+    );
+    let Imported::Document(mut doc) = crate::import::open_any(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/assets/idml/publishing.idml"
+    )))
+    .unwrap() else {
+        panic!("expected editable document")
+    };
+    let head = doc
+        .layers
+        .iter_mut()
+        .filter_map(|l| l.kind.shapes_mut())
+        .flatten()
+        .find_map(|s| {
+            if let Geom::Text(t) = &mut s.geom {
+                if t.thread.as_ref().unwrap().prev.is_none() {
+                    Some(t)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    head.replace_text(0, 4, "Edited café", None);
+    let keep = std::env::var_os("OMADESIGN_IDML_RECEIPTS");
+    let dir = keep
+        .clone()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+                ".artifacts/idml-test-{}",
+                crate::document::next_id()
+            ))
+        });
+    assert!(dir.starts_with("/home"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let oma = dir.join("publishing.oma");
+    crate::formats::cli::export(&doc, &oma).unwrap();
+    let reopened = crate::formats::cli::document(&oma).unwrap();
+    assert_eq!(reopened.publishing, doc.publishing);
+    assert!(reopened.import_notes.iter().any(|n| n.contains("Table")));
+    let output = dir.join("publishing.idml");
+    crate::formats::cli::export(&reopened, &output).unwrap();
+    let round = crate::formats::cli::document(&output).unwrap();
+    assert_eq!(round.artboards.len(), 2);
+    assert_eq!(round.publishing.bleed, [9., 12., 15., 18.]);
+    assert!(
+        texts(&round)
+            .iter()
+            .any(|t| t.content.starts_with("Edited café"))
+    );
+    let (bytes, _) = crate::export::encode(
+        &Source::Document(reopened),
+        Settings {
+            format: Format::Idml,
+            ..Default::default()
+        },
+        &crate::ml::NoProgress,
+    )
+    .unwrap();
+    assert_eq!(read(&bytes, "Dialog export").unwrap().0.artboards.len(), 2);
+    std::fs::write(dir.join("dialog.idml"), bytes).unwrap();
+    if keep.is_none() {
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
