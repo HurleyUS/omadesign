@@ -65,12 +65,15 @@ impl Seat {
             .and_then(|(number, unit)| number.parse::<f64>().ok().map(|number| (number, unit)));
         self.labels
             .iter()
-            .find(|(text, _)| {
+            .find(|(text, rect)| {
                 text == value
                     || number.is_some_and(|(number, unit)| {
-                        text.strip_suffix(unit)
-                            .and_then(|text| text.trim().parse::<f64>().ok())
-                            == Some(number)
+                        text.trim().parse::<f64>().ok() == Some(number)
+                            && self.labels.iter().any(|(suffix, suffix_rect)| {
+                                suffix.trim() == unit
+                                    && (suffix_rect.left() - rect.right()).abs() < 1.
+                                    && (suffix_rect.center().y - rect.center().y).abs() < 1.
+                            })
                     })
             })
             .unwrap_or_else(|| panic!("Missing {value:?}: {:?}", self.labels))
