@@ -165,6 +165,17 @@ impl Workspace {
         }
     }
 
+    /// Hide a floating group without losing its tab membership.
+    /// Args: original group. Returns no value; every tab retains the same restore location.
+    fn close_group(&mut self, group: &Group) {
+        for panel in &group.panels {
+            self.close(panel);
+        }
+        for panel in &group.panels {
+            self.hidden.insert(panel.clone(), group.clone());
+        }
+    }
+
     /// Restore a hidden panel.
     /// Args: panel ID. Returns no value; an existing group is preferred over a duplicate dock.
     pub fn restore(&mut self, id: &str) {
@@ -176,6 +187,21 @@ impl Workspace {
                 .cloned()
             {
                 self.tab_with(id, &target);
+                if let Some(destination) = self
+                    .groups
+                    .iter_mut()
+                    .find(|g| g.panels.iter().any(|p| p == id))
+                {
+                    let index = group
+                        .panels
+                        .iter()
+                        .position(|p| p == id)
+                        .unwrap_or(0)
+                        .min(destination.panels.len() - 1);
+                    destination.panels.retain(|p| p != id);
+                    destination.panels.insert(index, id.into());
+                    destination.active = index;
+                }
             } else {
                 let place = group.place;
                 self.hidden.insert(id.into(), group);
@@ -315,9 +341,7 @@ impl Workspace {
                     ];
                 }
                 if !open {
-                    for panel in &saved.panels {
-                        self.close(panel);
-                    }
+                    self.close_group(saved);
                 }
             } else {
                 let horizontal = matches!(saved.place, Place::Left | Place::Right);
@@ -508,6 +532,29 @@ impl Book {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_workspace_restores_tab_order_and_closed_floating_groups() {
+        let mut layout = Workspace::preset(&[
+            ("a", Place::Right),
+            ("b", Place::Right),
+            ("c", Place::Right),
+        ]);
+        layout.close("b");
+        layout.restore("b");
+        assert_eq!(layout.groups[0].panels, vec!["a", "b", "c"]);
+        layout.move_panel("a", Place::Floating);
+        layout.tab_with("b", "a");
+        layout.tab_with("c", "a");
+        let group = layout.groups[0].clone();
+        layout.close_group(&group);
+        assert!(layout.groups.is_empty());
+        for panel in &group.panels {
+            layout.restore(panel);
+        }
+        assert_eq!(layout.groups.len(), 1);
+        assert_eq!(layout.groups[0].panels, group.panels);
+        assert_eq!(layout.groups[0].place, Place::Floating);
+    }
     #[test]
     fn shared_workspace_move_tab_close_restore_and_scale_safety() {
         let mut layout = Workspace::preset(&[("inspector", Place::Right), ("layers", Place::Left)]);
