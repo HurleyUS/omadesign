@@ -14,7 +14,7 @@ import { verifyCompilerReceipt } from './suite/build.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [command, ...args] = process.argv.slice(2);
 const options = {};
-const allowedOptions=new Set(['index','roots','lane','base','builds','out','config','inside','diff-product','product','raw-bindings','raw-receipts','raw-corpus','owner-receipts','producer-roots']);
+const allowedOptions=new Set(['index','roots','lane','base','builds','out','config','inside','diff-product','product','raw-bindings','raw-receipts','raw-corpus','owner-receipts','producer-roots','raw-producer-bindings']);
 for (let i = 0; i < args.length; i += 2) {
   if (!args[i].startsWith('--') || !allowedOptions.has(args[i].slice(2)) || args[i+1] === undefined || options[args[i].slice(2)] !== undefined) throw Error('Use known named --option VALUE pairs');
   options[args[i].slice(2)] = args[i+1];
@@ -23,6 +23,12 @@ const read = f => JSON.parse(fs.readFileSync(f, 'utf8'));
 const indexPath = options.index ?? path.join(root, 'qualification/suite/index.json');
 const index = validate(read(indexPath));
 const roots = { omadesign: root, ...(options.roots ? read(options.roots) : {}) };
+const rawProducerBinding = options['raw-producer-bindings'] ? read(options['raw-producer-bindings']) : undefined;
+if (rawProducerBinding) {
+  roots['raw-camera'] ??= rawProducerBinding.producer_worktree;
+  roots['raw-evidence'] ??= path.resolve(path.dirname(rawProducerBinding.public_packet),'../..');
+}
+const cameraBindings = () => options['raw-bindings'] ? read(options['raw-bindings']) : rawProducerBinding?.case_bindings ? read(rawProducerBinding.case_bindings) : {};
 const inspectProducers = () => ({...producerEvidence(read(path.join(root,'qualification/suite/owner-sources.json')), {...roots,...(options['producer-roots'] ? read(options['producer-roots']) : {})}),inspection_source:source(root)});
 const lane = options.lane ?? 'candidate';
 let changed = [];
@@ -53,7 +59,11 @@ function assertBuildLock(configPath) {
   const config=read(configPath);
   if (!config.lock?.startsWith('/home/') || !ancestors.some(a=>path.basename(a[0])==='flock' && a[1]===config.lock)) throw Error('Global serialized lock ancestry unavailable');
 }
-if (command === 'evidence') {
+if (command === 'raw-evidence') {
+  const raw = await rawEvidence(index.cohorts.find(c=>c.id==='raw-camera'),{roots,bindings:cameraBindings(),producerBinding:rawProducerBinding});
+  console.log(JSON.stringify({...raw,inspection_source:source(root)},null,2));
+  process.exitCode = raw.passed ? 0 : 1;
+} else if (command === 'evidence') {
   const evidence = inspectProducers();
   console.log(JSON.stringify(evidence,null,2));
   process.exitCode = evidence.integrity_passed ? 0 : 1;
@@ -182,7 +192,7 @@ if (command === 'evidence') {
     }
     const result = command === 'verify' ? { passed: fixtures.length > 0 && issues.length === 0 } : gate(fixtures,receipts,current);
     for (const cohort of cohorts) {
-      const raw = await rawEvidence(cohort,{roots,builds,bindings:options['raw-bindings']?read(options['raw-bindings']):{},receipts:options['raw-receipts'],corpus:options['raw-corpus']});
+      const raw = await rawEvidence(cohort,{roots,builds,bindings:cameraBindings(),receipts:options['raw-receipts'],corpus:options['raw-corpus'],producerBinding:rawProducerBinding});
       result.passed &&= raw.passed;
       result.rows ??= [];
       result.rows.push(...raw.rows);
@@ -200,4 +210,4 @@ if (command === 'evidence') {
     console.log(JSON.stringify({ lane, selection, ...result, issues, producer_evidence }, null, 2));
     process.exitCode = result.passed && issues.length === 0 ? 0 : 1;
   }
-} else throw Error('Use evidence --producer-roots PRIVATE.json or plan|verify|run|gate --lane affected|candidate [--base COMMIT] [--roots LOCAL.json] [--builds LOCAL.json] [--out DIR] [--config BUILD-CONFIG]');
+} else throw Error('Use raw-evidence --raw-producer-bindings PRIVATE.json, evidence --producer-roots PRIVATE.json or plan|verify|run|gate --lane affected|candidate [--base COMMIT] [--roots LOCAL.json] [--builds LOCAL.json] [--out DIR] [--config BUILD-CONFIG]');

@@ -105,6 +105,47 @@ reference/tool hashes and tolerances. Workflow math cannot replace independent
 comparisons. Missing cameras/references remain unqualified. Updating the upstream
 manifest requires a reviewed pin update; old receipts remain source-bound.
 
+The reviewed `b3041919` dependency now consumes exactly `cr3-canon-m50-raw`:
+
+```
+node scripts/qualify-suite.mjs raw-evidence --raw-producer-bindings /home/.../m50-suite-bindings-b3041919.json
+node scripts/qualify-suite.mjs gate --lane candidate --raw-producer-bindings /home/.../m50-suite-bindings-b3041919.json --out /home/.../NEW_GATE
+```
+
+The private producer binding supplies the existing producer checkout, packet,
+case bindings and original compiler/receipt locations. No corpus or outputs are
+copied. The consumer verifies the exact committed tree and eleven source blobs,
+including inspector blob `9ce83d61` (31,380 bytes, SHA `2a87c7b4`). It imports only
+the verified Node inspector's read-only validation functions. It never invokes
+`inspectCase`, which would open tool executables, or any qualification runner.
+The reviewed diff from `870ef7a3` changes aggregation and the helper path; inspector
+case/manifest validation is unchanged. Only the M50 manifest case changed.
+
+Actual RAW input and reference pixel data stream through a 512 KiB buffer. SHA,
+length, regular-file identity and before/after stat checks must match; sensor FNV
+is over each little-endian byte, including masked borders. `62261f0ba81cfcd2` is
+attributed to the independent reference recipe, not the native qualification code.
+Current data checks are distinct from frozen coordinator observations. Missing,
+changed or truncated data cannot pass using an old observation.
+
+The original `c9de158a` and workflow `0c73d1c2` compiler records bind the same
+`b115c236` test executable, exact clean producer source, Cargo arguments and
+helper hashes. The consumer checks these records, the actual logged native packet,
+one executed test, strict selected/checked summary, seven workflow checks, required
+nonzero comparison samples and the pinned producer host hash. The host contract is
+SHA-256 of nonempty trimmed hostname bytes. No product, decoder or reference-tool
+executable is opened, posthashed, replayed or executed. Later checkout/head/dirty
+observations are reported separately and never relabel the original binary.
+
+Both commands exit 1 while 79 required cases remain unqualified. A valid import
+reports one exact M50 case, not an 80-case pass. DNGLab independently proves masked
+sensor values; RGB normalization uses LibRaw integration with the same decoder
+implementation. Firmware is unknown. Other modes/cameras, RAW document placement,
+100 MP, native-window/device/physical/human proof remain unqualified. Process VmHWM
+includes the lifetime of reference/workflow work and is not decoder-only peak RSS.
+The native cancellation 283.503 ms / 25-check proof is separate from this case.
+The previous `870ef7a3` contract and `60eab7da` observations remain in history.
+
 Each UI case requires separate app edit, undo, native save/reopen, keyboard, focus,
 mixed, invalid, error, preservation and appearance checks. The source generator is
 pinned; currently absent appearance/font/theme pins are explicit unavailable
@@ -170,7 +211,8 @@ from their records and original compiler-host identity remain explicit gaps.
 
 Pass `--producer-roots` to `gate` to attach the same inspection. A failed evidence
 import also fails that gate; a valid partial import cannot satisfy or replace any
-required owner acceptance check. RAW80, UI appearance/common fixture/font/theme,
+required owner acceptance check. All 80 RAW cases remain required (79 unavailable
+after the reviewed M50 pin), along with UI appearance/common fixture/font/theme,
 caption native burn-in/master QC, current scopes/multicam/viewer runtime, stereo
 full-cohort/surround and stricter product gates remain required and unavailable.
 The eleven baseline fixtures/52 checks remain historical at Omadesign123dd7c5,

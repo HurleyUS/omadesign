@@ -19,7 +19,47 @@
     {"id":"editbay-ui","cohort":"ui","product":"editbay","input":{"root":"editbay","path":"crates/editbay-app/src/timeline_ui.rs","bytes":97328,"sha256":"ddb468c2df4b6393e2381efe6bc3d5e6dc014f6516430dd2a094c2501a6abad8"},"reference":{"root":"ui-references","path":"editbay-1.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 1 scale and actual font/theme identity","scale":1},"dependencies":[{"root":"ui-references","path":"editbay-1.5.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 1.5 scale and actual font/theme identity","scale":1.5},{"root":"ui-references","path":"editbay-2.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 2 scale and actual font/theme identity","scale":2}],"provenance":{"license":"MIT original test generators; future reference rights must be established before pinning","source":"Existing real app UI fixtures; generator-source pin only, not a runtime pass","authoring":"Pinned committed app fixture code; exact owner source/executable runtime receipts required"},"losses":["Headless UI assertions, rendered/reference appearance, native window, physical device and human review are separate. No existing semantics/scale test is promoted to a visual golden or document save/undo proof."],"required":["editability","undo","save_reopen","keyboard","focus","mixed","invalid","error","appearance","preservation"],"required_tiers":["headless"],"adapter":{"root":"omadesign","path":"scripts/suite/ui-evidence.mjs","kind":"product"},"limits":{"deadline_ms":30000,"max_input_bytes":4194304},"affected":["crates/editbay-app/","vendor/oma-ui/"],"tools":[],"ui":{"fixture_origin_revision":"ff9220b041a41fc7c4cc3ed94e7b78ddbfd333ef","appearance_references":[{"root":"ui-references","path":"editbay-1.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 1 scale and actual font/theme identity","scale":1},{"root":"ui-references","path":"editbay-1.5.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 1.5 scale and actual font/theme identity","scale":1.5},{"root":"ui-references","path":"editbay-2.png","sha256":null,"bytes":null,"unavailable_reason":"No qualified pinned editbay appearance reference at 2 scale and actual font/theme identity","scale":2}],"scales":[1,1.5,2],"font_sha256":null,"theme_sha256":null,"appearance_policy":"Exact deterministic headless PNG reference with actual font/theme hashes; missing pins remain unavailable. Screenshots do not prove functional checks."}}
   ],
   "cohorts": [
-    {"id":"raw-camera","type":"photo03","manifest":{"root":"raw-camera","path":"docs/qa/raw-camera-manifest.json","bytes":350928,"sha256":"97f49687be152cea579326f9ed764b05553bde46cba53273a735d4821c36f3ac"},"inspector":{"root":"raw-camera","path":"scripts/raw-qualification.mjs","bytes":30770,"sha256":"e73b25c91735544385759c1212e566f5098d2dcc7323ad8acaaf2f724c1e1dbd"},"advertised":{"root":"raw-camera","path":"src/formats/raw.rs","bytes":17088,"sha256":"6f529b2cb204f8be8aa001ed3013f8765c5fba1c062a3b03b0bfb76abf70b5b4"},"source_revision":"870ef7a3e63b4d1160a1602d96281368adb6c12d","required":true,"affected":["src/formats/raw","src/photo","docs/qa/raw-camera-manifest.json","scripts/raw-qualification.mjs"],"policy":"Every required case in the pinned PHOTO03 manifest; no mode inventory/acquisition duplicate. Missing inputs/references/executables/receipts fail, never skip-pass."}
+    {
+      "id": "raw-camera",
+      "type": "photo03",
+      "manifest": {"root":"raw-camera","path":"docs/qa/raw-camera-manifest.json","sha256":"663cbda12e23248e04d21e5e260794d23d3cda815d5f27f865fcd4d6bea88ff1","bytes":352324},
+      "inspector": {"root":"raw-camera","path":"scripts/raw-qualification.mjs","sha256":"2a87c7b4d4fdffd4efcc0498c2eaf4ccbd04f7e9888cd32b6f0c83b8084903c9","bytes":31380},
+      "advertised": {"root":"raw-camera","path":"src/formats/raw.rs","sha256":"f3b873ec4d361b7ccb8e5eba9da55d03b1145e55ec8a368d86226df854d4c078","bytes":17548},
+      "source_revision": "b3041919d443dad35ec3387b76a13e275fb41db9",
+      "required": true,
+      "affected": ["src/formats/raw","src/photo","docs/qa/raw-camera-manifest.json","scripts/raw-qualification.mjs"],
+      "policy": "Every required case in the pinned PHOTO03 manifest; no mode inventory/acquisition duplicate. Missing inputs/references/executables/receipts fail, never skip-pass.",
+      "source_tree": "54f9650f0cf073baec7e2c484b456aae35921901",
+      "source_pins": [
+        {"path":"docs/qa/raw-camera-manifest.json","sha256":"663cbda12e23248e04d21e5e260794d23d3cda815d5f27f865fcd4d6bea88ff1","bytes":352324,"blob":"cbe176b13412b5ce253b4b83a352be990936d69b"},
+        {"path":"scripts/raw-qualification.mjs","sha256":"2a87c7b4d4fdffd4efcc0498c2eaf4ccbd04f7e9888cd32b6f0c83b8084903c9","bytes":31380,"blob":"9ce83d61a63fa51b8b397e9c4248315de56c627d"},
+        {"path":"src/formats/raw.rs","sha256":"f3b873ec4d361b7ccb8e5eba9da55d03b1145e55ec8a368d86226df854d4c078","bytes":17548,"blob":"d1eae93c2817fb594107da4209ef9d1ad41f0c3e"},
+        {"path":"src/formats/raw/qualification.rs","sha256":"6ca43297dcb4377ac84920fee0778c78f7351b73fdab20488357586927f2bcfa","bytes":19115,"blob":"0f94eb712e6e70c8869e49d0f17f0134364b4629"},
+        {"path":"src/formats/raw/qualification/workflow.rs","sha256":"81000065bf669636bbe3637b6cec7818cb6ac5873e2b1e974d266dd919d0e10f","bytes":31441,"blob":"f47b0f024ae7a11093295646c7a02b94a80d1904"},
+        {"path":"src/formats/raw/qualification/tests.rs","sha256":"95e52b6229c0b0391dbb3b852cc94333d210c2299184a50b11c9f63f18d7c2a5","bytes":13618,"blob":"fe6f802a4349f401f82bb6fa8190cde939a56eb4"},
+        {"path":"src/formats/raw/bridge.cpp","sha256":"90d9c40c9e4e804454d8cff101ce143973c0e18c36ef482bd0584814926ded4d","bytes":11186,"blob":"214243b2e5517243fa8028f9a1cf9bc364b5ecb8"},
+        {"path":"src/formats/raw/cancellation.rs","sha256":"93172d45277319f4ed43c3bf7d48bf55b9b895843cc879b27418de7b525fc29d","bytes":4869,"blob":"60490aff6f809bf8c99c399b599e9991cf2eb797"},
+        {"path":"src/photo/raw_photo.rs","sha256":"030cf5778d5748fc52c0b7f530af6b760343d95bf1d32e3e8ee3d88d55a4c83b","bytes":32693,"blob":"2d2b154257f3216ad6bf6470672b35043b709b4e"},
+        {"path":"src/resources.rs","sha256":"d2f23feb00de3e565543b68fa8ceb15796d34bba3c1e861dcf7c98cec26cf5f8","bytes":20032,"blob":"ead8a5a80a9e21077c59d8672dc47980f6fa4f04"},
+        {"path":"Cargo.lock","sha256":"0db47e1feb1cc67223cf50454511b9860dffbb7d68cae72e1999e4c20b185d80","bytes":144855,"blob":"b11339f518cadcf624d676a4703cb002115d4f6b"}
+      ],
+      "producer": {
+        "case": "cr3-canon-m50-raw",
+        "packet": {"root":"raw-evidence","path":"implementation/raw-camera-data/m50-suite-producer-b3041919.json","sha256":"5d9784315c53bf9b5cfe33699c7c02ac5f09d5f513f9a5a0f5c907067a0c1c8a","bytes":7089},
+        "coordinator": {"root":"raw-evidence","path":"implementation/coordinator-verify-m50-b304-motion-5b44554d-20261015-r1.json","sha256":"a7f72eb7c1879dafd8e78e3060aaa4935f40ee52b0f8c2a870d6530a5fb67b96","bytes":25885},
+        "original_compiler": {"root":"raw-evidence","path":"build-jobs/receipts/omadesign/b3041919d443dad35ec3387b76a13e275fb41db9/c9de158a2f7df6c5aaca4c7bf353da1d57fc090f08555fb57113d5d3111f1d73.json","sha256":"c9de158a2f7df6c5aaca4c7bf353da1d57fc090f08555fb57113d5d3111f1d73","bytes":2709},
+        "workflow_compiler": {"root":"raw-evidence","path":"build-jobs/receipts/omadesign/b3041919d443dad35ec3387b76a13e275fb41db9/0c73d1c285f785286b46203930315e49d1cc6a91e14a9787f771fa4546534b76.json","sha256":"0c73d1c285f785286b46203930315e49d1cc6a91e14a9787f771fa4546534b76","bytes":2135},
+        "receipt": {"root":"raw-camera","path":".qa-runs/m50-b3041919-r1/cr3-canon-m50-raw-native/cr3-canon-m50-raw/result.json","sha256":"4ab7777e07ac4f5316e4fd769ea36ced0a58bdfeede7d9da0240551c35c50aa1","bytes":6972},
+        "outer": {"root":"raw-camera","path":".qa-runs/m50-b3041919-r1/cr3-canon-m50-raw.json","sha256":"6e1b63c5d5cffab497f67d6fd39549bf6ce4a886ef3923a203c343ad5a0a063a","bytes":7003},
+        "summary": {"root":"raw-camera","path":".qa-runs/m50-b3041919-r1/summary.json","sha256":"20232bd3a3aa34b4bcf75c2a6351df011da889f13321e60361e58cb949e40d44","bytes":244},
+        "log": {"root":"raw-camera","path":".qa-runs/m50-b3041919-r1/cr3-canon-m50-raw.log","sha256":"566bf7e030f18048d661f685bbcb63441b4c5fd6641537d429b5763c935b8cf2","bytes":8470},
+        "host_sha256": "63e4eb78511659537374528131d22b3b9e53c773c0117556ffc681681b3ea14f",
+        "host_contract": {"algorithm":"sha256(trimmed-hostname)","source":"src/formats/raw/qualification.rs","function_sha256":"24f7a00767e23c8ac944395cdebdce4ad2bbedd34623e802b3db0d57d3457701","empty_rejected":true,"raw_hostname_public":false},
+        "inspector_imports": ["node:fs","node:path","node:crypto","node:child_process","node:url","node:assert/strict"],
+        "case_count": 80,
+        "qualification_boundary": "One Canon EOS M50 CRX lossless14-bit fixture only; firmware unknown. DNGLab sensor is independent; LibRaw RGB is same-implementation integration. No other mode/camera/placement/100MP/window/device/physical inference. Native cancellation25-check proof remains separate; VmHWM is process-lifetime."
+      }
+    }
   ],
   "owner_gates": [
     {"id":"SUITE-01","product":"omadesign","checks":["SUITE-01"]},
