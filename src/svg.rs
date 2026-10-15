@@ -232,6 +232,18 @@ fn write_shape(
     extra: &str,
     text_as_paths: bool,
 ) {
+    if let Geom::Text(run)=&shape.geom && run.spans.iter().any(|span|span.fill.is_some()) && run.on_path.is_none() && run.frame.is_none() {
+        body.push_str(&format!("<g{} opacity=\"{}\"{extra}>",xf_attr(shape),shape.opacity));
+        for line in crate::text::compose(run).iter() {
+            for glyph in &line.glyphs {
+                let mut part=Shape::new(Geom::Poly {contours:crate::text::glyph_contours(run,glyph),winding:true},shape.style.clone());
+                part.style.fill=run.character_style(glyph.cluster).fill.unwrap_or_else(||shape.style.fill.clone());
+                write_shape(body,defs,grad_id,&part,"",true);
+            }
+        }
+        body.push_str("</g>");
+        return;
+    }
     if shape.mask.is_some() {
         let mut plain = shape.clone();
         plain.mask = None;

@@ -530,9 +530,10 @@ pub fn caret_pt(run:&TypeRun,char_idx:usize)->Pt {
     if let Some((point,_)) = crate::text_geometry::caret_frame(run,char_idx) { return point; }
     let lines=compose(run);let idx=char_idx.min(run.content.chars().count());
     let line=&lines[lines.iter().rposition(|l|l.start<=idx).unwrap_or(0)];
-    Pt::new(run.origin.x+line.caret_x(idx),run.origin.y+line.baseline-character_metrics(run,idx.min(run.content.chars().count().saturating_sub(1))).baseline_shift.unwrap())
+    run.map_point(Pt::new(run.origin.x+line.caret_x(idx),run.origin.y+line.baseline-character_metrics(run,idx.min(run.content.chars().count().saturating_sub(1))).baseline_shift.unwrap()))
 }
 pub fn hit_char(run:&TypeRun,p:Pt)->usize {
+    let p=run.unmap_point(p);
     if let Some(index) = crate::text_geometry::hit_char(run,p) { return index; }
     let lines=compose(run);
     lines.iter().flat_map(|line|line.carets.iter().map(move |(index,x)| {
@@ -570,6 +571,9 @@ pub fn paragraph_spacing_css(run: &TypeRun, style: &crate::geom::ParagraphStyle)
 pub fn character_css(run:&TypeRun,style:&crate::geom::CharSpan)->String {
     use std::fmt::Write;
     let mut css=String::new();
+    if let Some(font)=&style.font {let _=write!(css,"font-family:'{}';",label_for(font).replace(['\'','"','<','>'],""));}
+    if let Some(px)=style.px {let _=write!(css,"font-size:{px}px;");}
+    if let Some(crate::document::Fill::Solid(color))=&style.fill {let _=write!(css,"color:{};",color.hex());}
     if let Some(value)=style.tracking{let _=write!(css,"letter-spacing:calc({}em + var(--oma-paragraph-letter-spacing, 0em));",value/1000.);}
     if let Some(value)=style.leading{let _=write!(css,"line-height:{}px;",value.pixels(run.px));}
     if let Some(mode)=style.kerning{let _=write!(css,"font-kerning:{};",if mode==crate::geom::KernMode::Metrics{"normal"}else{"none"});}

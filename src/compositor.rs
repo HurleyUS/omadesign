@@ -1176,6 +1176,22 @@ fn draw_shape_inner(
     pose: Pose,
     mask: Option<&tiny_skia::Mask>,
 ) {
+    if let crate::geom::Geom::Text(run)=&shape.geom
+        && run.spans.iter().any(|span|span.fill.is_some())
+        && run.on_path.is_none() && run.frame.is_none()
+    {
+        let center=shape.geom.bbox().center();
+        let xf=t.pre_concat(pose.to_skia(shape.world_bbox().center()))
+            .pre_concat(Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y));
+        for line in crate::text::compose(run).iter() {
+            for glyph in &line.glyphs {
+                let mut part=Shape::new(crate::geom::Geom::Poly {contours:crate::text::glyph_contours(run,glyph),winding:true},shape.style.clone());
+                part.style.fill=run.character_style(glyph.cluster).fill.unwrap_or_else(||shape.style.fill.clone());
+                draw_shape_inner(pm,&part,xf,opacity*pose.opacity.unwrap_or(shape.opacity),blend,Pose::identity(),mask);
+            }
+        }
+        return;
+    }
     let Some(path) = shape.get_cached_path(96) else {
         return;
     };

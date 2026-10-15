@@ -140,6 +140,33 @@ mod tests {
     fn width(run: &TypeRun) -> f32 {
         compose(run)[0].width
     }
+    #[test]
+    fn affine_styled_type_survives_edit_transform_and_project_reopen() {
+        use crate::{color::Rgba,document::{Document,Shape,Style},geom::Pt};
+        let mut r=run("Type type");
+        r.set_character_style(5,9,|s| {s.px=Some(70.);s.font=Some(r#"/usr/share/fonts/liberation/LiberationSans-Bold.ttf"#.into());s.fill=Some(crate::document::Fill::Solid(Rgba::rgb(220,30,50)));});
+        assert!(width(&r)>width(&run("Type type")));
+        r.transform=Some([-0.9,0.25,0.35,1.2,220.,20.]);
+        let local=Pt::new(13.,-24.);
+        assert!((r.unmap_point(r.map_point(local))-local).length()<0.001);
+        r.contours=super::shape(&r);
+        let mut geom=Geom::Text(r);
+        let before=geom.contours(32);
+        geom.translate(Pt::new(17.,13.));
+        crate::text::fill_contours(&mut geom);
+        assert!((geom.contours(32)[0][0]-before[0][0]-Pt::new(17.,13.)).length()<0.001);
+        let Geom::Text(r)=&mut geom else {unreachable!()};
+        r.replace_text(0,0,"é",None);
+        assert_eq!(r.character_style(6).px,Some(70.));
+        let mut doc=Document::new("Affine type",300.,180.,96.);
+        doc.layers[0].kind.shapes_mut().unwrap().push(Shape::new(geom,Style::default()));
+        let encoded=crate::project::encode(&doc).unwrap();
+        assert!(encoded.contains("\"version\":14"));
+        let decoded=crate::project::decode(&encoded).unwrap();
+        assert_eq!(serde_json::to_value(&doc).unwrap(),serde_json::to_value(&decoded).unwrap());
+        let image=crate::compositor::render_export(&decoded,1).unwrap();
+        assert!(image.pixels().iter().any(|p|p.red()>p.blue()+20 && p.red()>p.green()+20));
+    }
     fn near(a: f32, b: f32) {
         assert!((a - b).abs() < 0.02, "{a} != {b}");
     }
