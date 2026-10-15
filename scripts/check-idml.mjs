@@ -1,0 +1,21 @@
+#!/usr/bin/env node
+/**
+ * Independently inspect an acceptance export with Node ZIP parsing and libxml2.
+ * Args: exported IDML filename. Returns a concise JSON receipt or throws on a broken package/reference.
+ */
+import fs from 'node:fs';
+import zlib from 'node:zlib';
+import {spawnSync} from 'node:child_process';
+import assert from 'node:assert/strict';
+const bytes=fs.readFileSync(process.argv[2]);const parts=new Map();const end=bytes.lastIndexOf(Buffer.from([0x50,0x4b,0x05,0x06]));assert(end>=0);const count=bytes.readUInt16LE(end+10);let offset=bytes.readUInt32LE(end+16);const entries=[];
+for(let i=0;i<count;i++){assert.equal(bytes.readUInt32LE(offset),0x02014b50);const method=bytes.readUInt16LE(offset+10);const compressed=bytes.readUInt32LE(offset+20);const size=bytes.readUInt32LE(offset+24);const nameLen=bytes.readUInt16LE(offset+28);const extra=bytes.readUInt16LE(offset+30);const comment=bytes.readUInt16LE(offset+32);const local=bytes.readUInt32LE(offset+42);const name=bytes.subarray(offset+46,offset+46+nameLen).toString();assert(!parts.has(name));assert(!name.includes('..'));assert.equal(bytes.readUInt32LE(local),0x04034b50);const start=local+30+bytes.readUInt16LE(local+26)+bytes.readUInt16LE(local+28);const packed=bytes.subarray(start,start+compressed);const data=method===0?packed:method===8?zlib.inflateRawSync(packed):assert.fail(`compression ${method}`);assert.equal(data.length,size);parts.set(name,data);entries.push({name,method,size,local});offset+=46+nameLen+extra+comment;}
+assert.equal(entries[0].name,'mimetype');assert.equal(entries[0].method,0);assert.equal(entries[0].local,0);assert.equal(parts.get('mimetype').toString(),'application/vnd.adobe.indesign-idml-package');assert(parts.has('META-INF/container.xml'));assert(parts.has('designmap.xml'));
+const xpath=(text,query)=>{const result=spawnSync('xmllint',['--nonet','--xpath',query,'-'],{input:text,encoding:'utf8'});assert.equal(result.status,0,result.stderr);return result.stdout;};
+const xmls=[...parts].filter(([name])=>name.endsWith('.xml'));for(const[name,text]of xmls){const result=spawnSync('xmllint',['--nonet','--noout','-'],{input:text,encoding:'utf8'});assert.equal(result.status,0,`${name}: ${result.stderr}`);}
+const ids=new Set();for(const[,text]of xmls){for(const match of xpath(text,'//@Self').matchAll(/Self="([^"]+)"/g)){assert(!ids.has(match[1]),`duplicate ID ${match[1]}`);ids.add(match[1]);}}
+let refs=0;for(const[,text]of xmls){const attrs=xpath(text,'//@ParentStory | //@PreviousTextFrame | //@NextTextFrame | //@AppliedMaster | //@ItemLayer | //@AppliedParagraphStyle | //@AppliedCharacterStyle');for(const match of attrs.matchAll(/="([^"]+)"/g)){const value=match[1].replaceAll('&amp;','&');if(value!=='n'){assert(ids.has(value),`dangling reference ${value}`);refs++;}}}
+for(const m of parts.get('designmap.xml').toString().matchAll(/src="([^"]+)"/g))assert(parts.has(m[1]),`missing ${m[1]}`);
+const spreads=xmls.filter(([name])=>name.startsWith('Spreads/'));const pages=spreads.reduce((sum,[,text])=>sum+Number(xpath(text,'count(//Page)')),0);assert.equal(pages,2);assert.equal(Number(xpath(parts.get('Resources/Preferences.xml'),'string(//DocumentPreference/@DocumentBleedOutsideOrRightOffset)')),18);
+const stories=xmls.filter(([name])=>name.startsWith('Stories/'));assert.equal(stories.length,1);const story=stories[0][1].toString();assert(story.includes('Edited café'));assert(!story.includes('<Table'));assert(!story.includes('<Note'));assert(story.includes('CharacterStyle/Emphasis'));
+const images=spreads.map(([,text])=>text.toString()).join('');assert(images.includes('Links/mark.png'));assert(images.includes('Links/unavailable.png'));const embedded=images.match(/<Contents><!\[CDATA\[([^]*?)\]\]><\/Contents>/);assert(embedded);assert(Buffer.from(embedded[1],'base64').subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])));
+console.log(JSON.stringify({file:process.argv[2],zipEntries:entries.length,xmlParts:xmls.length,pages,stories:stories.length,masterSpreads:xmls.filter(([n])=>n.startsWith('MasterSpreads/')).length,uniqueIds:ids.size,checkedReferences:refs,embeddedPng:true,linkedUrisRetained:true,unsupportedTablesNotesAbsent:true,bytes:bytes.length},null,2));
