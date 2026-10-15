@@ -432,6 +432,25 @@ fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+/// Identify the producing host without publishing its hostname.
+/// Args: none. Returns SHA-256 of the trimmed system hostname.
+fn host_identity() -> Result<String, String> {
+    let name = fs::read_to_string("/proc/sys/kernel/hostname")
+        .or_else(|_| {
+            let output = std::process::Command::new("hostname").output()?;
+            if !output.status.success() {
+                return Err(std::io::Error::other("Host identity unavailable"));
+            }
+            String::from_utf8(output.stdout).map_err(std::io::Error::other)
+        })
+        .map_err(|_| "Could not identify qualification host")?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Qualification hostname is empty".into());
+    }
+    Ok(format!("{:x}", Sha256::digest(name.as_bytes())))
+}
+
 #[test]
 #[ignore = "real camera corpus; use serialized-cargo with pinned runner and corpus environment"]
 fn raw_camera_corpus() {
@@ -481,12 +500,13 @@ fn raw_camera_corpus() {
         .expect("rustc identity");
     assert!(rustc.status.success(), "rustc identity failed");
     let mut reports = Vec::new();
+    let host_sha256 = host_identity().expect("hashed producer host identity");
     for case in cases {
         let directory = output.join(&case.id);
         fs::create_dir(&directory).expect("new case directory");
         let mut report = workflow::run(case, &bindings, &corpus, &directory, &mode);
         report["manifest_sha256"] = json!(format!("{:x}", Sha256::digest(text.as_bytes())));
-        report["runner"] = json!({"sha256":runner_hash,"revision":revision,"decoder":super::VERSION,
+        report["runner"] = json!({"sha256":runner_hash,"revision":revision,"host_sha256":host_sha256,"decoder":super::VERSION,
             "rustc":String::from_utf8_lossy(&rustc.stdout),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
             "cargo_lock_sha256":hash_file(&Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock")).expect("lock identity")});
         write_json(&directory.join("result.json"), &report).expect("case receipt");
