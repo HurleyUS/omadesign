@@ -228,7 +228,27 @@ fn scene(
         Pt::ZERO,
         Pt::new(bounds.width(), bounds.height()),
     )];
+    let layer_ids = layers
+        .iter()
+        .map(|l| (l.id, l.id))
+        .collect::<HashMap<_, _>>();
+    let shape_ids = layers
+        .iter()
+        .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+        .map(|s| (s.id, s.id))
+        .collect::<HashMap<_, _>>();
+    let placement = tiny_skia::Transform::from_translate(-bounds.min.x, -bounds.min.y);
     for layer in &mut layers {
+        for mask in &mut layer.artwork_masks {
+            mask.remap(&layer_ids, &shape_ids, placement);
+        }
+        if let Some(shapes) = layer.kind.shapes_mut() {
+            for shape in shapes {
+                for mask in &mut shape.artwork_masks {
+                    mask.remap(&layer_ids, &shape_ids, placement);
+                }
+            }
+        }
         match &mut layer.kind {
             LayerKind::Vector { shapes } => {
                 for shape in shapes {

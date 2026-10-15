@@ -248,3 +248,57 @@ fn pdf_exchange_poppler_matches_vector_masks_gradients_and_native_reopen() {
     );
     std::fs::remove_dir_all(folder).unwrap();
 }
+
+#[test]
+fn pdf_exchange_pixel_masks_keep_gradient_strokes_as_vector_artwork() {
+    let mut doc = Document::new("Pixel mask with vector stroke", 80., 60., 72.);
+    doc.layers.clear();
+    let mut layer = Layer::vector("Masked gradient stroke");
+    let gradient = Gradient::new(
+        GradientKind::Linear,
+        Rgba::rgb(255, 10, 20),
+        Rgba::rgb(20, 30, 255),
+    );
+    let mut shape = rectangle(Pt::new(15., 15.), Pt::new(45., 30.), Fill::None);
+    shape.style.stroke = Some(Stroke {
+        gradient: Some(gradient),
+        width: 6.,
+        ..Default::default()
+    });
+    shape.mask = Pixels::from_rgba(2, 1, vec![255, 255, 255, 255, 128, 128, 128, 255]);
+    shape.rotation = 0.1;
+    layer.kind.shapes_mut().unwrap().push(shape);
+    doc.layers.push(layer);
+    let (bytes, notes) = write(&doc).unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let pdf = Pdf::load_mem(&bytes).unwrap();
+    let images = pdf
+        .objects
+        .values()
+        .filter_map(|o| o.as_stream().ok())
+        .filter(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        images.len(),
+        1,
+        "only the native pixel mask may be an image"
+    );
+    assert_eq!(
+        images[0]
+            .dict
+            .get(b"ColorSpace")
+            .unwrap()
+            .as_name()
+            .unwrap(),
+        b"DeviceGray"
+    );
+    let (loaded, notes) = read(&bytes, "gradient-stroke.pdf").unwrap();
+    assert!(notes.iter().all(|n| !n.contains("could not")), "{notes:?}");
+    assert!(
+        loaded
+            .layers
+            .iter()
+            .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+            .any(|s| s.style.fill.gradient().is_some())
+    );
+}
