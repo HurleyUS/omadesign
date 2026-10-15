@@ -196,7 +196,42 @@ impl Workspace {
         mut body: impl FnMut(&mut Ui, &str),
     ) -> Rect {
         let mut center = ui.available_rect_before_wrap();
-        let viewport = ui.ctx().screen_rect();
+        let viewport = ui
+            .ctx()
+            .input(|input| input.viewport().inner_rect)
+            .unwrap_or(ui.max_rect());
+        let panels: Vec<_> = self
+            .groups
+            .iter()
+            .flat_map(|g| g.panels.iter().cloned())
+            .collect();
+        if ui.input(|input| input.key_pressed(egui::Key::F6)) && !panels.is_empty() {
+            let current = self
+                .focus
+                .as_ref()
+                .and_then(|id| panels.iter().position(|p| p == id))
+                .unwrap_or(0);
+            let next = if ui.input(|i| i.modifiers.shift) {
+                (current + panels.len() - 1) % panels.len()
+            } else {
+                (current + 1) % panels.len()
+            };
+            self.focus = Some(panels[next].clone());
+            for group in &mut self.groups {
+                if let Some(index) = group.panels.iter().position(|p| p == &panels[next]) {
+                    group.active = index;
+                }
+            }
+        }
+        let focus_key = egui::Id::new(id).with("focused-panel");
+        let previous_focus: Option<String> = ui.ctx().data_mut(|d| d.get_temp(focus_key));
+        let focus_next = if previous_focus != self.focus {
+            self.focus.clone()
+        } else {
+            None
+        };
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(focus_key, self.focus.clone().unwrap_or_default()));
         let before = self.groups.clone();
         let mut command = None;
         for (index, saved) in before.iter().enumerate() {
@@ -213,6 +248,9 @@ impl Workspace {
                 ui.horizontal_wrapped(|ui| {
                     for (tab, panel) in saved.panels.iter().enumerate() {
                         let response = ui.selectable_label(tab == group.active, panel_label(panel));
+                        if focus_next.as_ref() == Some(panel) {
+                            response.request_focus();
+                        }
                         if response.clicked() {
                             group.active = tab;
                             self.focus = Some(panel.clone());
@@ -227,7 +265,7 @@ impl Workspace {
                             ] {
                                 if ui.button(label).clicked() {
                                     command = Some((panel.clone(), Some(place), None));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             }
                             ui.menu_button("Tab with", |ui| {
@@ -238,13 +276,13 @@ impl Workspace {
                                 {
                                     if ui.button(panel_label(other)).clicked() {
                                         command = Some((panel.clone(), None, Some(other.clone())));
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                 }
                             });
                             if ui.button("Close").clicked() {
                                 command = Some((panel.clone(), None, None));
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                     }
@@ -307,7 +345,7 @@ impl Workspace {
                     Place::Floating => {}
                 }
                 if extent > 20.0 {
-                    ui.allocate_ui_at_rect(rect.shrink(4.0), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(4.0)), |ui| {
                         egui::Frame::group(ui.style()).show(ui, |ui| {
                             ui.set_min_size((rect.size() - vec2(24.0, 24.0)).max(vec2(0.0, 0.0)));
                             content(ui);
