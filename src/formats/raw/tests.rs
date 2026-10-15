@@ -178,7 +178,8 @@ fn real_camera_active_cancel_keeps_edits_and_immediately_opens_next() {
         "before_open",
         started,
     )];
-    let photo = crate::photo::PhotoImage::load(&source).unwrap();
+    let baseline_cancel = Cancellation::default();
+    let photo = crate::photo::PhotoImage::load_cancellable(&source, &baseline_cancel).unwrap();
     let dimensions = photo.dimensions();
     if let Ok(expected_dimensions) = std::env::var("OMA_RAW_EXPECT_DIMENSIONS") {
         let expected_dimensions = expected_dimensions
@@ -259,6 +260,11 @@ fn real_camera_active_cancel_keeps_edits_and_immediately_opens_next() {
     let loaded_photos = session.images.len();
     let errors = session.import_errors().to_vec();
     let idle = !session.is_loading();
+    let requests = [
+        baseline_cancel.native_memory_request(),
+        first.native_memory_request(),
+        next.native_memory_request(),
+    ];
     drop(session);
     drop(original);
     let released = Instant::now();
@@ -272,7 +278,7 @@ fn real_camera_active_cancel_keeps_edits_and_immediately_opens_next() {
         "final_owner_released",
         started,
     ));
-    let result = serde_json::json!({"source_before_sha256":expected,"source_after_sha256":source_after,"metadata":metadata,"dimensions":dimensions,"linear_u16_samples":source_samples,"fixture_storage":fixture_storage,"admitted_before_bytes":admitted_before,"admitted_baseline_bytes":admitted_baseline,"admitted_after_next_bytes":admitted_after_next,"admitted_after_final_owner_bytes":admitted_after_release,"resource_observations":observations,"native_active_at_cancel":active,"native_progress_at_cancel":stage,"native_stop_ms":native_stop.as_secs_f64()*1000.,"next_open_ms":next_open.as_secs_f64()*1000.,"current_edits_and_source_kept":kept,"slots_cleared_immediately":cleared,"next_live_until_completion":next_live_until_completion,"next_native_progress":next.native_progress(),"next_distinct_source_accepted":next_accepted,"completed_owner_cleanup_signalled":next.is_cancelled(),"loaded_photos":loaded_photos,"errors":errors,"proof":"headless actual PhotoSession import/cancel/distinct-path next-open; sampled process-lifetime RSS/HWM is not a decoder-only peak; completed ImportJob drop defensively cancels its token after accepting its result; no native window/device/physical proof"});
+    let result = serde_json::json!({"source_before_sha256":expected,"source_after_sha256":source_after,"metadata":metadata,"dimensions":dimensions,"linear_u16_samples":source_samples,"fixture_storage":fixture_storage,"admitted_before_bytes":admitted_before,"admitted_baseline_bytes":admitted_baseline,"admitted_after_next_bytes":admitted_after_next,"admitted_after_final_owner_bytes":admitted_after_release,"native_memory_requests_bytes":requests,"resource_observations":observations,"native_active_at_cancel":active,"native_progress_at_cancel":stage,"native_stop_ms":native_stop.as_secs_f64()*1000.,"next_open_ms":next_open.as_secs_f64()*1000.,"current_edits_and_source_kept":kept,"slots_cleared_immediately":cleared,"next_live_until_completion":next_live_until_completion,"next_native_progress":next.native_progress(),"next_distinct_source_accepted":next_accepted,"completed_owner_cleanup_signalled":next.is_cancelled(),"loaded_photos":loaded_photos,"errors":errors,"proof":"headless actual PhotoSession import/cancel/distinct-path next-open; sampled process-lifetime RSS/HWM is not a decoder-only peak; completed ImportJob drop defensively cancels its token after accepting its result; no native window/device/physical proof"});
     if let Some(path) = std::env::var_os("OMA_RAW_CANCEL_RECEIPT") {
         use std::io::Write;
         let path = std::path::PathBuf::from(path);
@@ -295,6 +301,13 @@ fn real_camera_active_cancel_keeps_edits_and_immediately_opens_next() {
     assert!(idle);
     assert_eq!(loaded_photos, 2, "stale result must never publish");
     assert!(errors.is_empty());
+    if let Ok(expected_memory) = std::env::var("OMA_RAW_EXPECT_NATIVE_MEMORY") {
+        let expected_memory = expected_memory.parse::<u64>().unwrap();
+        assert_eq!(
+            requests, [expected_memory; 3],
+            "the actual decoder route must use its pinned live-buffer bound"
+        );
+    }
     assert_eq!(
         admitted_after_release, admitted_before,
         "final sample and session owners must release the same pool"

@@ -322,8 +322,28 @@ the measured LibRaw output. The independent active-area value is absent. Standar
 TIFF tag inspection also finds no ActiveArea tag, DNGVersion or OpcodeList1/2/3;
 MakerNotes are not interpreted as DNG opcodes. `active_dimensions` remains null,
 and required preflight refuses this case rather than inventing an active area.
-Application precision, settings reopen, native placement/export and active
-cancellation for this X2D source remain unproven.
+At `c8093a50fca4dc38104d7c7a4f1f22bf2bdf881b`, the real Photo load returned
+11664x8750 with 306,180,000 linear u16 samples. Process-lifetime sampled high
+water was 1,905,360,896 bytes; retained admission was 673,613,632 bytes and returned
+to zero after final owners dropped. Source hashes were unchanged. The affected
+cohort was 11 passed / 1 failed: a second open while retaining the current photo
+was refused at the generic 3,982 MiB native request, before sensor stage 8. The
+1.12 ms cancellation of that admission wait is not active decode proof; next-open
+failed safely and current edits/source stayed intact. The full failed receipt is
+preserved. Application precision, settings reopen, native placement/export and
+active cancellation for this X2D source remain unproven.
+
+The follow-up demand repair recognizes only `unpacked_load_raw()` with ordinary
+three-color Bayer, single-frame, unit-aspect, non-Fuji layout, normal ushort pitch
+and at most 32 MiB metadata. With the adapter's fixed AHD settings, LibRaw 0.22.2
+`unpack.cpp`, `raw2image.cpp`, `ahd_demosaic.cpp` and `mem_image.cpp` bound the
+simultaneously live padded ushort sensor, padded four-channel ushort image and
+RGB16 output. The request is their sum plus 64 MiB for metadata/tile scratch, or
+two RGB16 outputs during the later native-to-Rust copy, whichever is greater.
+Other decoders/layouts retain the generic estimate. No vendor source, shared-pool
+policy or host-pressure test changes. The token records actual requests, including
+refusals, so the real fixture check must prove which bound was used. This repair
+still requires exact-source execution.
 
 Nineteen cases still lack licensed source URLs/hashes. Other missing inputs,
 references and mode identities remain explicit required failures. No body, firmware,
