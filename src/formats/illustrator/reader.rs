@@ -1429,7 +1429,7 @@ impl Reader<'_> {
                             .extend(notes.into_iter().map(|n| format!("Illustrator type: {n}")));
                     }
                     Err(error) => {
-                        self.note(format!("Illustrator styled type could not use the shared SVG importer: {error}. Editable source characters remain available."));
+                        self.notes.insert(format!("Illustrator styled type could not use the shared SVG importer: {error}. Editable source characters remain available."));
                     }
                 }
             }
