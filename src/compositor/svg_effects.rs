@@ -85,12 +85,49 @@ pub(super) fn render(
             }
         }
     }
-    let source = crate::svg::export_posed(&isolated, &poses)?;
+    let source = effect_source(&isolated, &poses)?;
     let tree =
         usvg::Tree::from_str(&source, &crate::svg_source::options()).map_err(|e| e.to_string())?;
     let mut surface = Pixmap::new(width, height).ok_or("Could not allocate SVG effect viewport")?;
     resvg::render(&tree, transform, &mut surface.as_mut());
     Ok(surface)
+}
+
+/// Omit redundant native isolation containers inside an already isolated filter.
+/// Args: effect subtree and evaluated poses. Returns vector XML with required blends preserved.
+fn effect_source(doc: &Document, poses: &HashMap<u64, Pose>) -> Result<String, String> {
+    let mut source = crate::svg::export_posed(doc, poses)?;
+    if doc.layers.iter().any(|layer| {
+        layer.blend != crate::color::Blend::Normal
+            || layer.filters.blends_backdrop()
+            || layer.kind.shapes().into_iter().flatten().any(|shape| {
+                shape.blend != crate::color::Blend::Normal || shape.filters.blends_backdrop()
+            })
+    }) {
+        return Ok(source);
+    }
+    let xml = roxmltree::Document::parse(&source).map_err(|e| e.to_string())?;
+    let mut edits: Vec<_> = xml
+        .descendants()
+        .filter(|node| {
+            node.attribute("id")
+                .is_some_and(|id| id.starts_with("oma-layer-"))
+        })
+        .filter_map(|node| {
+            let style = node.attributes().find(|attr| attr.name() == "style")?;
+            style.value().contains("isolation:isolate").then(|| {
+                (
+                    style.range_value(),
+                    style.value().replace("isolation:isolate", "isolation:auto"),
+                )
+            })
+        })
+        .collect();
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    for (range, replacement) in edits {
+        source.replace_range(range, &replacement);
+    }
+    Ok(source)
 }
 
 #[cfg(test)]
