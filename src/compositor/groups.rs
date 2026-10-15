@@ -14,7 +14,7 @@ pub(super) fn draw(
     if doc
         .layers
         .iter()
-        .all(|layer| !layer.is_group && layer.parent.is_none())
+        .all(|layer| !layer.is_group && layer.parent.is_none() && layer.svg_filter.is_none())
     {
         for (index, layer) in doc.layers.iter().enumerate() {
             if sources.contains(&MaskSource {

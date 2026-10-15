@@ -193,6 +193,33 @@ mod tests {
     }
 
     #[test]
+    fn svg_graph_renders_on_a_flat_native_vector_layer() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="140"><defs><filter id="fx"><feOffset dx="9" dy="7"/></filter></defs><path filter="url(#fx)" d="M20 20H100V90H20Z" fill="#c52"/></svg>"##;
+        let (mut doc, _) = crate::formats::svg::read(source, "Flat graph").unwrap();
+        let graph = doc
+            .layers
+            .iter()
+            .find_map(|l| l.svg_filter.clone())
+            .unwrap();
+        let mut layer = doc
+            .layers
+            .iter()
+            .find(|l| l.kind.shapes().is_some_and(|s| !s.is_empty()))
+            .unwrap()
+            .clone();
+        layer.parent = None;
+        layer.svg_filter = Some(graph);
+        doc.layers = vec![layer];
+        assert!(!doc.layers[0].is_group);
+        let tree = usvg::Tree::from_str(source, &crate::svg_source::options()).unwrap();
+        let mut expected = Pixmap::new(180, 140).unwrap();
+        resvg::render(&tree, Transform::identity(), &mut expected.as_mut());
+        let actual = crate::compositor::render_export_at(&doc, 1., 0., true).unwrap();
+        let (maximum, mean) = difference(&actual, &expected);
+        assert!(maximum <= 3 && mean < 0.1, "max={maximum} mean={mean}");
+    }
+
+    #[test]
     fn svg_graph_applies_root_clips_after_effect_without_painting_clip_sources() {
         let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="140"><defs><filter id="fx"><feGaussianBlur stdDeviation="2"/><feOffset dx="3"/></filter><clipPath id="clip"><g><path d="M20 20H100V90H20Z"/></g></clipPath></defs><g filter="url(#fx)" clip-path="url(#clip)"><rect x="10" y="10" width="110" height="90" fill="#c52"/></g></svg>"##;
         let (doc, notes) = crate::formats::svg::read(source, "Root clip graph").unwrap();
