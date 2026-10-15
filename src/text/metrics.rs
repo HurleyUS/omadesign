@@ -602,4 +602,11 @@ mod svg_type_native_acceptance {
         let mut run=sample("Release");run.on_path=Some(crate::text_geometry::TextOnPath{cache:Some(crate::text_geometry::ArcPath::new(vec![[Pt::new(20.,70.),Pt::new(110.,70.),Pt::new(210.,70.),Pt::new(300.,70.)]],false)),..Default::default()});run.transform=Some([1.,0.,0.,1.,100.,0.]);let before=crate::text::caret_pt(&run,0);crate::text_geometry::release(&mut run);assert!((crate::text::caret_pt(&run,0)-before).length()<0.01);
     }
 
+    #[test]
+    fn native_type_visible_overflow_paints_and_affine_autoheight_stays_local(){
+        use crate::text_geometry::{TextFrame,Overflow};
+        let mut run=sample("MMMMM");run.frame=Some(TextFrame{size:Pt::new(20.,100.),overflow:Overflow::Visible,..Default::default()});run.set_character_style(0,1,|s|s.fill=Some(Fill::Solid(Rgba::rgb(220,20,40))));let doc=document(run);let image=crate::compositor::render_export(&doc,1).unwrap();assert!(image.pixels().iter().enumerate().any(|(i,p)|i%320>60&&p.alpha()>0));assert!(compare(&crate::svg::export(&doc).unwrap(),&doc)<0.1);
+        let mut run=sample("Auto height words wrap over multiple lines");run.frame=Some(TextFrame{size:Pt::new(120.,100.),auto_height:true,..Default::default()});let mut plain=document(run.clone());run.transform=Some([1.,0.,0.,1.,0.,100.]);let mut shifted=document(run);crate::text_geometry::reflow_areas(&mut plain);crate::text_geometry::reflow_areas(&mut shifted);let height=|d:&Document|{let Geom::Text(t)=&d.layers[0].kind.shapes().unwrap()[0].geom else{unreachable!()};t.frame.as_ref().unwrap().size.y};assert!((height(&plain)-height(&shifted)).abs()<0.01);
+    }
+
 }

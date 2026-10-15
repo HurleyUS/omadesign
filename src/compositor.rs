@@ -1202,7 +1202,7 @@ fn draw_shape_inner(
             let texture=fill.gradient().and_then(|g|crate::gradient::texture(&g,shape,0.,xf.get_scale().0.max(xf.get_scale().1)));
             let mut paint=fill_paint(&fill,&shape.geom,texture.as_ref());paint.blend_mode=blend;paint.shader.apply_opacity(op);
             if shape.rotation.abs()>1e-5{let center=shape.geom.bbox().center();paint.shader.transform(Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y));}
-            let bounds=shape.world_bbox();if let Some(rect)=tiny_skia::Rect::from_xywh(bounds.min.x,bounds.min.y,bounds.width(),bounds.height()){pm.fill_rect(rect,&paint,xf,Some(&clip));}
+            let bounds=glyph_path.bounds();if let Some(rect)=tiny_skia::Rect::from_xywh(bounds.x()-1.,bounds.y()-1.,bounds.width()+2.,bounds.height()+2.){pm.fill_rect(rect,&paint,xf,Some(&clip));}
         }
     }
     if !painted && !shape.style.fill.is_none() && shape.geom.is_closed() && fill_reveal > 0.0 {

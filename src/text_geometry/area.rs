@@ -1062,15 +1062,11 @@ pub fn reflow_areas(doc: &mut Document) {
         if let Some(s) = doc.find_shape_mut(layer, id)
             && let Geom::Text(t) = &mut s.geom
         {
+            let local_bottom=layout.contours.iter().flatten().map(|p|t.unmap_point(*p).y).fold(t.origin.y,f32::max);
             if let Some(frame) = &mut t.frame {
                 t.wrap_width = Some((frame.size.x - frame.inset[1] - frame.inset[3]).max(1.));
                 if frame.auto_height && frame.contour.is_none() {
-                    let bottom = layout
-                        .contours
-                        .iter()
-                        .flatten()
-                        .map(|p| p.y)
-                        .fold(t.origin.y, f32::max);
+                    let bottom=local_bottom;
                     frame.size.y = (bottom - (t.origin.y - t.px * 0.85) + frame.inset[2]).max(t.px);
                 }
             }

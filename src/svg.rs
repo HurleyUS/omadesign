@@ -213,6 +213,11 @@ fn gradient_reference(
     format!("url(#{id})")
 }
 
+fn fill_reference(defs:&mut String,grad_id:&mut usize,fill:&Fill,shape:&Shape)->String{
+    use crate::gradient::{Gradient,GradientKind};
+    match fill{Fill::Solid(color)=>svg_color(*color),Fill::None=>"none".into(),Fill::Gradient(g)=>gradient_reference(defs,grad_id,g,shape,0.),Fill::Linear{from,to,c0,c1}=>{let mut g=Gradient::new(GradientKind::Linear,*c0,*c1);g.from=*from;g.to=*to;gradient_reference(defs,grad_id,&g,shape,0.)},Fill::Radial{c0,c1}=>{let mut g=Gradient::new(GradientKind::Radial,*c0,*c1);if shape.geom.bbox().height()>shape.geom.bbox().width(){g.to=[0.5,1.];}gradient_reference(defs,grad_id,&g,shape,0.)}}
+}
+
 fn object_mask_definition(defs: &mut String, shape: &Shape) -> Option<String> {
     let mask = shape.mask.as_ref()?;
     let mut local = shape.clone();
@@ -358,8 +363,7 @@ fn write_shape(
             let part=Shape::new(Geom::Poly{contours,winding:true},shape.style.clone());
             let id=format!("oma-type-paint-{}-{index}",shape.id);
             defs.push_str(&format!("<clipPath id=\"{id}\" clipPathUnits=\"userSpaceOnUse\"><path d=\"{}\" clip-rule=\"nonzero\"/></clipPath>",path_data(&part)));
-            let bounds=shape.geom.bbox();let mut painted=Shape::new(Geom::Rect{origin:bounds.min,size:bounds.size(),radius:0.},shape.style.clone());painted.style.fill=fill;painted.style.stroke=None;
-            write_shape(body,defs,grad_id,&painted,&format!(" clip-path=\"url(#{id})\""),true);
+            let bounds=part.geom.bbox();let paint=fill_reference(defs,grad_id,&fill,shape);body.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{paint}\" clip-path=\"url(#{id})\"/>",bounds.min.x-1.,bounds.min.y-1.,bounds.width()+2.,bounds.height()+2.));
         }
         if shape.style.stroke.is_some(){let mut stroke=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());stroke.style.fill=Fill::None;write_shape(body,defs,grad_id,&stroke,"",true);}
         body.push_str("</g>");return;
