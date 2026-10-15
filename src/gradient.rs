@@ -150,8 +150,11 @@ impl Gradient {
         } else {
             if let Some(axis) = &mut self.radial_axis {
                 let delta = degrees.to_radians() - (b.y - a.y).atan2(b.x - a.x);
-                let rotated =
-                    Pt::new(axis[0] * bounds.width(), axis[1] * bounds.height()).rotate(delta);
+                let rotated = Pt::new(
+                    axis[0] * bounds.width().max(1e-3),
+                    axis[1] * bounds.height().max(1e-3),
+                )
+                .rotate(delta);
                 *axis = [
                     rotated.x / bounds.width().max(1e-3),
                     rotated.y / bounds.height().max(1e-3),
@@ -200,7 +203,12 @@ impl Gradient {
         let d = b - a;
         let y = self
             .radial_axis
-            .map(|v| Pt::new(v[0] * bounds.width(), v[1] * bounds.height()))
+            .map(|v| {
+                Pt::new(
+                    v[0] * bounds.width().max(1e-3),
+                    v[1] * bounds.height().max(1e-3),
+                )
+            })
             .unwrap_or_else(|| d.perp());
         tiny_skia::Transform::from_row(d.x, d.y, y.x, y.y, a.x, a.y)
     }

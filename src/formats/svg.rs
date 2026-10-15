@@ -1255,6 +1255,31 @@ mod tests {
     }
 
     #[test]
+    fn svg_affine_radial_strokes_preserve_zero_width_or_height_paint_bounds() {
+        for path in ["M10 40H150", "M80 10V110"] {
+            let source = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><defs><radialGradient id="r" gradientUnits="userSpaceOnUse" cx="70" cy="60" r="40" fx="62" fy="55" fr="4" gradientTransform="skewX(15)"><stop stop-color="#28a"/><stop offset="1" stop-color="#f64"/></radialGradient></defs><path d="{path}" fill="none" stroke="url(#r)" stroke-width="12" stroke-linecap="round"/></svg>"##
+            );
+            let (doc, notes, maximum, mean) = compare_render(&source);
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+            assert!(
+                maximum <= 2 && mean < 0.02,
+                "{path}: max={maximum} mean={mean}"
+            );
+            let restored = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+            let exported = crate::svg::export(&restored).unwrap();
+            assert!(!exported.contains("<image"));
+            let (_, notes, maximum, mean) = compare_render(&exported);
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(
+                maximum <= 2 && mean < 0.02,
+                "export {path}: max={maximum} mean={mean}"
+            );
+        }
+    }
+
+    #[test]
     fn svg_affine_focal_radial_survives_edit_save_and_vector_export() {
         for fr in [0., 7.] {
             let source = format!(
