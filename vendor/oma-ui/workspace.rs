@@ -301,6 +301,10 @@ impl Workspace {
                     .constrain_to(viewport)
                     .current_pos(rect.min)
                     .default_size(rect.size())
+                    .min_width(0.0)
+                    .min_height(0.0)
+                    .max_size(viewport.size())
+                    .vscroll(true)
                     .show(ui.ctx(), |ui| content(ui))
                 {
                     group.rect = [
@@ -375,6 +379,10 @@ impl Workspace {
                         group.extent = (extent + sign * if horizontal { delta.x } else { delta.y })
                             .clamp(80.0, 1200.0);
                     }
+                } else {
+                    group.place = Place::Floating;
+                    let safe = safe_rect(group.rect, viewport);
+                    group.rect = [safe.min.x, safe.min.y, safe.width(), safe.height()];
                 }
             }
             if let Some(actual) = self.groups.iter_mut().find(|g| g.panels == saved.panels) {
