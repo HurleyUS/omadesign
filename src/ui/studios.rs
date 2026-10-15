@@ -653,6 +653,7 @@ fn color_studio(ui: &mut Ui, studio: &mut Studio) {
             apply_gradient(studio, gradient.clone());
         }
     });
+    super::svg_paint::show(ui, studio);
     if let Some(mut gradient) = gradient {
         let bounds = studio
             .primary()

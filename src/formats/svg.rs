@@ -1314,6 +1314,77 @@ mod tests {
     }
 
     #[test]
+    fn svg_repeat_reflect_paint_remains_vector_through_native_codec() {
+        for tag in ["linearGradient", "radialGradient"] {
+            for spread in ["repeat", "reflect"] {
+                let source = format!(
+                    r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><defs><{tag} id="p" gradientUnits="userSpaceOnUse" x1="20" y1="15" x2="50" y2="25" cx="60" cy="55" r="24" fx="55" fy="50" fr="3" spreadMethod="{spread}" gradientTransform="skewX(20)"><stop stop-color="#128"/><stop offset=".4" stop-color="#4cc" stop-opacity=".6"/><stop offset="1" stop-color="white"/></{tag}></defs><path d="M8 8H152V112H8Z" fill="url(#p)" stroke="url(#p)" stroke-width="4"/></svg>"##
+                );
+                let (doc, notes, maximum, mean) = compare_render(&source);
+                assert!(notes.is_empty(), "{notes:?}");
+                assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+                assert!(
+                    maximum < 6 && mean < 0.12,
+                    "{tag} {spread}: max={maximum}, mean={mean}"
+                );
+                let reopened =
+                    crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+                assert_eq!(
+                    crate::compositor::export_png(&doc, 1).unwrap(),
+                    crate::compositor::export_png(&reopened, 1).unwrap()
+                );
+                let exported = crate::svg::export(&reopened).unwrap();
+                assert!(!exported.contains("<image"));
+                assert!(exported.contains(&format!("spreadMethod=\"{spread}\"")));
+                let (_, _, maximum, mean) = compare_render(&exported);
+                assert!(
+                    maximum < 6 && mean < 0.12,
+                    "{tag} {spread}: max={maximum}, mean={mean}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn svg_transformed_nested_symbol_patterns_remain_vector_and_editable() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><defs><symbol id="inner" viewBox="0 0 10 10"><path d="M0 0H5V10H0Z" fill="#28a"/></symbol><symbol id="outer" viewBox="0 0 10 10"><use href="#inner" width="10" height="10"/><circle cx="7" cy="5" r="2" fill="#e73"/></symbol><pattern id="p" patternUnits="userSpaceOnUse" width="18" height="16" patternTransform="matrix(1 .2 .35 1 4 6)"><use href="#outer" width="18" height="16"/></pattern></defs><path d="M8 8H152V112H8Z" fill="url(#p)" fill-opacity=".8" stroke="url(#p)" stroke-width="3"/></svg>"##;
+        let (mut doc, notes, maximum, mean) = compare_render(source);
+        assert!(
+            notes.iter().all(|n| n.contains("editable vector outlines")),
+            "{notes:?}"
+        );
+        assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+        assert!(maximum < 12 && mean < 0.4, "max={maximum}, mean={mean}");
+        let original = crate::compositor::export_png(&doc, 1).unwrap();
+        let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        assert_eq!(
+            original,
+            crate::compositor::export_png(&reopened, 1).unwrap()
+        );
+        let exported = crate::svg::export(&reopened).unwrap();
+        assert!(!exported.contains("<image"));
+        assert!(exported.contains("<pattern"));
+        let (_, _, maximum, mean) = compare_render(&exported);
+        assert!(maximum < 12 && mean < 0.4, "max={maximum}, mean={mean}");
+        let pattern = doc
+            .layers
+            .iter_mut()
+            .filter_map(|l| l.kind.shapes_mut())
+            .flatten()
+            .find_map(|s| {
+                if let Fill::Pattern(p) = &mut s.style.fill {
+                    Some(p)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        pattern.transform[4] += 0.1;
+        pattern.definitions = pattern.definitions.replace("#2288aa", "#ff0000");
+        assert_ne!(original, crate::compositor::export_png(&doc, 1).unwrap());
+    }
+
+    #[test]
     fn svg_affine_focal_radial_survives_edit_save_and_vector_export() {
         for fr in [0., 7.] {
             let source = format!(
@@ -1324,8 +1395,7 @@ mod tests {
             assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
             assert!(maximum <= 2 && mean < 0.1, "max={maximum}, mean={mean}");
             let original = crate::compositor::export_png(&doc, 1).unwrap();
-            let reopened: Document =
-                serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
+            let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
             assert_eq!(
                 original,
                 crate::compositor::export_png(&reopened, 1).unwrap()
