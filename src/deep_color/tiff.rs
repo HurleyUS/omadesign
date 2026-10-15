@@ -85,8 +85,7 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Pixels>, String> {
     let rows = decoder.get_tag_u32(Tag::RowsPerStrip).unwrap_or(h).min(h);
     let tile = decoder.get_tag_u32(Tag::TileWidth).ok().zip(decoder.get_tag_u32(Tag::TileLength).ok());
     let chunk = if let Some((tw,th)) = tile {storage::count(tw,th,channels)?} else {storage::count(w,rows,channels)?};
-    let compression = decoder.get_tag_u32(Tag::Compression).unwrap_or(1);
-    let scratch = if compression == 1 {64 * 1024} else {chunk.checked_mul(bps).and_then(|n| n.checked_add(bytes.len())).ok_or("TIFF codec working bytes overflow")?};
+    let scratch = chunk.checked_mul(bps).and_then(|n| n.checked_add(bytes.len())).map(|n| n.max(64 * 1024)).ok_or("TIFF codec working bytes overflow")?;
     let _codec = resources::global().reserve_now(scratch as u64,&storage::check)?;
     let mut limits = tiff::decoder::Limits::default();
     limits.decoding_buffer_size = layout.complete_len;
