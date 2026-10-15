@@ -26,7 +26,7 @@ pub(super) fn field(
     bounds: Bounds,
     extent: Bounds,
     alpha: bool,
-) -> Result<ObjectId, String> {
+) -> Result<Vec<ObjectId>, String> {
     let corners = [
         extent.min,
         Pt::new(extent.max.x, extent.min.y),
@@ -143,8 +143,7 @@ pub(super) fn field(
         }
         channels(g.stops.last().unwrap().color)
     };
-    let mut functions = vec![];
-    let mut cuts = vec![];
+    let mut shadings = vec![];
     for cycle in start.floor() as i64..end.ceil() as i64 {
         let cycle = cycle as f32;
         let reverse = g.spread == Spread::Reflect && (cycle as i64).rem_euclid(2) == 1;
@@ -153,6 +152,8 @@ pub(super) fn field(
         if upper <= lower {
             continue;
         }
+        let mut functions = vec![];
+        let mut cuts = vec![];
         let mut stops = vec![lower, upper];
         stops.extend(
             g.stops
@@ -166,17 +167,41 @@ pub(super) fn field(
             let from = sample(if reverse { 1. - pair[0] } else { pair[0] }, !reverse);
             let to = sample(if reverse { 1. - pair[1] } else { pair[1] }, reverse);
             if !functions.is_empty() {
-                cuts.push(Object::Real((cycle + pair[0] - start) / (end - start)));
+                cuts.push(Object::Real((pair[0] - lower) / (upper - lower)));
             }
             functions.push(Object::Reference(pdf.add_object(dictionary!{"FunctionType"=>2,"Domain"=>vec![0.into(),1.into()],"C0"=>from.into_iter().map(Object::Real).collect::<Vec<_>>(),"C1"=>to.into_iter().map(Object::Real).collect::<Vec<_>>(),"N"=>1})));
         }
+        let encode = functions
+            .iter()
+            .flat_map(|_| [0.into(), 1.into()])
+            .collect::<Vec<Object>>();
+        let function=pdf.add_object(dictionary!{"FunctionType"=>3,"Domain"=>vec![0.into(),1.into()],"Functions"=>functions,"Bounds"=>cuts,"Encode"=>encode});
+        let first = cycle + lower;
+        let last = cycle + upper;
+        let coords = if radial {
+            let f = Pt::from_array(g.focal);
+            let r = g.inner_radius.max(0.);
+            let dr = 1. - r;
+            let a = f * (1. - first);
+            let b = f * (1. - last);
+            vec![
+                a.x,
+                a.y,
+                (r + first * dr).max(0.),
+                b.x,
+                b.y,
+                (r + last * dr).max(0.),
+            ]
+        } else {
+            let (a, b) = g.endpoints(bounds);
+            let d = b - a;
+            let from = a + d * first;
+            let to = a + d * last;
+            vec![from.x, from.y, to.x, to.y]
+        };
+        shadings.push(pdf.add_object(dictionary!{"ShadingType"=>if radial{3}else{2},"ColorSpace"=>if alpha{"DeviceGray"}else{"DeviceRGB"},"Coords"=>coords.into_iter().map(Object::Real).collect::<Vec<_>>(),"Function"=>function,"Extend"=>vec![Object::Boolean(false),Object::Boolean(false)]}));
     }
-    let encode = functions
-        .iter()
-        .flat_map(|_| [0.into(), 1.into()])
-        .collect::<Vec<Object>>();
-    let function=pdf.add_object(dictionary!{"FunctionType"=>3,"Domain"=>vec![0.into(),1.into()],"Functions"=>functions,"Bounds"=>cuts,"Encode"=>encode});
-    Ok(pdf.add_object(dictionary!{"ShadingType"=>if radial{3}else{2},"ColorSpace"=>if alpha{"DeviceGray"}else{"DeviceRGB"},"Coords"=>coords.into_iter().map(Object::Real).collect::<Vec<_>>(),"Function"=>function,"Extend"=>vec![Object::Boolean(false),Object::Boolean(false)]}))
+    Ok(shadings)
 }
 
 impl Writer {

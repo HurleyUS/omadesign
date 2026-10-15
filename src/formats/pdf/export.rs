@@ -473,8 +473,9 @@ impl Writer {
                 matrix(&mut scene.ops, gradient.radial_transform(shape.geom.bbox()));
             }
             let extent = paint::local_bounds(bounds, shape.geom.bbox().center(), shape.rotation);
-            let shading = self.shading(&gradient, shape.geom.bbox(), extent, false)?;
-            scene.invoke("sh", "Shading", shading);
+            for shading in self.shading(&gradient, shape.geom.bbox(), extent, false)? {
+                scene.invoke("sh", "Shading", shading);
+            }
             let id = self.form(scene, bounds, true)?;
             let id = if gradient.stops.iter().any(|s| s.color.a != 255) {
                 let mut alpha = Scene::default();
@@ -482,8 +483,9 @@ impl Writer {
                 if gradient.kind == GradientKind::Radial {
                     matrix(&mut alpha.ops, gradient.radial_transform(shape.geom.bbox()));
                 }
-                let shading = self.shading(&gradient, shape.geom.bbox(), extent, true)?;
-                alpha.invoke("sh", "Shading", shading);
+                for shading in self.shading(&gradient, shape.geom.bbox(), extent, true)? {
+                    alpha.invoke("sh", "Shading", shading);
+                }
                 let mask = self.form(alpha, bounds, true)?;
                 self.masked(id, mask, MaskMode::Luminance, bounds)?
             } else {
@@ -528,7 +530,7 @@ impl Writer {
         bounds: Bounds,
         extent: Bounds,
         alpha: bool,
-    ) -> Result<ObjectId, String> {
+    ) -> Result<Vec<ObjectId>, String> {
         let (a, b) = gradient.endpoints(bounds);
         let radial = gradient.kind == GradientKind::Radial;
         if !matches!(gradient.kind, GradientKind::Linear | GradientKind::Radial) {
@@ -596,7 +598,7 @@ impl Writer {
             .flat_map(|_| [0.into(), 1.into()])
             .collect::<Vec<Object>>();
         let function=self.pdf.add_object(dictionary!{"FunctionType"=>3,"Domain"=>vec![0.into(),1.into()],"Functions"=>functions,"Bounds"=>cuts,"Encode"=>encode});
-        Ok(self.pdf.add_object(dictionary!{"ShadingType"=>if radial{3}else{2},"ColorSpace"=>if alpha{"DeviceGray"}else{"DeviceRGB"},"Coords"=>coords.into_iter().map(Object::Real).collect::<Vec<_>>(),"Function"=>function,"Extend"=>vec![Object::Boolean(true),Object::Boolean(true)]}))
+        Ok(vec![self.pdf.add_object(dictionary!{"ShadingType"=>if radial{3}else{2},"ColorSpace"=>if alpha{"DeviceGray"}else{"DeviceRGB"},"Coords"=>coords.into_iter().map(Object::Real).collect::<Vec<_>>(),"Function"=>function,"Extend"=>vec![Object::Boolean(true),Object::Boolean(true)]})])
     }
     /// Apply pixel and live vector masks without rasterizing the painted artwork.
     /// Args: source form, mask references, optional placed pixel mask, bounds and depth. Returns the nested masked form.

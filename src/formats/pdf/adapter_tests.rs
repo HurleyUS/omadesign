@@ -217,7 +217,9 @@ fn inspect(doc: &Document, name: &str, limit: f64) -> (Pdf, f64) {
         .as_ref()
         .map(|p| std::path::PathBuf::from(p).join(format!("adapter-{name}")))
         .unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("pdf-adapter-{name}-{}", crate::document::next_id()))
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(".artifacts")
+                .join(format!("pdf-adapter-{name}-{}", crate::document::next_id()))
         });
     std::fs::create_dir_all(&folder).unwrap();
     let source = folder.join("source.oma");
@@ -495,6 +497,25 @@ fn pdf_adapter_mixed_type_real_output() {
         .filter(|d| d.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"CIDFontType2"))
         .count();
     assert_eq!(fonts, 2);
+    let modes = pdf
+        .get_pages()
+        .values()
+        .flat_map(|id| {
+            Content::decode(&pdf.get_page_content(*id).unwrap())
+                .unwrap()
+                .operations
+        })
+        .filter(|o| o.operator == "Tr")
+        .map(|o| o.operands[0].as_float().unwrap())
+        .collect::<Vec<_>>();
+    assert!(modes.contains(&0.) && modes.contains(&7.), "{modes:?}");
+    assert!(!modes.contains(&1.) && !modes.contains(&2.), "{modes:?}");
+    let (_, notes) = write(&native_text()).unwrap();
+    assert!(
+        notes
+            .iter()
+            .any(|s| s.contains("stroke as a vector outline"))
+    );
 }
 #[test]
 #[ignore = "independent retained filter qualification requires qpdf and Poppler"]
