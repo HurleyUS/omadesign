@@ -16,6 +16,7 @@ struct Record {
     mask_rect: Option<Rect>,
     channels: Vec<(i16, Vec<u8>)>,
     overlay: Option<super::effects::Overlay>,
+    type_data: Option<Vec<u8>>,
 }
 
 fn u16(out: &mut Vec<u8>, value: u16) {
@@ -74,6 +75,42 @@ fn zip_channel(data: &[u8]) -> Result<Vec<u8>, String> {
 /// Export a standards-compliant RGB/8 PSD or PSB, with a compatibility composite.
 /// Vectors and native filters are rendered per layer; groups and pixel masks stay separate.
 pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
+    if doc.layers.iter().any(|l| {
+        l.kind.shapes().is_some_and(|ss| {
+            ss.len() > 1
+                && ss
+                    .iter()
+                    .any(|s| matches!(s.geom, crate::geom::Geom::Text(_)))
+        })
+    }) {
+        let mut prepared = doc.clone();
+        prepared.layers.clear();
+        for layer in &doc.layers {
+            if let Some(shapes) = layer.kind.shapes().filter(|ss| {
+                ss.len() > 1
+                    && ss
+                        .iter()
+                        .any(|s| matches!(s.geom, crate::geom::Geom::Text(_)))
+            }) {
+                let mut group = layer.clone();
+                group.kind = LayerKind::Vector { shapes: vec![] };
+                group.is_group = true;
+                group.pass_through = false;
+                for shape in shapes {
+                    let mut child = Layer::vector(&shape.name);
+                    child.parent = Some(group.id);
+                    child.kind = LayerKind::Vector {
+                        shapes: vec![shape.clone()],
+                    };
+                    prepared.layers.push(child);
+                }
+                prepared.layers.push(group);
+            } else {
+                prepared.layers.push(layer.clone());
+            }
+        }
+        return encode(&prepared, large);
+    }
     if !doc.mask_sources().is_empty() {
         if doc.layers.iter().any(|l| {
             l.kind.pixels().is_some_and(|p| p.native.is_some())
@@ -150,6 +187,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             mask_rect: None,
             channels: Vec::new(),
             overlay: None,
+            type_data: None,
         };
         add_pixels(
             &mut record,
@@ -192,6 +230,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             mask_rect: None,
             channels: Vec::new(),
             overlay: None,
+            type_data: None,
         });
     }
     let mut layer_info = Vec::new();
@@ -322,6 +361,7 @@ fn collect(
                 mask_rect: None,
                 channels: Vec::new(),
                 overlay: None,
+                type_data: None,
             });
             collect(
                 doc,
@@ -356,7 +396,23 @@ fn collect(
             mask_rect: None,
             channels: Vec::new(),
             overlay: super::effects::overlay(&layer.filters),
+            type_data: None,
         };
+        if let Some(shape) = layer
+            .kind
+            .shapes()
+            .filter(|ss| ss.len() == 1)
+            .and_then(|ss| ss.first())
+            .filter(|s| matches!(s.geom, crate::geom::Geom::Text(_)))
+        {
+            record.type_data = Some(super::type_layer::encode(
+                shape,
+                layer.psd_type.as_ref(),
+                warnings,
+            )?);
+            record.opacity =
+                (record.opacity as f32 * shape.opacity * shape.fill_opacity).round() as u8;
+        }
         if layer.is_group {
             if layer.filters.active() && record.overlay.is_none() {
                 warn(
@@ -588,7 +644,8 @@ fn layer_pixels(
             }
         }
     }
-    if matches!(layer.kind, LayerKind::Vector { .. }) {
+    if matches!(&layer.kind, LayerKind::Vector { shapes } if !shapes.iter().all(|s|matches!(s.geom,crate::geom::Geom::Text(_))))
+    {
         warn(
             warnings,
             "Vector artwork and text are rasterized individually in Photoshop export; save .oma to retain native editing.",
@@ -691,6 +748,9 @@ fn write_record(out: &mut Vec<u8>, record: &Record, large: bool) -> Result<(), S
         divider.extend_from_slice(b"8BIM");
         divider.extend_from_slice(&record.blend);
         tagged(&mut extra, b"lsct", &divider)?;
+    }
+    if let Some(data) = &record.type_data {
+        tagged(&mut extra, b"TySh", data)?;
     }
     section(out, &extra, false)
 }

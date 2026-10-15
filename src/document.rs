@@ -791,6 +791,8 @@ impl LayerKind {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub psd_type: Option<crate::formats::psd::type_layer::TypeData>,
     pub id: u64,
     pub name: String,
     pub visible: bool,
@@ -844,6 +846,7 @@ impl Layer {
             parent: None,
             is_group: false,
             pass_through: false,
+            psd_type: None,
             text_wrap: Default::default(),
             mask: None,
             artwork_masks: Vec::new(),
@@ -867,6 +870,7 @@ impl Layer {
             parent: None,
             is_group: false,
             pass_through: false,
+            psd_type:None,
             text_wrap: Default::default(),
             mask: None,
             artwork_masks: Vec::new(),
@@ -896,6 +900,7 @@ impl Layer {
             parent: None,
             is_group: false,
             pass_through: false,
+            psd_type:None,
             text_wrap: Default::default(),
             mask: None,
             artwork_masks: Vec::new(),
