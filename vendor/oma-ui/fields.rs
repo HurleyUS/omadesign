@@ -29,6 +29,7 @@ pub fn number<N: egui::emath::Numeric>(
     state: FieldState<'_>,
 ) -> FieldResponse {
     let before = *value;
+    let mut reset_clicked = false;
     let key = ui.make_persistent_id(id);
     ui.push_id(key, |ui| {
         ui.vertical(|ui| {
@@ -64,6 +65,7 @@ pub fn number<N: egui::emath::Numeric>(
                                 )
                             });
                             if reset_response.clicked() {
+                                reset_clicked = true;
                                 *value = reset;
                                 response.mark_changed();
                             }
@@ -79,7 +81,7 @@ pub fn number<N: egui::emath::Numeric>(
                     .inner
                 })
                 .inner;
-            let cancelled = (response.has_focus() || response.lost_focus())
+            let cancelled = (response.has_focus() || response.lost_focus() || response.dragged())
                 && ui.input(|input| input.key_pressed(egui::Key::Escape));
             if cancelled {
                 *value = before;
@@ -93,7 +95,13 @@ pub fn number<N: egui::emath::Numeric>(
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
             let changed = response.changed() && !cancelled && !invalid && !state.locked;
-            let committed = changed || response.drag_stopped() || response.lost_focus();
+            let committed = !cancelled
+                && !invalid
+                && !state.locked
+                && (reset_clicked
+                    || response.drag_stopped()
+                    || response.lost_focus()
+                    || (changed && !response.dragged() && !response.has_focus()));
             FieldResponse {
                 response,
                 changed,
