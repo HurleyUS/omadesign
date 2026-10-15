@@ -412,8 +412,16 @@ mod tests {
     fn frame(
         ctx: &egui::Context,
         book: &mut Book,
-        events: Vec<egui::Event>,
+        mut events: Vec<egui::Event>,
     ) -> (egui::FullOutput, f32) {
+        let modifiers = events
+            .iter()
+            .find_map(|event| match event {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        events.insert(0, egui::Event::ModifiersChanged(modifiers));
         let mut left = 0.;
         let mut output = ctx.run_ui(
             egui::RawInput {
