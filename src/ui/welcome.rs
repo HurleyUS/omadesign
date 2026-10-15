@@ -454,13 +454,14 @@ pub(super) mod keyboard_tests {
         }).collect()
     }
 
-    pub fn render(ctx: &egui::Context, events: Vec<Event>, show: impl FnMut(&mut Ui)) -> egui::FullOutput {
+    pub fn render(ctx: &egui::Context, mut events: Vec<Event>, show: impl FnMut(&mut Ui)) -> egui::FullOutput {
         let modifiers = events.iter().find_map(|event| match event {
             Event::Key { modifiers, .. } => Some(*modifiers), _ => None,
         }).unwrap_or_default();
+        events.insert(0, Event::ModifiersChanged(modifiers));
         let mut output = ctx.run_ui(egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200., 1000.))),
-            events, modifiers, ..Default::default()
+            events, ..Default::default()
         }, show);
         output.textures_delta.clear();
         output
