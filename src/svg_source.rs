@@ -147,6 +147,111 @@ pub fn path_data(path: &tiny_skia::Path) -> String {
     out
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SvgFilterGraph {
+    pub definitions: Arc<str>,
+    pub original_definitions: Arc<str>,
+    pub filters: Vec<String>,
+    pub transform: [f32; 6],
+    #[serde(default)]
+    pub reductions: Vec<String>,
+}
+
+impl SvgFilterGraph {
+    /// Apply the retained filter graph in its original coordinate system.
+    /// Args: export definitions, unique prefix and current editable vector content.
+    /// Returns a vector group; invalid singular placement leaves the content intact.
+    pub fn wrap(&self, definitions: &mut String, _prefix: &str, content: String) -> String {
+        let placement = transform(self.transform);
+        let Some(inverse) = placement.invert() else {
+            return content;
+        };
+        let prefix = append_source(definitions, &self.definitions);
+        let filters = self
+            .filters
+            .iter()
+            .map(|id| format!("url(#{prefix}{id})"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!(
+            "<g transform=\"{}\" filter=\"{filters}\"><g transform=\"{}\">{content}</g></g>",
+            matrix(placement),
+            matrix(inverse)
+        )
+    }
+}
+
+/// Identify SVG operations the current renderer cannot execute.
+/// Args: filter XML. Returns one explicit reduction per unsupported primitive or external input.
+pub fn reductions(source: &str) -> Vec<String> {
+    let Ok(xml) = roxmltree::Document::parse_with_options(
+        source,
+        roxmltree::ParsingOptions {
+            allow_dtd: true,
+            nodes_limit: 400_000,
+            entity_resolver: None,
+        },
+    ) else {
+        return vec!["Invalid SVG effect source".into()];
+    };
+    let mut notes = Vec::new();
+    for node in xml.descendants().filter(|n| n.is_element()) {
+        let tag = node.tag_name().name();
+        if tag.starts_with("fe")
+            && !matches!(
+                tag,
+                "feBlend"
+                    | "feColorMatrix"
+                    | "feComponentTransfer"
+                    | "feComposite"
+                    | "feConvolveMatrix"
+                    | "feDiffuseLighting"
+                    | "feDisplacementMap"
+                    | "feDistantLight"
+                    | "feDropShadow"
+                    | "feFlood"
+                    | "feFuncR"
+                    | "feFuncG"
+                    | "feFuncB"
+                    | "feFuncA"
+                    | "feGaussianBlur"
+                    | "feImage"
+                    | "feMerge"
+                    | "feMergeNode"
+                    | "feMorphology"
+                    | "feOffset"
+                    | "fePointLight"
+                    | "feSpecularLighting"
+                    | "feSpotLight"
+                    | "feTile"
+                    | "feTurbulence"
+            )
+        {
+            notes.push(format!(
+                "SVG filter operation {tag} is not rendered; original source retained."
+            ));
+        }
+        if tag == "feImage"
+            && node.attributes().any(|a| {
+                a.name() == "href" && !a.value().starts_with('#') && !a.value().starts_with("data:")
+            })
+        {
+            notes.push("SVG filter linked feImage is not loaded; embed the image first.".into());
+        }
+        for attribute in ["in", "in2"] {
+            if let Some(
+                input @ ("BackgroundImage" | "BackgroundAlpha" | "FillPaint" | "StrokePaint"),
+            ) = node.attribute(attribute)
+            {
+                notes.push(format!(
+                    "SVG filter input {input} is reduced by the renderer; original source retained."
+                ));
+            }
+        }
+    }
+    notes
+}
+
 /// Parse only self-contained vector source.
 /// Returns SVG options that resolve embedded data while refusing file or network references.
 pub fn options() -> usvg::Options<'static> {
@@ -165,18 +270,19 @@ pub fn requires_advanced_paint(doc: &crate::document::Document) -> bool {
             || g.spread != crate::gradient::Spread::Pad
     };
     doc.layers.iter().any(|layer| {
-        layer.kind.shapes().is_some_and(|shapes| {
-            shapes.iter().any(|shape| {
-                matches!(&shape.style.fill, crate::document::Fill::Pattern(_))
-                    || shape.style.fill.gradient().as_ref().is_some_and(gradient)
-                    || shape
-                        .style
-                        .stroke
-                        .as_ref()
-                        .and_then(|s| s.gradient.as_ref())
-                        .is_some_and(gradient)
+        layer.svg_filter.is_some()
+            || layer.kind.shapes().is_some_and(|shapes| {
+                shapes.iter().any(|shape| {
+                    matches!(&shape.style.fill, crate::document::Fill::Pattern(_))
+                        || shape.style.fill.gradient().as_ref().is_some_and(gradient)
+                        || shape
+                            .style
+                            .stroke
+                            .as_ref()
+                            .and_then(|s| s.gradient.as_ref())
+                            .is_some_and(gradient)
+                })
             })
-        })
     })
 }
 
@@ -322,6 +428,10 @@ pub fn unpack_sources(
 /// Args: mutable document and an operation on each shared definition reference.
 fn visit_sources(doc: &mut crate::document::Document, visit: &mut impl FnMut(&mut Arc<str>)) {
     for layer in &mut doc.layers {
+        if let Some(graph) = &mut layer.svg_filter {
+            visit(&mut graph.definitions);
+            visit(&mut graph.original_definitions);
+        }
         for shape in layer.kind.shapes_mut().into_iter().flatten() {
             if let crate::document::Fill::Pattern(pattern) = &mut shape.style.fill {
                 visit(&mut pattern.definitions);
