@@ -140,8 +140,9 @@ pub fn decode_clipboard_shapes(text: &str) -> Result<Vec<crate::document::Shape>
 }
 
 fn compress_pixels(px: &Pixels) -> Result<Pixels, String> {
-    let pm = px.to_pixmap().ok_or("pixmap")?;
-    let png = pm.encode_png().map_err(|e| e.to_string())?;
+    use image::ImageEncoder;
+    let mut png=Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png).write_image(&px.data,px.w,px.h,image::ExtendedColorType::Rgba8).map_err(|e|e.to_string())?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(png);
     Ok(Pixels {
         native: px.native.clone(),
