@@ -519,7 +519,7 @@ impl Reader<'_> {
                             filters,
                             transform: matrix(g.abs_transform()),
                             reductions: crate::svg_source::reductions(&format!(
-                                "<svg>{}</svg>",
+                                "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\">{}</svg>",
                                 self.original_definitions
                             )),
                         });
@@ -1088,6 +1088,8 @@ impl Reader<'_> {
         Ok(())
     }
 }
+/// Serialize resolved vector resources without creating pixel layers.
+/// Args: normalized SVG tree. Returns portable definition XML, including SVG 2 inner radii.
 pub(crate) fn normalized_definitions(tree: &usvg::Tree) -> String {
     let source = tree.to_string(&usvg::WriteOptions::default());
     let xml = roxmltree::Document::parse(&source).expect("normalized SVG");

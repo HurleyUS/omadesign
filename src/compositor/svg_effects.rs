@@ -22,24 +22,20 @@ pub(super) fn render(
             if layer.parent.is_some_and(|id| ids.contains(&id)) {
                 ids.insert(layer.id);
             }
-        }
-        if ids.len() == before {
-            break;
-        }
-    }
-    for source in doc.mask_sources() {
-        if let Some((index, _)) = source.resolve(doc) {
-            ids.insert(doc.layers[index].id);
-            for ancestor in doc.layer_ancestors(index) {
-                ids.insert(doc.layers[ancestor].id);
+            if !ids.contains(&layer.id) {
+                continue;
             }
-        }
-    }
-    for _ in 0..64 {
-        let before = ids.len();
-        for layer in &doc.layers {
-            if layer.parent.is_some_and(|id| ids.contains(&id)) {
-                ids.insert(layer.id);
+            for mask in layer.artwork_masks.iter().chain(
+                layer
+                    .kind
+                    .shapes()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|s| &s.artwork_masks),
+            ) {
+                if let Some((index, _)) = mask.source.resolve(doc) {
+                    ids.insert(doc.layers[index].id);
+                }
             }
         }
         if ids.len() == before {
@@ -51,6 +47,9 @@ pub(super) fn render(
     isolated.transparent = true;
     let mut poses = HashMap::new();
     for layer in &mut isolated.layers {
+        if layer.parent.is_some_and(|id| !ids.contains(&id)) {
+            layer.parent = None;
+        }
         if layer.id == group.id {
             layer.parent = None;
             layer.opacity = 1.;
@@ -181,6 +180,40 @@ mod tests {
             assert!(maximum <= 3 && mean < 0.1, "max={maximum} mean={mean}");
         }
         assert!(crate::project::encode(&doc).unwrap().len() < 30_000);
+    }
+
+    #[test]
+    fn svg_graph_keeps_nested_clip_sources_and_recomputes_object_bbox_regions() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="140"><defs><filter id="fx"><feGaussianBlur stdDeviation="2"/><feOffset dx="3"/></filter><clipPath id="clip"><g><path d="M20 20H100V90H20Z"/></g></clipPath></defs><g filter="url(#fx)"><g clip-path="url(#clip)"><rect x="10" y="10" width="110" height="90" fill="#c52"/></g></g></svg>"##;
+        let (mut doc, _) = crate::formats::svg::read(source, "Clip graph").unwrap();
+        let tree = usvg::Tree::from_str(source, &crate::svg_source::options()).unwrap();
+        let mut expected = Pixmap::new(180, 140).unwrap();
+        resvg::render(&tree, Transform::identity(), &mut expected.as_mut());
+        let actual = crate::compositor::render_export_at(&doc, 1., 0., true).unwrap();
+        let (maximum, mean) = difference(&actual, &expected);
+        assert!(maximum <= 3 && mean < 0.1, "max={maximum} mean={mean}");
+        let unclipped = source.replace(r##" clip-path="url(#clip)""##, "");
+        doc = crate::formats::svg::read(&unclipped, "Edit graph")
+            .unwrap()
+            .0;
+        let shape = doc
+            .layers
+            .iter_mut()
+            .filter_map(|l| l.kind.shapes_mut())
+            .flatten()
+            .find(|s| s.style.fill == Fill::Solid(Rgba::new(204, 85, 34, 255)))
+            .unwrap();
+        shape.geom.translate(Pt::new(30., 15.));
+        let moved = unclipped.replace(r##"x="10" y="10""##, r##"x="40" y="25""##);
+        let tree = usvg::Tree::from_str(&moved, &crate::svg_source::options()).unwrap();
+        expected.fill(tiny_skia::Color::TRANSPARENT);
+        resvg::render(&tree, Transform::identity(), &mut expected.as_mut());
+        let actual = crate::compositor::render_export_at(&doc, 1., 0., true).unwrap();
+        let (maximum, mean) = difference(&actual, &expected);
+        assert!(
+            maximum <= 3 && mean < 0.1,
+            "moved max={maximum} mean={mean}"
+        );
     }
 
     #[test]

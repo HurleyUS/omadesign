@@ -161,7 +161,7 @@ impl SvgFilterGraph {
     /// Apply the retained filter graph in its original coordinate system.
     /// Args: export definitions, unique prefix and current editable vector content.
     /// Returns a vector group; invalid singular placement leaves the content intact.
-    pub fn wrap(&self, definitions: &mut String, prefix: &str, content: String) -> String {
+    pub fn wrap(&self, definitions: &mut String, _prefix: &str, content: String) -> String {
         let placement = transform(self.transform);
         let Some(inverse) = placement.invert() else {
             return content;
@@ -451,4 +451,72 @@ pub fn append_source(definitions: &mut String, source: &Arc<str>) -> String {
         definitions.push_str(&namespace(source, &prefix));
     }
     prefix
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{document::Fill, formats::svg::read};
+
+    #[test]
+    fn svg_sources_share_prune_pack_and_reopen_without_pattern_id_collisions() {
+        let shapes = (0..120)
+            .map(|i| {
+                format!(
+                    "<rect x=\"{}\" y=\"0\" width=\"5\" height=\"10\" fill=\"url(#paint)\"/>",
+                    i * 5
+                )
+            })
+            .collect::<String>();
+        let source = format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="600" height="10"><defs><pattern id="paint" patternUnits="userSpaceOnUse" width="4" height="4"><path d="M0 0H2V4H0Z" fill="#28a"/></pattern><pattern id="unused" width="1" height="1"><rect width="1" height="1"/></pattern></defs>{shapes}</svg>"##
+        );
+        let (doc, _) = read(&source, "Shared resources").unwrap();
+        let paints: Vec<_> = doc
+            .layers
+            .iter()
+            .filter_map(|l| l.kind.shapes())
+            .flatten()
+            .filter_map(|s| {
+                if let Fill::Pattern(p) = &s.style.fill {
+                    Some(p)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(paints.len(), 120);
+        assert!(Arc::ptr_eq(
+            &paints[0].definitions,
+            &paints[119].definitions
+        ));
+        assert!(!paints[0].definitions.contains("unused"));
+        let encoded = crate::project::encode(&doc).unwrap();
+        let file: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(file["version"], 14);
+        assert_eq!(file["svg_sources"].as_object().unwrap().len(), 1);
+        let restored = crate::project::decode(&encoded).unwrap();
+        let exported = crate::svg::export(&restored).unwrap();
+        let xml = roxmltree::Document::parse(&exported).unwrap();
+        let ids: Vec<_> = xml
+            .descendants()
+            .filter_map(|n| n.attribute("id"))
+            .collect();
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(ids.len(), unique.len());
+        assert_eq!(exported.matches("M0 0H2V4H0Z").count(), 0);
+        assert_eq!(exported.matches("<!--oma-resource-").count(), 1);
+        let actual = crate::compositor::render_export_at(&restored, 1., 0., true).unwrap();
+        assert!(actual.pixels().iter().any(|p| p.alpha() > 0));
+        let tree = usvg::Tree::from_str(&source, &options()).unwrap();
+        let mut expected = tiny_skia::Pixmap::new(600, 10).unwrap();
+        resvg::render(&tree, Transform::identity(), &mut expected.as_mut());
+        let sum: u64 = actual
+            .data()
+            .iter()
+            .zip(expected.data())
+            .map(|(a, b)| u64::from(a.abs_diff(*b)))
+            .sum();
+        assert!(sum as f64 / (actual.data().len() as f64) < 0.1);
+    }
 }
