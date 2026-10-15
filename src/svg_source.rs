@@ -293,7 +293,7 @@ pub fn reductions(source: &str) -> Vec<String> {
 /// Parse only self-contained vector source.
 /// Returns SVG options that resolve embedded data while refusing file or network references.
 pub fn options() -> usvg::Options<'static> {
-    let mut options = usvg::Options::default();
+    let mut options = crate::text::svg_type::options();
     options.image_href_resolver.resolve_string = Box::new(|_, _| None);
     options
 }
@@ -509,6 +509,23 @@ pub fn append_source(definitions: &mut String, source: &Arc<str>) -> String {
 mod tests {
     use super::*;
     use crate::{document::Fill, formats::svg::read};
+
+    #[test]
+    fn integrated_svg_sources_keep_text_inside_pattern_definitions() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><defs><pattern id="p" width="64" height="32" patternUnits="userSpaceOnUse"><text x="2" y="24" font-size="20" font-family="Oma Missing Family">ABCD</text></pattern></defs><rect width="64" height="32" fill="url(#p)"/></svg>"##;
+        let tree = usvg::Tree::from_str(source, &options()).unwrap();
+        let mut pixels = tiny_skia::Pixmap::new(64, 32).unwrap();
+        resvg::render(&tree, Transform::identity(), &mut pixels.as_mut());
+        assert!(
+            pixels
+                .pixels()
+                .iter()
+                .filter(|pixel| pixel.alpha() > 0)
+                .count()
+                > 20,
+            "retained pattern text must not disappear from an empty font database"
+        );
+    }
 
     #[test]
     fn svg_project_guard_covers_each_advanced_gradient_field_on_fill_and_stroke() {
