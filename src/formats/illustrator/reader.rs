@@ -1099,6 +1099,8 @@ impl Reader<'_> {
                 stroke: None,
             });
             let mut shape = Shape::new(Geom::Text(text), style);
+            shape.visible = self.state.visible;
+            shape.locked = self.state.locked;
             shape.opacity = self.state.opacity;
             shape.blend = self.state.blend;
             let mut layer = Layer::vector("Text");

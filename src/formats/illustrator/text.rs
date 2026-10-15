@@ -587,6 +587,7 @@ impl Texts {
             )
         };
         let mut rotation = 0.;
+        let mut point_scale = 1.;
         if kind == 0 {
             if frame > 0 {
                 return None;
@@ -607,6 +608,7 @@ impl Texts {
                     + f,
             );
             let scale = (a * d - b * c).sqrt() as f32;
+            point_scale = scale;
             run.px *= scale;
             run.leading *= scale;
             run.tracking *= scale;
@@ -665,7 +667,7 @@ impl Texts {
         let stroke = if matches!(pick("57"), Some(Val::Bool(true))) {
             Some(Stroke {
                 color: pick("54").and_then(paint).unwrap_or(Rgba::BLACK),
-                width: num("63").unwrap_or(1.) as f32,
+                width: num("63").unwrap_or(1.) as f32 * point_scale,
                 ..Stroke::default()
             })
         } else {
