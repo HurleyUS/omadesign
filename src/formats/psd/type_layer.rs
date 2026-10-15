@@ -373,6 +373,11 @@ pub fn encode(
     let Geom::Text(run) = &shape.geom else {
         return Err("Expected native text".into());
     };
+    if !matches!(shape.style.fill, Fill::Solid(_))
+        || run.spans.iter().any(|s| s.fill.as_ref().is_some_and(|f| !matches!(f, Fill::Solid(_))))
+    {
+        return Err("Editable Photoshop type cannot retain non-solid text paint. Save .oma or export SVG to preserve the original paint.".into());
+    }
     let mut text = retained
         .map(|d| d.text.clone())
         .unwrap_or_else(|| Descriptor::new("TxLr"));
@@ -638,6 +643,23 @@ fn compose(a: [f32; 6], b: [f32; 6]) -> [f32; 6] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn non_solid_type_paint_is_not_silently_replaced_with_black() {
+        for span in [false, true] {
+            let mut doc = crate::formats::psd::decode(include_bytes!("fixtures/independent-type.psd"), "Paint").unwrap().document;
+            let shape = &mut doc.layers[0].kind.shapes_mut().unwrap()[0];
+            let fill = Fill::Radial {c0:Rgba::BLACK,c1:Rgba::WHITE};
+            if span {
+                let Geom::Text(run) = &mut shape.geom else {panic!()};
+                run.spans[0].fill = Some(fill);
+            } else {shape.style.fill = fill;}
+            let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+            for large in [false,true] {
+                let error = crate::formats::psd::encode(&reopened,large).err().expect("Unsupported paint must not become black editable type");
+                assert!(error.contains("non-solid text paint"),"{error}");
+            }
+        }
+    }
     #[test]
     fn independent_type_remains_editable_after_native_save_and_psd_export() {
         let fixture = include_bytes!("fixtures/independent-type.psd");
