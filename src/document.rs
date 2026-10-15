@@ -493,6 +493,8 @@ impl Shape {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Pixels {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<crate::deep_color::NativePixels>,
     pub w: u32,
     pub h: u32,
     pub data: Vec<u8>,
@@ -510,6 +512,7 @@ impl Clone for Pixels {
             w: self.w,
             h: self.h,
             data: self.data.clone(),
+            native: self.native.clone(),
             version: self.version,
             cached_pm: RefCell::new(None),
             cached_uniform: RefCell::new(*self.cached_uniform.borrow()),
@@ -523,6 +526,7 @@ impl Pixels {
             w: w.max(1),
             h: h.max(1),
             data: vec![0u8; w.max(1) as usize * h.max(1) as usize * 4],
+            native: None,
             version: 0,
             cached_pm: RefCell::new(None),
             cached_uniform: RefCell::new(Some((0, Some(Rgba::TRANSPARENT)))),
@@ -536,6 +540,7 @@ impl Pixels {
         Some(Self {
             w,
             h,
+            native: None,
             data,
             version: 1,
             cached_pm: RefCell::new(None),
@@ -606,6 +611,7 @@ impl Pixels {
         Self {
             w: pm.width(),
             h: pm.height(),
+            native: None,
             data,
             version: 1,
             cached_pm: RefCell::new(Some((1, pm.clone()))),
@@ -1829,6 +1835,12 @@ pub enum Cmd {
         blend: Blend,
         before: (String, bool, bool, f32, Blend),
     },
+    NativePixels {
+        layer: usize,
+        mask: bool,
+        before: Pixels,
+        after: Pixels,
+    },
     Pixels {
         layer: usize,
         mask: bool,
@@ -2340,6 +2352,7 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
             blend: before.4,
             before: (name, visible, locked, opacity, blend),
         },
+        Cmd::NativePixels {layer, mask, before, after} => Cmd::NativePixels {layer, mask, before:after, after:before},
         Cmd::Pixels {
             layer,
             mask,
@@ -2722,6 +2735,12 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
         Cmd::PaintRaster { layer, after, .. } => {
             if let Some(layer) = doc.layers.get_mut(*layer) {
                 after.clone().restore(layer);
+            }
+        }
+        Cmd::NativePixels {layer, mask, after, ..} => {
+            if let Some(l) = doc.layers.get_mut(*layer) {
+                let target = if *mask {l.mask.as_mut()} else {l.kind.pixels_mut()};
+                if let Some(target) = target {*target = after.clone(); target.touch();}
             }
         }
         Cmd::Pixels {

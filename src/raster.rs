@@ -305,6 +305,31 @@ pub fn apply(
             ]
         })
         .collect();
+    Ok(apply_float(&src, w, h, settings, selection)?
+        .par_iter()
+        .flat_map_iter(|p| p.iter().map(|&v| byte(v)))
+        .collect())
+}
+
+/// Filter straight floating-point samples without an 8-bit intermediate.
+/// Args: source, dimensions, settings and optional coverage. Returns edited RGBA samples.
+pub fn apply_float(
+    src: &[[f32; 4]],
+    w: u32,
+    h: u32,
+    settings: &Settings,
+    selection: Option<&[u8]>,
+) -> Result<Vec<[f32; 4]>, String> {
+    let count = (w as usize)
+        .checked_mul(h as usize)
+        .ok_or("Image is too large")?;
+    if count == 0
+        || src.len() != count
+        || selection.is_some_and(|m| m.len() != count)
+        || src.iter().flatten().any(|v| !v.is_finite())
+    {
+        return Err("Invalid native image or selection".into());
+    }
     let p = settings.values;
     let mut out = match settings.kind {
         Kind::GaussianBlur => blur(&src, w, h, p[0]),
@@ -494,8 +519,7 @@ pub fn apply(
         let alpha = original[3] * (1.0 - amount) + pixel[3] * amount;
         for ch in 0..3 {
             pixel[ch] = if alpha > 0.00001 {
-                (original[ch] * original[3] * (1.0 - amount)
-                    + pixel[ch].clamp(0.0, 1.0) * pixel[3] * amount)
+                (original[ch] * original[3] * (1.0 - amount) + pixel[ch] * pixel[3] * amount)
                     / alpha
             } else {
                 original[ch]
@@ -503,10 +527,7 @@ pub fn apply(
         }
         pixel[3] = alpha;
     });
-    Ok(out
-        .par_iter()
-        .flat_map_iter(|p| p.iter().map(|&v| byte(v)))
-        .collect())
+    Ok(out)
 }
 
 fn hash(mut n: u32) -> u32 {

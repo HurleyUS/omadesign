@@ -102,6 +102,7 @@ pub(super) struct Parsed {
     pub width: u32,
     pub height: u32,
     pub mode: u16,
+    pub depth: u16,
     pub dpi: f32,
     pub layers: Vec<Record>,
     pub merged: Option<Vec<Vec<u8>>>,
@@ -150,14 +151,6 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
         return Err("Photoshop file has too few color channels".into());
     }
     let mut warnings = Vec::new();
-    if depth != 8 {
-        warn(
-            &mut warnings,
-            format!(
-                "{depth}-bit Photoshop channels were converted to the document's 8-bit precision."
-            ),
-        );
-    }
     if mode == 4 {
         warn(
             &mut warnings,
@@ -230,7 +223,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
             large,
         )?;
         let mut merged = samples
-            .chunks_exact(pixels)
+            .chunks_exact(pixels * depth as usize / 8)
             .map(|p| p.to_vec())
             .collect::<Vec<_>>();
         if !merged_alpha && merged.len() > color_channels(mode) {
@@ -248,6 +241,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
         width,
         height,
         mode,
+        depth,
         dpi,
         layers,
         merged,
@@ -518,7 +512,7 @@ fn parse_layers(
                 continue;
             }
             let pixels = dimensions(w, h)?;
-            budget(allocation, pixels)?;
+            budget(allocation, pixels * depth as usize / 8)?;
             record
                 .pixels
                 .push((id, decode_channel(bytes, w, h, depth, large)?));
@@ -612,22 +606,7 @@ pub(super) fn decode_channel(
             }
         }
     }
-    Ok(match depth {
-        8 => data,
-        16 => data
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|b| ((u16::from_be_bytes([b[0], b[1]]) as u32 + 128) / 257) as u8)
-            .collect(),
-        32 => data
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|b| (f32::from_be_bytes(*b).clamp(0.0, 1.0) * 255.0).round() as u8)
-            .collect(),
-        _ => return Err("Unsupported Photoshop channel depth".into()),
-    })
+    Ok(data)
 }
 
 fn unpack_bits(encoded: &[u8], expected: usize, output: &mut Vec<u8>) -> Result<(), String> {
@@ -684,13 +663,16 @@ mod tests {
             (
                 16,
                 vec![0, 0, 128, 0, 127, 255, 255, 255, 128, 1, 128, 0],
-                vec![0, 128, 255, 255, 128, 0],
+                vec![0, 0, 128, 0, 255, 255, 255, 255, 128, 0, 0, 0],
             ),
             // Float bytes are shuffled before byte-wise delta prediction.
             (
                 32,
                 vec![0, 63, 0, 193, 0, 128, 128, 0, 0, 0, 0, 0],
-                vec![0, 128, 255],
+                [0f32, 0.5, 1.]
+                    .into_iter()
+                    .flat_map(f32::to_be_bytes)
+                    .collect(),
             ),
         ] {
             let mut data = vec![0, 3];

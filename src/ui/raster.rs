@@ -592,16 +592,19 @@ fn commit(studio: &mut Studio, session: &Session, after: Vec<u8>) -> Result<(), 
     if after.len() != session.source.len() {
         return Err("The filter returned invalid pixel data".into());
     }
-    if after == *session.source {
+    let native_after = pixels.native.as_ref().map(|_|pixels.filtered(&session.settings,session.selection.as_deref().map(|s|s.as_slice()))).transpose()?;
+    if native_after.is_none() && after == *session.source {
         studio.status = format!("{} · no pixel changes", session.settings.kind.name());
         return Ok(());
     }
-    let cmd = Cmd::Pixels {
+    let cmd = if let Some(after) = native_after {
+        Cmd::NativePixels {layer:index, mask:session.mask, before:pixels.clone(), after}
+    } else {Cmd::Pixels {
         layer: index,
         mask: session.mask,
         before: session.source.as_ref().clone(),
         after,
-    };
+    }};
     apply_command(&mut studio.doc, &cmd);
     studio.history.push(cmd);
     studio.dirty = true;

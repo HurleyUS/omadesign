@@ -5,7 +5,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(crate) const VERSION: u32 = 13;
+pub(crate) const VERSION: u32 = 14;
 
 #[derive(Serialize, Deserialize)]
 struct File {
@@ -19,7 +19,9 @@ pub fn encode(doc: &Document) -> Result<String, String> {
     serde_json::to_string(&File {
         // Older readers must not silently strip a mask or change stroke placement.
         // Keep plain documents compatible with v5; v1-v13 remain readable here.
-        version: if !doc.mask_sources().is_empty() {
+        version: if doc.layers.iter().any(|l| l.kind.pixels().is_some_and(|p|p.native.is_some()) || l.mask.as_ref().is_some_and(|p|p.native.is_some()) || l.kind.shapes().is_some_and(|ss|ss.iter().any(|s|s.mask.as_ref().is_some_and(|p|p.native.is_some())))) {
+            14
+        } else if !doc.mask_sources().is_empty() {
             13
         } else if doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(&s.geom, crate::geom::Geom::Text(t) if !t.manual_kern.is_empty() || t.spans.iter().any(|s| s.tracking.is_some() || s.kerning.is_some() || s.leading.is_some() || s.baseline_shift.is_some() || s.hscale.is_some() || s.vscale.is_some()))) {
             12
@@ -142,6 +144,7 @@ fn compress_pixels(px: &Pixels) -> Result<Pixels, String> {
     let png = pm.encode_png().map_err(|e| e.to_string())?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(png);
     Ok(Pixels {
+        native: px.native.clone(),
         w: px.w,
         h: px.h,
         data: b64.into_bytes(),
@@ -166,7 +169,10 @@ fn decompress_pixels(px: &Pixels) -> Result<Pixels, String> {
         .map_err(|e| e.to_string())?;
     let img = image::load_from_memory(&png).map_err(|e| e.to_string())?;
     let rgba = img.to_rgba8();
-    Pixels::from_rgba(rgba.width(), rgba.height(), rgba.into_raw()).ok_or_else(|| "size".into())
+    let mut out = Pixels::from_rgba(rgba.width(), rgba.height(), rgba.into_raw()).ok_or("size")?;
+    out.native = px.native.clone();
+    if out.native.as_ref().is_some_and(|n|n.samples.len()!=out.data.len()) {return Err("Native sample dimensions mismatch".into());}
+    Ok(out)
 }
 
 pub fn save_to(doc: &Document, path: &Path) -> Result<(), String> {

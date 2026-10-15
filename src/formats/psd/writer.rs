@@ -75,8 +75,8 @@ fn zip_channel(data: &[u8]) -> Result<Vec<u8>, String> {
 /// Vectors and native filters are rendered per layer; groups and pixel masks stay separate.
 pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
     if !doc.mask_sources().is_empty() {
-        let prepared=crate::compositor::raster_export_document(doc)?;
-        let mut result=encode(&prepared,large)?;
+        let prepared = crate::compositor::raster_export_document(doc)?;
+        let mut result = encode(&prepared, large)?;
         result.warnings.push("Live artwork masks were rendered into their affected layers or groups. Save .oma or export SVG to retain editable mask sources.".into());
         return Ok(result);
     }
@@ -96,6 +96,13 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
     if doc.layers.len() > MAX_LAYERS {
         return Err("Photoshop export exceeds the 8192 layer limit".into());
     }
+    let depth = doc
+        .layers
+        .iter()
+        .flat_map(|l| l.kind.pixels().into_iter().chain(l.mask.iter()))
+        .filter_map(|p| p.native.as_ref().map(|n| n.depth.bits()))
+        .max()
+        .unwrap_or(8);
     let mut warnings = Vec::new();
     if doc.layers.iter().any(|l| {
         l.filters.independent()
@@ -137,7 +144,11 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             channels: Vec::new(),
             overlay: None,
         };
-        add_pixels(&mut record, pixels.as_raw())?;
+        add_pixels(
+            &mut record,
+            &Pixels::from_rgba(w, h, pixels.into_raw()).ok_or("Invalid paper")?,
+            depth,
+        )?;
         records.push(record);
         used = dimensions(w, h)? * 8;
         warn(
@@ -153,6 +164,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
         &mut visited,
         &mut used,
         &mut warnings,
+        depth,
     )?;
     if visited.len() != doc.layers.len() {
         return Err("Cannot export Photoshop: layer groups contain duplicate IDs, missing parents, or cycles".into());
@@ -197,7 +209,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
     u16(&mut out, 4);
     u32(&mut out, h);
     u32(&mut out, w);
-    u16(&mut out, 8);
+    u16(&mut out, depth);
     u16(&mut out, 3);
     u32(&mut out, 0); // RGB color-mode data.
     let mut resources = Vec::new();
@@ -217,21 +229,21 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
     }
     section(&mut out, &resources, false)?;
     section(&mut out, &layer_mask, large)?;
-    let png = crate::compositor::export_png(doc, 1)?;
-    let merged = image::load_from_memory(&png)
-        .map_err(|e| format!("Could not create Photoshop composite: {e}"))?
-        .into_rgba8();
-    if merged.width() != w || merged.height() != h {
-        return Err("Photoshop composite dimensions do not match the canvas".into());
-    }
+    let merged = if depth == 8 {
+        let png = crate::compositor::export_png(doc, 1)?;
+        let image = image::load_from_memory(&png)
+            .map_err(|e| e.to_string())?
+            .into_rgba8();
+        Pixels::from_rgba(w, h, image.into_raw()).ok_or("Invalid merged image")?
+    } else {
+        crate::deep_color::composite(doc, 1)?
+    };
     u16(&mut out, 2);
     let mut zipper = flate2::write::ZlibEncoder::new(&mut out, flate2::Compression::fast());
-    let data = merged.as_raw();
     for ch in 0..4 {
-        let plane: Vec<u8> = data.as_chunks::<4>().0.iter().map(|p| p[ch]).collect();
         zipper
-            .write_all(&plane)
-            .map_err(|e| format!("Could not encode Photoshop composite: {e}"))?;
+            .write_all(&plane(&merged, ch, depth))
+            .map_err(|e| e.to_string())?;
     }
     zipper
         .finish()
@@ -250,6 +262,7 @@ fn collect(
     visited: &mut HashSet<u64>,
     used: &mut usize,
     warnings: &mut Vec<String>,
+    sample_depth: u16,
 ) -> Result<(), String> {
     if depth > 64 {
         return Err("Photoshop export exceeds the 64 level group nesting limit".into());
@@ -278,6 +291,7 @@ fn collect(
                 visited,
                 used,
                 warnings,
+                sample_depth,
             )?;
         }
         let mut record = Record {
@@ -320,7 +334,7 @@ fn collect(
                         "Photoshop export masks exceed the 512 MiB working size limit".into(),
                     );
                 }
-                add_mask(&mut record, &pixels, bounds)?;
+                add_mask(&mut record, &pixels, bounds, sample_depth)?;
             }
         } else if !matches!(&layer.kind, LayerKind::Vector { shapes } if shapes.is_empty())
             || layer.mask.is_some()
@@ -340,9 +354,9 @@ fn collect(
                 return Err("Photoshop export layers exceed the 512 MiB working size limit".into());
             }
             record.rect = bounds;
-            add_pixels(&mut record, &pixels.data)?;
+            add_pixels(&mut record, &pixels, sample_depth)?;
             if let Some(mask) = mask {
-                add_mask(&mut record, &mask, bounds)?;
+                add_mask(&mut record, &mask, bounds, sample_depth)?;
             }
         }
         records.push(record);
@@ -350,16 +364,30 @@ fn collect(
     Ok(())
 }
 
-fn add_pixels(record: &mut Record, rgba: &[u8]) -> Result<(), String> {
+fn plane(pixels: &Pixels, component: usize, depth: u16) -> Vec<u8> {
+    (0..pixels.w as usize * pixels.h as usize)
+        .flat_map(|i| {
+            let value = pixels.sample(i)[component];
+            match depth {
+                8 => vec![crate::deep_color::byte(value)],
+                16 => ((value.clamp(0., 1.) * 65535.).round() as u16)
+                    .to_be_bytes()
+                    .to_vec(),
+                _ => value.to_be_bytes().to_vec(),
+            }
+        })
+        .collect()
+}
+fn add_pixels(record: &mut Record, pixels: &Pixels, depth: u16) -> Result<(), String> {
     for ch in [-1i16, 0, 1, 2] {
-        let component = if ch == -1 { 3 } else { ch as usize };
-        let data: Vec<u8> = rgba
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|p| p[component])
-            .collect();
-        record.channels.push((ch, zip_channel(&data)?));
+        record.channels.push((
+            ch,
+            zip_channel(&plane(
+                pixels,
+                if ch == -1 { 3 } else { ch as usize },
+                depth,
+            ))?,
+        ));
     }
     Ok(())
 }
@@ -423,24 +451,21 @@ fn placed_group_mask(
     Ok((pixels, bounds))
 }
 
-fn add_mask(record: &mut Record, mask: &Pixels, bounds: Rect) -> Result<(), String> {
+fn add_mask(record: &mut Record, mask: &Pixels, bounds: Rect, depth: u16) -> Result<(), String> {
     if mask.data.len() != dimensions(mask.w, mask.h)? * 4 {
         return Err("Invalid native pixel mask buffer".into());
     }
     record.mask_rect = Some(bounds);
-    // The compositor uses premultiplied luminance; match it for colored masks too.
-    let values: Vec<u8> = mask
-        .data
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|p| {
-            let luminance = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32)
-                * p[3] as f32
-                / 255.0;
-            luminance.round() as u8
-        })
-        .collect();
+    let mut values = Vec::new();
+    for i in 0..mask.w as usize * mask.h as usize {
+        let p = mask.sample(i);
+        let value = ((p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722) * p[3]).clamp(0., 1.);
+        match depth {
+            8 => values.push(crate::deep_color::byte(value)),
+            16 => values.extend_from_slice(&((value * 65535.).round() as u16).to_be_bytes()),
+            _ => values.extend_from_slice(&value.to_be_bytes()),
+        };
+    }
     record.channels.push((-2, zip_channel(&values)?));
     Ok(())
 }
@@ -523,14 +548,22 @@ fn layer_pixels(
         isolated.filters = Default::default();
     }
     single.layers = vec![isolated];
-    let png = crate::compositor::export_png(&single, 1)?;
-    let rgba = image::load_from_memory(&png)
-        .map_err(|e| format!("Could not render Photoshop layer: {e}"))?
-        .into_rgba8();
-    let w = rgba.width();
-    let h = rgba.height();
-    let pixels =
-        Pixels::from_rgba(w, h, rgba.into_raw()).ok_or("Invalid rendered Photoshop layer")?;
+    let pixels = if doc
+        .layers
+        .iter()
+        .any(|l| l.kind.pixels().is_some_and(|p| p.native.is_some()))
+    {
+        crate::deep_color::composite(&single, 1)?
+    } else {
+        let png = crate::compositor::export_png(&single, 1)?;
+        let rgba = image::load_from_memory(&png)
+            .map_err(|e| e.to_string())?
+            .into_rgba8();
+        Pixels::from_rgba(rgba.width(), rgba.height(), rgba.into_raw())
+            .ok_or("Invalid layer render")?
+    };
+    let w = pixels.w;
+    let h = pixels.h;
     Ok((
         pixels,
         Rect {

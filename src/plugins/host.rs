@@ -68,6 +68,7 @@ impl State {
                 .unwrap_or(usize::MAX)
         };
         let bytes = match &command {
+            Cmd::NativePixels {before,after,..} => before.data.len().max(after.data.len())*5,
             Cmd::Pixels { before, after, .. } => before.len().max(after.len()),
             Cmd::AddShape { shape, .. } => json_size(serde_json::json!(shape)),
             Cmd::RemoveShapes { shapes, .. } => json_size(serde_json::json!(shapes)),

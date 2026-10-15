@@ -182,15 +182,14 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
                 layer.parent = stack.last().map(|g| g.id);
                 layer
             } else {
-                let rgba = rgba_channels(w, h, parsed.mode, |id| {
+                let rgba = rgba_channels(w, h, parsed.mode, parsed.depth, |id| {
                     record
                         .pixels
                         .iter()
                         .find(|(key, _)| *key == id)
                         .map(|(_, data)| data.as_slice())
                 })?;
-                let pixels =
-                    Pixels::from_rgba(w, h, rgba).ok_or("Invalid Photoshop layer pixels")?;
+                let pixels = rgba;
                 let mut layer = Layer::placed_raster(
                     &record.name,
                     pixels,
@@ -219,7 +218,13 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
                 } else {
                     record.rect
                 };
-                layer.mask = Some(convert_mask(mask, values, bounds, record.rect)?);
+                layer.mask = Some(convert_mask(
+                    mask,
+                    values,
+                    bounds,
+                    record.rect,
+                    parsed.depth,
+                )?);
             } else {
                 warn(
                     &mut warnings,
@@ -237,12 +242,17 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
     }
     if let Some(channels) = parsed.merged {
         let color_count = codec::color_channels(parsed.mode);
-        let rgba = rgba_channels(parsed.width, parsed.height, parsed.mode, |id| {
-            let idx = if id == -1 { color_count } else { id as usize };
-            channels.get(idx).map(Vec::as_slice)
-        })?;
-        let pixels = Pixels::from_rgba(parsed.width, parsed.height, rgba)
-            .ok_or("Invalid Photoshop merged pixels")?;
+        let rgba = rgba_channels(
+            parsed.width,
+            parsed.height,
+            parsed.mode,
+            parsed.depth,
+            |id| {
+                let idx = if id == -1 { color_count } else { id as usize };
+                channels.get(idx).map(Vec::as_slice)
+            },
+        )?;
+        let pixels = rgba;
         doc.layers.push(Layer::placed_raster(
             "Merged image",
             pixels,
@@ -267,39 +277,83 @@ fn rgba_channels<'a>(
     w: u32,
     h: u32,
     mode: u16,
+    depth: u16,
     channel: impl Fn(i16) -> Option<&'a [u8]>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Pixels, String> {
     let n = dimensions(w, h)?;
-    let r = channel(0);
-    let g = channel(1);
-    let b = channel(2);
-    let k = channel(3);
-    let alpha = channel(-1);
-    for samples in [r, g, b, k, alpha].into_iter().flatten() {
-        if samples.len() != n {
-            return Err("Photoshop channel dimensions do not match the layer".into());
-        }
+    let bps = depth as usize / 8;
+    let channels = [channel(0), channel(1), channel(2), channel(3), channel(-1)];
+    if channels.iter().flatten().any(|v| v.len() != n * bps) {
+        return Err("Photoshop channel dimensions do not match layer".into());
     }
-    let mut rgba = vec![0u8; n * 4];
-    for (i, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-        if let Some(red) = r {
-            let green = g.map_or(red[i], |data| data[i]);
-            let blue = b.map_or(red[i], |data| data[i]);
+    let mut samples = vec![0.; n * 4];
+    for (i, p) in samples.chunks_exact_mut(4).enumerate() {
+        if let Some(r) = channels[0] {
+            let r = sample_value(r, i, depth)?;
+            let g = channels[1]
+                .map(|v| sample_value(v, i, depth))
+                .transpose()?
+                .unwrap_or(r);
+            let b = channels[2]
+                .map(|v| sample_value(v, i, depth))
+                .transpose()?
+                .unwrap_or(r);
+            let k = channels[3]
+                .map(|v| sample_value(v, i, depth))
+                .transpose()?
+                .unwrap_or(1.);
+            p.copy_from_slice(&[
+                r,
+                g,
+                b,
+                channels[4]
+                    .map(|v| sample_value(v, i, depth))
+                    .transpose()?
+                    .unwrap_or(1.),
+            ]);
             if mode == 4 {
-                // PSD CMYK channel values are inverted ink coverage.
-                let black = k.map_or(255, |data| data[i]) as u16;
-                pixel[..3].copy_from_slice(&[
-                    (red[i] as u16 * black / 255) as u8,
-                    (green as u16 * black / 255) as u8,
-                    (blue as u16 * black / 255) as u8,
-                ]);
-            } else {
-                pixel[..3].copy_from_slice(&[red[i], green, blue]);
+                for c in &mut p[..3] {
+                    *c *= k;
+                }
             }
-            pixel[3] = alpha.map_or(255, |data| data[i]);
         }
     }
-    Ok(rgba)
+    if depth == 8 {
+        Pixels::from_rgba(
+            w,
+            h,
+            samples
+                .iter()
+                .map(|&v| crate::deep_color::byte(v))
+                .collect(),
+        )
+        .ok_or("Invalid Photoshop pixels".into())
+    } else {
+        Pixels::from_samples(
+            w,
+            h,
+            if depth == 16 {
+                crate::deep_color::Depth::U16
+            } else {
+                crate::deep_color::Depth::F32
+            },
+            samples,
+        )
+    }
+}
+
+fn sample_value(data: &[u8], i: usize, depth: u16) -> Result<f32, String> {
+    let v = match depth {
+        8 => data[i] as f32 / 255.,
+        16 => u16::from_be_bytes(data[i * 2..i * 2 + 2].try_into().unwrap()) as f32 / 65535.,
+        32 => f32::from_be_bytes(data[i * 4..i * 4 + 4].try_into().unwrap()),
+        _ => return Err("Unsupported Photoshop depth".into()),
+    };
+    if v.is_finite() {
+        Ok(v)
+    } else {
+        Err("Nonfinite Photoshop float sample".into())
+    }
 }
 
 fn convert_mask(
@@ -307,16 +361,17 @@ fn convert_mask(
     values: &[u8],
     bounds: Rect,
     layer_bounds: Rect,
+    depth: u16,
 ) -> Result<Pixels, String> {
     let (w, h) = bounds.size()?;
     let (mw, mh) = mask.rect.size()?;
-    if values.len() != dimensions(mw, mh)? {
+    if values.len() != dimensions(mw, mh)? * depth as usize / 8 {
         return Err("Photoshop mask size mismatch".into());
     }
     if w == 0 || h == 0 {
         return Ok(Pixels::new(1, 1));
     }
-    let mut data = vec![0u8; dimensions(w, h)? * 4];
+    let mut data = vec![0.; dimensions(w, h)? * 4];
     let offset_x = i64::from(mask.rect.left)
         + if mask.flags & 1 != 0 {
             i64::from(layer_bounds.left)
@@ -334,19 +389,37 @@ fn convert_mask(
             let mx = i64::from(bounds.left) + i64::from(x) - offset_x;
             let my = i64::from(bounds.top) + i64::from(y) - offset_y;
             let mut value = if mx >= 0 && my >= 0 && mx < i64::from(mw) && my < i64::from(mh) {
-                values[my as usize * mw as usize + mx as usize]
+                sample_value(values, my as usize * mw as usize + mx as usize, depth)?
             } else {
-                mask.background
+                mask.background as f32 / 255.
             };
             if mask.flags & 4 != 0 {
-                value = 255 - value;
+                value = 1. - value;
             }
-            value = 255 - (((255 - value) as u16 * mask.density as u16 + 127) / 255) as u8;
+            value = 1. - ((1. - value) * mask.density as f32 / 255.);
             let p = (y as usize * w as usize + x as usize) * 4;
-            data[p..p + 4].copy_from_slice(&[value, value, value, 255]);
+            data[p..p + 4].copy_from_slice(&[value, value, value, 1.]);
         }
     }
-    Pixels::from_rgba(w, h, data).ok_or_else(|| "Invalid Photoshop mask".into())
+    if depth == 8 {
+        Pixels::from_rgba(
+            w,
+            h,
+            data.iter().map(|&v| crate::deep_color::byte(v)).collect(),
+        )
+        .ok_or("Invalid Photoshop mask".into())
+    } else {
+        Pixels::from_samples(
+            w,
+            h,
+            if depth == 16 {
+                crate::deep_color::Depth::U16
+            } else {
+                crate::deep_color::Depth::F32
+            },
+            data,
+        )
+    }
 }
 
 fn bake_clipping(

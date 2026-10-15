@@ -164,6 +164,15 @@ pub fn encode(
                 raster
             }
         }
+        Source::Document(doc) if doc.layers.iter().any(|l|l.kind.pixels().is_some_and(|p|p.native.is_some())) => {
+            if settings.ai.is_some() || settings.format == Format::Jpeg {return Err("This export would reduce native document precision. Export PNG, TIFF or PSD without AI upscaling.".into());}
+            let pixels=crate::deep_color::composite(doc,settings.scale)?;
+            let data:Vec<u16> = pixels.samples().into_iter().map(|v|(v.clamp(0.,1.)*65535.).round() as u16).collect();
+            if doc.layers.iter().any(|l|l.kind.pixels().is_some_and(|p|p.native.as_ref().is_some_and(|n|n.depth==crate::deep_color::Depth::F32))) && settings.format != Format::Tiff {return Err("Floating-point export requires TIFF or PSD to retain float samples".into());}
+            if settings.format==Format::Tiff && doc.layers.iter().any(|l|l.kind.pixels().is_some_and(|p|p.native.as_ref().is_some_and(|n|n.depth==crate::deep_color::Depth::F32))) {
+                DynamicImage::ImageRgba32F(image::ImageBuffer::from_raw(pixels.w,pixels.h,pixels.samples()).ok_or("Invalid float export")?)
+            } else {DynamicImage::ImageRgba16(image::ImageBuffer::from_raw(pixels.w,pixels.h,data).ok_or("Invalid native export")?)}
+        }
         Source::Document(doc) => {
             // The compositor returns premultiplied RGBA; models and encoders
             // require straight RGB, especially around translucent artwork.
