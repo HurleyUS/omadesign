@@ -58,8 +58,11 @@ fn amount(
         _ => purpose,
     };
     let id = ui.make_persistent_id(("character-amount", purpose));
-    ui.scope_builder(egui::UiBuilder::new().id(id), |ui| {
-        ui.vertical(|ui| {
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .id(id)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+        |ui| {
             let before = value.unwrap_or(fallback);
             let mut number = before;
             let input_range = range.clone();
@@ -143,9 +146,8 @@ fn amount(
             });
             focus_outline(ui, &response);
             changed.then_some(number)
-        })
-        .inner
-    })
+        },
+    )
     .inner
 }
 
@@ -198,7 +200,7 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
                     Some(Leading::Fixed(_)) => "Fixed",
                     None => "Mixed",
                 };
-                let mode_id = ui.make_persistent_id("leading_mode");
+                let mut choice = None;
                 let mode = egui::ComboBox::from_id_salt("leading_mode")
                     .width(54.)
                     .selected_text(selected)
@@ -207,7 +209,8 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
                             .selectable_label(matches!(lead, Some(Leading::Auto(_))), "Auto");
                         if auto.clicked() {
                             studio.patch_character(|s| s.leading = Some(Leading::Auto(120.)));
-                            restore_edit_focus(ui, studio, &auto, mode_id);
+                            ui.close();
+                            choice = Some(auto);
                         }
                         let fixed = ui
                             .selectable_label(matches!(lead, Some(Leading::Fixed(_))), "Fixed");
@@ -218,9 +221,13 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
                                     |value| value.pixels(run.px),
                                 )))
                             });
-                            restore_edit_focus(ui, studio, &fixed, mode_id);
+                            ui.close();
+                            choice = Some(fixed);
                         }
                     });
+                if let Some(choice) = choice {
+                    restore_edit_focus(ui, studio, &choice, &mode.response);
+                }
                 mode_name(ui, mode.response, leading_label, "Leading mode", selected);
                 if let Some(number) = amount(
                     ui,
@@ -253,7 +260,7 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
                 Some(KernMode::None) => "None",
                 None => "Mixed",
             };
-            let mode_id = ui.make_persistent_id("kerning_mode");
+            let mut activated = None;
             let mode = egui::ComboBox::from_id_salt("kerning_mode")
                 .selected_text(selected)
                 .show_ui(ui, |ui| {
@@ -265,10 +272,14 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
                         let choice = ui.selectable_label(kern == Some(mode), name);
                         if choice.clicked() {
                             studio.patch_character(|s| s.kerning = Some(mode));
-                            restore_edit_focus(ui, studio, &choice, mode_id);
+                            ui.close();
+                            activated = Some(choice);
                         }
                     }
                 });
+            if let Some(choice) = activated {
+                restore_edit_focus(ui, studio, &choice, &mode.response);
+            }
             mode_name(ui, mode.response, kerning_label, "Kerning mode", selected);
             ui.end_row();
             if let Some(edit) = studio.type_edit.clone().filter(|e| {
@@ -336,12 +347,11 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
 }
 
 /// Return focus after a character mode choice.
-/// Args: popup UI, studio, activated choice and mode identity. Returns no value.
+/// Args: inspector UI, studio, activated choice and actual mode response. Returns no value.
 /// Keyboard and accessibility choices return to the mode; pointer choices resume live canvas typing.
-fn restore_edit_focus(ui: &Ui, studio: &Studio, choice: &Response, mode_id: Id) {
-    ui.close();
+fn restore_edit_focus(ui: &Ui, studio: &Studio, choice: &Response, mode: &Response) {
     if !choice.clicked_by(egui::PointerButton::Primary) {
-        ui.memory_mut(|m| m.request_focus(mode_id));
+        mode.request_focus();
     } else if studio.type_edit.is_some() {
         ui.memory_mut(|m| m.request_focus(egui::Id::new("studio-canvas")));
     }
@@ -431,9 +441,16 @@ mod tests {
     /// Args: context, rendered output and purpose. Returns no value; checks tree and paint evidence.
     fn assert_focused(ctx: &egui::Context, output: &egui::FullOutput, name: &str) {
         let (id, node) = named(output, name);
+        let focused = ctx.memory(|memory| memory.focused());
+        let actual = focused.and_then(|id| {
+            output.platform_output.accesskit_update.as_ref().unwrap().nodes.iter()
+                .find(|(node_id, _)| *node_id == id.accesskit_id())
+                .map(|(_, node)| (node.label(), node.value(), node.role()))
+        });
         assert_eq!(
-            ctx.memory(|memory| memory.focused()).map(|id| id.accesskit_id()),
-            Some(id)
+            focused.map(|id| id.accesskit_id()),
+            Some(id),
+            "expected {name}; focused {focused:?}; native node {actual:?}"
         );
         assert_eq!(
             output.platform_output.accesskit_update.as_ref().unwrap().focus,
@@ -555,10 +572,10 @@ mod tests {
         edit.anchor = 2;
         edit.pending_style = None;
         let output = frame(&ctx, &mut studio, vec![]);
-        assert_focused(&ctx, &output, "Tracking");
         for (name, id) in CONTROLS.iter().zip(&ids) {
             assert_eq!(named(&output, name).0, *id, "{name}");
         }
+        assert_focused(&ctx, &output, "Tracking");
         assert!(!ids.contains(&named(&output, "Pair kerning").0));
         frame(&ctx, &mut studio, key(Key::ArrowUp, Modifiers::NONE));
         assert_eq!(studio.selected_character_metrics()[0].tracking, Some(73.));
