@@ -1191,6 +1191,62 @@ fn draw_svg_type(pm:&mut Pixmap,shape:&Shape,run:&crate::geom::TypeRun,layout:&c
     pm.draw_pixmap(0,0,buffer.as_ref(),&PixmapPaint{opacity:op,blend_mode:blend,..Default::default()},Transform::identity(),mask);
 }
 
+/// Paint a vector pattern using the object's shared bounds and current clipping.
+/// Args: rotated path, whole shape, viewport, opacity/blend, reveal and parent mask.
+/// Returns after painting the clipped pattern without applying glyph coverage twice.
+fn draw_pattern_fill(
+    pm: &mut Pixmap,
+    pattern: &crate::svg_source::SvgPattern,
+    path: &tiny_skia::Path,
+    shape: &Shape,
+    xf: Transform,
+    opacity: f32,
+    blend: tiny_skia::BlendMode,
+    fill_reveal: f32,
+    mask: Option<&tiny_skia::Mask>,
+    winding: bool,
+) {
+    let center = shape.geom.bbox().center();
+    let rotation = Transform::from_rotate_at(shape.rotation.to_degrees(), center.x, center.y);
+    let Some(local_path) = path
+        .clone()
+        .transform(rotation.invert().unwrap_or_default())
+    else {
+        return;
+    };
+    let mut reveal = None;
+    if fill_reveal < 1. {
+        let bounds = shape.world_bbox();
+        if let Some(rect) = tiny_skia::Rect::from_xywh(
+            bounds.min.x,
+            bounds.max.y - bounds.height() * fill_reveal,
+            bounds.width().max(1e-5),
+            (bounds.height() * fill_reveal).max(1e-5),
+        ) {
+            reveal = mask
+                .cloned()
+                .or_else(|| tiny_skia::Mask::new(pm.width(), pm.height()));
+            if let Some(clip) = &mut reveal {
+                if mask.is_some() {
+                    clip.intersect_path(&PathBuilder::from_rect(rect), FillRule::Winding, true, xf);
+                } else {
+                    clip.fill_path(&PathBuilder::from_rect(rect), FillRule::Winding, true, xf);
+                }
+            }
+        }
+    }
+    pattern.draw(
+        pm,
+        &local_path,
+        shape.geom.bbox(),
+        xf.pre_concat(rotation),
+        opacity,
+        blend,
+        reveal.as_ref().or(mask),
+        winding,
+    );
+}
+
 fn draw_shape_inner(
     pm: &mut Pixmap,
     shape: &Shape,
@@ -1221,6 +1277,10 @@ fn draw_shape_inner(
             if fill.is_none(){continue;}
             let part=Shape::new(Geom::Poly{contours,winding:true},shape.style.clone());
             let Some(glyph_path)=part.get_cached_path(96)else{continue;};
+            if let Fill::Pattern(pattern) = &fill {
+                draw_pattern_fill(pm, pattern, &glyph_path, shape, xf, op, blend, fill_reveal, mask, true);
+                continue;
+            }
             let Some(mut clip)=tiny_skia::Mask::new(pm.width(),pm.height())else{continue;};
             clip.fill_path(&glyph_path,FillRule::Winding,true,xf);
             if let Some(parent)=mask{for(a,b)in clip.data_mut().iter_mut().zip(parent.data()){*a=((u16::from(*a)*u16::from(*b)+127)/255)as u8;}}
@@ -1252,58 +1312,7 @@ fn draw_shape_inner(
             _ => FillRule::EvenOdd,
         };
         if let Fill::Pattern(pattern) = &shape.style.fill {
-            let rotation = Transform::from_rotate_at(
-                shape.rotation.to_degrees(),
-                shape.geom.bbox().center().x,
-                shape.geom.bbox().center().y,
-            );
-            let local_path = path
-                .as_ref()
-                .clone()
-                .transform(rotation.invert().unwrap_or_default());
-            if let Some(local_path) = local_path {
-                let mut reveal = None;
-                if fill_reveal < 1. {
-                    let bounds = shape.world_bbox();
-                    if let Some(rect) = tiny_skia::Rect::from_xywh(
-                        bounds.min.x,
-                        bounds.max.y - bounds.height() * fill_reveal,
-                        bounds.width().max(1e-5),
-                        (bounds.height() * fill_reveal).max(1e-5),
-                    ) {
-                        reveal = mask
-                            .cloned()
-                            .or_else(|| tiny_skia::Mask::new(pm.width(), pm.height()));
-                        if let Some(clip) = &mut reveal {
-                            if mask.is_some() {
-                                clip.intersect_path(
-                                    &PathBuilder::from_rect(rect),
-                                    FillRule::Winding,
-                                    true,
-                                    xf,
-                                );
-                            } else {
-                                clip.fill_path(
-                                    &PathBuilder::from_rect(rect),
-                                    FillRule::Winding,
-                                    true,
-                                    xf,
-                                );
-                            }
-                        }
-                    }
-                }
-                pattern.draw(
-                    pm,
-                    &local_path,
-                    shape.geom.bbox(),
-                    xf.pre_concat(rotation),
-                    op,
-                    blend,
-                    reveal.as_ref().or(mask),
-                    shape.geom.nonzero_winding(),
-                );
-            }
+            draw_pattern_fill(pm, pattern, &path, shape, xf, op, blend, fill_reveal, mask, shape.geom.nonzero_winding());
         } else if fill_reveal < 1.0 {
             let bounds = shape.world_bbox();
             if let Some(rect) = tiny_skia::Rect::from_xywh(
@@ -1609,6 +1618,55 @@ fn draw_checker(pm: &mut Pixmap, origin: Pt, size: Pt) {
 mod tests {
     use super::*;
     use crate::document::{Cmd, Document, Shape, Style, apply};
+
+    #[test]
+    fn svg_type_native_character_patterns_share_object_placement_opacity_and_clips() {
+        let pattern = Fill::Pattern(crate::svg_source::SvgPattern {
+            definitions: r##"<pattern id="tile" patternUnits="userSpaceOnUse" width="0.16" height="0.3"><rect width="0.16" height="0.3" fill="#0044ee"/><rect width="0.08" height="0.3" fill="#ee2200"/></pattern>"##.into(),
+            id: "tile".into(),
+            transform: [1., 0., 0., 1., 0., 0.],
+            opacity: 0.4,
+        });
+        let mut run = crate::geom::TypeRun {
+            content: "MMMM".into(),
+            origin: Pt::new(16., 24.),
+            px: 38.,
+            font: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/assets/fonts/EBGaramond.ttf").into(),
+            transform: Some([1., 0.1, 0.2, 1., 8., 3.]),
+            ..Default::default()
+        };
+        run.contours = crate::text::shape(&run);
+        let plain = Shape::new(Geom::Text(run.clone()), Style { fill: pattern.clone(), stroke: None });
+        run.set_character_style(0, 4, |span| span.fill = Some(pattern.clone()));
+        let ranged = Shape::new(Geom::Text(run), Style { fill: Fill::Solid(Rgba::rgb(0, 255, 0)), stroke: None });
+        let mut mask = tiny_skia::Mask::new(300, 180).unwrap();
+        for (index, value) in mask.data_mut().iter_mut().enumerate() {
+            *value = if index % 300 < 100 { 96 } else { 224 };
+        }
+        for rotation in [0., 0.23] {
+            for reveal in [1., 0.55] {
+                let render = |mut shape: Shape| {
+                    shape.rotation = rotation;
+                    let mut pixels = Pixmap::new(300, 180).unwrap();
+                    draw_shape_inner(
+                        &mut pixels, &shape, Transform::from_scale(1.3, 1.3), 0.7,
+                        tiny_skia::BlendMode::SourceOver,
+                        Pose { dx: 7., dy: 4., scale: 1.1, fill_reveal: Some(reveal), ..Pose::identity() },
+                        Some(&mask),
+                    );
+                    pixels
+                };
+                let expected = render(plain.clone());
+                let actual = render(ranged.clone());
+                let differences: Vec<_> = actual.data().iter().zip(expected.data()).map(|(a, b)| a.abs_diff(*b)).collect();
+                let mean = differences.iter().map(|v| *v as f64).sum::<f64>() / differences.len() as f64;
+                assert!(mean < 0.05 && *differences.iter().max().unwrap() <= 2, "rotation={rotation}, reveal={reveal}, mean={mean}");
+                assert!(actual.pixels().iter().filter(|p| p.red() > p.blue() * 2 && p.alpha() > 10).count() > 20);
+                assert!(actual.pixels().iter().filter(|p| p.blue() > p.red() * 2 && p.alpha() > 10).count() > 20);
+                assert!(actual.pixels().iter().map(|p| p.alpha()).max().unwrap() <= 64);
+            }
+        }
+    }
 
     #[test]
     fn svg_type_rich_fill_and_stroke_reveals_remain_independent() {
