@@ -538,7 +538,7 @@ fn resize_identity_source(smart: &mut SmartObject, size: [f64; 2]) {
                 .map(|(_, v)| v)
         {
             for (axis, _, values) in items {
-                let factor = scale[usize::from(axis == "Vrtc")];
+                let factor = scale[usize::from(axis.as_str() == "Vrtc")];
                 for v in values {
                     *v *= factor;
                 }
@@ -796,9 +796,7 @@ pub fn refresh(doc: &Document, index: usize, mut smart: SmartObject) -> Result<C
                 samples.extend_from_slice(&value);
             }
         }
-        let mut remapped = mask.clone();
-        remapped.w = pixels.w;
-        remapped.h = pixels.h;
+        let mut remapped = mask.reframed(pixels.w, pixels.h, 0, 0)?;
         remapped.set_samples(samples)?;
         after.mask = Some(remapped);
     }
@@ -1337,6 +1335,43 @@ mod tests {
         );
         assert!(smart.filters()[0].settings.is_none());
         assert!(refresh(&doc, 0, smart).is_err());
+    }
+
+    #[test]
+    fn transformed_native_mask_keeps_consistent_authoritative_grids_on_refresh() {
+        let mut doc = super::super::decode(FIXTURE, "Native placed mask")
+            .unwrap()
+            .document;
+        let profile = include_bytes!("fixtures/fogra39l-cc0.icc").to_vec();
+        doc.layers[0].mask = Some(
+            Pixels::from_cmyk(
+                8,
+                8,
+                crate::deep_color::Depth::U16,
+                [0.1, 0.2, 0.3, 0.4, 1.].repeat(64),
+                profile.clone(),
+                1,
+            )
+            .unwrap(),
+        );
+        if let LayerKind::Raster { size, rotation, .. } = &mut doc.layers[0].kind {
+            *size = Pt::new(12., 10.);
+            *rotation = 0.25;
+        }
+        let command = refresh(&doc, 0, doc.layers[0].psd_smart.clone().unwrap()).unwrap();
+        crate::document::apply(&mut doc, &command);
+        let mask = doc.layers[0].mask.as_ref().unwrap();
+        mask.validate_native().unwrap();
+        assert_eq!(
+            (mask.w, mask.h),
+            (
+                doc.layers[0].kind.pixels().unwrap().w,
+                doc.layers[0].kind.pixels().unwrap().h
+            )
+        );
+        assert_eq!(mask.native.as_ref().unwrap().icc_profile, profile);
+        let saved = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        assert_eq!(saved.layers[0].mask.as_ref().unwrap().native, mask.native);
     }
 
     #[test]
