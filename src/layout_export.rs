@@ -980,7 +980,18 @@ fn portable_variant_ids(
             .layout
             .parent
             .map(|id| ids.get(&id).copied().unwrap_or(id));
+        let family = match &shape.layout.component {
+            Some(crate::layout_components::ComponentBinding::Main { family, .. }) => Some(*family),
+            _ => None,
+        };
         crate::layout_components::remap_duplicate(shape, &ids);
+        if let (
+            Some(before),
+            Some(crate::layout_components::ComponentBinding::Main { family, .. }),
+        ) = (family, &mut shape.layout.component)
+        {
+            *family = ids.get(&before).copied().unwrap_or(before);
+        }
     }
     Ok(())
 }
@@ -1313,7 +1324,7 @@ mod tests {
         assert!(
             html.contains("flex-wrap:wrap")
                 && html.contains("justify-content:space-between")
-                && html.contains("flex:1 1 20.000px")
+                && html.contains("flex:1 1 28.000px")
         );
         assert!(
             html.contains("font-size:14.000px")

@@ -190,6 +190,8 @@ fn native_present_canvas_clips_an_oversized_overlay_without_changing_the_documen
         700.,
         510.,
     );
+    doc.find_shape_mut(2, outside).unwrap().style.fill =
+        Fill::Solid(crate::color::Rgba::from_hex(0xfa00dd));
     let doc = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
     let before = crate::project::encode(&doc).unwrap();
     let open = doc.layers[0]
@@ -207,7 +209,22 @@ fn native_present_canvas_clips_an_oversized_overlay_without_changing_the_documen
     assert_eq!((canvas.width, canvas.height), (600., 400.));
     let pixels = crate::compositor::render_export(&canvas, 1).unwrap();
     assert_eq!((pixels.width(), pixels.height()), (600, 400));
-    assert!(pixels.pixel(700, 130).is_none());
+    let outside_bounds = canvas
+        .layers
+        .iter()
+        .filter_map(|layer| layer.kind.shapes())
+        .flatten()
+        .find(|shape| shape.id == outside)
+        .unwrap()
+        .geom
+        .bbox();
+    assert!(outside_bounds.min.x >= pixels.width() as f32);
+    let outside_sentinel_pixels = pixels
+        .pixels()
+        .iter()
+        .filter(|p| p.red() == 250 && p.green() == 0 && p.blue() == 221)
+        .count();
+    assert_eq!(outside_sentinel_pixels, 0);
     assert_eq!(before, crate::project::encode(&doc).unwrap());
     if let Ok(directory) = std::env::var("OMADESIGN_LAYOUT_PROOF") {
         let path = std::path::Path::new(&directory);
@@ -216,7 +233,7 @@ fn native_present_canvas_clips_an_oversized_overlay_without_changing_the_documen
             export_html(&doc, 0, a).unwrap(),
         )
         .unwrap();
-        std::fs::write(path.join("headless-present.json"),serde_json::json!({"kind":"actual native Present materialization and CPU compositor; not visible native or physical acceptance","canvas":{"width":canvas.width,"height":canvas.height},"overlays":state.overlays,"outside":outside,"outsideCanvasPixel":pixels.pixel(700,130).is_none(),"sourceUnchanged":true}).to_string()).unwrap();
+        std::fs::write(path.join("headless-present.json"),serde_json::json!({"kind":"actual native Present materialization and CPU compositor; not visible native or physical acceptance","canvas":{"width":canvas.width,"height":canvas.height},"overlays":state.overlays,"outside":outside,"outsideArtworkX":outside_bounds.min.x,"outsideSentinelPixelCount":outside_sentinel_pixels,"sourceUnchanged":true}).to_string()).unwrap();
     }
 }
 #[test]

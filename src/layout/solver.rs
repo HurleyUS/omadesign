@@ -1890,6 +1890,8 @@ mod tests {
                     ..Default::default()
                 };
                 let (ascent, descent, _) = crate::text::font_metrics_for(&run).unwrap();
+                close(ascent, px * 1.007);
+                close(descent, px * 0.298);
                 assert!(ascent > 0.0 && descent > 0.0);
                 run.contours = crate::text::shape(&run);
                 let offset = run.origin.y - Geom::Text(run.clone()).bbox().min.y;
@@ -1917,28 +1919,23 @@ mod tests {
                     let Geom::Text(run) = &shape.geom else {
                         panic!("text changed kind");
                     };
-                    close(
-                        run.origin.y + crate::text::compose(run)[0].baseline,
-                        10.0 + expected_baseline,
-                    );
+                    close(crate::text::caret_pt(run, 0).y, 10.0 + expected_baseline);
                     assert!(shape.geom.bbox().max.y <= bounds(document, root).max.y - 9.9);
                 }
                 let svg = crate::svg::export_frame(document, 1, root).unwrap();
-                let xml = roxmltree::Document::parse(&svg).unwrap();
+                let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).unwrap();
                 for &id in &ids {
                     let node_id = format!("oma-{id}");
-                    let text = xml
-                        .descendants()
-                        .find(|node| node.attribute("id") == Some(node_id.as_str()))
-                        .unwrap();
-                    let first_line = text
-                        .descendants()
-                        .find(|node| node.has_tag_name("tspan") && node.attribute("y").is_some())
-                        .unwrap();
-                    close(
-                        first_line.attribute("y").unwrap().parse::<f32>().unwrap(),
-                        10.0 + expected_baseline,
-                    );
+                    let parsed = tree.node_by_id(&node_id).unwrap().abs_bounding_box();
+                    let native = document.find_shape(1, id).unwrap().geom.bbox();
+                    for (actual, expected) in [
+                        (parsed.x(), native.min.x),
+                        (parsed.y(), native.min.y),
+                        (parsed.width(), native.width()),
+                        (parsed.height(), native.height()),
+                    ] {
+                        close(actual, expected);
+                    }
                 }
             }
         }
