@@ -538,6 +538,10 @@ fn text_document() -> Document {
     doc.layers.clear();
     let mut layer = Layer::vector("Live text");
     let mut run = TypeRun {
+        font: crate::text::preferred_default_path()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
         origin: Pt::new(15., 45.),
         content: "Editable office — café".into(),
         px: 24.,
@@ -553,6 +557,10 @@ fn text_document() -> Document {
         },
     ));
     let mut run = TypeRun {
+        font: crate::text::preferred_default_path()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
         origin: Pt::new(18., 98.),
         content: "Rotated vector type".into(),
         px: 22.,

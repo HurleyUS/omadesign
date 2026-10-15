@@ -140,6 +140,12 @@ pub(super) fn write(
         (false, true) => 1,
         _ => 3,
     };
+    let character_bytes = run
+        .content
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(run.content.len()))
+        .collect::<Vec<_>>();
     for line in lines.iter() {
         let mut clusters = line
             .glyphs
@@ -178,11 +184,8 @@ pub(super) fn write(
         op(&mut out.ops, "Tr", &[mode as f32]);
         for glyph in &line.glyphs {
             let end = ends.get(&glyph.cluster).copied().unwrap_or(line.end);
-            let unicode = run
-                .content
+            let unicode = run.content[character_bytes[glyph.cluster]..character_bytes[end]]
                 .chars()
-                .skip(glyph.cluster)
-                .take(end - glyph.cluster)
                 .filter(|&c| c != '\u{ad}')
                 .collect::<String>();
             let cid = embedded.code(glyph.id, unicode)?;
@@ -222,6 +225,8 @@ fn editable_font(face: &Face<'_>) -> bool {
     ) && face.is_outline_embedding_allowed()
 }
 impl Embedded {
+    /// Register a full embedded TrueType font.
+    /// Args: PDF store, cached bytes and face. Returns font resources and pending glyph maps.
     fn new(pdf: &mut Pdf, bytes: Arc<Vec<u8>>, face: &Face<'_>) -> Result<Self, String> {
         let name = face
             .names()
@@ -262,6 +267,8 @@ impl Embedded {
             glyphs: vec![(0, String::new())],
         })
     }
+    /// Assign a stable CID to a glyph and Unicode sequence.
+    /// Args: glyph ID and text. Returns its CID or a map-size error.
     fn code(&mut self, glyph: u16, text: String) -> Result<u16, String> {
         let key = (glyph, text);
         if let Some(id) = self.codes.get(&key) {
@@ -331,7 +338,13 @@ mod tests {
     use super::*;
     #[test]
     fn pdf_exchange_rejects_restricted_and_print_only_font_embedding() {
-        let run = crate::geom::TypeRun::default();
+        let run = crate::geom::TypeRun {
+            font: crate::text::preferred_default_path()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            ..Default::default()
+        };
         let bytes = crate::text::font_bytes_for(&run).expect("test font");
         let face = Face::parse(&bytes, 0).unwrap();
         assert!(editable_font(&face));
