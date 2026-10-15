@@ -699,7 +699,7 @@ fn shade(
             .metallic_roughness_tex
             .and_then(|t| model.textures.get(t.texture))
         {
-            let tex = sample(t, uv);
+            let tex = sample(t, uv, false);
             rough *= tex[1];
             metallic *= tex[2];
         }
@@ -709,7 +709,7 @@ fn shade(
             .occlusion_tex
             .and_then(|t| model.textures.get(t.texture))
             .map_or(1., |t| {
-                1. + m.occlusion_strength as f64 * (sample(t, uv)[0] - 1.)
+                1. + m.occlusion_strength as f64 * (sample(t, uv, false)[0] - 1.)
             });
         for k in 0..3 {
             color[k] = base[k] * ambient[k] * ao;
@@ -755,7 +755,7 @@ fn shade(
         let tex = m
             .emissive_tex
             .and_then(|t| model.textures.get(t.texture))
-            .map(|t| sample(t, uv));
+            .map(|t| sample(t, uv, true));
         for k in 0..3 {
             color[k] += m.emissive[k] as f64 * tex.map_or(1., |t| t[k]);
         }
