@@ -533,6 +533,27 @@ fn pdf_exchange_applies_fill_opacity_once_to_overlapping_fill_and_stroke() {
     }
 }
 
+fn drawing_operations(pdf: &Pdf) -> Vec<lopdf::content::Operation> {
+    let mut operations = pdf
+        .get_pages()
+        .into_values()
+        .flat_map(|page| pdf.get_and_decode_page_content(page).unwrap().operations)
+        .collect::<Vec<_>>();
+    for stream in pdf
+        .objects
+        .values()
+        .filter_map(|o| o.as_stream().ok())
+        .filter(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Form"))
+    {
+        operations.extend(
+            Content::decode(&decoded(stream, STREAM_LIMIT).unwrap())
+                .unwrap()
+                .operations,
+        );
+    }
+    operations
+}
+
 fn text_document() -> Document {
     let mut doc = Document::new("Embedded editable text", 360., 140., 72.);
     doc.layers.clear();
@@ -610,16 +631,8 @@ fn pdf_exchange_text_has_embedded_font_unicode_and_positioned_glyphs() {
     );
     assert!(fonts[0].get(b"ToUnicode").is_ok());
     assert!(!pdf.objects.values().any(|o| subtype(o, b"Image")));
-    let text_ops = pdf
-        .objects
-        .values()
-        .filter_map(|o| o.as_stream().ok())
-        .filter(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Form"))
-        .flat_map(|s| {
-            Content::decode(&decoded(s, STREAM_LIMIT).unwrap())
-                .unwrap()
-                .operations
-        })
+    let text_ops = drawing_operations(&pdf)
+        .into_iter()
         .filter(|o| o.operator == "Tj")
         .count();
     assert!(text_ops > 30, "text did not remain PDF text");
@@ -838,16 +851,8 @@ fn pdf_exchange_rejects_nonfinite_text_and_skips_zero_width_strokes() {
     let (bytes, notes) = write(&doc).unwrap();
     assert!(notes.is_empty(), "{notes:?}");
     let pdf = Pdf::load_mem(&bytes).unwrap();
-    let modes = pdf
-        .objects
-        .values()
-        .filter_map(|o| o.as_stream().ok())
-        .filter(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Form"))
-        .flat_map(|s| {
-            Content::decode(&decoded(s, STREAM_LIMIT).unwrap())
-                .unwrap()
-                .operations
-        })
+    let modes = drawing_operations(&pdf)
+        .into_iter()
         .filter(|o| o.operator == "Tr")
         .map(|o| number_value(&o.operands[0]).unwrap())
         .collect::<Vec<_>>();
