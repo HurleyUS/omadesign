@@ -131,3 +131,31 @@ fn native_mask_resize_and_tiny_alpha_keep_authored_values() {
     invalid.native.as_mut().unwrap().samples.clear();
     assert!(invalid.validate_native().is_err());
 }
+
+#[test]
+fn native_clipping_uses_authoritative_alpha_and_mask_samples() {
+    let mut doc = Document::new("Clipping", 1., 1., 72.);
+    let mut base = Layer::placed_raster(
+        "Base",
+        Pixels::from_samples(1, 1, Depth::F32, vec![1., 0., 0., 0.50001]).unwrap(),
+        Pt::ZERO,
+        Pt::new(1., 1.),
+    );
+    base.mask = Some(
+        Pixels::from_samples(1, 1, Depth::F32, vec![0.333333, 0.333333, 0.333333, 1.]).unwrap(),
+    );
+    let mut clipped = Layer::placed_raster(
+        "Clipped",
+        Pixels::from_samples(1, 1, Depth::F32, vec![0., 1., 0., 1.]).unwrap(),
+        Pt::ZERO,
+        Pt::new(1., 1.),
+    );
+    clipped.mask =
+        Some(Pixels::from_samples(1, 1, Depth::F32, vec![0.70001, 0.70001, 0.70001, 1.]).unwrap());
+    doc.layers = vec![base, clipped];
+    crate::formats::psd::test_native_clipping(&mut doc);
+    assert!(
+        (doc.layers[1].mask.as_ref().unwrap().sample(0)[0] - 0.50001 * 0.333333 * 0.70001).abs()
+            < 1e-7
+    );
+}

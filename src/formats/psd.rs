@@ -470,6 +470,30 @@ fn bake_clipping(
             .raster_xform()
             .map(|(origin, _, _)| origin)
             .unwrap_or(Pt::ZERO);
+        if [base_pixels, base_layer.mask.as_ref(), Some(pixels), layer.mask.as_ref()]
+            .into_iter().flatten().any(|p| p.native.is_some())
+        {
+            let mut samples = Vec::with_capacity(w as usize * h as usize * 4);
+            for y in 0..h {
+                for x in 0..w {
+                    let bx = x as i64 + origin.x as i64 - base_origin.x as i64;
+                    let by = y as i64 + origin.y as i64 - base_origin.y as i64;
+                    let alpha = base_pixels
+                        .filter(|p| bx >= 0 && by >= 0 && bx < p.w as i64 && by < p.h as i64)
+                        .map_or(0., |p| {
+                            let coverage = base_layer.mask.as_ref().map_or(1., |m|
+                                crate::deep_color::sample_at(m, (bx as f32 + 0.5) * m.w as f32 / p.w as f32, (by as f32 + 0.5) * m.h as f32 / p.h as f32)[0]);
+                            p.sample(by as usize * p.w as usize + bx as usize)[3] * coverage
+                        });
+                    let coverage = layer.mask.as_ref().map_or(1., |m|
+                        crate::deep_color::sample_at(m, (x as f32 + 0.5) * m.w as f32 / w as f32, (y as f32 + 0.5) * m.h as f32 / h as f32)[0]);
+                    let value = coverage * alpha;
+                    samples.extend_from_slice(&[value, value, value, 1.]);
+                }
+            }
+            doc.layers[idx].mask = Some(Pixels::from_samples(w, h, crate::deep_color::Depth::F32, samples)?);
+            continue;
+        }
         let mut mask = layer.mask.clone().unwrap_or_else(|| {
             let mut mask = Pixels::new(w, h);
             mask.data.fill(255);
@@ -683,4 +707,9 @@ mod tests {
             crate::compositor::export_png(&imported, 1).unwrap()
         );
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_native_clipping(doc: &mut Document) {
+    bake_clipping(doc, &[doc.layers[1].id], &mut Vec::new()).unwrap();
 }

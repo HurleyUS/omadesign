@@ -244,16 +244,10 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
     } else {
         crate::deep_color::composite(doc, 1)?
     };
-    u16(&mut out, 2);
-    let mut zipper = flate2::write::ZlibEncoder::new(&mut out, flate2::Compression::fast());
+    u16(&mut out, 0);
     for ch in 0..4 {
-        zipper
-            .write_all(&plane(&merged, ch, depth))
-            .map_err(|e| e.to_string())?;
+        out.extend_from_slice(&plane(&merged, ch, depth));
     }
-    zipper
-        .finish()
-        .map_err(|e| format!("Could not finish Photoshop composite: {e}"))?;
     Ok(PsdExport {
         bytes: out,
         warnings,
