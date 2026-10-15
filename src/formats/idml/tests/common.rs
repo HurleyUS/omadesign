@@ -363,7 +363,12 @@ fn reopen(native: &Path, cold: bool) -> serde_json::Value {
                 .flatten()
         })
         .filter_map(|s| s["geom"]["Text"].as_object())
-        .flat_map(|t| t["spans"].as_array().into_iter().flatten())
+        .flat_map(|t| {
+            t.get("spans")
+                .and_then(|spans| spans.as_array())
+                .into_iter()
+                .flatten()
+        })
         .filter_map(|span| span["font"].as_str())
         .filter(|font| font.starts_with("omatype:"))
         .collect();
