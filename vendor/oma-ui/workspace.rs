@@ -401,6 +401,7 @@ impl Workspace {
             let mut content = |ui: &mut Ui| {
                 ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
                 egui::ScrollArea::horizontal()
+                    .animated(false)
                     .id_salt((id, "dock-tabs", saved.panels.first()))
                     .max_height(28.0)
                     .auto_shrink([false, true])
