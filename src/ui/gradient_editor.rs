@@ -561,7 +561,7 @@ mod keyboard_tests {
         studio.doc = crate::document::Document::new("Native radial authoring", 300., 220., 72.);
         studio.persona = crate::tools::Persona::Motion;
         studio.show_welcome = false;
-        let background = studio.doc.layers[0].clone();
+        let background = serde_json::to_value(&studio.doc.layers[0]).unwrap();
         assert!(studio.selection.is_empty());
         assert_eq!(
             studio
@@ -725,7 +725,7 @@ mod keyboard_tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("radial.oma");
         crate::project::save_to(&studio.doc, &path).unwrap();
-        assert_eq!(studio.doc.layers[0], background);
+        assert_eq!(serde_json::to_value(&studio.doc.layers[0]).unwrap(), background);
         assert_eq!(
             crate::project::encode(&crate::project::load_from(&path).unwrap()).unwrap(),
             crate::project::encode(&studio.doc).unwrap()
