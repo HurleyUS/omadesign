@@ -5515,6 +5515,7 @@ mod tests {
     fn artboard_resize_clone_gesture_commits_once_and_escape_restores_everything() {
         for cancel in [false,true] {
             let mut studio=Studio::new();
+            studio.doc.layers[0]=crate::document::Layer::raster("Background",1280,800).unwrap();
             studio.snap.enabled=false;
             studio.doc.artboards=vec![crate::document::Artboard::new(0,Pt::ZERO,Pt::new(200.,160.))];
             studio.finish_create(CreateKind::Rect,Pt::new(40.,40.),Pt::new(80.,80.));
@@ -5534,6 +5535,7 @@ mod tests {
     fn artboard_double_click_wraps_exact_bounds_or_opens_size_dialog() {
         let ctx=eframe::egui::Context::default();
         let mut studio=Studio::new();studio.doc.artboards.clear();studio.doc.artboardless=true;
+        studio.doc.layers[0]=crate::document::Layer::raster("Background",1280,800).unwrap();
         studio.finish_create(CreateKind::Rect,Pt::new(200.,300.),Pt::new(340.,390.));
         studio.tool=Tool::Artboard;
         assert!(artboard_double_click(&mut studio,&ctx,Pt::new(270.,345.)));
