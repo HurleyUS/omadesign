@@ -203,7 +203,7 @@ fn encode_inner_admitted(
         if settings.format != Format::Tiff || settings.ai.is_some() {
             return Err("CMYK authoring exports as PSD, PSB or TIFF. Convert the document to RGB explicitly for PNG/JPEG.".into());
         }
-        let mut pixels = crate::deep_color::composite(doc, settings.scale)?;
+        let mut pixels = crate::deep_color::composite_with_cancel(doc, settings.scale, cancel)?;
         pixels.native.as_mut().unwrap().depth = crate::deep_color::document_depth(doc);
         let bytes = crate::deep_color::tiff::encode_admitted(&pixels)?;
         progress.check()?;
@@ -218,7 +218,7 @@ fn encode_inner_admitted(
             if settings.ai.is_some() || settings.format == Format::Jpeg {
                 return Err("This export would reduce native document precision. Export PNG, TIFF or PSD without AI upscaling.".into());
             }
-            let mut pixels = crate::deep_color::composite(doc, settings.scale)?;
+            let mut pixels = crate::deep_color::composite_with_cancel(doc, settings.scale, cancel)?;
             let depth = crate::deep_color::document_depth(doc);
             if depth == crate::deep_color::Depth::F32 && settings.format != Format::Tiff {
                 return Err(
