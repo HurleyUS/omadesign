@@ -93,8 +93,14 @@ pub fn number<N: egui::emath::Numeric>(
                             .labelled_by(label_response.id)
                             .on_hover_text(label);
                         if let Some(reset) = reset {
-                            let reset_response =
-                                ui.small_button("↺").on_hover_text(format!("Reset {label}"));
+                            let reset_response = ui
+                                .add(
+                                    egui::Button::new("↺")
+                                        .small()
+                                        .frame(false)
+                                        .min_size(egui::vec2(22.0, 22.0)),
+                                )
+                                .on_hover_text(format!("Reset {label}"));
                             reset_response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
                                     egui::WidgetType::Button,

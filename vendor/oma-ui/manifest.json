@@ -8,7 +8,7 @@
     "0.36"
   ],
   "sha256": {
-    "fields.rs": "20fe871371b5bdfaf187a25a57d30d31d7d2c2c96f8a471b4ddf4daf3a663ab0",
+    "fields.rs": "300b8747c2c1ba70b6670f1aaba98293943dfc572de8cff20aa082a756a9818b",
     "workspace.rs": "20b882346cdec40e52f2df08547b94b4eb7885d4b827ecae96c8dbe6dc888062",
     "native_scope.rs": "5ca4d208655a3a9a90dc45104d705ce125438c68b0d62ca5821b452bf0cf46b0"
   },
