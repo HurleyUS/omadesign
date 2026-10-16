@@ -2,7 +2,7 @@
 //! 16-bit linear source is shared by full-resolution exports and never edited.
 use super::*;
 use crate::formats::raw::{Cancellation, resources};
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -943,17 +943,13 @@ mod tests {
     fn bounded_photo_writer_rejects_excess_before_allocation_and_obeys_cancel() {
         use std::io::Write;
         let cancel = Cancellation::default();
-        let mut writer = BoundedWriter {
-            inner: Cursor::new(Vec::new()),
-            limit: 16,
-            progress: &cancel,
-        };
+        let mut writer = BoundedWriter::new(16, &cancel).unwrap();
         assert!(writer.write_all(&[0u8; 17]).is_err());
-        assert_eq!(writer.inner.get_ref().capacity(), 0);
+        assert_eq!(writer.buffer.bytes(), 0);
         writer.write_all(&[1u8; 8]).unwrap();
         cancel.cancel();
         assert!(writer.write_all(&[2u8; 8]).is_err());
-        assert_eq!(writer.inner.into_inner(), vec![1; 8]);
+        assert_eq!(writer.buffer.as_slice(), &[1; 8]);
     }
 
     #[test]
