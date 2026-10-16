@@ -130,14 +130,11 @@ fn craft_export_sizing_real_png_jpeg_tiff_density_and_native16_tags_samples() {
                     reader.get_tag_u32(tiff::tags::Tag::ResolutionUnit).unwrap(),
                     2
                 );
-                assert_eq!(
-                    reader.get_tag_f64(tiff::tags::Tag::XResolution).unwrap(),
-                    144.
-                );
-                assert_eq!(
-                    reader.get_tag_f64(tiff::tags::Tag::YResolution).unwrap(),
-                    144.
-                );
+                for tag in [tiff::tags::Tag::XResolution,tiff::tags::Tag::YResolution] {
+                    let tiff::decoder::ifd::Value::Rational(n,d)=reader.get_tag(tag).unwrap() else {panic!("Resolution must be a TIFF rational")};
+                    assert_eq!((n,d),(1_440_000,10_000));
+                    assert_eq!(n as f64/d as f64,144.);
+                }
                 assert_eq!(
                     reader
                         .get_tag_u16_vec(tiff::tags::Tag::ExtraSamples)
