@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 mod features;
 
-pub(crate) const VERSION: u32 = features::SCENE3D;
+pub(crate) const VERSION: u32 = features::ADVANCED_LAYOUT;
 
 /// Check whether this build implements a project version.
 /// Args: envelope version. Returns false for unimplemented reserved formats.
@@ -142,6 +142,7 @@ pub(crate) fn normalize_decoded_document(
         if let Some(replica) = &doc.collaboration {
             crate::collaboration::resources::validate(replica)?;
         }
+        crate::layout_components::validate_properties(doc)?;
         for layer in &mut doc.layers {
             if version < 7 {
                 layer.filters.migrate_legacy(layer.blend);

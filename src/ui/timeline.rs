@@ -13,6 +13,10 @@ const ROW: f32 = 22.0;
 const LABEL: f32 = 108.0;
 const PAD: f32 = 8.0;
 
+#[cfg(test)]
+#[path = "timeline_field_tests.rs"]
+mod keyboard_field_tests;
+
 pub fn show(ui: &mut Ui, studio: &mut Studio) {
     if studio.persona != Persona::Motion {
         return;
@@ -28,7 +32,7 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
 /// Args: panel UI and studio. Returns no value; motion commands remain unchanged.
 pub(super) fn content(ui: &mut Ui, studio: &mut Studio) {
     if studio.persona != Persona::Motion {ui.label("Switch to Motion for keyframes");return;}
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 transport(ui, studio);
             });
             ui.add_space(2.0);
@@ -37,6 +41,16 @@ pub(super) fn content(ui: &mut Ui, studio: &mut Studio) {
 }
 
 fn transport(ui: &mut Ui, studio: &mut Studio) {
+    let owner = eframe::egui::Id::new(("motion-transport", &studio.swap_id, &studio.selection));
+    let available = !studio.file_dialog_pending() && !studio.updates.freezing;
+    super::fields::native_scope(ui, owner, |ui| {
+        studio.with_field_history(ui, "motion-transport", |ui, studio| {
+            ui.add_enabled_ui(available, |ui| transport_controls(ui, studio));
+        });
+    });
+}
+
+fn transport_controls(ui: &mut Ui, studio: &mut Studio) {
     if icons::tiny_icon(ui, ph::SKIP_BACK, "To start  Home", false) {
         studio.playhead = 0.0;
         studio.playing = false;
@@ -81,36 +95,35 @@ fn transport(ui: &mut Ui, studio: &mut Studio) {
             .color(fg_weak()),
     );
     ui.separator();
-    ui.label(
-        eframe::egui::RichText::new("Duration")
-            .small()
-            .color(fg_weak()),
-    );
     let mut dur = studio.doc.motion.duration;
-    if ui
-        .add(
-            eframe::egui::DragValue::new(&mut dur)
-                .speed(0.05)
-                .range(0.2..=60.0)
-                .suffix("s"),
-        )
-        .changed()
-    {
+    let (field, _) = super::keyboard_controls::motion_number(
+        ui,
+        ui.id().with("duration"),
+        ("Duration", "Motion duration (s)"),
+        &mut dur,
+        0.01..=3600.0,
+        0.05,
+        "s",
+        None,
+    );
+    if crate::app::input_history::record(field.response, field.changed) {
         let mut after = studio.doc.motion.clone();
         after.duration = dur;
         studio.playhead = studio.playhead.min(dur);
         studio.commit_motion(after);
     }
-    ui.label(eframe::egui::RichText::new("fps").small().color(fg_weak()));
     let mut fps = studio.doc.motion.fps;
-    if ui
-        .add(
-            eframe::egui::DragValue::new(&mut fps)
-                .speed(1.0)
-                .range(8.0..=60.0),
-        )
-        .changed()
-    {
+    let (field, _) = super::keyboard_controls::motion_number(
+        ui,
+        ui.id().with("fps"),
+        ("fps", "Motion frame rate (fps)"),
+        &mut fps,
+        1.0..=240.0,
+        1.0,
+        "",
+        None,
+    );
+    if crate::app::input_history::record(field.response, field.changed) {
         let mut after = studio.doc.motion.clone();
         after.fps = fps;
         studio.commit_motion(after);
@@ -119,6 +132,7 @@ fn transport(ui: &mut Ui, studio: &mut Studio) {
     expression_editor(ui, studio);
     super::motion_compositions::show(ui, studio);
     super::scene3d::show(ui, studio);
+    super::timeline_keyboard::show(ui, studio);
     if ui
         .add_enabled(
             !studio.selection.is_empty(),
