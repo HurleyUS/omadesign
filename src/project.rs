@@ -679,11 +679,9 @@ pub(crate) fn prepare_swap(
     Ok(prepared)
 }
 
-pub fn load_swap(path: &Path) -> Result<SwapMeta, String> {
-    let bytes = read_admitted(path)?;
-    let s = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
-    let _parser = crate::resources::global()
-        .reserve_now(bytes.len() as u64, &crate::deep_color::storage::check)?;
+/// Restore recovery resource references before recovery or previews use the document.
+/// Args: original recovery JSON. Returns metadata with every current and retained SVG reference restored.
+pub(crate) fn decode_swap_archive(s: &str) -> Result<SwapMeta, String> {
     validate_retained_json(s)?;
     let archive: SwapArchive = serde_json::from_str(s).map_err(|e| e.to_string())?;
     let mut meta = archive.meta;
@@ -691,6 +689,15 @@ pub fn load_swap(path: &Path) -> Result<SwapMeta, String> {
         .version
         .unwrap_or_else(|| features::required_version(&meta.doc));
     restore_sources(&mut meta.doc, version, &archive.svg_sources)?;
+    Ok(meta)
+}
+
+pub fn load_swap(path: &Path) -> Result<SwapMeta, String> {
+    let bytes = read_admitted(path)?;
+    let s = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+    let _parser = crate::resources::global()
+        .reserve_now(bytes.len() as u64, &crate::deep_color::storage::check)?;
+    let mut meta = decode_swap_archive(s)?;
     let archive = swap_font_archive(path);
     if archive.is_dir() {
         crate::typography::register_archive(&archive)?;
@@ -767,10 +774,7 @@ pub fn list_swaps() -> Vec<(PathBuf, SwapMeta)> {
         // Listing needs metadata only. Keep older snapshots visible even when
         // restoring one needs a missing font; Recover reports that error.
         if let Some(meta) = std::fs::read_to_string(&p).ok().and_then(|json| {
-            validate_retained_json(&json).ok()?;
-            let mut archive: SwapArchive = serde_json::from_str(&json).ok()?;
-            crate::svg_source::unpack_sources(&mut archive.meta.doc, &archive.svg_sources).ok()?;
-            Some(archive.meta)
+            decode_swap_archive(&json).ok()
         }) {
             out.push((p, meta));
         }

@@ -7,6 +7,7 @@ use crate::{
 use std::{fs, path::PathBuf, process::Command, sync::Arc};
 
 const CHILD: &str = "OMADESIGN_RETAINED_ARCHIVE_CASE";
+const ROUTES: [&str; 4] = ["save", "recovery", "preview-save", "preview-recovery"];
 const XML: &str = r##"<pattern id="p" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="2" fill="#28a"/></pattern><filter id="f"><feGaussianBlur stdDeviation="0.25"/></filter>"##;
 
 fn pattern() -> Fill {
@@ -181,14 +182,14 @@ fn retained_archives_cold_reopen_undo_remote_restore_and_recovery_pruning() {
         .unwrap();
         fs::write(
             directory.join("case.json"),
-            serde_json::to_vec(&json!({"mode":mode,"fonts":fonts})).unwrap(),
+            serde_json::to_vec(&json!({"mode":mode,"fonts":fonts,"routes":ROUTES})).unwrap(),
         )
         .unwrap();
         cases.push((directory, doc));
     }
     fs::remove_dir_all(&originals).unwrap();
     for (directory, doc) in cases {
-        for route in ["save", "recovery"] {
+        for route in ROUTES {
             let output = Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -251,12 +252,20 @@ fn cold_archive_child() {
         );
     }
     let route = std::env::var("OMADESIGN_RETAINED_ARCHIVE_ROUTE").unwrap();
-    let doc = if route == "save" {
-        crate::project::load_from(&directory.join("retained.oma")).unwrap()
-    } else {
-        crate::project::load_swap(&directory.join("retained.oma.swp"))
-            .unwrap()
-            .doc
+    let doc = match route.as_str() {
+        "save" => crate::project::load_from(&directory.join("retained.oma")).unwrap(),
+        "recovery" => {
+            crate::project::load_swap(&directory.join("retained.oma.swp"))
+                .unwrap()
+                .doc
+        }
+        "preview-save" => {
+            crate::brand::load_preview_document(&directory.join("retained.oma"), false).unwrap()
+        }
+        "preview-recovery" => {
+            crate::brand::load_preview_document(&directory.join("retained.oma.swp"), true).unwrap()
+        }
+        _ => panic!("Unknown isolated archive route"),
     };
     assert!(doc.layers.is_empty() && doc.sources.is_empty());
     for font in case["fonts"].as_array().unwrap() {
@@ -432,5 +441,22 @@ fn withdrawn_pixels_remain_encoded_and_legacy_inline_recovery_still_opens() {
             .collaboration
             .is_none()
     );
+    let mut future = serde_json::to_value(&meta).unwrap();
+    future["version"] = json!(25);
+    future["doc"]["collaboration"] = json!({"future_model_that_must_not_be_typed":true});
+    let future_bytes = serde_json::to_vec(&future).unwrap();
+    fs::write(&path, &future_bytes).unwrap();
+    assert!(
+        crate::project::load_swap(&path)
+            .err()
+            .unwrap()
+            .contains("Unsupported")
+    );
+    assert!(
+        crate::brand::load_preview_document(&path, true)
+            .unwrap_err()
+            .contains("Unsupported")
+    );
+    assert_eq!(fs::read(&path).unwrap(), future_bytes);
     fs::remove_dir_all(root).unwrap();
 }
