@@ -2,7 +2,7 @@
 
 The rejected nightly added a second mode bar without a usable docking system. This branch replaces that bar with native pane tabs and keeps the existing top-bar persona icons.
 
-Drag a tab onto another group to nest it. Drop in the upper or lower part of a pane to split the group; drop on a canvas edge to dock there, or in its middle to float. Drag a column's inner edge to change its width, or a separator between stacked panes to change their heights. Window contains pane access, Reset workspace, and the keyboard arranger (Ctrl+F6). A narrow window constrains the visible dock sizes without rewriting their saved placement.
+Drag a tab onto another group to nest it. Drop near a pane body’s edge to split the group (left/right for top or bottom docks; upper/lower for side docks); drop on a canvas edge to dock there, or in its middle to float. Drag a column's inner edge to change its width, or a separator between stacked panes to change their heights. Window contains pane access, Reset workspace, and the keyboard arranger (Ctrl+F6). A narrow window constrains the visible dock sizes without rewriting their saved placement.
 
 The Layers pane keeps the existing selection, reorder, group, visibility, lock, and typed document commands. It adds rendered thumbnails and a fixed bottom strip for layer/group/mask/effects/duplicate/delete actions. Double-click a layer name to rename; Enter commits and Escape cancels.
 

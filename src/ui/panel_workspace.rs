@@ -462,3 +462,22 @@ mod split_tests {
         assert_eq!(layout,serde_json::from_slice(&serde_json::to_vec(&layout).unwrap()).unwrap());
     }
 }
+
+#[cfg(test)]
+mod tab_visibility_tests {
+    use super::*;
+    #[test]
+    fn human_qa_opening_a_far_tab_reveals_its_actual_native_control() {
+        let ctx=egui::Context::default();ctx.enable_accesskit();
+        let ids=["transform","align","pathfinder","appearance","color","swatches","stroke","gradients","patterns","transparency"];
+        let mut layout=Workspace{groups:vec![group(&ids,Place::Right,320.0,1.0)],..Default::default()};
+        let mut output=None;
+        for step in 0..5 {
+            if step==1 {assert!(layout.request_focus(&ctx,"tab-reveal","transparency"));}
+            output=Some(crate::ui::shared_fields_tests::headless(&ctx,egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1200.0,800.0))),..Default::default()},|ui|{layout.show(ui,"tab-reveal",PANELS,|ui,_|{ui.label("Pane body");});}));
+        }
+        let output=output.unwrap();let (id,node)=crate::ui::welcome::keyboard_tests::named(&output,"Transparency");
+        assert_eq!(ctx.memory(|m|m.focused()).map(|id|id.accesskit_id()),Some(id));
+        let bounds=node.bounds().unwrap();assert!(bounds.x0>=880.0&&bounds.x1<=1200.0,"the actual active tab must be visible: {bounds:?}");
+    }
+}

@@ -440,6 +440,7 @@ impl Workspace {
                                 {
                                     let already_focused = response.has_focus();
                                     response.request_focus();
+                                    response.scroll_to_me(Some(egui::Align::Center));
                                     if !already_focused && response.gained_focus() {
                                         response.widget_info(|| {
                                             egui::WidgetInfo::selected(
