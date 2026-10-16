@@ -60,7 +60,7 @@ fn human_qa_layer_double_click_focuses_rename_paste_commit_undo_reopen() {
         ctx.memory(|m| m.focused()).map(|id| id.accesskit_id()),
         Some(field)
     );
-    frame(keys::key(Key::A, Modifiers::CTRL));
+    frame(keys::key(Key::A, Modifiers::CTRL | Modifiers::COMMAND));
     frame(vec![Event::Paste("Pasted layer name".into())]);
     frame(keys::key(Key::Enter, Modifiers::NONE));
     drop(frame);
@@ -97,7 +97,7 @@ fn human_qa_native_dimension_lock_preserves_ratio_and_one_undo() {
     frame(vec![Event::PointerMoved(at), pointer(at, true)]);
     frame(vec![pointer(at, false)]);
     keys::tab_to(&ctx, "W", &mut frame);
-    frame(keys::key(Key::A, Modifiers::CTRL));
+    frame(keys::key(Key::A, Modifiers::CTRL | Modifiers::COMMAND));
     frame(vec![Event::Paste("200".into())]);
     frame(keys::key(Key::Enter, Modifiers::NONE));
     drop(frame);

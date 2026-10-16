@@ -528,20 +528,26 @@ fn bounds_fields(
         changed |= number_field(&mut columns[1], "Y", y, -100000.0..=100000.0, "");
     });
     let mut size_changed = [false; 2];
-    ui.horizontal(|ui| {
-        let available = (ui.available_width() - 22.0 - ui.spacing().item_spacing.x).max(0.0);
-        ui.allocate_ui_with_layout(vec2(available, 0.0), Layout::top_down(eframe::egui::Align::Min), |ui| {
-            ui.set_max_width(available);
-            ui.columns(2, |columns| {
-                size_changed[0] = number_field(&mut columns[0], "W", width, min_size..=20000.0, "");
-                size_changed[1] = number_field(&mut columns[1], "H", height, min_size..=20000.0, "");
-            });
-        });
-        if icons::tiny_icon(ui, if linked { ph::LOCK } else { ph::LOCK_OPEN }, "Constrain proportions", linked) {
+    let total = ui.available_width();
+    let gap = ui.spacing().item_spacing.x;
+    let field_width = ((total - 22.0 - gap * 2.0) * 0.5).max(24.0);
+    let row_height = ui.text_style_height(&eframe::egui::TextStyle::Body) + ui.spacing().item_spacing.y + 24.0;
+    let (_,rect) = ui.allocate_space(vec2(total,row_height));
+    let width_row = ui.scope_builder(eframe::egui::UiBuilder::new().id_salt("bounds-width").max_rect(eframe::egui::Rect::from_min_size(rect.min,vec2(field_width,row_height))),|ui| {
+        size_changed[0] = number_field(ui,"W",width,min_size..=20000.0,"");
+    });
+    let height_row = ui.scope_builder(eframe::egui::UiBuilder::new().id_salt("bounds-height").max_rect(eframe::egui::Rect::from_min_size(rect.min+vec2(field_width+gap,0.0),vec2(field_width,row_height))),|ui| {
+        size_changed[1] = number_field(ui,"H",height,min_size..=20000.0,"");
+    });
+    let lock_rect=eframe::egui::Rect::from_min_size(eframe::egui::pos2(rect.right()-22.0,rect.bottom()-24.0),vec2(22.0,22.0));
+    ui.scope_builder(eframe::egui::UiBuilder::new().id_salt("bounds-aspect").max_rect(lock_rect),|ui| {
+        if icons::tiny_icon(ui,if linked {ph::LOCK} else {ph::LOCK_OPEN},"Constrain proportions",linked) {
             linked = !linked;
-            ui.ctx().data_mut(|data| data.insert_persisted(lock_id, linked));
+            ui.ctx().data_mut(|data|data.insert_persisted(lock_id,linked));
         }
     });
+    let overflow=width_row.response.rect.bottom().max(height_row.response.rect.bottom())-rect.bottom();
+    if overflow>0.0 {ui.add_space(overflow);}
     if linked && before.0 > 0.0 && before.1 > 0.0 {
         let ratio = before.0 / before.1;
         if ratio.is_finite() && ratio > 0.0 {
