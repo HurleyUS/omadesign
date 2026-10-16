@@ -14,6 +14,7 @@ use crate::{
     palette::Palette,
 };
 use eframe::egui::{self, Id, Response, Ui};
+mod library;
 
 #[derive(Clone)]
 struct Guide {
@@ -36,6 +37,12 @@ struct Theme {
 struct Themes {
     next: u64,
     entries: Vec<Theme>,
+    #[serde(skip)]
+    stamp: Option<u64>,
+    #[serde(skip)]
+    error: String,
+    #[serde(skip)]
+    loaded: bool,
 }
 #[derive(Clone)]
 struct ThemeDraft {
@@ -408,9 +415,11 @@ fn guide(ui: &mut Ui, studio: &mut Studio) {
 fn themes(ui: &mut Ui, studio: &mut Studio) {
     let key = Id::new("color-themes-library");
     let draft_id = Id::new("color-theme-draft");
+    let file = library::path(ui.ctx());
     let mut library = ui
-        .data_mut(|d| d.get_persisted::<Themes>(key))
-        .unwrap_or_default();
+        .data(|d| d.get_temp::<Themes>(key))
+        .unwrap_or_else(|| library::load(&file));
+    let previous = library.clone();
     library.entries.retain(|entry| entry.colors.len() == 5);
     library.entries.truncate(256);
     library.next = library
@@ -498,7 +507,9 @@ fn themes(ui: &mut Ui, studio: &mut Studio) {
     );
     ui.horizontal(|ui| {
         ui.add_enabled_ui(
-            library.entries.len() < 256 || draft.editing.is_some(),
+            library.loaded
+                && library.next < u64::MAX
+                && (library.entries.len() < 256 || draft.editing.is_some()),
             |ui| {
                 if icon(
                     ui,
@@ -623,8 +634,29 @@ fn themes(ui: &mut Ui, studio: &mut Studio) {
             draft.editing = None;
         }
     }
+    if serde_json::to_vec(&library).ok() != serde_json::to_vec(&previous).ok() {
+        match library::save(&file, &mut library) {
+            Ok(()) => library.error.clear(),
+            Err(error) => {
+                library = previous;
+                library.error = error;
+            }
+        }
+    }
+    if !library.error.is_empty() {
+        studio.status = library.error.clone();
+        ui.colored_label(ui.visuals().error_fg_color, &library.error);
+        if icon(
+            ui,
+            key.with("reload"),
+            ph::ARROW_CLOCKWISE,
+            "Reload color theme library",
+        ) {
+            library = library::load(&file);
+        }
+    }
     ui.data_mut(|d| {
-        d.insert_persisted(key, library);
+        d.insert_temp(key, library);
         d.insert_temp(draft_id, draft);
     });
 }
@@ -820,6 +852,20 @@ fn recolor(ui: &mut Ui, studio: &mut Studio) {
 mod tests {
     use super::super::welcome::keyboard_tests as keys;
     use super::*;
+    pub(super) fn context() -> egui::Context {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let ctx = egui::Context::default();
+        let root = std::path::PathBuf::from(
+            std::env::var("TMPDIR").expect("Run through the serialized helper"),
+        );
+        let file = root.join(format!(
+            "color-themes-{}-{}.json",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        ctx.data_mut(|d| d.insert_temp(Id::new("color-theme-file"), file));
+        ctx
+    }
     use crate::{
         document::{Document, Layer, Shape, Style},
         geom::{Geom, Pt},
@@ -874,7 +920,7 @@ mod tests {
     }
     #[test]
     fn craft_color_guide_real_swatch_and_theme_wheel_native_focus_save_and_reopen() {
-        let ctx = egui::Context::default();
+        let ctx = context();
         ctx.enable_accesskit();
         super::super::theme::apply(&ctx);
         let mut studio = studio();
@@ -928,13 +974,16 @@ mod tests {
         click(&ctx, &mut frame, "Save color theme");
         drop(frame);
         let library = ctx
-            .data_mut(|d| d.get_persisted::<Themes>(Id::new("color-themes-library")))
+            .data(|d| d.get_temp::<Themes>(Id::new("color-themes-library")))
             .unwrap();
         assert_eq!(library.entries.len(), 1);
         assert_eq!(library.entries[0].colors, moved);
         let reopened: Themes =
             serde_json::from_str(&serde_json::to_string(&library).unwrap()).unwrap();
         assert_eq!(reopened.entries[0].colors, moved);
+        let reloaded = library::load(&library::path(&ctx));
+        assert!(reloaded.loaded);
+        assert_eq!(reloaded.entries[0].colors, moved);
         assert_eq!(
             crate::project::encode(&studio.doc).unwrap(),
             before,
@@ -944,7 +993,7 @@ mod tests {
 
     #[test]
     fn craft_color_recolor_native_hex_apply_undo_and_selection_retirement() {
-        let ctx = egui::Context::default();
+        let ctx = context();
         ctx.enable_accesskit();
         super::super::theme::apply(&ctx);
         let mut studio = studio();
@@ -989,7 +1038,7 @@ mod tests {
 
     #[test]
     fn craft_color_compact_dock_keeps_swatches_visible_and_options_operable() {
-        let ctx = egui::Context::default();
+        let ctx = context();
         ctx.enable_accesskit();
         super::super::theme::apply(&ctx);
         let mut studio = studio();
@@ -1030,7 +1079,7 @@ mod tests {
 
     #[test]
     fn craft_color_pane_body_can_open_another_pane_in_the_actual_workspace() {
-        let ctx = egui::Context::default();
+        let ctx = context();
         ctx.enable_accesskit();
         super::super::theme::apply(&ctx);
         let mut studio = studio();
