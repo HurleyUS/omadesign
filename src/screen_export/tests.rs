@@ -293,6 +293,7 @@ fn craft_screen_export_keeps_actual_inside_center_outside_strokes_and_blur_tails
     s.doc.find_shape_mut(layer, id).unwrap().filters = FilterStack {
         enabled: true,
         items: vec![Fx::Blur { std: 1. }],
+        ..Default::default()
     };
     let root = folder();
     Plan::new(&s.doc, &[Scope::Asset(s.doc.screen_export.assets[0].id)])
@@ -332,4 +333,33 @@ fn craft_screen_export_graph_overflow_has_an_explicit_asset_bounds_refusal() {
             .contains("SVG filter graphs")
     );
     assert!(crate::export::encode(&Source::Document(doc), Default::default(), &NoProgress).is_ok());
+}
+
+#[test]
+fn craft_screen_export_cubic_crop_uses_actual_extrema_not_sampled_points() {
+    use crate::geom::{Anchor, Geom, Pt};
+    let mut s = fixture();
+    let (layer, id) = s.selection[0];
+    let mut start = Anchor::corner(Pt::new(10., 10.));
+    start.h_out = Pt::new(0., 1000.);
+    let end = Anchor::corner(Pt::new(50., 10.));
+    s.doc.find_shape_mut(layer, id).unwrap().geom = Geom::Path {
+        anchors: vec![start, end],
+        closed: true,
+        winding: false,
+    };
+    let asset = &s.doc.screen_export.assets[0];
+    let doc = asset.document(&s.doc).unwrap();
+    assert_eq!(doc.width, 40.);
+    assert!((doc.height - 4000. / 9.).abs() < 0.001);
+    s.doc.screen_export.rows[0].scale = 8;
+    let root = folder();
+    Plan::new(&s.doc, &[Scope::Asset(asset.id)])
+        .unwrap()
+        .save(&root, &NoProgress)
+        .unwrap();
+    let image = image::open(root.join("Badge.png")).unwrap().to_rgba8();
+    assert_eq!(image.dimensions(), (320, 3556));
+    assert!(image.rows().skip(3553).flatten().any(|pixel| pixel[3] > 0));
+    std::fs::remove_dir_all(root).unwrap();
 }

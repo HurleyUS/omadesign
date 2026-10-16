@@ -13,15 +13,25 @@ pub enum Scope {
     Selection,
 }
 
+/// Bound the cached artwork and stroke that the existing renderer paints.
+/// Args: concrete shape. Returns its exact path extents with ordinary effect padding.
 fn paint_bounds(shape: &crate::document::Shape) -> Result<Bounds, String> {
-    let mut bounds = shape.world_bbox();
+    let path = shape.get_cached_path(96);
+    let mut bounds = path
+        .as_ref()
+        .map(|path| {
+            let b = path.compute_tight_bounds().unwrap_or_else(|| path.bounds());
+            Bounds {
+                min: Pt::new(b.left(), b.top()),
+                max: Pt::new(b.right(), b.bottom()),
+            }
+        })
+        .unwrap_or_else(|| shape.world_bbox());
     if let Some(stroke) = &shape.style.stroke
         && stroke.width > 0.
         && !(shape.geom.is_closed() && stroke.alignment == crate::document::StrokeAlignment::Inside)
     {
-        let path = shape
-            .get_cached_path(96)
-            .ok_or("Could not bound the selected stroke")?;
+        let path = path.ok_or("Could not bound the selected stroke")?;
         let aligned =
             shape.geom.is_closed() && stroke.alignment == crate::document::StrokeAlignment::Outside;
         let outline = path
@@ -35,7 +45,9 @@ fn paint_bounds(shape: &crate::document::Shape) -> Result<Bounds, String> {
                 1.,
             )
             .ok_or("Could not bound the selected stroke")?;
-        let b = outline.bounds();
+        let b = outline
+            .compute_tight_bounds()
+            .unwrap_or_else(|| outline.bounds());
         bounds = bounds.union(Bounds {
             min: Pt::new(b.left(), b.top()),
             max: Pt::new(b.right(), b.bottom()),
