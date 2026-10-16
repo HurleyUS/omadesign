@@ -68,7 +68,11 @@ fn icon(ui: &mut Ui, id: Id, glyph: &str, name: &str) -> bool {
 }
 fn swatch(ui: &mut Ui, id: Id, color: Rgba, on: bool, name: &str, size: f32) -> Response {
     let response = named(ui, id, name, |ui| {
-        ui.add_sized([size, size], egui::Button::new(""))
+        let (_, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, name)
+        });
+        response
     });
     let rect = response.rect.shrink(2.);
     let cell = (size / 4.).max(3.);
@@ -175,7 +179,7 @@ fn guide(ui: &mut Ui, studio: &mut Studio) {
         .data(|d| d.get_temp::<Guide>(id))
         .unwrap_or_else(|| Guide {
             base: current(studio),
-            rule: Harmony::default(),
+            rule: Harmony::Complementary,
             variation: Variation::default(),
             steps: 4,
             amount: 50.,
@@ -190,8 +194,21 @@ fn guide(ui: &mut Ui, studio: &mut Studio) {
         state.amount,
         state.limit,
     );
-    target(ui, studio, id);
+    let palettes = studio.libraries.draft().palettes.clone();
+    if state.limit.is_some_and(|i| i >= palettes.len()) {
+        state.limit = None;
+    }
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.;
+        named(ui, id.with("fill"), "Apply guide colors to fill", |ui| {
+            ui.selectable_value(&mut studio.fill_active, true, "Fill")
+        });
+        named(
+            ui,
+            id.with("stroke"),
+            "Apply guide colors to stroke",
+            |ui| ui.selectable_value(&mut studio.fill_active, false, "Stroke"),
+        );
         super::color_picker::color_edit_named(
             ui,
             id.with("base"),
@@ -227,59 +244,61 @@ fn guide(ui: &mut Ui, studio: &mut Studio) {
             });
             super::panel_workspace::open(ui.ctx(), studio, "color-themes");
         }
+        let response = ui
+            .menu_button("···", |ui| {
+                ui.set_max_width(270.);
+                for variation in Variation::ALL {
+                    named(
+                        ui,
+                        id.with(("variation", variation as u8)),
+                        variation.name(),
+                        |ui| ui.selectable_value(&mut state.variation, variation, variation.name()),
+                    );
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Steps");
+                    named(ui, id.with("steps"), "Guide steps per side", |ui| {
+                        ui.add(egui::DragValue::new(&mut state.steps).range(1..=20))
+                    });
+                    ui.label("Reach");
+                    named(ui, id.with("reach"), "Guide variation reach", |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut state.amount)
+                                .range(0.0..=100.0)
+                                .suffix("%"),
+                        )
+                    });
+                });
+                ui.separator();
+                ui.label("Limit to swatches");
+                named(ui, id.with("unlimited"), "No guide library limit", |ui| {
+                    ui.selectable_value(&mut state.limit, None, "None")
+                });
+                egui::ScrollArea::vertical()
+                    .max_height(180.)
+                    .show(ui, |ui| {
+                        for (i, palette) in palettes.iter().enumerate() {
+                            named(
+                                ui,
+                                id.with(("library", i)),
+                                &format!("Limit to {}", palette.name),
+                                |ui| ui.selectable_value(&mut state.limit, Some(i), &palette.name),
+                            );
+                        }
+                    });
+            })
+            .response;
+        welcome::name_control(
+            ui,
+            &response,
+            id.with("options-label"),
+            "Color Guide options",
+        );
     });
     let mut harmony = Some(state.rule);
     rule(ui, id.with("rule"), &mut harmony, false);
     state.rule = harmony.unwrap_or_default();
-    let response = egui::ComboBox::from_id_salt(id.with("variation"))
-        .selected_text(state.variation.name())
-        .width(ui.available_width())
-        .show_ui(ui, |ui| {
-            for variation in Variation::ALL {
-                ui.selectable_value(&mut state.variation, variation, variation.name());
-            }
-        })
-        .response;
-    welcome::name_control(ui, &response, id.with("variation-label"), "Guide variation");
-    ui.horizontal(|ui| {
-        ui.label("Steps");
-        named(ui, id.with("steps"), "Guide steps per side", |ui| {
-            ui.add(egui::DragValue::new(&mut state.steps).range(1..=20))
-        });
-        ui.label("Reach");
-        named(ui, id.with("reach"), "Guide variation reach", |ui| {
-            ui.add(
-                egui::DragValue::new(&mut state.amount)
-                    .range(0.0..=100.0)
-                    .suffix("%"),
-            )
-        });
-    });
-    let palettes = studio.libraries.draft().palettes.clone();
-    if state.limit.is_some_and(|i| i >= palettes.len()) {
-        state.limit = None;
-    }
-    let response = egui::ComboBox::from_id_salt(id.with("limit"))
-        .selected_text(
-            state
-                .limit
-                .and_then(|i| palettes.get(i))
-                .map_or("No library limit", |p| p.name.as_str()),
-        )
-        .width(ui.available_width())
-        .show_ui(ui, |ui| {
-            ui.selectable_value(&mut state.limit, None, "No library limit");
-            for (i, palette) in palettes.iter().enumerate() {
-                ui.selectable_value(&mut state.limit, Some(i), &palette.name);
-            }
-        })
-        .response;
-    welcome::name_control(
-        ui,
-        &response,
-        id.with("limit-label"),
-        "Limit guide to swatch library",
-    );
     if old
         != (
             state.base,
@@ -966,5 +985,46 @@ mod tests {
         studio.selection.clear();
         assert!(studio.recolor_artwork(&target, &target.colors).is_err());
         assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
+    }
+
+    #[test]
+    fn craft_color_compact_dock_keeps_swatches_visible_and_options_operable() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        super::super::theme::apply(&ctx);
+        let mut studio = studio();
+        let before = crate::project::encode(&studio.doc).unwrap();
+        let owner = Id::new(("color-guide", &studio.swap_id));
+        let mut frame = |events| {
+            keys::render(&ctx, events, |ui| {
+                ui.set_max_width(304.);
+                egui::ScrollArea::vertical()
+                    .max_height(172.)
+                    .min_scrolled_height(0.)
+                    .show(ui, |ui| show(ui, &mut studio, "color-guide"));
+            })
+        };
+        frame(vec![]);
+        let output = frame(vec![]);
+        for name in [
+            "Guide color 1 variation 1: #FF2020",
+            "Save guide colors as swatches",
+        ] {
+            let (_, node) = keys::named(&output, name);
+            let rect = node.bounds().unwrap();
+            assert!(
+                rect.y0 >= 0. && rect.y1 <= 172.,
+                "{name} must be visible in the real short dock: {rect:?}"
+            );
+        }
+        click(&ctx, &mut frame, "Color Guide options");
+        click(&ctx, &mut frame, "Vivid / muted");
+        frame(keys::key(Key::Escape, Modifiers::NONE));
+        assert_eq!(
+            ctx.data(|d| d.get_temp::<Guide>(owner)).unwrap().variation,
+            Variation::VividMuted
+        );
+        drop(frame);
+        assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
     }
 }
