@@ -171,6 +171,9 @@ fn render(
         .iter()
         .filter(|l| l.parent == parent && l.visible)
     {
+        if layer.svg_filter.as_ref().is_some_and(|graph| !graph.filters.is_empty()) {
+            return Err("Native SVG filter graphs require a float effect renderer; save .oma to retain the authored document.".into());
+        }
         if layer.opacity <= 0. {
             continue;
         }
@@ -247,6 +250,7 @@ fn render(
                 shape.filters.active()
                     || !matches!(&shape.style.fill, crate::document::Fill::None | crate::document::Fill::Solid(_))
                     || shape.style.stroke.as_ref().is_some_and(|stroke| stroke.gradient.is_some())
+                    || matches!(&shape.geom, crate::geom::Geom::Text(run) if run.spans.iter().any(|span| span.fill.as_ref().is_some_and(|fill| !matches!(fill, crate::document::Fill::None | crate::document::Fill::Solid(_)))))
             })) {
                 return Err("Native vector gradients, patterns and effects require a float paint renderer. Save .oma to retain the authored document; use an explicit 8-bit copy for this export.".into());
             }

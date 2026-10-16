@@ -5,63 +5,37 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(crate) const VERSION: u32 = 14;
+mod features;
+
+pub(crate) const VERSION: u32 = features::PUBLISHING;
+
+/// Check whether this build implements a project version.
+/// Args: envelope version. Returns false for unimplemented reserved formats.
+pub(crate) fn supports_version(version: u32) -> bool {
+    features::supports_version(version)
+}
 
 #[derive(Serialize, Deserialize)]
 struct File {
     version: u32,
     doc: Document,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    svg_sources: std::collections::BTreeMap<String, std::sync::Arc<str>>,
 }
 
 pub fn encode(doc: &Document) -> Result<String, String> {
+    doc.validate_sources()?;
+    if features::required_version(doc) > VERSION {
+        return Err("Unsupported omadesign project version".into());
+    }
     let mut packed = doc.clone();
     pack_rasters(&mut packed)?;
+    let svg_sources = crate::svg_source::pack_sources(&mut packed);
     let mut output = crate::deep_color::storage::Builder::new()?;
     serde_json::to_writer(&mut output, &File {
-        // Older readers must not silently strip a mask or change stroke placement.
-        // Keep plain documents compatible with v5; v1-v13 remain readable here.
-        version: if doc.color!=crate::deep_color::cms::DocumentColor::default() || doc.layers.iter().any(|l| l.kind.pixels().is_some_and(|p|p.native.is_some()) || l.mask.as_ref().is_some_and(|p|p.native.is_some()) || l.kind.shapes().is_some_and(|ss|ss.iter().any(|s|s.mask.as_ref().is_some_and(|p|p.native.is_some())))) {
-            14
-        } else if !doc.mask_sources().is_empty() {
-            13
-        } else if doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(&s.geom, crate::geom::Geom::Text(t) if !t.manual_kern.is_empty() || t.spans.iter().any(|s| s.tracking.is_some() || s.kerning.is_some() || s.leading.is_some() || s.baseline_shift.is_some() || s.hscale.is_some() || s.vscale.is_some()))) {
-            12
-        } else if doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(&s.geom, crate::geom::Geom::Text(t) if !t.features.is_empty() || t.spans.iter().any(|s| !s.features.is_empty()))) {
-            11
-        } else if doc.layers.iter().any(|l| !l.text_wrap.is_none() || l.kind.shapes().unwrap_or(&[]).iter().any(|s| !s.text_wrap.is_none() || matches!(&s.geom,crate::geom::Geom::Text(t) if t.frame.is_some() || t.thread.is_some()))) {
-            10
-        } else if doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(&s.geom, crate::geom::Geom::Text(t) if t.on_path.is_some())) {
-            9
-        } else if doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(&s.geom, crate::geom::Geom::Text(t) if t.wrap_width.is_some() || !t.paragraphs.is_empty() || !t.spans.is_empty() || matches!(t.align, crate::geom::TextAlign::Justify{..}))) {
-            8
-        } else if doc.layers.iter().any(|l| {
-            l.fill_opacity != 1.
-                || l.blend_interior
-                || !l.filters.items.is_empty()
-                || l.kind.shapes().is_some_and(|ss| {
-                    ss.iter().any(|s| {
-                        s.fill_opacity != 1. || s.blend_interior || !s.filters.items.is_empty()
-                    })
-                })
-        }) {
-            7
-        } else if doc
-            .layers
-            .iter()
-            .filter_map(|l| l.kind.shapes())
-            .flatten()
-            .any(|s| {
-                s.mask.is_some()
-                    || s.style.stroke.as_ref().is_some_and(|stroke| {
-                        stroke.alignment != crate::document::StrokeAlignment::Center
-                    })
-            })
-        {
-            6
-        } else {
-            5
-        },
+        version: features::required_version(doc),
         doc: packed,
+        svg_sources,
     })
     .map_err(|e| e.to_string())?;
     let allocation = std::sync::Arc::try_unwrap(output.finish()?).map_err(|_| "Shared project encoded storage")?;
@@ -77,11 +51,10 @@ pub fn decode(s: &str) -> Result<Document, String> {
 
 fn decode_admitted(s: &str) -> Result<Document, String> {
     let _parser = crate::resources::global().reserve_now(s.len() as u64, &crate::deep_color::storage::check)?;
+    validate_retained_json(s)?;
     let file: File = serde_json::from_str(s).map_err(|e| e.to_string())?;
-    if !(1..=VERSION).contains(&file.version) {
-        return Err("Unsupported omadesign project version".into());
-    }
     let mut doc = file.doc;
+    restore_sources(&mut doc, file.version, &file.svg_sources)?;
     for layer in &mut doc.layers {
         if let Some(px) = layer.kind.pixels_mut() {
             *px = decompress_pixels(px)?;
@@ -100,10 +73,48 @@ fn decode_admitted(s: &str) -> Result<Document, String> {
     normalize_decoded_document(doc, file.version)
 }
 
+/// Inspect retained live/source properties without rebuilding pixels or color state.
+/// Args: original JSON value. Returns its greatest required retained-feature version.
+pub(crate) fn retained_feature_version(value: &serde_json::Value) -> Result<u32, String> {
+    features::value_version(value)
+}
+
+/// Refuse unsupported retained state before a project or preview reader can discard fields.
+/// Args: original JSON. Returns a version error before typed materialization.
+pub(crate) fn validate_retained_json(text: &str) -> Result<(), String> {
+    let (required, declared) = features::serialized_version(text)?;
+    if required > VERSION || declared.is_some_and(|version| !supports_version(version)) {
+        return Err("Unsupported omadesign project version".into());
+    }
+    if let Some(declared) = declared && required >= 18 && declared < required {
+        return Err(format!("Project declares version {declared}, but its retained data requires version {required}"));
+    }
+    Ok(())
+}
+
+/// Restore shared vector sources before materializing project pixels.
+/// Args: document, declared version and source table. Returns a version or reference error.
+pub(crate) fn restore_sources(
+    doc: &mut Document,
+    version: u32,
+    sources: &std::collections::BTreeMap<String, std::sync::Arc<str>>,
+) -> Result<(), String> {
+    if !supports_version(version) {
+        return Err("Unsupported omadesign project version".into());
+    }
+    features::validate_version(doc, version, !sources.is_empty())?;
+    crate::svg_source::unpack_sources(doc, sources)
+}
+
 /// Shared normalization after pixels have been decoded under the caller's budgets.
 pub(crate) fn normalize_decoded_document(mut doc: Document, version: u32) -> Result<Document, String> {
+    if !supports_version(version) {
+        return Err("Unsupported omadesign project version".into());
+    }
+    features::validate_version(&doc, version, false)?;
     crate::deep_color::cms::validate_profile(&doc.color.icc_profile,doc.color.model)?;
     if doc.color.intent>3{return Err("Invalid document color rendering intent".into());}
+    doc.validate_sources()?;
     for layer in &mut doc.layers {
         if version < 7 {
             layer.filters.migrate_legacy(layer.blend);
@@ -648,6 +659,7 @@ pub fn load_swap(path: &Path) -> Result<SwapMeta, String> {
     let bytes = read_admitted(path)?;
     let s = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
     let _parser = crate::resources::global().reserve_now(bytes.len() as u64, &crate::deep_color::storage::check)?;
+    validate_retained_json(s)?;
     let mut meta: SwapMeta = serde_json::from_str(s).map_err(|e| e.to_string())?;
     let archive = swap_font_archive(path);
     if archive.is_dir() {

@@ -1,6 +1,6 @@
 [package]
 name = "omadesign"
-version = "0.6.4"
+version = "0.6.7"
 edition = "2024"
 description = "Native Linux studio for design, layout, painting, photography, and motion"
 license = "MIT"
@@ -44,6 +44,7 @@ rustybuzz = "0.20"
 unicode-linebreak = "0.1"
 hyphenation = { version = "0.8.4", features = ["embed_en-us"] }
 unicode-segmentation = "1.13"
+unicode-bidi = "0.3"
 rfd = "0.15"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
@@ -76,6 +77,7 @@ tar = "0.4"
 # winit 0.30 only emits PinchGesture on macOS/iOS. This tree adds Wayland
 # zwp_pointer_gestures_v1 so a trackpad pinch zooms the canvas.
 [patch.crates-io]
+resvg = { path = "vendor/resvg" }
 # Wait for Wayland frame callbacks instead of polling occluded windows.
 eframe = { path = "vendor/eframe" }
 # Retain native clipboard key presses for modifier-aware application shortcuts.
