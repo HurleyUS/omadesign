@@ -70,9 +70,16 @@ fn icon(ui: &mut Ui, id: Id, glyph: &str, name: &str, enabled: bool) -> bool {
     response.on_hover_text(name).clicked()
 }
 fn text(ui: &mut Ui, id: Id, value: &mut String, name: &str) -> egui::Response {
+    let hint = match name {
+        "Export filename prefix" => "Prefix",
+        "Export row filename suffix" => "Suffix",
+        "Export destination folder" => "Destination folder",
+        _ => "Asset name",
+    };
     let response = ui.add(
         egui::TextEdit::singleline(value)
             .id(id)
+            .hint_text(hint)
             .desired_width(ui.available_width()),
     );
     welcome::name_control(ui, &response, id.with("label"), name);

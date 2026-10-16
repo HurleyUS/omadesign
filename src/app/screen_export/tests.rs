@@ -17,7 +17,7 @@ pub(crate) fn fixture() -> Studio {
     );
     shape.name = "Badge".into();
     studio.selection = vec![(0, shape.id)];
-    studio.selected_layer = Some(0);
+    studio.selected_layer = Some(layer.id);
     studio.active_layer = Some(0);
     layer.kind.shapes_mut().unwrap().push(shape);
     studio.doc.layers = vec![layer];
@@ -120,4 +120,45 @@ fn craft_screen_assets_collect_multiple_unique_names_and_missing_references_stay
     );
     let reopened = crate::project::decode(&crate::project::encode(&studio.doc).unwrap()).unwrap();
     assert_eq!(reopened.screen_export, studio.doc.screen_export);
+}
+
+#[test]
+fn craft_screen_assets_whole_layer_uses_stable_identity_and_refuses_changed_owner() {
+    let mut studio = fixture();
+    studio.selection.clear();
+    let layer = studio.doc.layers[0].id;
+    let mut unrelated = Layer::vector("Other layer");
+    unrelated.kind.shapes_mut().unwrap().push(Shape::new(
+        Geom::Rect {
+            origin: Pt::ZERO,
+            size: Pt::splat(5.),
+            radius: 0.,
+        },
+        Style::default(),
+    ));
+    studio.doc.layers.insert(0, unrelated);
+    studio.active_layer = Some(1);
+    let target = studio.capture_export_assets().unwrap();
+    studio.collect_export_assets(&target, true).unwrap();
+    assert!(
+        studio.doc.screen_export.assets[0]
+            .objects
+            .iter()
+            .all(|o| o.layer == layer)
+    );
+    let target = studio.capture_export_assets().unwrap();
+    studio.active_layer = Some(0);
+    assert!(
+        studio
+            .collect_export_assets(&target, true)
+            .unwrap_err()
+            .contains("selection changed")
+    );
+    studio.selected_layer = Some(u64::MAX - 1);
+    assert!(
+        studio
+            .capture_export_assets()
+            .unwrap_err()
+            .contains("no longer exists")
+    );
 }

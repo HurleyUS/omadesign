@@ -7,7 +7,8 @@ pub(crate) struct AssetTarget {
     document: String,
     revision: u64,
     selection: Vec<(usize, u64)>,
-    layer: Option<usize>,
+    layer: Option<u64>,
+    active: Option<u64>,
     objects: Vec<Object>,
 }
 fn ready(studio: &Studio) -> Result<(), String> {
@@ -115,7 +116,16 @@ impl Studio {
                     objects.push(object);
                 }
             }
-        } else if let Some(index) = self.selected_layer.or(self.active_layer) {
+        } else if let Some(index) = match self.selected_layer {
+            Some(id) => Some(
+                self.doc
+                    .layers
+                    .iter()
+                    .position(|l| l.id == id)
+                    .ok_or("The selected layer no longer exists")?,
+            ),
+            None => self.active_layer,
+        } {
             let root = self
                 .doc
                 .layers
@@ -166,6 +176,10 @@ impl Studio {
             revision: self.canvas_gen,
             selection: self.selection.clone(),
             layer: self.selected_layer,
+            active: self
+                .active_layer
+                .and_then(|i| self.doc.layers.get(i))
+                .map(|l| l.id),
             objects,
         })
     }
@@ -182,6 +196,11 @@ impl Studio {
             || target.revision != self.canvas_gen
             || target.selection != self.selection
             || target.layer != self.selected_layer
+            || target.active
+                != self
+                    .active_layer
+                    .and_then(|i| self.doc.layers.get(i))
+                    .map(|l| l.id)
         {
             return Err("The asset selection changed. Collect the current artwork again".into());
         }
