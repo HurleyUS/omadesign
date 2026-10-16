@@ -575,10 +575,8 @@ fn append_glyph_outline(path: &mut tiny_skia::PathBuilder, run: &TypeRun, glyph:
                 path.line_to(b.x, b.y);
             }
             OutlineCurve::Quad(_, b, c) => {
-                let (a, b, c) = (map(start), map(b), map(c));
-                let c1 = a + (b - a) * (2. / 3.);
-                let c2 = c + (b - c) * (2. / 3.);
-                path.cubic_to(c1.x, c1.y, c2.x, c2.y, c.x, c.y);
+                let (b, c) = (map(b), map(c));
+                path.quad_to(b.x, b.y, c.x, c.y);
             }
             OutlineCurve::Cubic(_, b, c, d) => {
                 let (b, c, d) = (map(b), map(c), map(d));
