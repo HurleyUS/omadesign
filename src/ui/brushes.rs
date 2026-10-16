@@ -97,7 +97,8 @@ pub(super) fn inspector(ui: &mut egui::Ui, studio: &mut Studio) {
         .selected_text(name)
         .width(ui.available_width())
         .show_ui(ui, |ui| {
-            if super::agent::named(ui,super::fields::native_scope(ui,owner.with("round"),|ui|ui.selectable_label(studio.brushes.selected.is_none(), "Round brush")).inner,"Round brush").clicked()
+            let round_response = super::fields::native_scope(ui,owner.with("round"),|ui|ui.selectable_label(studio.brushes.selected.is_none(), "Round brush")).inner;
+            if super::agent::named(ui,round_response,"Round brush").clicked()
             {
                 studio.end_pixel_stroke(false);
                 studio.brushes.selected = None;
