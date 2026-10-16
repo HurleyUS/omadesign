@@ -2238,7 +2238,8 @@ mod tests {
         let imported = import_lottie(&json).unwrap();
         assert!(!imported.shapes.is_empty());
         assert!((imported.motion.duration - 2.0).abs() < 0.05);
-        assert_eq!(imported.shapes.len(), 2);
+        assert_eq!(imported.shapes.len(), 3);
+        assert_eq!(imported.shapes.iter().filter(|shape| shape.name.starts_with("Moving rectangle · ")).count(), 2);
         let nid = imported
             .shapes
             .iter()
@@ -2248,7 +2249,7 @@ mod tests {
         let background = imported
             .shapes
             .iter()
-            .find(|shape| shape.id != nid)
+            .find(|shape| !shape.name.starts_with("Moving rectangle · "))
             .unwrap();
         assert_eq!(background.style.fill, Fill::Solid(Rgba::WHITE));
         assert_eq!(imported.motion.pose(background.id, 2.).dx, 0.);
