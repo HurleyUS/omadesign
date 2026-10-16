@@ -176,7 +176,13 @@ fn scheduled_x2d_available_workflow_keeps_required_identity_failure() {
     let path = PathBuf::from(
         std::env::var_os("OMA_RAW_CONSUMER_OUTPUT").expect("OMA_RAW_CONSUMER_OUTPUT"),
     );
-    let directory = create_scratch(&path).unwrap();
+    let scratch = storage::root::Scratch::create(&path).unwrap();
+    let directory = scratch.path();
+    let receipts = if let Some(path) = std::env::var_os("OMA_RAW_CONSUMER_RECEIPTS") {
+        create_scratch(&PathBuf::from(path)).unwrap()
+    } else {
+        directory.to_path_buf()
+    };
     let references: Vec<_> = case
         .references
         .iter()
@@ -197,14 +203,16 @@ fn scheduled_x2d_available_workflow_keeps_required_identity_failure() {
             json!({"passed":false,"error":error,"resources":workflow::resource_sample("native_failure_released", started)})
         }
     };
-    write_json(&directory.join("native.json"), &native).unwrap();
+    storage.check_next(1024 * 1024).unwrap();
+    write_json(&receipts.join("native.json"), &native).unwrap();
     let corpus = source.parent().unwrap();
     let report = workflow::run(case, &bindings, corpus, &directory, "required");
     let runner = std::env::current_exe().unwrap();
     let packet = json!({"schema_version":1,"case":case.id,"camera_qualified":false,"full_candidate":false,
         "runner":{"revision":std::env::var("OMA_RAW_REVISION").expect("exact revision"),"sha256":hash_file(&runner).unwrap(),"host_sha256":host_identity().unwrap(),"cargo_lock_sha256":hash_file(&Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock")).unwrap()},
         "source_after_sha256":hash_file(source).unwrap(),"manifest_sha256":format!("{:x}",Sha256::digest(MANIFEST.as_bytes())),"native":native,"workflow":report});
-    write_json(&directory.join("consumer.json"), &packet).unwrap();
+    storage.check_next(1024 * 1024).unwrap();
+    write_json(&receipts.join("consumer.json"), &packet).unwrap();
     eprintln!("RAW_HIGHRES_CONSUMER {packet}");
     assert_eq!(crate::resources::global().usage().0, before);
     assert_eq!(
