@@ -64,14 +64,8 @@ pub fn top_bar(ui: &mut Ui, studio: &mut Studio) {
                 );
                 ui.scope_builder(eframe::egui::UiBuilder::new().max_rect(right), |ui| {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let photo = studio.persona == Persona::Photo;
                         super::library::tabs(ui, studio);
-                        if photo {
-                            library_buttons(ui, studio);
-                        }
-                        if !compact && photo && ui.button("Place in Design").clicked() {
-                            studio.send_photo_to_design();
-                        }
+
                     });
                 });
             }
@@ -126,6 +120,9 @@ fn main_menus(ui: &mut Ui, studio: &mut Studio) {
             if ui.button("Paste adjustments…").clicked() {super::photo::paste_adjustments(ui.ctx(),studio);ui.close();}
             if ui.button("Presets…").clicked() {super::photo::preset_library(ui.ctx(),studio);ui.close();}
             if ui.button("Place in Design").clicked() {studio.send_photo_to_design();ui.close();}
+            ui.separator();
+            if ui.button("Shape library…").clicked(){studio.show_shape_browser=true;ui.close();}
+            if ui.button("Free photos…").clicked(){studio.show_asset_browser=true;ui.close();}
         });
         pane_menu(ui,studio,"Develop",&["photo-develop","histogram","presets","history"]);
     } else {

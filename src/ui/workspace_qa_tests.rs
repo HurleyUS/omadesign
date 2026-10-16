@@ -161,3 +161,40 @@ fn human_qa_parallel_paint_panes_have_independent_native_widget_ids() {
     assert_ne!(controls[0].0, controls[1].0);
     assert_eq!(before, crate::project::encode(&studio.doc).unwrap());
 }
+
+#[test]
+fn human_qa_photo_panes_keep_import_actions_without_duplicate_headings_or_slogans() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    theme::apply(&ctx);
+    let mut studio = fixture();
+    studio.persona = crate::tools::Persona::Photo;
+    let before = crate::project::encode(&studio.doc).unwrap();
+    let output = keys::render(&ctx, vec![], |ui| {
+        ui.columns(2, |columns| {
+            panes::show(&mut columns[0], &mut studio, "photo-library");
+            panes::show(&mut columns[1], &mut studio, "photo-develop");
+        });
+    });
+    let nodes = &output
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .unwrap()
+        .nodes;
+    assert!(
+        nodes
+            .iter()
+            .any(|(_, node)| node.label() == Some("Open photo"))
+    );
+    assert!(
+        !nodes
+            .iter()
+            .filter_map(|(_, node)| node.label())
+            .any(|label| label == "Library"
+                || label == "Develop"
+                || label.starts_with("A little light")
+                || label.starts_with("Open a photo to make"))
+    );
+    assert_eq!(before, crate::project::encode(&studio.doc).unwrap());
+}
