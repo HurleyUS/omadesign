@@ -1183,6 +1183,7 @@ mod tests {
         fs::write(bank.root.join("broken.svg"), "<svg><path d=\"M 0 0").unwrap();
         png(&bank.root.join("wide.png"), MAX_EDGE + 1, 1);
         let mut doc = crate::document::Document::new("Bad dimensions", 1.0, 1.0, 72.0);
+        doc.layers = vec![crate::document::Layer::raster("Bad dimensions", 1, 1).unwrap()];
         let pixels = doc.layers[0].kind.pixels_mut().unwrap();
         pixels.w = u32::MAX;
         let value = serde_json::json!({ "version": 3, "doc": doc });
@@ -1264,7 +1265,8 @@ mod welcome_budget_tests {
         let file = fs::File::create(&path).unwrap();
         file.set_len(64 * 1024 * 1024 + 1).unwrap();
         assert!(load_full_preview_document(&path, false).is_err());
-        let doc = crate::document::Document::new("malformed pixels", 1., 1., 96.);
+        let mut doc = crate::document::Document::new("malformed pixels", 1., 1., 96.);
+        doc.layers = vec![crate::document::Layer::raster("malformed pixels", 1, 1).unwrap()];
         let mut value: serde_json::Value =
             serde_json::from_str(&crate::project::encode(&doc).unwrap()).unwrap();
         let pixels = &mut value["doc"]["layers"][0]["kind"]["Raster"]["pixels"];
