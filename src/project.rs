@@ -1041,6 +1041,14 @@ mod tests {
         assert_eq!(parser.bytes(), escaped.len() as u64);
         drop(parser);
         assert_eq!((pool.usage().0, pool.pending_bytes()), before);
+        let mut mixed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        mixed["doc"]["layers"][0]["kind"]["Raster"]["pixels"]["native"]["samples"] = "BBBB".into();
+        let mixed = mixed.to_string().replacen("BBBB", "\\u0042BBB", 1);
+        assert_eq!(borrowed_native_sample_bytes(&mixed), 4);
+        let parser = admit_parser(&mixed).unwrap();
+        assert_eq!(parser.bytes(), mixed.len() as u64 - 4);
+        drop(parser);
+        assert_eq!((pool.usage().0, pool.pending_bytes()), before);
     }
 
     #[test]
@@ -1055,6 +1063,7 @@ mod tests {
             ),
             original.replace("\"pixels\":", "\"wrong_pixels\":"),
             original.replace("\"samples\":\"AAAA\"", "\"samples\":42"),
+            original.replace("\"Raster\":", "\"Vector\":{},\"Raster\":"),
             original.replace("\"layers\":[", "\"history\":["),
             format!(r#"{{"version":23,"doc":{doc},"doc":{doc}}}"#),
             format!(r#"{{"project":{original}}}"#),
