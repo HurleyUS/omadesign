@@ -116,3 +116,11 @@ are source-only until the single combined integration check is authorized and
 completed. Original independent AI and strict native Affinity assertions remain
 unchanged. See [native common integration](affinity-native.md#native-common-source-integration)
 for the exact prerequisite and proof boundaries.
+
+The first combined run at `27791b5db7dd70d19f52d873bb834eb169090fa1`
+finished with 24 passed and one Reuters failure at the unchanged exact
+preview-independent artwork comparison. The strict 15-file Affinity gate and
+all three new pixel regressions passed at that revision. Retained SVG type IDs
+were generated from process-wide layer numbers; the adapter now uses source
+slot order for stable text/frame IDs across imports. This correction awaits
+qualification; the initial run is not a complete integration pass.

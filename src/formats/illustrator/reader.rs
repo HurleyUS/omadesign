@@ -1405,11 +1405,11 @@ impl Reader<'_> {
                 .template
                 .map(|t| ((t[0] + t[2]) / 2., (t[1] + t[3]) / 2.))
                 .unwrap_or((0., 0.));
-            for (layer, story, frame, _) in &self.text_slots {
+            for (slot, (layer, story, frame, _)) in self.text_slots.iter().enumerate() {
                 if !doc.layers.iter().any(|l| l.id == *layer) {
                     continue;
                 }
-                let id = format!("ai-type-{layer}");
+                let id = format!("ai-type-{slot}");
                 if let Some(svg) = texts.svg_story(*story, *frame, template, first, &id) {
                     body.push_str(&svg);
                     targets.insert(id, *layer);
