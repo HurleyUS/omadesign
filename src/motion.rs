@@ -2216,7 +2216,7 @@ mod tests {
     #[test]
     fn lottie_roundtrip_keeps_motion() {
         let mut doc = Document::new("clip", 400.0, 300.0, 72.0);
-        let shape = Shape::new(
+        let mut shape = Shape::new(
             Geom::Rect {
                 origin: Pt::new(40.0, 40.0),
                 size: Pt::new(80.0, 50.0),
@@ -2224,6 +2224,7 @@ mod tests {
             },
             Style::default(),
         );
+        shape.name = "Moving rectangle".into();
         let id = shape.id;
         apply(&mut doc, &Cmd::AddShape { layer: 1, shape });
         doc.motion.set_key(id, Prop::X, 0.0, 0.0, Ease::Linear);
@@ -2237,7 +2238,20 @@ mod tests {
         let imported = import_lottie(&json).unwrap();
         assert!(!imported.shapes.is_empty());
         assert!((imported.motion.duration - 2.0).abs() < 0.05);
-        let nid = imported.shapes[0].id;
+        assert_eq!(imported.shapes.len(), 2);
+        let nid = imported
+            .shapes
+            .iter()
+            .find(|shape| shape.name == "Moving rectangle · Fill")
+            .unwrap()
+            .id;
+        let background = imported
+            .shapes
+            .iter()
+            .find(|shape| shape.id != nid)
+            .unwrap();
+        assert_eq!(background.style.fill, Fill::Solid(Rgba::WHITE));
+        assert_eq!(imported.motion.pose(background.id, 2.).dx, 0.);
         let p = imported.motion.pose(nid, 2.0);
         assert!(p.dx.abs() > 40.0, "expected travel, got dx={}", p.dx);
         assert!(
@@ -2303,6 +2317,7 @@ mod tests {
             },
         );
         shape.opacity = 0.4;
+        shape.name = "Compound reveal".into();
         let id = shape.id;
         let mut guide = shape.clone();
         guide.id += 1000;
@@ -2320,7 +2335,20 @@ mod tests {
             doc.motion.set_key(id, prop, 2.0, 1.0, Ease::Linear);
         }
         let exported: Value = serde_json::from_str(&export_lottie(&doc).unwrap()).unwrap();
-        let layers = exported["layers"].as_array().unwrap();
+        let all_layers = exported["layers"].as_array().unwrap();
+        assert_eq!(
+            all_layers.len(),
+            3,
+            "preserve one vector background and two authored paint layers"
+        );
+        let layers: Vec<_> = all_layers
+            .iter()
+            .filter(|layer| {
+                layer["nm"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("Compound reveal · "))
+            })
+            .collect();
         assert_eq!(layers.len(), 2, "guides must not create paint layers");
         let stroke = &layers[0];
         let fill = &layers[1];
@@ -2328,7 +2356,7 @@ mod tests {
             stroke["masksProperties"].is_null(),
             "fill reveal must not clip the stroke"
         );
-        for layer in layers {
+        for layer in &layers {
             let items = layer["shapes"][0]["it"].as_array().unwrap();
             assert_eq!(
                 items.iter().filter(|item| item["ty"] == "sh").count(),
@@ -2415,7 +2443,7 @@ mod tests {
 
     fn rotating_rect() -> Document {
         let mut doc = Document::new("spin", 160.0, 90.0, 72.0);
-        let shape = Shape::new(
+        let mut shape = Shape::new(
             Geom::Rect {
                 origin: Pt::new(20.0, 16.0),
                 size: Pt::new(48.0, 32.0),
@@ -2426,6 +2454,7 @@ mod tests {
                 stroke: None,
             },
         );
+        shape.name = "Animated rectangle".into();
         let id = shape.id;
         apply(&mut doc, &Cmd::AddShape { layer: 1, shape });
         doc.motion
@@ -2454,7 +2483,21 @@ mod tests {
         assert_eq!(imported.shapes.len(), vector_shape_count(doc));
         assert_eq!(imported.shapes.len(), vector_layer_count(doc));
         assert!((imported.motion.duration - doc.motion.duration).abs() < 1e-3);
-        let id = imported.shapes[0].id;
+        let id = imported
+            .shapes
+            .iter()
+            .find(|shape| shape.name == "Animated rectangle · Fill")
+            .unwrap()
+            .id;
+        let background = imported.shapes.iter().find(|shape| shape.id != id).unwrap();
+        assert_eq!(background.style.fill, Fill::Solid(Rgba::WHITE));
+        assert_eq!(
+            imported
+                .motion
+                .pose(background.id, imported.motion.duration)
+                .rotation,
+            0.
+        );
         let start = imported.motion.pose(id, 0.0).rotation;
         let end = imported.motion.pose(id, imported.motion.duration).rotation;
         assert!(start.abs() < 1e-3, "start rotation {start}");
