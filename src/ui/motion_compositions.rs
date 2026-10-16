@@ -4,17 +4,38 @@ use eframe::egui::{self, Ui};
 
 pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
     let owner = egui::Id::new(("motion-compositions", &studio.swap_id));
+    let key = owner.with("menu-open");
+    let mut open = ui.data(|data| data.get_temp::<bool>(key)).unwrap_or(false);
     let menu = super::fields::native_scope(ui, owner, |ui| {
-        ui.menu_button("Compositions", |ui| {
-            ui.set_min_width(300.);
-            ui.set_max_width(420.);
-            egui::ScrollArea::vertical()
-                .max_height(600.)
-                .show(ui, |ui| controls(ui, studio));
-        })
+        let response = ui.button("Compositions");
+        if response.clicked() {
+            open = !open;
+        }
+        egui::Popup::menu(&response)
+            .open_bool(&mut open)
+            .show(|ui| {
+                if studio.file_dialog_pending() || studio.updates.freezing {
+                    ui.disable();
+                }
+                ui.set_min_width(300.);
+                ui.set_max_width(420.);
+                egui::ScrollArea::vertical()
+                    .max_height(600.)
+                    .show(ui, |ui| controls(ui, studio));
+            });
+        response
     })
     .inner;
-    super::welcome::focus_control(ui, &menu.response);
+    let popup = egui::Popup::default_response_id(&menu);
+    if open {
+        if !egui::Popup::is_any_open(ui.ctx()) || egui::Popup::is_id_open(ui.ctx(), popup) {
+            egui::Popup::open_id(ui.ctx(), popup);
+        }
+    } else if egui::Popup::is_id_open(ui.ctx(), popup) {
+        egui::Popup::close_id(ui.ctx(), popup);
+    }
+    ui.data_mut(|data| data.insert_temp(key, open));
+    super::welcome::focus_control(ui, &menu);
 }
 
 /// Import the project returned by the existing native chooser.
@@ -1175,6 +1196,10 @@ mod keyboard_tests {
         assert_eq!(f.studio.doc.motion, before);
         f.text("Composition start", "0");
         f.press("Animate");
+        assert_eq!(
+            f.studio.doc.motion, before,
+            "Opening native Animate must not set a key"
+        );
         let output = f.text("Composition key value", "-");
         keys::associated_error(&output, "Composition key value");
         assert!(keys::named(&output, "Set key").1.is_disabled());

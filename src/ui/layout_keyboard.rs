@@ -233,6 +233,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Rows<T> {
         value: &mut N,
         range: RangeInclusive<N>,
         unit: &str,
+        mixed: bool,
     ) -> bool {
         let field = crate::ui::fields::number(
             ui,
@@ -242,7 +243,10 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Rows<T> {
             range,
             unit,
             None,
-            Default::default(),
+            crate::ui::fields::FieldState {
+                mixed,
+                ..Default::default()
+            },
         );
         self.widgets.push(field.response.id);
         crate::app::input_history::record(field.response, field.changed)

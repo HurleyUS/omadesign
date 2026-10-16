@@ -41,7 +41,7 @@ pub(super) fn control(
     name: &str,
     widget: impl FnOnce(&mut Ui) -> egui::Response,
 ) -> egui::Response {
-    let response = super::fields::native_scope(ui, owner, widget).inner;
+    let response = super::fields::native_scope(ui, owner.with("native-scope"), widget).inner;
     ui.ctx()
         .accesskit_node_builder(response.id, |node| node.set_label(name));
     super::welcome::focus_control(ui, &response);

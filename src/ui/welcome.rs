@@ -480,13 +480,20 @@ pub(super) mod keyboard_tests {
 
     pub fn tab_to(ctx: &egui::Context, name: &str, mut frame: impl FnMut(Vec<Event>) -> egui::FullOutput) -> egui::FullOutput {
         let mut output = frame(vec![]);
+        for _ in 0..16 {
+            if output.platform_output.accesskit_update.as_ref().unwrap().nodes.iter().any(|(_,node)| node.label() == Some(name)) { break; }
+            output = frame(vec![]);
+        }
+        let mut trace = Vec::new();
         for _ in 0..128 {
-            if ctx.memory(|memory| memory.focused()).map(|id| id.accesskit_id()) == Some(named(&output, name).0) {
+            let focused = ctx.memory(|memory| memory.focused()).map(|id| id.accesskit_id());
+            if focused == Some(named(&output, name).0) {
                 return frame(vec![]);
             }
+            trace.push(output.platform_output.accesskit_update.as_ref().unwrap().nodes.iter().find(|(id,_)|Some(*id)==focused).map(|(id,node)|(*id,node.role(),node.label().map(str::to_owned))));
             output = tab(false, &mut frame);
         }
-        panic!("native Tab did not reach {name}");
+        panic!("native Tab did not reach {name}; actual focus traversal: {trace:?}; target {:?}", named(&output,name));
     }
 
     pub fn replace(text: &str, mut frame: impl FnMut(Vec<Event>) -> egui::FullOutput) -> egui::FullOutput {
