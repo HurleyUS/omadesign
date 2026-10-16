@@ -79,35 +79,68 @@ impl<T: Copy> Allocation<T> {
         self.values.capacity() as u64 * std::mem::size_of::<T>() as u64
     }
 
-    /// Grow uniquely owned output storage while covering old and replacement allocations.
-    /// Args: initialized end offset and cancellation owner. Returns before allocation on pressure; spare capacity receives no credit.
-    fn grow<C: CancellationCheck + ?Sized>(
+    /// Reserve synchronous typed storage without initializing spare capacity.
+    /// Args: minimum total capacity and cancellation owner. Returns immediately on pressure, covering old and new buffers during growth.
+    pub fn reserve_now<C: CancellationCheck + ?Sized>(
         &mut self,
-        end: usize,
+        capacity: usize,
         cancel: &C,
     ) -> Result<(), String> {
-        if end <= self.values.capacity() {
+        self.grow(capacity, cancel, false)
+    }
+
+    /// Append initialized samples without requiring a default sample value.
+    /// Args: source samples and cancellation owner. Returns after crediting only the written length or before growth on pressure.
+    pub fn extend_from_slice_now<C: CancellationCheck + ?Sized>(
+        &mut self,
+        values: &[T],
+        cancel: &C,
+    ) -> Result<(), String> {
+        let end = self
+            .values
+            .len()
+            .checked_add(values.len())
+            .ok_or("Buffer length overflows")?;
+        self.reserve_now(end, cancel)?;
+        self.values.extend_from_slice(values);
+        self.lease
+            .budget
+            .bind_storage(&self.values, &self.lease, &self.owner)
+    }
+
+    fn grow<C: CancellationCheck + ?Sized>(
+        &mut self,
+        capacity: usize,
+        cancel: &C,
+        wait: bool,
+    ) -> Result<(), String> {
+        if capacity <= self.values.capacity() {
             return cancel.check();
         }
-        let capacity = end.max(self.values.capacity().saturating_mul(2));
         let bytes = allocation_bytes::<T>(capacity)?;
         let old = self.bytes();
-        self.lease.resize(
+        self.lease.resize_mode(
             old.checked_add(bytes).ok_or("Output growth overflows")?,
             cancel,
+            wait,
         )?;
+        if let Err(error) = cancel.check() {
+            self.lease.resize_now(old, &|| Ok(()))?;
+            return Err(error);
+        }
         if self
             .values
             .try_reserve_exact(capacity - self.values.len())
             .is_err()
         {
-            self.lease.resize(old, cancel)?;
+            self.lease.resize_now(old, &|| Ok(()))?;
             return Err("Not enough memory to grow output storage".into());
         }
         self.lease
             .budget
             .bind_storage(&self.values, &self.lease, &self.owner)?;
-        self.lease.resize(self.bytes(), cancel)
+        self.lease.resize_now(self.bytes(), &|| Ok(()))?;
+        cancel.check()
     }
     /// Copy an allocation only after admitting its independent storage.
     /// Args: cancellation owner. Returns a fallible COW working allocation in the same pool.
@@ -146,7 +179,12 @@ impl Allocation<u8> {
         let end = offset
             .checked_add(bytes.len())
             .ok_or("Output length overflows")?;
-        self.grow(end, cancel)?;
+        let capacity = if end > self.values.capacity() {
+            end.max(self.values.capacity().saturating_mul(2))
+        } else {
+            end
+        };
+        self.grow(capacity, cancel, true)?;
         if end > self.values.len() {
             self.values.resize(end, 0);
         }
@@ -628,6 +666,83 @@ pub fn decoder<C: CancellationCheck + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typed_growth_retains_initialized_credit_and_admits_transient_old_plus_new() {
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        struct Sample(u16);
+        let check = || Ok(());
+        let pool = Budget::new(111, false);
+        let mut output = pool.copy_now(&[Sample(7); 16], &check).unwrap();
+        output.reserve_now(24, &check).unwrap();
+        assert_eq!((output.bytes(), pool.pending_bytes()), (48, 16));
+        let pending = pool.reserve_now(15, &check).unwrap();
+        let started = Instant::now();
+        assert!(output.reserve_now(32, &check).is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(
+            (
+                output.len(),
+                output.bytes(),
+                pool.usage().0,
+                pool.pending_bytes()
+            ),
+            (16, 48, 63, 31)
+        );
+        drop(pending);
+        assert!(
+            output.reserve_now(32, &check).is_err(),
+            "48 old + 64 new must not fit a111-byte pool"
+        );
+        output
+            .extend_from_slice_now(&[Sample(9); 8], &check)
+            .unwrap();
+        assert_eq!((output.len(), pool.pending_bytes()), (24, 0));
+        assert_eq!(&output[16..], &[Sample(9); 8]);
+        let cancelled = || Err("cancelled".into());
+        assert!(
+            output
+                .extend_from_slice_now(&[Sample(1)], &cancelled)
+                .is_err()
+        );
+        assert_eq!(output.len(), 24);
+        assert!(output.reserve_now(usize::MAX, &check).is_err());
+        let (values, lease) = output.into_parts();
+        assert_eq!(pool.pending_bytes(), 48);
+        let output = pool.adopt(values, lease).unwrap();
+        let alias = output.clone();
+        drop(output);
+        assert_eq!((pool.usage().0, pool.pending_bytes()), (48, 0));
+        drop(alias);
+        assert_eq!((pool.usage().0, pool.pending_bytes()), (0, 0));
+    }
+
+    #[test]
+    fn cancellation_after_growth_admission_restores_the_existing_owner() {
+        let pool = Budget::new(1024, false);
+        let mut output = pool.copy_now(&[1u32; 8], &|| Ok(())).unwrap();
+        let checks = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || {
+            if checks.fetch_add(1, Ordering::AcqRel) == 0 {
+                Ok(())
+            } else {
+                Err("cancelled".into())
+            }
+        };
+        assert!(output.reserve_now(32, &cancel).is_err());
+        assert_eq!(
+            (
+                output.len(),
+                output.bytes(),
+                pool.usage().0,
+                pool.pending_bytes()
+            ),
+            (8, 32, 32, 0)
+        );
+        assert_eq!(output.as_slice(), &[1; 8]);
+        drop(output);
+        assert_eq!(pool.usage().0, 0);
+    }
+
     #[test]
     fn output_writes_credit_only_initialized_length_and_preserve_owners_on_failure() {
         let check = || Ok(());
