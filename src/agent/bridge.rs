@@ -66,6 +66,8 @@ impl Bridge {
         Self::start_in(ctx, &std::env::temp_dir())
     }
 
+    /// Create the authenticated bridge beneath a chosen scratch folder.
+    /// Args: repaint context and scratch root. Returns the bridge or its setup error.
     fn start_in(ctx: eframe::egui::Context, temporary: &std::path::Path) -> Result<Self, String> {
         let mut random = [0u8; 24];
         std::fs::File::open("/dev/urandom")

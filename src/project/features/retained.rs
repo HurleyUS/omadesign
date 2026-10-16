@@ -20,6 +20,8 @@ struct Seen {
     named_properties: bool,
 }
 
+/// Identify an advanced Layout field in retained history.
+/// Args: logical property path. Returns its field tag for the streaming value check.
 fn layout_property(path: &str) -> Option<&'static str> {
     let (_, tail) = path.rsplit_once("/layout/")?;
     let mut fields = tail.split('/');
