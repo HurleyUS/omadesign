@@ -490,6 +490,13 @@ fn common_flat_u8_writer_entries_allow_rest_expressions_and_advanced_keys() {
             .any(|shape| shape.style.fill == doc.layers[0].kind.shapes().unwrap()[0].style.fill)
     );
     let pixels = crate::deep_color::composite(&doc, 1).unwrap();
+    let direct =
+        crate::deep_color::composite_with_cancel(&doc, 1, &crate::deep_color::storage::check)
+            .unwrap();
+    assert_eq!(
+        pixels.native.as_ref().unwrap().samples,
+        direct.native.as_ref().unwrap().samples
+    );
     assert_eq!((pixels.w, pixels.h), (24, 24));
     assert!(
         pixels
@@ -520,6 +527,15 @@ fn common_writer_entries_refuse_compositions_and_scenes_without_source_mutation(
                 "Native float compositor",
                 crate::deep_color::composite(&doc, 1).map(|_| ()),
             ),
+            (
+                "Native float compositor",
+                crate::deep_color::composite_with_cancel(
+                    &doc,
+                    1,
+                    &crate::deep_color::storage::check,
+                )
+                .map(|_| ()),
+            ),
         ] {
             let error = result.unwrap_err();
             assert!(
@@ -528,6 +544,11 @@ fn common_writer_entries_refuse_compositions_and_scenes_without_source_mutation(
             );
         }
         assert_eq!(serde_json::to_value(&doc).unwrap(), before);
+        assert_eq!(
+            crate::deep_color::composite_with_cancel(&doc, 1, &|| Err("Cancelled".to_string()))
+                .unwrap_err(),
+            "Cancelled"
+        );
         crate::compositor::render_export_preview(&doc, 32)
             .expect("RGBA8 previews remain available");
         assert_eq!(serde_json::to_value(&doc).unwrap(), before);
