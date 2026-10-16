@@ -176,6 +176,7 @@ pub(crate) struct Selection {
     pub objects: Vec<(u64, u64)>,
     pub layer: Option<u64>,
     pub active: Option<u64>,
+    pub individual: Option<(u64, u64)>,
 }
 #[derive(Clone)]
 pub(crate) struct Recording {

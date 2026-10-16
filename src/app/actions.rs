@@ -180,6 +180,13 @@ mod tests {
         let recording = studio.actions.recording.take().unwrap();
         assert_eq!(recording.steps.len(), 1);
         assert!(recording.paused.unwrap().contains("Selection changed"));
+        studio.start_action_recording(32).unwrap();
+        studio.flip_selection(true);
+        studio.individual_object = studio.selection.first().copied();
+        studio.bring_to_front();
+        let recording = studio.actions.recording.take().unwrap();
+        assert_eq!(recording.steps.len(), 1);
+        assert!(recording.paused.unwrap().contains("Selection changed"));
     }
 
     #[test]
@@ -277,6 +284,9 @@ impl Studio {
             active: self
                 .active_layer
                 .and_then(|index| self.doc.layers.get(index).map(|l| l.id)),
+            individual: self
+                .individual_object
+                .and_then(|(layer, id)| self.doc.layers.get(layer).map(|l| (l.id, id))),
         }
     }
     /// Capture one explicit semantic operation only after its existing command body accepts an edit.
