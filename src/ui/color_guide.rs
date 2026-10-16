@@ -1027,4 +1027,44 @@ mod tests {
         drop(frame);
         assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
     }
+
+    #[test]
+    fn craft_color_pane_body_can_open_another_pane_in_the_actual_workspace() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        super::super::theme::apply(&ctx);
+        let mut studio = studio();
+        let before = crate::project::encode(&studio.doc).unwrap();
+        assert!(super::super::panel_workspace::open(
+            &ctx,
+            &mut studio,
+            "color-guide"
+        ));
+        let mut frame = |events| {
+            keys::render(&ctx, events, |ui| {
+                super::super::panel_workspace::panels(ui, &mut studio);
+            })
+        };
+        frame(vec![]);
+        frame(vec![]);
+        click(&ctx, &mut frame, "Edit harmony as a five-color theme");
+        frame(vec![]);
+        let output = frame(vec![]);
+        keys::named(&output, "Selected theme color");
+        drop(frame);
+        let design = &studio.panel_workspaces.tasks["Design"];
+        assert!(design.groups.iter().any(|group| {
+            group
+                .panels
+                .get(group.active)
+                .is_some_and(|p| p == "color-themes")
+        }));
+        assert!(
+            design
+                .groups
+                .iter()
+                .any(|group| group.panels.iter().any(|p| p == "layers"))
+        );
+        assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
+    }
 }
