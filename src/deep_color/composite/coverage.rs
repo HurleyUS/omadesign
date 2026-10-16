@@ -363,7 +363,7 @@ pub(super) fn rows_clipped(
                     }
                 })
             };
-            let mut left = None;
+            let mut left: Option<Edge> = None;
             for &edge in &active[..count] {
                 if middle < edge.a[1].min(edge.b[1]) || middle >= edge.a[1].max(edge.b[1]) {
                     continue;
