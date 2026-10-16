@@ -37,6 +37,30 @@ pub(super) fn values(
     value: &Value,
     visit: &mut impl FnMut(&str, &Value),
 ) -> Result<(), String> {
+    fn cell(
+        path: &str,
+        value: &Value,
+        depth: usize,
+        count: &mut usize,
+        visit: &mut impl FnMut(&str, &Value),
+    ) -> Result<(), String> {
+        match value {
+            Value::String(marker) if marker == "Object" => walk(
+                path,
+                &Value::Object(Default::default()),
+                depth,
+                count,
+                visit,
+            ),
+            Value::String(marker) if marker == "List" => {
+                walk(path, &Value::Array(vec![]), depth, count, visit)
+            }
+            Value::Object(object) if object.len() == 1 && object.contains_key("Variant") => {
+                walk(path, &object["Variant"], depth, count, visit)
+            }
+            _ => walk(path, value, depth, count, visit),
+        }
+    }
     fn walk(
         path: &str,
         value: &Value,
@@ -65,11 +89,11 @@ pub(super) fn values(
                     .map(str::to_owned)
                     && let Some(value) = object.get("value")
                 {
-                    return walk(&property, value, depth, &mut 0, visit);
+                    return cell(&property, value, depth, &mut 0, visit);
                 }
                 for (key, value) in object.iter() {
                     if key.starts_with('/') {
-                        walk(key, value, depth, &mut 0, visit)?;
+                        cell(key, value, depth, &mut 0, visit)?;
                     } else {
                         walk(&super::child(path, key), value, depth, count, visit)?;
                     }
@@ -107,6 +131,24 @@ fn values_mut(
     value: &mut Value,
     visit: &mut impl FnMut(&str, &mut Value),
 ) -> Result<(), String> {
+    fn cell(
+        path: &str,
+        value: &mut Value,
+        depth: usize,
+        count: &mut usize,
+        visit: &mut impl FnMut(&str, &mut Value),
+    ) -> Result<(), String> {
+        if matches!(value.as_str(), Some("Object" | "List")) {
+            return Ok(());
+        }
+        if let Value::Object(object) = value
+            && object.len() == 1
+            && let Some(value) = object.get_mut("Variant")
+        {
+            return walk(path, value, depth, count, visit);
+        }
+        walk(path, value, depth, count, visit)
+    }
     fn walk(
         path: &str,
         value: &mut Value,
@@ -135,11 +177,11 @@ fn values_mut(
                     .map(str::to_owned)
                     && let Some(value) = object.get_mut("value")
                 {
-                    return walk(&property, value, depth, &mut 0, visit);
+                    return cell(&property, value, depth, &mut 0, visit);
                 }
                 for (key, value) in object.iter_mut() {
                     if key.starts_with('/') {
-                        walk(key, value, depth, &mut 0, visit)?;
+                        cell(key, value, depth, &mut 0, visit)?;
                     } else {
                         walk(&super::child(path, key), value, depth, count, visit)?;
                     }
