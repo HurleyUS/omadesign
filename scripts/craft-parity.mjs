@@ -17,7 +17,7 @@ for(const product of products){
   let commit;
   try{commit=execFileSync('git',['-C',root,'rev-parse','HEAD'],{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();}catch{catalog.push({product,state:'no-source-commit'});continue;}
   const dirty=execFileSync('git',['-C',root,'status','--porcelain','--untracked-files=no'],{encoding:'utf8'}).trim();
-  const commands=new Map(),panels=[];
+  const commands=new Map(),panels=[],menus=[];
   const crateRoot=path.join(root,'crates');
   for(const file of walk(crateRoot)){
     const relative=path.relative(root,file);
@@ -32,10 +32,21 @@ for(const product of products){
       if(prior)prior.sources.push({file:relative,line,sha256:sha(data)});
       else commands.set(id,{id,label,sources:[{file:relative,line,sha256:sha(data)}],status:'unmapped'});
     }
+    if(/(?:^|\/)(?:catalog|menu_catalog)\.rs$/.test(relative)){
+      const patterns=[
+        /\bm!\s*\(\s*"([^"\n]+)"\s*,\s*"([^"\n]+)"\s*,\s*"([^"\n]+)"/g,
+        /\(\s*&\[([^\]]+)\]\s*,\s*"([^"\n]+)"\s*,\s*(?:None|Some\([^)]*\))\s*,\s*"([^"\n]+)"/g,
+      ];
+      for(const pattern of patterns)for(const match of text.matchAll(pattern)){
+        const [_,menu,label,id]=match;
+        if(!id||id==='---')continue;
+        menus.push({id,label,menu:menu.replaceAll('"',''),source:relative,line:text.slice(0,match.index).split('\n').length,sha256:sha(data),status:'unmapped-menu-declaration'});
+      }
+    }
   }
-  catalog.push({product,commit,tracked_source_clean:!dirty,state:panels.length||commands.size?'source-inventoried':'no-matching-editor-catalog',commands:[...commands.values()].sort((a,b)=>a.id.localeCompare(b.id)),panels:panels.sort((a,b)=>a.id.localeCompare(b.id))});
+  catalog.push({product,commit,tracked_source_clean:!dirty,state:panels.length||commands.size||menus.length?'source-inventoried':'no-matching-editor-catalog',commands:[...commands.values()].sort((a,b)=>a.id.localeCompare(b.id)),panels:panels.sort((a,b)=>a.id.localeCompare(b.id)),menus});
 }
 const data={schema:1,boundary:'Source inventory only. A pane name or command declaration is not an implemented or qualified Omadesign feature. Dynamic commands, tools and file workflows also require direct inspection.',products:catalog};
 fs.mkdirSync(path.dirname(path.resolve(output)),{recursive:true});
 fs.writeFileSync(output,JSON.stringify(data,null,2)+'\n');
-for(const product of catalog)process.stdout.write(`${product.product}: ${product.state}; ${product.commands?.length??0} command declarations, ${product.panels?.length??0} pane sources\n`);
+for(const product of catalog)process.stdout.write(`${product.product}: ${product.state}; ${product.commands?.length??0} command declarations, ${product.panels?.length??0} pane sources, ${product.menus?.length??0} catalog menu entries\n`);
