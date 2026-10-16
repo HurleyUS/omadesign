@@ -90,12 +90,14 @@ fn native_roundtrip(
         }
     }
     let _owned = Owned(path.clone());
-    let output = crate::project::encode_admitted(&doc)?;
+    let output = crate::project::encode_admitted(&doc)
+        .map_err(|error| format!("native project encode: {error}"))?;
     storage.check_next(output.len() as u64)?;
     let encoded_sha256 = format!("{:x}", Sha256::digest(output.as_slice()));
     let encoded_bytes = output.len();
     samples.push(workflow::resource_sample("native_project_encoded", started));
-    crate::project::save_encoded_to(&doc, &path, &output, storage)?;
+    crate::project::save_encoded_to(&doc, &path, &output, storage)
+        .map_err(|error| format!("native project write: {error}"))?;
     if hash_file(&path)? != encoded_sha256 {
         return Err("project write differs from admitted owner".into());
     }
@@ -115,7 +117,8 @@ fn native_roundtrip(
         "native_project_written_released",
         started,
     ));
-    let reopened = crate::project::load_from(&path)?;
+    let reopened = crate::project::load_from(&path)
+        .map_err(|error| format!("native project reopen: {error}"))?;
     let reopened_pixels = reopened.layers[0]
         .kind
         .pixels()
