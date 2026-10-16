@@ -43,6 +43,7 @@ fn pointer(pos: egui::Pos2, pressed: bool) -> Event {
 fn human_qa_layer_double_click_focuses_rename_paste_commit_undo_reopen() {
     let ctx = egui::Context::default();
     ctx.enable_accesskit();
+    theme::apply(&ctx);
     let mut studio = fixture();
     let mut frame =
         |events| keys::render(&ctx, events, |ui| studios::layers_content(ui, &mut studio));
@@ -80,21 +81,24 @@ fn human_qa_layer_double_click_focuses_rename_paste_commit_undo_reopen() {
 fn human_qa_native_dimension_lock_preserves_ratio_and_one_undo() {
     let ctx = egui::Context::default();
     ctx.enable_accesskit();
+    theme::apply(&ctx);
     let mut studio = fixture();
     let before = crate::project::encode(&studio.doc).unwrap();
     let mut frame = |events| {
         keys::render(&ctx, events, |ui| {
+            ui.set_max_width(304.0);
             studios::pane(ui, &mut studio, "transform");
         })
     };
     frame(vec![]);
     let output = frame(vec![]);
     let at = point(&output, "Constrain proportions");
+    assert!(at.x < 304.0, "the actual lock must fit the dock");
     frame(vec![Event::PointerMoved(at), pointer(at, true)]);
     frame(vec![pointer(at, false)]);
     keys::tab_to(&ctx, "W", &mut frame);
     frame(keys::key(Key::A, Modifiers::CTRL));
-    frame(vec![Event::Text("200".into())]);
+    frame(vec![Event::Paste("200".into())]);
     frame(keys::key(Key::Enter, Modifiers::NONE));
     drop(frame);
     let hit = studio.selection[0];

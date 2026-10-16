@@ -8,19 +8,31 @@ struct Owner {
     revision: u64,
     field: Id,
 }
-type Pasted = (Owner, String);
+type Pasted = (Owner, Result<String, String>);
 
 /// Deliver an OS paste only to the native field that requested it.
 /// Args: context and current editor. Returns nothing; canvas clipboard handling remains separate.
 pub(super) fn tick(ctx: &egui::Context, studio: &mut Studio) {
-    if let Some(result) = super::jobs::poll::<Pasted>(ctx, JOB) {
-        let (owner, text) = match result {
-            Ok(value) => value,
-            Err(error) => {
-                studio.status = error;
-                return;
-            }
-        };
+    let superseded = ctx.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(
+                event,
+                Event::Paste(_)
+                    | Event::Text(_)
+                    | Event::PointerButton { pressed: true, .. }
+                    | Event::Key {
+                        key: Key::Escape | Key::Tab,
+                        pressed: true,
+                        ..
+                    }
+            )
+        })
+    });
+    if superseded {
+        super::jobs::cancel::<Pasted>(ctx, JOB);
+        return;
+    }
+    if let Some(Ok((owner, result))) = super::jobs::poll::<Pasted>(ctx, JOB) {
         if owner.document == studio.swap_id
             && owner.revision == studio.canvas_gen
             && ctx.memory(|memory| memory.focused()) == Some(owner.field)
@@ -28,7 +40,9 @@ pub(super) fn tick(ctx: &egui::Context, studio: &mut Studio) {
             && !studio.file_dialog_pending()
             && !studio.updates.freezing
         {
-            ctx.input_mut(|input| input.events.push(Event::Paste(text.replace("\r\n", "\n"))));
+            if let Ok(text) = result {
+                ctx.input_mut(|input| input.events.push(Event::Paste(text.replace("\r\n", "\n"))));
+            }
         }
     }
     if super::jobs::is_running::<Pasted>(ctx, JOB) {
@@ -40,7 +54,7 @@ pub(super) fn tick(ctx: &egui::Context, studio: &mut Studio) {
     if field == Id::new("studio-canvas") || field == Id::new("studio-photo-canvas") {
         return;
     }
-    let requested=ctx.input(|input|input.focused&&!input.events.iter().any(|event|matches!(event,Event::Paste(_)))&&input.events.iter().any(|event|matches!(event,
+    let requested=ctx.input(|input|input.focused&&input.events.iter().any(|event|matches!(event,
         Event::Key{key:Key::V,pressed:true,modifiers,..} if (modifiers.command||modifiers.ctrl||modifiers.mac_cmd)&&!modifiers.alt
     )||matches!(event,Event::Key{key:Key::Insert,pressed:true,modifiers,..} if modifiers.shift)));
     if requested && !studio.file_dialog_pending() && !studio.updates.freezing {
@@ -50,7 +64,10 @@ pub(super) fn tick(ctx: &egui::Context, studio: &mut Studio) {
             field,
         };
         super::jobs::start(ctx, JOB, move || {
-            crate::clipboard::type_style::read(None).map(|paste| (owner, paste.text))
+            Ok((
+                owner,
+                crate::clipboard::type_style::read(None).map(|paste| paste.text),
+            ))
         });
     }
 }

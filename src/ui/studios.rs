@@ -529,7 +529,7 @@ fn bounds_fields(
     });
     let mut size_changed = [false; 2];
     ui.horizontal(|ui| {
-        let available = (ui.available_width() - 28.0).max(0.0);
+        let available = (ui.available_width() - 22.0 - ui.spacing().item_spacing.x).max(0.0);
         ui.allocate_ui_with_layout(vec2(available, 0.0), Layout::top_down(eframe::egui::Align::Min), |ui| {
             ui.columns(2, |columns| {
                 size_changed[0] = number_field(&mut columns[0], "W", width, min_size..=20000.0, "");
