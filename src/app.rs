@@ -4984,8 +4984,9 @@ mod tests {
             .layers
             .iter()
             .filter_map(|l| l.kind.shapes())
-            .map(|ss| ss.len())
-            .sum();
+            .flatten()
+            .filter(|shape| matches!(&shape.geom, Geom::Text(_)))
+            .count();
         assert_eq!(n, 2);
     }
 

@@ -1605,6 +1605,7 @@ mod tests {
     fn select_duplicate_arrange_combine_and_nudge_use_native_chords() {
         let ctx = context();
         let mut studio = Studio::new();
+        studio.doc.layers[0] = Layer::raster("Background", 1280, 800).unwrap();
         let a = add_rectangle(&mut studio, 10.0);
         let b = add_rectangle(&mut studio, 50.0);
         let c = add_rectangle(&mut studio, 90.0);
