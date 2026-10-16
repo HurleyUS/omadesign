@@ -555,10 +555,12 @@ fn independent_fixture(file: &str, expected_boards: usize, needs_type: bool) {
             .map(|s| (serde_json::to_value(&s.geom).unwrap(), s.style.clone()))
             .collect()
     }
-    assert_eq!(
-        shapes(&doc),
-        shapes(&alone),
-        "{file}: preview-independent native artwork"
+    let original_shapes = shapes(&doc);
+    let previewless_shapes = shapes(&alone);
+    assert!(
+        original_shapes == previewless_shapes,
+        "{file}: preview-independent native artwork: {}",
+        shape_difference(&original_shapes, &previewless_shapes)
     );
     assert_eq!(notes, alone_notes);
     assert!(!shapes(&doc).is_empty(), "{file}: actual native artwork");
@@ -804,6 +806,73 @@ fn independent_fixture(file: &str, expected_boards: usize, needs_type: bool) {
         text.len(),
         notes.len()
     );
+}
+
+/// Describe the first exact artwork difference without dumping the whole document.
+/// Args: original and previewless geometry/style pairs. Returns a bounded JSON diagnostic; equality is unchanged.
+fn shape_difference(
+    original: &[(serde_json::Value, crate::document::Style)],
+    previewless: &[(serde_json::Value, crate::document::Style)],
+) -> serde_json::Value {
+    fn difference(a: &serde_json::Value, b: &serde_json::Value, path: String) -> serde_json::Value {
+        match (a, b) {
+            (serde_json::Value::Object(a), serde_json::Value::Object(b)) => {
+                for key in a.keys().chain(b.keys()) {
+                    if a.get(key) != b.get(key) {
+                        return difference(
+                            a.get(key).unwrap_or(&serde_json::Value::Null),
+                            b.get(key).unwrap_or(&serde_json::Value::Null),
+                            format!("{path}/{key}"),
+                        );
+                    }
+                }
+            }
+            (serde_json::Value::Array(a), serde_json::Value::Array(b)) => {
+                for i in 0..a.len().max(b.len()) {
+                    if a.get(i) != b.get(i) {
+                        return difference(
+                            a.get(i).unwrap_or(&serde_json::Value::Null),
+                            b.get(i).unwrap_or(&serde_json::Value::Null),
+                            format!("{path}/{i}"),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+        let offset = a.as_str().zip(b.as_str()).map(|(a, b)| {
+            a.chars()
+                .zip(b.chars())
+                .position(|(a, b)| a != b)
+                .unwrap_or_else(|| a.chars().count().min(b.chars().count()))
+        });
+        let summary = |value: &serde_json::Value| {
+            if let Some(text) = value.as_str() {
+                serde_json::json!({"bytes":text.len(),"sha256":format!("{:x}",Sha256::digest(text.as_bytes())),"context":text.chars().skip(offset.unwrap_or(0).saturating_sub(40)).take(120).collect::<String>()})
+            } else {
+                serde_json::Value::String(value.to_string().chars().take(160).collect())
+            }
+        };
+        serde_json::json!({"path":path,"first_differing_character":offset,"original":summary(a),"previewless":summary(b)})
+    }
+    for (index, (a, b)) in original.iter().zip(previewless).enumerate() {
+        let (component, detail) = if a.0 != b.0 {
+            ("geometry", difference(&a.0, &b.0, String::new()))
+        } else if a.1 != b.1 {
+            (
+                "style",
+                difference(
+                    &serde_json::to_value(&a.1).unwrap(),
+                    &serde_json::to_value(&b.1).unwrap(),
+                    String::new(),
+                ),
+            )
+        } else {
+            continue;
+        };
+        return serde_json::json!({"original_count":original.len(),"previewless_count":previewless.len(),"shape_index":index,"component":component,"difference":detail});
+    }
+    serde_json::json!({"original_count":original.len(),"previewless_count":previewless.len()})
 }
 
 /// Check portable exports after native reopen.

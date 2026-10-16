@@ -124,3 +124,7 @@ all three new pixel regressions passed at that revision. Retained SVG type IDs
 were generated from process-wide layer numbers; the adapter now uses source
 slot order for stable text/frame IDs across imports. This correction awaits
 qualification; the initial run is not a complete integration pass.
+The exact shape/style comparison now reports the first differing shape, JSON
+field and bounded value context instead of dumping entire documents. It still
+compares all raw geometry and style values, including retained SVG identities;
+no IDs, fields or thresholds are excluded from equality.
