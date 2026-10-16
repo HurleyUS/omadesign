@@ -178,20 +178,158 @@ pub(super) fn inspector_content(ui: &mut Ui, studio: &mut Studio) {
 /// Draw layer commands inside an application-placed panel.
 /// Args: panel UI and studio. Returns no value; layer edits retain typed history.
 pub(super) fn layers_content(ui: &mut Ui, studio: &mut Studio) {
-            ui.add_space(10.0);
-            ui.separator();
-            ui.add_space(8.0);
-            ScrollArea::vertical()
-                .id_salt("layers-scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| layers_studio(ui, studio));
+    ui.spacing_mut().item_spacing=vec2(3.0,3.0);
+    studio.with_field_history(ui,"layer-settings",|ui,studio| {
+        let n=studio.doc.layers.len();
+    if let Some(i) = studio.active_layer.filter(|&i| i < n) {
+        let layer_blend_owner = ui.make_persistent_id(("layer-blend", studio.doc.layers[i].id));
+        if studio.doc.layers[i].is_group {
+            let before = studio.doc.layers[i].pass_through;
+            let mut after = before;
+            if ui
+                .add_enabled(
+                    studio.layer_unlocked(i),
+                    eframe::egui::Checkbox::new(&mut after, "Pass through"),
+                )
+                .on_hover_text("Allow layers in this group to blend with the layers below it")
+                .changed()
+            {
+                studio.commit(crate::document::Cmd::SetGroupPassThrough {
+                    index: i,
+                    before,
+                    after,
+                });
+            }
+        }
+        ui.vertical(|ui| {
+            if !studio.layer_unlocked(i) {
+                ui.disable();
+            }
+            let mut blend = studio.doc.layers[i].blend;
+            let pass_through = studio.doc.layers[i].is_group && studio.doc.layers[i].pass_through;
+            ui.add_enabled_ui(!pass_through, |ui| {
+                ui.horizontal(|ui| {
+                    let label = ui.label("Layer blend");
+                    let mut response = super::fields::native_scope(ui, layer_blend_owner, |ui| ComboBox::from_id_salt("active-layer-blend")
+                        .selected_text(if pass_through {
+                            "Pass through"
+                        } else {
+                            blend.name()
+                        })
+                        .width(80.0)
+                        .show_ui(ui, |ui| {
+                            for value in Blend::ALL {
+                                ui.selectable_value(&mut blend, value, value.name());
+                            }
+                        }).response).inner.labelled_by(label.id);
+                    super::keyboard_controls::selection_keys(ui, &mut response, "Layer blend", &mut blend,
+                        &Blend::ALL.into_iter().map(|mode| (mode, mode.name().into())).collect::<Vec<_>>());
+                });
+            });
+            let mut opacity = studio.doc.layers[i].opacity * 100.0;
+            ui.horizontal(|ui| {
+                let label = ui.label("Layer opacity");
+                let response = ui.add(
+                    eframe::egui::DragValue::new(&mut opacity)
+                        .range(0.0..=100.0)
+                        .suffix("%")
+                        .speed(0.5)
+                        .max_decimals(0),
+                ).labelled_by(label.id).on_hover_text("Layer opacity");
+                response.widget_info(|| {
+                    let mut info = eframe::egui::WidgetInfo::drag_value(response.enabled(), f64::from(opacity));
+                    info.label = Some("Layer opacity".into());
+                    info
+                });
+                input_history::changed(response);
+            });
+            let layer = &studio.doc.layers[i];
+            if blend != layer.blend || (opacity / 100.0 - layer.opacity).abs() > 0.0001 {
+                studio.commit(crate::document::Cmd::SetLayerMeta {
+                    index: i,
+                    name: layer.name.clone(),
+                    visible: layer.visible,
+                    locked: layer.locked,
+                    opacity: opacity / 100.0,
+                    blend,
+                    before: (
+                        layer.name.clone(),
+                        layer.visible,
+                        layer.locked,
+                        layer.opacity,
+                        layer.blend,
+                    ),
+                });
+            }
+        });
+        ui.add_space(8.0);
+    }
+
+    });
+    let height=(ui.available_height()-36.0).max(0.0);
+    ScrollArea::vertical().id_salt("layers-scroll").min_scrolled_height(0.0).max_height(height).auto_shrink([false,false])
+        .show(ui,|ui|layers_studio(ui,studio));
+    ui.separator();
+    ui.horizontal(|ui| {
+        if icons::tiny_icon(ui,ph::PLUS,"New layer",false){studio.add_layer(studio.persona==Persona::Pixel);}
+        if icons::tiny_icon(ui,ph::FOLDER_OPEN,"New group",false){studio.add_layer_group();}
+        ui.add_enabled_ui(studio.active_layer.is_some(),|ui| {
+            if icons::tiny_icon(ui,ph::SELECTION,"Add layer mask",false){if let Some(layer)=studio.active_layer {studio.add_layer_mask(layer,true);}}
+            if icons::tiny_icon(ui,ph::MAGIC_WAND,"Layer effects",false){super::panel_workspace::open(ui.ctx(),studio,"effects");}
+            if icons::tiny_icon(ui,ph::COPY,"Duplicate selection",false){studio.duplicate_selection();}
+            if icons::tiny_icon(ui,ph::TRASH,"Delete selection or layer",false){if studio.selection.is_empty(){studio.delete_layer();}else{studio.delete_selection();}}
+        });
+    });
 }
 
 fn section_gap(ui: &mut Ui) {
     ui.add_space(12.0);
 }
 
+/// Place existing typed inspector controls in an independently dockable pane.
+/// Args: pane UI, current editor and pane identity. Returns whether this pane owns the requested controls.
+pub(super) fn pane(ui: &mut Ui, studio: &mut Studio, panel: &str) -> bool {
+    if !matches!(panel,"transform"|"appearance"|"gradients"|"stroke"|"character"|"keyframes"|"effects"|"trace"|"brushes"|"transparency"|"color"){return false;}
+    let locked=studio.selection.iter().any(|&(layer,id)|!studio.layer_unlocked(layer)||studio.doc.find_shape(layer,id).is_some_and(|s|s.locked));
+    ui.add_enabled_ui(!locked,|ui| match panel {
+        "transform" => transform_studio(ui,studio,false),
+        "appearance"|"gradients" => color_studio(ui,studio),
+        "stroke" => stroke_studio(ui,studio),
+        "character" => character_studio(ui,studio),
+        "keyframes" => super::timeline_keyboard::editor(ui,studio),
+        "effects" => fx_studio(ui,studio),
+        "trace" => trace_studio(ui,studio),
+        "brushes" => {super::brushes::pane(ui,studio);brush_studio(ui,studio);},
+        "transparency" => object_appearance::show(ui,studio),
+        "color" => studio.with_field_history(ui,"inline-color-pane",|ui,studio| {
+            color_row(ui,studio,true);
+            color_row(ui,studio,false);
+            let style=inspected_style(studio);
+            let mut color=if studio.fill_active {match &style.fill {
+                Fill::Solid(color)|Fill::Linear{c0:color,..}|Fill::Radial{c0:color,..}=>*color,
+                Fill::Gradient(gradient)=>gradient.sample(0.0),_=>studio.brush.color,
+            }} else {style.stroke.as_ref().map_or(studio.brush.color,|stroke|stroke.color)};
+            if super::color_picker::inline(ui,&mut color) {
+                if studio.fill_active {
+                    let style=inspected_style(studio).clone();
+                    if studio.is_motion()&&let Some((_,id))=studio.primary(){
+                        let rest=match &style.fill {Fill::Solid(c)|Fill::Linear{c0:c,..}|Fill::Radial{c0:c,..}=>*c,Fill::Gradient(g)=>g.sample(0.0),_=>color};
+                        studio.key_fill(id,color,rest);
+                    } else {
+                        let fill=match style.fill {Fill::Gradient(mut gradient)=>{if let Some(stop)=gradient.stops.first_mut(){stop.color=color;}Fill::Gradient(gradient)},_=>Fill::Solid(color)};
+                        studio.set_fill(fill);
+                    }
+                } else {studio.set_stroke_color(color);}
+                studio.brush.color=color;
+            }
+        }),
+        _=>{},
+    });
+    true
+}
+
 fn heading(ui: &mut Ui, title: &str) {
+    if ui.data(|d|d.get_temp::<bool>(eframe::egui::Id::new("dock-pane-content"))).unwrap_or(false){return;}
     ui.label(RichText::new(title).strong().size(12.0).color(fg()));
 }
 
@@ -382,14 +520,40 @@ fn bounds_fields(
     min_size: f32,
 ) -> bool {
     let mut changed = false;
+    let before = (*width, *height);
+    let lock_id = ui.make_persistent_id("constrain-proportions");
+    let mut linked = ui.ctx().data_mut(|data| data.get_persisted::<bool>(lock_id)).unwrap_or(false);
     ui.columns(2, |columns| {
         changed |= number_field(&mut columns[0], "X", x, -100000.0..=100000.0, "");
         changed |= number_field(&mut columns[1], "Y", y, -100000.0..=100000.0, "");
     });
-    ui.columns(2, |columns| {
-        changed |= number_field(&mut columns[0], "W", width, min_size..=20000.0, "");
-        changed |= number_field(&mut columns[1], "H", height, min_size..=20000.0, "");
+    let mut size_changed = [false; 2];
+    ui.horizontal(|ui| {
+        let available = (ui.available_width() - 28.0).max(0.0);
+        ui.allocate_ui_with_layout(vec2(available, 0.0), Layout::top_down(eframe::egui::Align::Min), |ui| {
+            ui.columns(2, |columns| {
+                size_changed[0] = number_field(&mut columns[0], "W", width, min_size..=20000.0, "");
+                size_changed[1] = number_field(&mut columns[1], "H", height, min_size..=20000.0, "");
+            });
+        });
+        if icons::tiny_icon(ui, if linked { ph::LOCK } else { ph::LOCK_OPEN }, "Constrain proportions", linked) {
+            linked = !linked;
+            ui.ctx().data_mut(|data| data.insert_persisted(lock_id, linked));
+        }
     });
+    if linked && before.0 > 0.0 && before.1 > 0.0 {
+        let ratio = before.0 / before.1;
+        if ratio.is_finite() && ratio > 0.0 {
+            if size_changed[0] {
+                *width = width.clamp(min_size.max(min_size * ratio), 20000.0_f32.min(20000.0 * ratio));
+                *height = *width / ratio;
+            } else if size_changed[1] {
+                *height = height.clamp(min_size.max(min_size / ratio), 20000.0_f32.min(20000.0 / ratio));
+                *width = *height * ratio;
+            }
+        }
+    }
+    changed |= size_changed.into_iter().any(|value| value);
     changed
 }
 
@@ -2370,46 +2534,6 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
         }
         ui.data_mut(|d| d.insert_temp(reveal_id, primary));
     }
-    ui.horizontal(|ui| {
-        heading(ui, "Layers");
-        ui.label(
-            RichText::new(studio.doc.layers.len().to_string())
-                .size(10.0)
-                .color(fg_weak()),
-        );
-        ui.with_layout(Layout::right_to_left(eframe::egui::Align::Center), |ui| {
-            ui.menu_button("···", |ui| {
-                if ui.button("New vector layer").clicked() {
-                    studio.add_layer(false);
-                    ui.close();
-                }
-                if ui.button("New pixel layer").clicked() {
-                    studio.add_layer(true);
-                    ui.close();
-                }
-                if ui.button("New group").clicked() {
-                    studio.add_layer_group();
-                    ui.close();
-                }
-                if ui.button("Group selection     Ctrl+G").clicked() {
-                    studio.group_selected();
-                    ui.close();
-                }
-                if ui.button("Ungroup     Ctrl+Shift+G").clicked() {
-                    studio.ungroup_selected();
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Delete active layer").clicked() {
-                    studio.delete_layer();
-                    ui.close();
-                }
-            });
-            if icons::tiny_icon(ui, ph::PLUS, "New vector layer", false) {
-                studio.add_layer(false);
-            }
-        });
-    });
 
     if studio.pending_item_mask.is_some() {
         ui.label(
@@ -2444,89 +2568,6 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
     let mut shape_down: Option<(usize, usize)> = None;
     let mut flip_shape: Option<(usize, u64, bool)> = None;
     let n = studio.doc.layers.len();
-    if let Some(i) = studio.active_layer.filter(|&i| i < n) {
-        let layer_blend_owner = ui.make_persistent_id(("layer-blend", studio.doc.layers[i].id));
-        if studio.doc.layers[i].is_group {
-            let before = studio.doc.layers[i].pass_through;
-            let mut after = before;
-            if ui
-                .add_enabled(
-                    studio.layer_unlocked(i),
-                    eframe::egui::Checkbox::new(&mut after, "Pass through"),
-                )
-                .on_hover_text("Allow layers in this group to blend with the layers below it")
-                .changed()
-            {
-                studio.commit(crate::document::Cmd::SetGroupPassThrough {
-                    index: i,
-                    before,
-                    after,
-                });
-            }
-        }
-        ui.vertical(|ui| {
-            if !studio.layer_unlocked(i) {
-                ui.disable();
-            }
-            let mut blend = studio.doc.layers[i].blend;
-            let pass_through = studio.doc.layers[i].is_group && studio.doc.layers[i].pass_through;
-            ui.add_enabled_ui(!pass_through, |ui| {
-                ui.horizontal(|ui| {
-                    let label = ui.label("Layer blend");
-                    let mut response = super::fields::native_scope(ui, layer_blend_owner, |ui| ComboBox::from_id_salt("active-layer-blend")
-                        .selected_text(if pass_through {
-                            "Pass through"
-                        } else {
-                            blend.name()
-                        })
-                        .width(80.0)
-                        .show_ui(ui, |ui| {
-                            for value in Blend::ALL {
-                                ui.selectable_value(&mut blend, value, value.name());
-                            }
-                        }).response).inner.labelled_by(label.id);
-                    super::keyboard_controls::selection_keys(ui, &mut response, "Layer blend", &mut blend,
-                        &Blend::ALL.into_iter().map(|mode| (mode, mode.name().into())).collect::<Vec<_>>());
-                });
-            });
-            let mut opacity = studio.doc.layers[i].opacity * 100.0;
-            ui.horizontal(|ui| {
-                let label = ui.label("Layer opacity");
-                let response = ui.add(
-                    eframe::egui::DragValue::new(&mut opacity)
-                        .range(0.0..=100.0)
-                        .suffix("%")
-                        .speed(0.5)
-                        .max_decimals(0),
-                ).labelled_by(label.id).on_hover_text("Layer opacity");
-                response.widget_info(|| {
-                    let mut info = eframe::egui::WidgetInfo::drag_value(response.enabled(), f64::from(opacity));
-                    info.label = Some("Layer opacity".into());
-                    info
-                });
-                input_history::changed(response);
-            });
-            let layer = &studio.doc.layers[i];
-            if blend != layer.blend || (opacity / 100.0 - layer.opacity).abs() > 0.0001 {
-                studio.commit(crate::document::Cmd::SetLayerMeta {
-                    index: i,
-                    name: layer.name.clone(),
-                    visible: layer.visible,
-                    locked: layer.locked,
-                    opacity: opacity / 100.0,
-                    blend,
-                    before: (
-                        layer.name.clone(),
-                        layer.visible,
-                        layer.locked,
-                        layer.opacity,
-                        layer.blend,
-                    ),
-                });
-            }
-        });
-        ui.add_space(8.0);
-    }
     for i in (0..n).rev() {
         let ancestors = studio.doc.layer_ancestors(i);
         if ancestors
@@ -2535,7 +2576,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
         {
             continue;
         }
-        let indent = ancestors.len() as f32 * 14.0;
+        let indent = (ancestors.len() as f32 * 12.0).min(ui.available_width()*0.3);
         ui.push_id(studio.doc.layers[i].id, |ui| {
             let active = studio.active_layer == Some(i);
             let header = Frame::new()
@@ -2576,17 +2617,10 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                         } else {
                             ui.add_space(22.0);
                         }
-                        object_icon(
-                            ui,
-                            if layer.is_group {
-                                ph::FOLDER_OPEN
-                            } else if layer.kind.shapes().is_some() {
-                                ph::STACK
-                            } else {
-                                ph::IMAGES
-                            },
-                            fg_weak(),
-                        );
+                        if layer.is_group {object_icon(ui,ph::FOLDER_OPEN,fg_weak());} else {
+                            let thumbnail=super::pane_previews::thumbnail(ui,studio,i,None);
+                            if thumbnail.clicked()||layer_drag::source(&thumbnail,studio,i){activate=Some(i);}
+                        }
                         if layer.filters.active() { ui.label(RichText::new("fx").small().color(accent())); }
                         let name_width = (ui.available_width()
                             - if layer.mask.is_some() { 74.0 } else { 50.0 })
@@ -2770,15 +2804,9 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                                         }
                                         ui.spacing_mut().item_spacing.x = 2.0;
                                         ui.add_space(indent + 24.0);
-                                        object_icon(
-                                            ui,
-                                            shape.icon,
-                                            if studio.selection.contains(&(i, shape.id)) {
-                                                accent()
-                                            } else {
-                                                fg_weak()
-                                            },
-                                        );
+                                        let thumbnail=super::pane_previews::thumbnail(ui,studio,i,Some(shape.id));
+                                        if thumbnail.clicked()&&objects_editable&&!shape.locked {pick_shape=Some((i,shape.id));}
+                                        if layer_drag::object_source(&thumbnail,studio,i,shape.id){pick_shape=Some((i,shape.id));}
                                         let name_width = (ui.available_width() - 50.0).max(42.0);
                                         if studio
                                             .shape_rename

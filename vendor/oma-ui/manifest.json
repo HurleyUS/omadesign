@@ -8,10 +8,10 @@
     "0.36"
   ],
   "sha256": {
-    "fields.rs": "61ca91449a1b0d453dc6a1655da3dcaa8464c0925132fab0fef1b9e24449b3ac",
-    "workspace.rs": "a42841201f1204fe7912a8a24c9964bb30d1c7d1ecd2856edb9c065e060d547c",
+    "fields.rs": "7b1502c5c94082ba182d3c8d81aa29cca8cf1cb61f0b66d4a55ebd4682a35064",
+    "workspace.rs": "5bddb546d0ed48d65e990339751ae3542620ae91bb18c7222b0586890d8e56fd",
     "native_scope.rs": "5ca4d208655a3a9a90dc45104d705ce125438c68b0d62ca5821b452bf0cf46b0"
   },
   "directory": "vendor/oma-ui",
-  "revision": 3
+  "revision": 4
 }

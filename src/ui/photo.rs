@@ -209,11 +209,7 @@ pub(super) fn filmstrip(ui: &mut Ui, studio: &mut Studio) {
 /// Retain the current inspector or library inside the registered Photo panel.
 /// Args: panel UI and studio. Returns no value.
 pub(super) fn develop_content(ui: &mut Ui, studio: &mut Studio) {
-    if studio.libraries.sidebar == crate::app::libraries::Sidebar::Inspector {
-        ui.add_enabled_ui(!studio.photo.is_batching(), |ui| develop_panel(ui, studio));
-    } else {
-        super::library::show(ui, studio);
-    }
+    ui.add_enabled_ui(!studio.photo.is_batching(), |ui| develop_panel(ui, studio));
 }
 
 #[derive(Clone, Copy)]
@@ -814,7 +810,7 @@ fn slider(ui: &mut Ui, label: &str, v: &mut f32, lo: f32, hi: f32) -> bool {
     changed
 }
 
-fn draw_hist(ui: &mut Ui, hists: &[Histogram; 4]) {
+pub(super) fn draw_hist(ui: &mut Ui, hists: &[Histogram; 4]) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 64.0), Sense::hover());
     ui.painter().rect_filled(rect, 3.0, bg_extreme());
     let cols = [

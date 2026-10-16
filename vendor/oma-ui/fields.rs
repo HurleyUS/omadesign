@@ -72,7 +72,7 @@ pub fn number<N: egui::emath::Numeric>(
                 .add_enabled_ui(enabled, |ui| {
                     ui.horizontal(|ui| {
                         let width = (ui.available_width()
-                            - if reset.is_some() { 48.0 } else { 0.0 })
+                            - if reset.is_some() { 28.0 } else { 0.0 })
                         .max(24.0);
                         let mut drag = egui::DragValue::new(value)
                             .range(range)
@@ -93,7 +93,7 @@ pub fn number<N: egui::emath::Numeric>(
                             .on_hover_text(label);
                         if let Some(reset) = reset {
                             let reset_response = ui
-                                .small_button("Reset")
+                                .small_button("↺")
                                 .on_hover_text(format!("Reset {label}"));
                             reset_response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
