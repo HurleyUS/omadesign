@@ -4630,6 +4630,21 @@
       ]
     },
     {
+      "name": "termcolor",
+      "version": "1.4.1",
+      "license": "Unlicense OR MIT",
+      "authors": [
+        "Andrew Gallant <jamslam@gmail.com>"
+      ],
+      "copyright": [
+        "Copyright (c) 2015 Andrew Gallant"
+      ],
+      "repository": "https://github.com/BurntSushi/termcolor",
+      "notices": [
+        25
+      ]
+    },
+    {
       "name": "thiserror",
       "version": "1.0.69",
       "license": "MIT OR Apache-2.0",
