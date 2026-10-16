@@ -18,6 +18,13 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
         eframe::egui::Id::new("studio-canvas"),
         Sense::click_and_drag(),
     );
+    if resp.enabled()
+        && resp.is_pointer_button_down_on()
+        && ui.input(|input| input.pointer.any_pressed())
+        && ui.ctx().memory(|memory| memory.allows_interaction(resp.layer_id))
+    {
+        resp.request_focus();
+    }
     resp.widget_info(|| eframe::egui::WidgetInfo::labeled(
         eframe::egui::WidgetType::Other, resp.enabled(), "Artwork canvas"
     ));
