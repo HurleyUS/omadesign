@@ -291,7 +291,7 @@ pub(crate) fn render_export(doc: &Document, scale: u32) -> Result<Pixmap, String
 /// Refuse an authored native document at an RGBA8 render boundary.
 /// Args: original document. Returns an explicit precision error before any fallback work.
 pub(crate) fn admit_precise_export(doc: &Document) -> Result<(), String> {
-    if crate::deep_color::has_native(doc) {
+    if crate::motion::compositions::documents(doc)?.into_iter().any(crate::deep_color::has_native) {
         return Err("This RGBA8 renderer cannot preserve native pixel or mask precision. Use the float compositor, PSD or TIFF, or convert an explicit document copy to 8-bit.".into());
     }
     Ok(())
@@ -348,6 +348,7 @@ pub fn render_export_at_cancellable(
     keep: &mut dyn FnMut() -> bool,
 ) -> Result<Pixmap, String> {
     crate::motion::compositions::validate(doc)?;
+    admit_precise_export(doc)?;
     if !keep() {
         return Err("Cancelled: render cancelled".into());
     }

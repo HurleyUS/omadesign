@@ -15,6 +15,15 @@ use std::collections::HashMap;
 pub mod compositions;
 pub mod expressions;
 
+/// Refuse exchanges that traverse only ordinary document layers.
+/// Args: editable document and writer name. Returns a named error before nested artwork or 3D is omitted.
+pub(crate) fn require_flat_artwork(doc: &Document, writer: &str) -> Result<(), String> {
+    if !doc.motion.compositions.is_empty() || doc.motion.scene3d.is_some() {
+        return Err(format!("MotionUnsupported: {writer} cannot preserve nested compositions or 3D artwork. Save .oma or .omamotion, or export an explicit rendered animation."));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Prop {
     X,

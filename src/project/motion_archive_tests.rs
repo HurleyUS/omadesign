@@ -362,3 +362,47 @@ fn portable_motion_cap_refuses_before_replacing_the_destination() {
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn common_native_child_motion_refuses_the_rgba8_export_boundary() {
+    let mut doc = plain();
+    doc.motion.compositions.push(Composition::new(
+        crate::collaboration::native_tests::fixture(),
+    ));
+    let source = encode(&doc).unwrap();
+    for result in [
+        crate::compositor::render_export(&doc, 1),
+        crate::compositor::render_export_at(&doc, 1., 0., true),
+    ] {
+        assert!(result.unwrap_err().contains("precision"));
+    }
+    assert_eq!(encode(&doc).unwrap(), source);
+    let reopened = decode(&source).unwrap();
+    crate::collaboration::native_tests::assert_native_equal(
+        &doc.motion.compositions[0].document,
+        &reopened.motion.compositions[0].document,
+    );
+}
+
+#[test]
+fn layer_only_exchange_guard_refuses_complex_motion_and_keeps_flat_design_routes() {
+    let mut doc = plain();
+    doc.motion.set_key(7, Prop::X, 0., 1., Ease::Hold);
+    doc.motion
+        .set_expression(7, Prop::Y, Some("time".into()))
+        .unwrap();
+    crate::motion::require_flat_artwork(&doc, "Flat writer").unwrap();
+    doc.motion.compositions.push(Composition::new(plain()));
+    assert!(
+        crate::motion::require_flat_artwork(&doc, "Flat writer")
+            .unwrap_err()
+            .contains("MotionUnsupported")
+    );
+    doc.motion.compositions.clear();
+    doc.motion.scene3d = Some(crate::scene3d::Scene::default());
+    assert!(
+        crate::motion::require_flat_artwork(&doc, "Flat writer")
+            .unwrap_err()
+            .contains("MotionUnsupported")
+    );
+}
