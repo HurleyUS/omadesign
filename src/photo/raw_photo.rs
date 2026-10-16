@@ -179,6 +179,25 @@ fn png16(
     writer.finish().map_err(|e| e.to_string())
 }
 
+/// Borrow developed RGB samples and declare their straight alpha explicitly.
+/// Args: typed RGB color, interleaved RGBA samples, geometry and admitted cancellable output. Returns a complete TIFF without a sample copy.
+fn tiff_straight<C: tiff::encoder::colortype::ColorType>(
+    data: &[C::Inner],
+    w: u32,
+    h: u32,
+    output: &mut BoundedWriter<'_>,
+) -> Result<(), String>
+where
+    [C::Inner]: tiff::encoder::TiffValue,
+{
+    let mut encoder = tiff::encoder::TiffEncoder::new(output).map_err(|e| e.to_string())?;
+    let mut image = encoder.new_image::<C>(w, h).map_err(|e| e.to_string())?;
+    image
+        .extra_samples(&[tiff::tags::ExtraSamples::UnassociatedAlpha])
+        .map_err(|e| e.to_string())?;
+    image.write_data(data).map_err(|e| e.to_string())
+}
+
 /// Account development's source-sized float buffers and output before allocating.
 /// Args: source/output dimensions, output channel bytes, saved parameters and owner. Returns an operation lease.
 fn development_memory(
@@ -671,15 +690,7 @@ impl PhotoImage {
             if format == image::ImageFormat::Png {
                 png16(&data, w, h, &mut bytes, cancel)?;
             } else {
-                use image::{EncodableLayout, ImageEncoder};
-                image::codecs::tiff::TiffEncoder::new(&mut bytes)
-                    .write_image(
-                        data.as_slice().as_bytes(),
-                        w,
-                        h,
-                        image::ExtendedColorType::Rgba16,
-                    )
-                    .map_err(|e| e.to_string())?;
+                tiff_straight::<tiff::encoder::colortype::RGB16>(&data, w, h, &mut bytes)?;
             }
         } else {
             let (w, h, data) = if let Some(raw) = &self.raw {
@@ -722,9 +733,7 @@ impl PhotoImage {
                         .write_image(data.as_slice(), w, h, image::ExtendedColorType::Rgba8)
                         .map_err(|e| e.to_string())?;
                 } else {
-                    image::codecs::tiff::TiffEncoder::new(&mut bytes)
-                        .write_image(data.as_slice(), w, h, image::ExtendedColorType::Rgba8)
-                        .map_err(|e| e.to_string())?;
+                    tiff_straight::<tiff::encoder::colortype::RGB8>(&data, w, h, &mut bytes)?;
                 }
             }
         }
@@ -746,6 +755,36 @@ impl PhotoImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_photo_tiff_declares_unassociated_alpha_and_exact_u16_samples() {
+        let cancel = Cancellation::default();
+        let values = [12345u16, 32767, 59991, 32769, 65535, 137, 417, 0];
+        let mut writer = BoundedWriter::new(1024 * 1024, &cancel).unwrap();
+        tiff_straight::<tiff::encoder::colortype::RGB16>(&values, 2, 1, &mut writer).unwrap();
+        let output = writer.finish().into_allocation().unwrap();
+        let mut reader =
+            tiff::decoder::Decoder::new(std::io::Cursor::new(output.as_slice())).unwrap();
+        assert_eq!(
+            reader
+                .get_tag_u16_vec(tiff::tags::Tag::ExtraSamples)
+                .unwrap(),
+            vec![2]
+        );
+        assert_eq!(reader.colortype().unwrap(), tiff::ColorType::RGBA(16));
+        let tiff::decoder::DecodingResult::U16(decoded) = reader.read_image().unwrap() else {
+            panic!("TIFF lost u16 channels")
+        };
+        assert_eq!(decoded, values);
+        assert_eq!(
+            image::load_from_memory(output.as_slice())
+                .unwrap()
+                .to_rgba16()
+                .as_raw()
+                .as_slice(),
+            values
+        );
+    }
 
     #[test]
     fn encoded_growth_admits_old_and_new_capacity_before_reallocation() {
