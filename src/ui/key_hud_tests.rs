@@ -128,7 +128,7 @@ fn live_pen_modifiers_update_hints_and_geometry_without_moving_the_canvas() {
         size,
         vec![Event::ModifiersChanged(Modifiers::SHIFT)],
     );
-    assert!(active(&studio, &ctx, "Shift"));
+    assert!(active(&studio, &ctx, "Shift"), "hints={:?}, focus={:?}, modifiers={:?}", studio.key_hints(&ctx), ctx.memory(|memory| memory.focused()), ctx.input(|input| input.modifiers));
     assert_eq!(canvas_rect(&ctx, Persona::Design), canvas);
     let (incoming, outgoing) = handles(&studio);
     assert!((outgoing.x - outgoing.y).abs() < 0.001);
@@ -367,7 +367,7 @@ fn hud_toggle_and_document_shortcuts_deliver_their_original_key_events() {
         size,
         vec![Event::ModifiersChanged(control), key(Key::D, control)],
     );
-    assert_eq!(studio.doc.layers[0].kind.shapes().unwrap().len(), 2);
+    assert_eq!(studio.doc.layers[0].kind.shapes().unwrap().len(), 2, "hints={:?}, focus={:?}, modifiers={:?}", studio.key_hints(&ctx), ctx.memory(|memory| memory.focused()), ctx.input(|input| input.modifiers));
     frame(&ctx, &mut studio, size, vec![key(Key::Slash, control)]);
     assert!(!studio.show_key_hud);
     frame(&ctx, &mut studio, size, vec![key(Key::Z, control)]);
