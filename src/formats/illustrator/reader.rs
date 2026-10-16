@@ -181,7 +181,7 @@ pub(super) fn read(
             Tok::Word(w) => reader.op(std::str::from_utf8(w).unwrap_or("?"), token.hidden)?,
             Tok::Preview(p) => {
                 if let Some(place) = reader.place.as_mut() {
-                    place.preview = preview(p);
+                    place.preview = preview(p).map_err(super::picture_error)?;
                 }
             }
             Tok::Data(data) => {
@@ -190,7 +190,7 @@ pub(super) fn read(
                         *operands = std::mem::take(&mut reader.values);
                     }
                 }
-                reader.image(data)?;
+                reader.image(data).map_err(super::picture_error)?;
             }
         }
     }
@@ -846,7 +846,7 @@ impl Reader<'_> {
                     place.path = values.iter().rev().find_map(V::text).unwrap_or_default();
                 }
             }
-            "~" => self.end_place()?,
+            "~" => self.end_place().map_err(super::picture_error)?,
             "p" | "P" => {
                 self.note(
                     "Pattern paint is unsupported; its original definition remains in the source.",
@@ -1147,7 +1147,9 @@ impl Reader<'_> {
                                     "linked-image",
                                     bytes,
                                 )?;
-                                if let Ok(pixels) = crate::formats::decode_image(source.bytes()) {
+                                if image::guess_format(source.bytes()).is_ok() {
+                                    let pixels = crate::formats::decode_image(source.bytes())
+                                        .map_err(|e| format!("Could not decode linked Illustrator picture {}: {e}", place.path))?;
                                     place.preview = Some(pixels);
                                     preview_only = false;
                                     source_id = Some(source.id.clone());
@@ -1230,19 +1232,29 @@ impl Reader<'_> {
             self.note("Embedded Illustrator raster depth or size is unsupported.");
             return Ok(());
         }
-        let decoded;
-        if !binary {
-            decoded = super::hex_decode(data).unwrap_or_default();
+        let decoded_hex;
+        let _decoded_memory;
+        let decoded = if !binary {
+            let scratch = data
+                .len()
+                .checked_mul(3)
+                .and_then(|n| n.checked_add(16))
+                .ok_or("Illustrator hex image size overflows")?;
+            _decoded_memory = crate::resources::global()
+                .reserve_now(scratch as u64, &crate::deep_color::storage::check)?;
+            decoded_hex = super::hex_decode(data).unwrap_or_default();
+            decoded_hex.as_slice()
         } else {
-            decoded = data.to_vec();
-        }
+            data
+        };
         let count = w as usize * h as usize;
         let need = count * channels;
         if decoded.len() < need {
             self.note("An embedded Illustrator raster is truncated.");
             return Ok(());
         }
-        let mut rgba = Vec::with_capacity(count * 4);
+        let mut rgba = crate::resources::global()
+            .allocate_now::<u8, _>(count * 4, &crate::deep_color::storage::check)?;
         for i in 0..count {
             let p = &decoded[i * channels..(i + 1) * channels];
             let color = match channels {
@@ -1255,7 +1267,7 @@ impl Reader<'_> {
                 1 => Rgba::rgb(p[0], p[0], p[0]),
                 _ => Rgba::rgb(p[0], p[1], p[2]),
             };
-            rgba.extend_from_slice(&[
+            rgba.as_mut_slice()[i * 4..i * 4 + 4].copy_from_slice(&[
                 color.r,
                 color.g,
                 color.b,
@@ -1266,8 +1278,8 @@ impl Reader<'_> {
                 },
             ]);
         }
-        let pixels = crate::document::Pixels::from_rgba(w, h, rgba)
-            .ok_or("Invalid Illustrator image samples")?;
+        let pixels =
+            crate::document::Pixels::from_byte_allocation(w, h, std::sync::Arc::new(rgba))?;
         let [a, b, c, d, tx, ty] = matrix;
         let layer = Layer::placed_raster(
             "Embedded picture",
@@ -1359,7 +1371,7 @@ impl Reader<'_> {
                 }
             }
             if let Some(matrix) = self.raster_placements.get(&layer.id) {
-                if place_pixels(layer, *matrix, first)? {
+                if place_pixels(layer, *matrix, first).map_err(super::picture_error)? {
                     self.notes.insert("Sheared Illustrator pictures are resampled into placed raster layers; retained linked source bytes remain unchanged.".into());
                 }
             }
@@ -1474,25 +1486,32 @@ impl Reader<'_> {
     }
 }
 
-fn preview(data: &[u8]) -> Option<crate::document::Pixels> {
-    let mut rest = data.trim_ascii_start();
-    let mut head = [0usize; 5];
-    for item in &mut head {
-        let at = rest.iter().position(|b| *b == b' ')?;
-        *item = std::str::from_utf8(&rest[..at]).ok()?.parse().ok()?;
-        rest = &rest[at + 1..];
-    }
-    let [w, h, row, bits, _] = head;
-    if w == 0
-        || h == 0
-        || w.checked_mul(h)? > 32 << 20
-        || bits != 32
-        || row < w.checked_mul(4)?
-        || rest.len() < row.checked_mul(h)?
-    {
-        return None;
-    }
-    let mut rgba = Vec::with_capacity(w * h * 4);
+fn preview(data: &[u8]) -> Result<Option<crate::document::Pixels>, String> {
+    let layout = (|| {
+        let mut rest = data.trim_ascii_start();
+        let mut head = [0usize; 5];
+        for item in &mut head {
+            let at = rest.iter().position(|b| *b == b' ')?;
+            *item = std::str::from_utf8(&rest[..at]).ok()?.parse().ok()?;
+            rest = &rest[at + 1..];
+        }
+        let [w, h, row, bits, _] = head;
+        if w == 0
+            || h == 0
+            || w.checked_mul(h)? > 32 << 20
+            || bits != 32
+            || row < w.checked_mul(4)?
+            || rest.len() < row.checked_mul(h)?
+        {
+            return None;
+        }
+        Some((w, h, row, rest))
+    })();
+    let Some((w, h, row, rest)) = layout else {
+        return Ok(None);
+    };
+    let mut pixels = crate::document::Pixels::new(w as u32, h as u32)?;
+    let rgba = pixels.bytes_mut()?;
     for y in 0..h {
         for x in 0..w {
             let p = &rest[y * row + x * 4..y * row + x * 4 + 4];
@@ -1504,10 +1523,11 @@ fn preview(data: &[u8]) -> Option<crate::document::Pixels> {
                     (v as u32 * 255 / a).min(255) as u8
                 }
             };
-            rgba.extend_from_slice(&[unpremul(p[1]), unpremul(p[2]), unpremul(p[3]), p[0]]);
+            let i = (y * w + x) * 4;
+            rgba[i..i + 4].copy_from_slice(&[unpremul(p[1]), unpremul(p[2]), unpremul(p[3]), p[0]]);
         }
     }
-    crate::document::Pixels::from_rgba(w as u32, h as u32, rgba)
+    Ok(Some(pixels))
 }
 
 /// Place picture pixels using their exact Illustrator affine.
@@ -1539,14 +1559,7 @@ fn place_pixels(layer: &mut Layer, matrix: [f32; 6], board: [f32; 4]) -> Result<
     }
     if dx.dot(dy).abs() < dimensions.x * dimensions.y * 0.0001 {
         if dx.cross(dy) < 0. {
-            let row = pixels.w as usize * 4;
-            for y in 0..pixels.h as usize / 2 {
-                let opposite = pixels.h as usize - y - 1;
-                for x in 0..row {
-                    pixels.data.swap(y * row + x, opposite * row + x);
-                }
-            }
-            pixels.touch();
+            super::raster::reflect(pixels)?;
         }
         let centre = top_left + (dx + dy) * 0.5;
         *origin = centre - dimensions * 0.5;
@@ -1563,20 +1576,30 @@ fn place_pixels(layer: &mut Layer, matrix: [f32; 6], board: [f32; 4]) -> Result<
     if width as u64 * height as u64 > 32 << 20 {
         return Err("Transformed Illustrator picture exceeds 32 megapixels".into());
     }
-    let mut output = tiny_skia::Pixmap::new(width, height)
-        .ok_or("Could not allocate transformed Illustrator picture")?;
-    let input = pixels
-        .to_pixmap()
-        .ok_or("Invalid Illustrator picture pixels")?;
-    output.draw_pixmap(
-        0,
-        0,
-        input.as_ref(),
-        &tiny_skia::PixmapPaint::default(),
-        tiny_skia::Transform::from_row(a, -b, c, -d, top_left.x - min.x, top_left.y - min.y),
-        None,
-    );
-    *pixels = Pixels::from_pixmap(&output);
+    let transform =
+        tiny_skia::Transform::from_row(a, -b, c, -d, top_left.x - min.x, top_left.y - min.y);
+    if pixels.native.is_some() {
+        *pixels = super::raster::resample_native(
+            pixels,
+            width,
+            height,
+            transform
+                .invert()
+                .ok_or("Invalid Illustrator picture transform")?,
+        )?;
+    } else {
+        let mut output = crate::deep_color::surface::Surface::new(width, height)?;
+        let input = pixels.try_to_pixmap()?;
+        output.draw_pixmap(
+            0,
+            0,
+            input.as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            transform,
+            None,
+        );
+        *pixels = Pixels::from_pixmap(&output)?;
+    }
     *origin = min;
     *size = Pt::new(width as f32, height as f32);
     *rotation = 0.;

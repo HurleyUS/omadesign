@@ -70,8 +70,10 @@ pub(crate) fn open_with_progress(
     }
     if kind == "eps" {
         let bytes = read_bounded(path)?;
-        if let Ok((doc, notes)) = crate::formats::illustrator::read_with_path(&bytes, &name, Some(path)) {
-            return document(doc, notes);
+        match crate::formats::illustrator::read_with_path(&bytes, &name, Some(path)) {
+            Ok((doc, notes)) => return document(doc, notes),
+            Err(error) if crate::formats::illustrator::picture_import_failed(&error) => return Err(error),
+            Err(_) => {}
         }
         return import_eps(path, &name);
     }
@@ -130,13 +132,14 @@ pub(crate) fn open_with_progress(
             stage("Reading Illustrator editing data");
             match crate::formats::illustrator::read_with_path(&bytes, &name, Some(path)) {
                 Ok((doc, notes)) => return document(doc, notes),
+                Err(error) if crate::formats::illustrator::picture_import_failed(&error) => return Err(error),
                 Err(error) => Some(error),
             }
         } else { None };
         if bytes.starts_with(b"%!") {
             let imported = import_eps(path, &name)?;
             if let Imported::Document(mut doc) = imported {
-                let id = doc.retain_source(crate::source_attachment::SourceAttachment::new(&name, "illustrator", bytes)?);
+                let id = doc.retain_source(crate::source_attachment::SourceAttachment::new(&name, "illustrator", bytes.to_vec())?);
                 for layer in &mut doc.layers { if layer.source_attachment.is_none() { layer.source_attachment = Some(id.clone()); } }
                 doc.import_notes.insert(0, format!("Illustrator editing data could not be reconstructed: {}. Opened converted PostScript artwork; unsupported live structures are not editable. Original source bytes are retained.", editing_error.unwrap_or_default()));
                 return Ok(Imported::Document(doc));
@@ -145,7 +148,7 @@ pub(crate) fn open_with_progress(
         }
         let (mut doc, mut notes) = crate::formats::pdf::read(&bytes, &name)?;
         if kind == "ai" {
-            let id = doc.retain_source(crate::source_attachment::SourceAttachment::new(&name, "illustrator", bytes)?);
+            let id = doc.retain_source(crate::source_attachment::SourceAttachment::new(&name, "illustrator", bytes.to_vec())?);
             for layer in &mut doc.layers { if layer.source_attachment.is_none() { layer.source_attachment = Some(id.clone()); } }
             notes.insert(0,format!("Illustrator editing data could not be reconstructed: {}. Opened PDF-compatible artwork instead. Original bytes are retained; unsupported live structures are not editable.", editing_error.unwrap_or_default()));
         }

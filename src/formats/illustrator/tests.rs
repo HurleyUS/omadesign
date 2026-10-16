@@ -372,6 +372,84 @@ fn illustrator_linked_picture_retains_original_once_and_reopens() {
 }
 
 #[test]
+fn illustrator_linked_native_pixels_retain_precision_and_refuse_damaged_decode() {
+    let directory = std::env::current_dir()
+        .unwrap()
+        .join(".artifacts")
+        .join(format!(
+            "illustrator-native-link-{}-{}",
+            std::process::id(),
+            crate::document::next_id()
+        ));
+    std::fs::create_dir_all(&directory).unwrap();
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _scratch = Scratch(directory.clone());
+    let image = image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(
+        1,
+        2,
+        vec![12345, 23456, 34567, 65535, 45678, 56789, 10101, 32768],
+    )
+    .unwrap();
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba16(image)
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .unwrap();
+    let bytes = encoded.into_inner();
+    let image_path = directory.join("native.png");
+    let source_path = directory.join("source.ai");
+    std::fs::write(&image_path, &bytes).unwrap();
+    let source =
+        program("%AI5_BeginPlace\n[1 0 0 1 0 0] 0 0 1 2 (native.png) `\n~\n%AI5_EndPlace\n");
+    std::fs::write(&source_path, &source).unwrap();
+    let imported = crate::import::open_any(&source_path).unwrap();
+    let crate::import::Imported::Document(doc) = imported else {
+        panic!("expected native artwork")
+    };
+    assert_eq!(doc.sources.len(), 2);
+    let layer = doc
+        .layers
+        .iter()
+        .find(|l| l.kind.pixels().is_some())
+        .unwrap();
+    let original = doc
+        .source(layer.source_attachment.as_deref().unwrap())
+        .unwrap();
+    assert_eq!(original.bytes(), bytes);
+    let pixels = layer.kind.pixels().unwrap();
+    let native = pixels.native.as_ref().unwrap();
+    assert_eq!(native.depth, crate::deep_color::Depth::U16);
+    for (actual, expected) in native
+        .samples
+        .iter()
+        .zip([45678, 56789, 10101, 32768, 12345, 23456, 34567, 65535])
+    {
+        assert!((actual - expected as f32 / 65535.).abs() < 1e-7);
+    }
+    let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+    let reopened_pixels = reopened
+        .layers
+        .iter()
+        .find_map(|l| l.kind.pixels())
+        .unwrap();
+    assert_eq!(reopened_pixels.native, pixels.native);
+    assert_eq!(reopened.sources, doc.sources);
+    std::fs::write(&image_path, b"\x89PNG\r\n\x1a\ntruncated").unwrap();
+    let error = match crate::import::open_any(&source_path) {
+        Err(error) => error,
+        Ok(_) => panic!("damaged linked image was silently replaced"),
+    };
+    assert!(picture_import_failed(&error), "{error}");
+    assert!(error.contains("native.png"), "{error}");
+    assert_eq!(std::fs::read(&source_path).unwrap(), source);
+    assert_eq!(original.bytes(), bytes);
+}
+
+#[test]
 #[ignore = "Requires the independent real AI fixture directory through OMADESIGN_ILLUSTRATOR_FIXTURE"]
 fn illustrator_independent_real_fixture_without_pdf_preview_and_oma_reopen() {
     independent_fixture("Test-Inkscape-LineIssue.ai", 1, false);

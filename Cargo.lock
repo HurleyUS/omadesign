@@ -2939,7 +2939,6 @@ dependencies = [
 name = "omadesign"
 version = "0.6.7"
 dependencies = [
- "omadesign-affinity",
  "ab_glyph",
  "arboard",
  "base64",
@@ -2953,6 +2952,7 @@ dependencies = [
  "lopdf",
  "mlua",
  "mozjpeg-sys",
+ "omadesign-affinity",
  "ort",
  "rayon",
  "resvg",

@@ -6,6 +6,7 @@
 
 mod lex;
 mod obj;
+mod raster;
 mod reader;
 mod text;
 
@@ -14,6 +15,17 @@ use std::io::Read;
 use std::path::Path;
 
 const MAX_DATA: usize = 256 << 20;
+const PICTURE_ERROR: &str = "Illustrator picture import failed: ";
+
+/// Identify a picture failure that must not select a byte preview fallback.
+/// Args: native import error. Returns whether the caller must preserve that failure.
+pub(crate) fn picture_import_failed(error: &str) -> bool {
+    error.starts_with(PICTURE_ERROR)
+}
+
+fn picture_error(error: String) -> String {
+    format!("{PICTURE_ERROR}{error}")
+}
 
 /// Read editable Illustrator art.
 /// `bytes` is an AI/EPS file and `name` names the new document. Returns editable

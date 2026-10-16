@@ -93,3 +93,26 @@ They do not compare every artboard or establish pixel fidelity to Illustrator.
 Shared SVG type can replace the fallback only when it preserves the source
 characters and paragraph breaks exactly. Otherwise the editable ATE text stays
 available and a saved diagnostic identifies the fallback layout.
+
+## Native pixel integration
+
+On the native common stack, embedded byte images and saved previews admit their
+storage before allocation. A recognized linked image's decoding or allocation
+error stops import instead of choosing its saved preview or PDF/PS fallback.
+Unreadable or unsupported link formats still receive the existing preview note.
+
+Reflections use admitted independent storage for shared byte/native buffers and
+preserve authored samples, CMYKA, profile and explicit intent. Sheared native
+images use the existing shared bilinear sampler in authored precision; CMYK
+components are packed into shared pixel views for that sampler and converted
+back through the common CMS API. The byte-only shear route retains admitted
+surfaces through its fallible conversion. Source UUIDs and original bytes remain
+independent of these display/placement buffers. The shear reduction is still
+reported in import notes.
+
+New regressions cover native/byte reflection isolation, HDR/profile/CMYKA shear,
+16-bit linked-image save/reopen and refusal of a damaged recognized link. They
+are source-only until the single combined integration check is authorized and
+completed. Original independent AI and strict native Affinity assertions remain
+unchanged. See [native common integration](affinity-native.md#native-common-source-integration)
+for the exact prerequisite and proof boundaries.

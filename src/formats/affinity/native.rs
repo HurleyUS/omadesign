@@ -110,6 +110,7 @@ struct Builder {
     next: usize,
     notes: Vec<String>,
     nodes: std::collections::HashMap<String, (String, Vec<crate::filter::Fx>)>,
+    image_memory: Vec<std::sync::Arc<crate::resources::Lease>>,
 }
 
 impl Builder {
@@ -312,16 +313,27 @@ impl Builder {
     }
 
     fn image(&mut self, image: &af::Image, out: &mut String) -> Result<(), String> {
+        use crate::deep_color::storage;
+        use image::ImageEncoder as _;
+        let encoded;
         let data = match &image.pixels {
-            af::Pixels::Encoded(data) => data.clone(),
+            af::Pixels::Encoded(data) => data.as_slice(),
             af::Pixels::Rgba8(data) => {
-                let image = image::RgbaImage::from_raw(image.width, image.height, data.clone())
-                    .ok_or("Invalid native Affinity pixels")?;
-                let mut output = std::io::Cursor::new(Vec::new());
-                image
-                    .write_to(&mut output, image::ImageFormat::Png)
+                if data.len() != storage::count(image.width, image.height, 4)? {
+                    return Err("Invalid native Affinity pixels".into());
+                }
+                let _codec = crate::resources::global().reserve_now(16 << 20, &storage::check)?;
+                let mut output = storage::Encoded::new()?;
+                image::codecs::png::PngEncoder::new(&mut output)
+                    .write_image(
+                        data,
+                        image.width,
+                        image.height,
+                        image::ExtendedColorType::Rgba8,
+                    )
                     .map_err(|e| e.to_string())?;
-                output.into_inner()
+                encoded = output.finish()?;
+                encoded.as_slice()
             }
         };
         let mime = if data.starts_with(&[0xff, 0xd8]) {
@@ -329,6 +341,14 @@ impl Builder {
         } else {
             "image/png"
         };
+        let length =
+            base64::encoded_len(data.len(), true).ok_or("Affinity image size overflows")?;
+        let staging = length
+            .checked_add(512)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or("Affinity SVG image size overflows")?;
+        self.image_memory
+            .push(crate::resources::global().reserve_now(staging as u64, &storage::check)?);
         write!(out,"<image width=\"{}\" height=\"{}\" transform=\"{}\" xlink:href=\"data:{mime};base64,{}\"/>",image.width,image.height,matrix(image.transform),base64::engine::general_purpose::STANDARD.encode(data)).unwrap();
         Ok(())
     }
