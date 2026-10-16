@@ -9,8 +9,9 @@ Run `node scripts/craft-parity.mjs REFERENCE_REPOS OUTPUT_JSON` against the pinn
 | Layer | Working scope | Remaining scope |
 | --- | --- | --- |
 | Workspace, #332 | Theme-derived chrome, one mode control, actual dock nesting/splits, recoverable sizing, Layers thumbnails/footer, ratio lock, native paste | Full panel and workflow parity |
-| Color workflows, #333 | 21 harmony choices, variation grid, five-color themes, linked/custom wheel edits, guarded library saving, explicit recolor mappings | Source under validation; pattern-internal recoloring, CMYK/spot-color models, color reduction, global swatch linkage and recolor preview remain open |
-| Actions | Ordered duplicate/group/flip/outline/stack commands | Actual command recording, editable parameters, import/export, atomic playback |
+| Color workflows, #333 | 21 harmony choices, compact variation grid, five-color themes, linked/custom wheel edits, atomic file-backed theme library, guarded swatch saving, explicit recolor mappings | Pattern-internal recoloring, CMYK/spot-color models, color reduction, global swatch linkage and recolor preview remain open |
+| Actions | Session-local ordered duplicate/group/flip/outline/stack commands | Actual command recording, persistent libraries, editable parameters, import/export, atomic playback |
+| Styles | Session-local capture and application | Durable portable libraries and complete appearance/resource preservation |
 | Channels | Bounded composite-channel viewing | Channel selection, editable alpha/spot channels, native channel operations |
 | Symbols | Existing Layout component/instance system | Vector symbol creation, placement, breaking links and symbol tools |
 | Export | Existing document/artboard export and admitted native writers | Asset collection, per-asset format/scale rows and export-for-screens workflow |

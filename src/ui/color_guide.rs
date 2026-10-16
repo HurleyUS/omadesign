@@ -653,6 +653,7 @@ fn themes(ui: &mut Ui, studio: &mut Studio) {
             "Reload color theme library",
         ) {
             library = library::load(&file);
+            draft.editing = None;
         }
     }
     ui.data_mut(|d| {
