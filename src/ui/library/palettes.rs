@@ -3,6 +3,7 @@ use super::*;
 
 pub(super) fn palettes(ui: &mut Ui, studio: &mut Studio, s: &mut Libraries) {
     let scope=egui::Id::new(("palette-scope",&studio.swap_id));
+    let compact = ui.ctx().viewport_rect().height() < 650.0;
     ui.horizontal(|ui| {
         native(ui,scope.with("personal"),"Personal palette collection",|ui|ui.selectable_value(&mut s.project_scope,false,"Personal"));
         native(ui,scope.with("project"),"Project palette collection",|ui|ui.selectable_value(&mut s.project_scope,true,"Project"));

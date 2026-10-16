@@ -172,7 +172,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio, panel: &str) {
 fn guide(ui: &mut Ui, studio: &mut Studio) {
     let id = Id::new(("color-guide", &studio.swap_id));
     let mut state = ui
-        .data_mut(|d| d.remove_temp::<Guide>(id))
+        .data(|d| d.get_temp::<Guide>(id))
         .unwrap_or_else(|| Guide {
             base: current(studio),
             rule: Harmony::default(),
@@ -402,7 +402,7 @@ fn themes(ui: &mut Ui, studio: &mut Studio) {
         .unwrap_or(0)
         .max(library.next);
     let mut draft = ui
-        .data_mut(|d| d.remove_temp::<ThemeDraft>(draft_id))
+        .data(|d| d.get_temp::<ThemeDraft>(draft_id))
         .unwrap_or_else(|| ThemeDraft {
             colors: Harmony::default().theme(current(studio)),
             rule: Some(Harmony::default()),
@@ -712,7 +712,7 @@ fn open_recolor(ui: &mut Ui, studio: &mut Studio, palette: &[Rgba]) {
 }
 fn recolor(ui: &mut Ui, studio: &mut Studio) {
     let id = Id::new(("recolor-draft", &studio.swap_id));
-    let mut draft = ui.data_mut(|d| d.remove_temp::<Recolor>(id));
+    let mut draft = ui.data(|d| d.get_temp::<Recolor>(id));
     ui.horizontal(|ui| {
         if icon(
             ui,
