@@ -34,7 +34,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut crate::app::Studio) {
             let mut affected = Vec::new();
             ui.add_enabled_ui(editable, |ui| {
                 let label = ui.label("Filter source");
-                let response = super::svg_paint::control(ui, id.with("editor"), "Filter source", |ui| ui.add(egui::TextEdit::multiline(&mut source).id(id.with("editor")).code_editor().lock_focus(false).desired_rows(9)).labelled_by(label.id));
+                let response = super::svg_paint::control(ui, id.with("editor"), "Filter source", |ui| ui.add(egui::TextEdit::multiline(&mut source).id(id.with("editor")).code_editor().lock_focus(false).desired_rows(9).desired_width(ui.available_width().min((ui.clip_rect().right() - ui.next_widget_position().x).max(24.)))).labelled_by(label.id));
                 if response.changed() { ui.data_mut(|d| d.insert_temp(id, source.clone())); }
                 affected.push(response);
                 let apply = super::svg_paint::control(ui, id.with("apply"), "Apply filter source", |ui| ui.button("Apply filter source"));
@@ -48,20 +48,33 @@ pub(super) fn show(ui: &mut Ui, studio: &mut crate::app::Studio) {
                             graph.reductions = crate::svg_source::reductions(&candidate);
                             graph.definitions = crate::svg_source::canonicalize(&source).unwrap_or_default().into();
                             ui.data_mut(|d| d.remove::<String>(id.with("error")));
+                            ui.data_mut(|d| d.remove::<bool>(id.with("reveal-error")));
                             changed = true;
                         }
                     }
-                    if !changed { ui.data_mut(|d| d.insert_temp(id.with("error"), "Keep a valid graph with the same filter IDs.".to_string())); }
+                    if !changed { ui.data_mut(|d| {
+                        d.insert_temp(id.with("error"), "Keep a valid graph with the same filter IDs.".to_string());
+                        d.insert_temp(id.with("reveal-error"), true);
+                    }); }
                 }
             });
             if let Some(error) = ui.data(|d| d.get_temp::<String>(id.with("error"))) {
                 let fields = affected.iter().collect::<Vec<_>>();
-                super::fields::native_scope(ui, id.with("error"), |ui| super::welcome::control_error(ui, &fields, &error));
+                super::fields::native_scope(ui, id.with("error"), |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                    if ui.data(|d| d.get_temp::<bool>(id.with("reveal-error"))).unwrap_or(false) {
+                        if super::welcome::reveal_control_error(ui, &fields, &error) {
+                            ui.data_mut(|d| d.remove::<bool>(id.with("reveal-error")));
+                        }
+                    } else {
+                        super::welcome::control_error(ui, &fields, &error);
+                    }
+                });
             }
             ui.collapsing("Original filter source", |ui| {
                 let mut source = graph.original_definitions.as_ref();
                 let original = id.with("original-source");
-                super::svg_paint::control(ui, original, "Original filter source", |ui| ui.add(egui::TextEdit::multiline(&mut source).id(original).code_editor().lock_focus(false).desired_rows(6).interactive(false)));
+                super::svg_paint::control(ui, original, "Original filter source", |ui| ui.add(egui::TextEdit::multiline(&mut source).id(original).code_editor().lock_focus(false).desired_rows(6).interactive(false).desired_width(ui.available_width().min((ui.clip_rect().right() - ui.next_widget_position().x).max(24.)))));
             });
           });
         });

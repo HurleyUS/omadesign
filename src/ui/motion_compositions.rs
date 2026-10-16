@@ -222,6 +222,7 @@ fn controls(ui: &mut Ui, studio: &mut Studio) {
                             message: error,
                             fields,
                             revision: studio.canvas_gen,
+                            reveal: true,
                         },
                     )
                 });
@@ -254,6 +255,7 @@ struct ActionError {
     message: String,
     fields: Vec<egui::Id>,
     revision: u64,
+    reveal: bool,
 }
 
 /// Identify a rejected explicit edit by its actual document and composition.
@@ -426,7 +428,7 @@ fn easing(ui: &mut Ui, ease: &mut crate::motion::Ease, purpose: &str) -> (bool, 
 /// Args: UI, studio and persistent composition. Returns no value and never changes document history.
 fn action_error(ui: &mut Ui, studio: &Studio, id: u64, group: &[egui::Id]) {
     let key = action_error_key(studio, id);
-    if let Some(error) = ui.data(|data| data.get_temp::<ActionError>(key)) {
+    if let Some(mut error) = ui.data(|data| data.get_temp::<ActionError>(key)) {
         if error.revision != studio.canvas_gen {
             ui.data_mut(|data| data.remove::<ActionError>(key));
             return;
@@ -442,11 +444,15 @@ fn action_error(ui: &mut Ui, studio: &Studio, id: u64, group: &[egui::Id]) {
         if !responses.is_empty() {
             ui.scope(|ui| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                super::welcome::control_error(
-                    ui,
-                    &responses.iter().collect::<Vec<_>>(),
-                    &error.message,
-                );
+                let fields = responses.iter().collect::<Vec<_>>();
+                if error.reveal {
+                    if super::welcome::reveal_control_error(ui, &fields, &error.message) {
+                        error.reveal = false;
+                        ui.data_mut(|data| data.insert_temp(key, error));
+                    }
+                } else {
+                    super::welcome::control_error(ui, &fields, &error.message);
+                }
             });
         }
     }
@@ -1160,6 +1166,7 @@ mod keyboard_tests {
         let output = f.frame(false, vec![]);
         assert_eq!(f.studio.doc.motion, before);
         keys::associated_error(&output, "Composition expression");
+        keys::focused(&f.ctx, &output, "Composition expression");
         f.text("Composition expression", "value + time * 2");
         f.press("Apply expression");
         assert_eq!(
