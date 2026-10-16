@@ -157,14 +157,10 @@ pub(super) fn render(
         let transform = Transform::from_translate(-(left as f32), -(top as f32))
             .pre_scale(scale as f32, scale as f32);
         let mut draw = |path: &Path,
-                        fill: &Fill,
+                        paint: &Paint,
                         nonzero: bool,
                         transform: Transform|
          -> Result<(), String> {
-            if fill.is_none() {
-                return Ok(());
-            }
-            let paint = Paint::new(fill, shape.geom.bbox(), shape.rotation, &doc.color, cancel)?;
             coverage::rows(path, transform, nonzero, width, height, cancel, |y, row| {
                 for (x, &coverage) in row.iter().enumerate() {
                     if x % 4096 == 0 {
@@ -192,15 +188,21 @@ pub(super) fn render(
             let rotation =
                 Transform::from_rotate_at(shape.rotation.to_degrees(), center.x, center.y);
             for (fill, path) in crate::text::paint_paths(run, &shape.style.fill) {
-                draw(&path, &fill, true, transform.pre_concat(rotation))?;
+                if !fill.is_none() {
+                    let paint =
+                        Paint::new(&fill, shape.geom.bbox(), shape.rotation, &doc.color, cancel)?;
+                    draw(&path, &paint, true, transform.pre_concat(rotation))?;
+                }
             }
-        } else if shape.geom.is_closed() {
-            draw(
-                &path,
+        } else if shape.geom.is_closed() && !shape.style.fill.is_none() {
+            let paint = Paint::new(
                 &shape.style.fill,
-                shape.geom.nonzero_winding(),
-                transform,
+                shape.geom.bbox(),
+                shape.rotation,
+                &doc.color,
+                cancel,
             )?;
+            draw(&path, &paint, shape.geom.nonzero_winding(), transform)?;
         }
         if let Some(stroke) = &shape.style.stroke
             && stroke.width > 0.
@@ -227,13 +229,24 @@ pub(super) fn render(
                     scale as f32,
                 )
                 .ok_or("Native stroke outline could not be prepared")?;
-            let fill = stroke
-                .gradient
-                .as_ref()
-                .map_or(Fill::Solid(stroke.color), |gradient| {
-                    Fill::Gradient(gradient.clone())
-                });
-            draw(&outline, &fill, true, transform)?;
+            let paint = if let Some(gradient) = &stroke.gradient {
+                Paint::from_gradient(
+                    gradient,
+                    shape.geom.bbox(),
+                    shape.rotation,
+                    &doc.color,
+                    cancel,
+                )?
+            } else {
+                Paint::new(
+                    &Fill::Solid(stroke.color),
+                    shape.geom.bbox(),
+                    shape.rotation,
+                    &doc.color,
+                    cancel,
+                )?
+            };
+            draw(&outline, &paint, true, transform)?;
         }
         for y in 0..height {
             cancel.check()?;

@@ -73,7 +73,11 @@ impl Pixels {
         memory: Arc<Lease>,
         cancel: &C,
     ) -> Result<Self, String> {
-        cancel.check()?;
+        if let Err(error) = cancel.check() {
+            drop(samples);
+            drop(memory);
+            return Err(error);
+        }
         let samples = resources::global().adopt(samples, memory)?;
         Self::from_sample_allocation_checked(w, h, depth, samples, cancel)
     }

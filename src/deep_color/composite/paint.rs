@@ -2,7 +2,7 @@
 use crate::{
     document::Fill,
     geom::{Bounds, Pt},
-    gradient::{Gradient, GradientKind, Spread},
+    gradient::{Gradient, GradientKind, GradientStop, Spread},
     resources::{self, CancellationCheck, Lease},
 };
 use std::sync::Arc;
@@ -50,21 +50,93 @@ impl Paint {
         if fill.is_none() {
             return Ok(Self::Solid([0.; 4]));
         }
-        let stop_count = match fill {
-            Fill::Gradient(g) => g.stops.len(),
-            Fill::Linear { .. } | Fill::Radial { .. } => 2,
+        if let Fill::Gradient(gradient) = fill {
+            return Self::from_gradient(gradient, bounds, rotation, color, cancel);
+        }
+        let (kind, from, to, c0, c1) = match fill {
+            Fill::Linear { from, to, c0, c1 } => (GradientKind::Linear, *from, *to, *c0, *c1),
+            Fill::Radial { c0, c1 } => (GradientKind::Radial, [0.5, 0.5], [1., 0.5], *c0, *c1),
             _ => return Err("Native vector patterns require a float paint renderer".into()),
         };
-        let bytes = stop_count
+        Self::prepare(
+            Gradient {
+                kind,
+                from,
+                to,
+                stops: Vec::new(),
+                radial_axis: None,
+                spread: Spread::Pad,
+                focal: [0., 0.],
+                inner_radius: 0.,
+            },
+            &[
+                GradientStop {
+                    offset: 0.,
+                    color: c0,
+                },
+                GradientStop {
+                    offset: 1.,
+                    color: c1,
+                },
+            ],
+            bounds,
+            rotation,
+            color,
+            cancel,
+        )
+    }
+
+    /// Prepare borrowed stroke or fill fields with a fallible admitted stop copy.
+    /// Args: saved gradient, shape bounds/rotation, document color and cancellation. Returns normalized native paint.
+    pub(super) fn from_gradient(
+        source: &Gradient,
+        bounds: Bounds,
+        rotation: f32,
+        color: &crate::deep_color::cms::DocumentColor,
+        cancel: &dyn CancellationCheck,
+    ) -> Result<Self, String> {
+        Self::prepare(
+            Gradient {
+                kind: source.kind,
+                from: source.from,
+                to: source.to,
+                stops: Vec::new(),
+                radial_axis: source.radial_axis,
+                spread: source.spread,
+                focal: source.focal,
+                inner_radius: source.inner_radius,
+            },
+            &source.stops,
+            bounds,
+            rotation,
+            color,
+            cancel,
+        )
+    }
+
+    fn prepare(
+        field: Gradient,
+        stops: &[GradientStop],
+        bounds: Bounds,
+        rotation: f32,
+        color: &crate::deep_color::cms::DocumentColor,
+        cancel: &dyn CancellationCheck,
+    ) -> Result<Self, String> {
+        cancel.check()?;
+        let bytes = stops
+            .len()
             .max(4)
             .checked_mul(2)
             .ok_or("Native gradient storage overflow")?
             .checked_mul(std::mem::size_of::<crate::gradient::GradientStop>())
             .ok_or("Native gradient storage overflow")?;
         let memory = resources::global().reserve_now(bytes as u64, cancel)?;
-        let mut gradient = fill
-            .gradient()
-            .ok_or("Native paint has no float gradient")?;
+        let mut gradient = field;
+        gradient
+            .stops
+            .try_reserve_exact(stops.len().max(2))
+            .map_err(|_| "Not enough memory for native gradient stops")?;
+        gradient.stops.extend_from_slice(stops);
         if !matches!(gradient.kind, GradientKind::Linear | GradientKind::Radial) {
             return Err(
                 "Native vector shape-distance and conic gradients require a float paint renderer"

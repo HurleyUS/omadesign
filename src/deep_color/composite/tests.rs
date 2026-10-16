@@ -324,6 +324,7 @@ fn float_vector_whole_and_solid_span_text_share_original_curves_affine_placement
         content: "Bé".into(),
         origin: Pt::new(4., 25.),
         px: 24.,
+        transform: Some([1., 0.125, 0.2, 0.9, 1., -0.5]),
         ..Default::default()
     };
     run.contours = crate::text::shape(&run);
@@ -380,6 +381,24 @@ fn float_vector_real_admission_cancel_pressure_and_final_owner_preserve_source()
     let before = serde_json::to_string(&doc).unwrap();
     let pool = resources::global();
     let baseline = pool.usage().0;
+    let admitted = pool.allocate_now::<f32, _>(4, &|| Ok(())).unwrap();
+    let (samples, memory) = admitted.into_parts();
+    let retained = std::sync::Arc::downgrade(&memory);
+    let cancelled_before_adoption = || Err("Cancelled native adoption".to_string());
+    assert!(
+        Pixels::from_admitted_samples(
+            1,
+            1,
+            Depth::F32,
+            samples,
+            memory,
+            &cancelled_before_adoption
+        )
+        .unwrap_err()
+        .contains("Cancelled native adoption")
+    );
+    assert!(retained.upgrade().is_none());
+    assert_eq!(pool.usage().0, baseline);
     let peak = AtomicU64::new(baseline);
     let calls = Cell::new(0u32);
     let cancelled = || {
