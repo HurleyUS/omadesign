@@ -1,5 +1,5 @@
 use super::{
-    ADVANCED_LAYOUT, COLOR, COMPOSITIONS, EXPRESSIONS, NATIVE, PSD_TYPE, SCENE3D, SMART, SOURCE,
+    ADVANCED_LAYOUT, COLOR, COMPOSITIONS, EXPRESSIONS, NATIVE, PSD_TYPE, SCENE3D, SMART, SOURCE, SCREEN_EXPORT,
 };
 use serde::Deserialize;
 use serde::de::{MapAccess, SeqAccess, Visitor};
@@ -78,6 +78,7 @@ fn field_version(key: &str, value: &Seen) -> u32 {
         "layout-span" if value.number != Some(1) => ADVANCED_LAYOUT,
         "layout-align" if value.word == Some("Baseline") => ADVANCED_LAYOUT,
         "collaboration" => 24,
+        "screen_export" => SCREEN_EXPORT,
         "expressions" if value.present => EXPRESSIONS,
         "compositions" if value.present => COMPOSITIONS,
         "scene3d" => SCENE3D,
@@ -150,6 +151,7 @@ impl<'de> Deserialize<'de> for Seen {
                         layout_property(s).or_else(|| match s.rsplit('/').next() {
                             Some("source_attachment") => Some("source_attachment"),
                             Some("sources") => Some("sources"),
+                            Some("screen_export") => Some("screen_export"),
                             Some("native") => Some("native"),
                             Some("psd_type") => Some("psd_type"),
                             Some("psd_smart") => Some("psd_smart"),
