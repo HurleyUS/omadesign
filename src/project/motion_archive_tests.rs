@@ -18,7 +18,7 @@ fn plain() -> Document {
 #[test]
 fn motion_feature_versions_keep_all_common_guards_and_nested_highest_feature() {
     let mut d = plain();
-    for v in [0, 28, u32::MAX] {
+    for v in [0, VERSION + 1, u32::MAX] {
         assert!(!supports_version(v));
     }
     for v in 1..=27 {

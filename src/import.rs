@@ -350,7 +350,11 @@ mod tests {
 
     #[test]
     fn missing_affinity_file_reports_read_failure() {
-        let err = match open_any(Path::new("/tmp/omadesign-no-such-file.afdesign")) {
+        let missing = std::env::temp_dir().join(format!(
+            "omadesign-missing-{}.afdesign",
+            crate::document::next_id()
+        ));
+        let err = match open_any(&missing) {
             Err(e) => e,
             Ok(_) => panic!(),
         };

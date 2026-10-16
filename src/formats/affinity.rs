@@ -36,7 +36,8 @@ pub fn available() -> bool {
 /// Open editable Affinity objects with the bounded native reader.
 /// Args: source path. Returns native artwork and actionable import diagnostics.
 pub fn read_document(path: &Path) -> Result<(crate::document::Document, Vec<String>), String> {
-    let bytes = bounded_read(path, MAX_INPUT)?;
+    let bytes = bounded_read(path, MAX_INPUT)
+        .map_err(|error| format!("Could not read Affinity file: {error}"))?;
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("Affinity document");
     match native::read(&bytes, name) {
         Ok(imported) => Ok(imported),

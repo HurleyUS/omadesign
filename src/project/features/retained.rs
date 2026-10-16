@@ -373,7 +373,8 @@ mod tests {
         {
             let name = fixture["name"].as_str().unwrap();
             let path = fixture["path"].as_str().unwrap();
-            let required = fixture["error"] == true;
+            let unknown = name.contains("unknown");
+            let required = fixture["error"] == true && !unknown;
             for in_base in [true, false] {
                 let mut replica = json!({"session":"layout-retained","actor":"a","base":{},"changes":[
                     {"id":{"actor":"a","seq":1},"clock":1,"seen":{},"edit":{"type":"write","writes":[]}},
@@ -387,6 +388,9 @@ mod tests {
                 }
                 let typed: crate::collaboration::Replica =
                     serde_json::from_value(replica.clone()).unwrap();
+                if unknown {
+                    assert!(typed.protocol_requirement().is_err(), "{name}");
+                }
                 assert_eq!(
                     replica_version(&typed).unwrap() >= ADVANCED_LAYOUT,
                     required,
