@@ -200,3 +200,50 @@ fn craft_screen_export_concurrent_collision_rolls_back_only_own_publication() {
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn craft_screen_export_retained_list_markers_and_deleted_nested_fields_require_reader29() {
+    for path in [
+        "/screen_export",
+        "/screen_export/rows/0/scale",
+        "/@compositions/42/document/screen_export/assets/0/name",
+    ] {
+        for cell in [
+            serde_json::json!("Object"),
+            serde_json::json!("List"),
+            serde_json::json!({"Value":null}),
+            serde_json::json!({"Value":"retained"}),
+        ] {
+            for in_base in [true, false] {
+                let mut replica = serde_json::json!({"session":"retained-assets","actor":"a","base":{},"changes":[]});
+                if in_base {
+                    replica["base"][path] = cell.clone();
+                } else {
+                    replica["changes"] = serde_json::json!([
+                        {"id":{"actor":"a","seq":1},"clock":1,"seen":{},"edit":{"type":"write","writes":[{"path":path,"value":cell}]}},
+                        {"id":{"actor":"a","seq":2},"clock":2,"seen":{},"edit":{"type":"toggle","target":{"actor":"a","seq":1},"enabled":false}}
+                    ]);
+                }
+                let mut document = Document::new("Retained assets", 10., 10., 96.);
+                document.collaboration = Some(serde_json::from_value(replica).unwrap());
+                let text = crate::project::encode(&document).unwrap();
+                let mut envelope: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(envelope["version"], 29, "{path}, {in_base}");
+                envelope["version"] = 28.into();
+                assert!(
+                    crate::project::validate_retained_json(&envelope.to_string())
+                        .unwrap_err()
+                        .contains("requires version 29")
+                );
+                assert!(
+                    document
+                        .collaboration
+                        .as_ref()
+                        .unwrap()
+                        .protocol_requirement()
+                        .is_err()
+                );
+            }
+        }
+    }
+}
