@@ -78,6 +78,37 @@ impl<T: Copy> Allocation<T> {
     pub fn bytes(&self) -> u64 {
         self.values.capacity() as u64 * std::mem::size_of::<T>() as u64
     }
+
+    /// Grow uniquely owned output storage while covering old and replacement allocations.
+    /// Args: initialized end offset and cancellation owner. Returns before allocation on pressure; spare capacity receives no credit.
+    fn grow<C: CancellationCheck + ?Sized>(
+        &mut self,
+        end: usize,
+        cancel: &C,
+    ) -> Result<(), String> {
+        if end <= self.values.capacity() {
+            return cancel.check();
+        }
+        let capacity = end.max(self.values.capacity().saturating_mul(2));
+        let bytes = allocation_bytes::<T>(capacity)?;
+        let old = self.bytes();
+        self.lease.resize(
+            old.checked_add(bytes).ok_or("Output growth overflows")?,
+            cancel,
+        )?;
+        if self
+            .values
+            .try_reserve_exact(capacity - self.values.len())
+            .is_err()
+        {
+            self.lease.resize(old, cancel)?;
+            return Err("Not enough memory to grow output storage".into());
+        }
+        self.lease
+            .budget
+            .bind_storage(&self.values, &self.lease, &self.owner)?;
+        self.lease.resize(self.bytes(), cancel)
+    }
     /// Copy an allocation only after admitting its independent storage.
     /// Args: cancellation owner. Returns a fallible COW working allocation in the same pool.
     pub fn try_clone<C: CancellationCheck + ?Sized>(&self, cancel: &C) -> Result<Self, String> {
@@ -100,6 +131,29 @@ impl<T: Copy> Allocation<T> {
         self.lease.release_credit(&mut state, &self.owner, false);
         self.transferred = true;
         (values, self.lease.clone())
+    }
+}
+
+impl Allocation<u8> {
+    /// Write a checked output chunk and credit only its initialized bytes.
+    /// Args: byte offset, data and cancellation owner. Returns after bounded zero-filling/copying or before growth on pressure.
+    pub fn write_at<C: CancellationCheck + ?Sized>(
+        &mut self,
+        offset: usize,
+        bytes: &[u8],
+        cancel: &C,
+    ) -> Result<(), String> {
+        let end = offset
+            .checked_add(bytes.len())
+            .ok_or("Output length overflows")?;
+        self.grow(end, cancel)?;
+        if end > self.values.len() {
+            self.values.resize(end, 0);
+        }
+        self.values[offset..end].copy_from_slice(bytes);
+        self.lease
+            .budget
+            .bind_storage(&self.values, &self.lease, &self.owner)
     }
 }
 
@@ -205,14 +259,20 @@ impl Budget {
         values: Vec<T>,
         lease: Arc<Lease>,
     ) -> Result<Arc<Allocation<T>>, String> {
-        if !Arc::ptr_eq(self, &lease.budget)
-            || Arc::strong_count(&lease) != 1
-            || lease.bytes() < allocation_bytes::<T>(values.capacity())?
-        {
+        let valid = Arc::ptr_eq(self, &lease.budget)
+            && Arc::strong_count(&lease) == 1
+            && allocation_bytes::<T>(values.capacity()).is_ok_and(|bytes| lease.bytes() >= bytes);
+        if !valid {
+            drop(values);
+            drop(lease);
             return Err("Buffer adoption needs one exclusive same-pool lease covering its allocation capacity".into());
         }
         let owner = Arc::new(());
-        self.bind_storage(&values, &lease, &owner)?;
+        if let Err(error) = self.bind_storage(&values, &lease, &owner) {
+            drop(values);
+            drop(lease);
+            return Err(error);
+        }
         Ok(Arc::new(Allocation {
             values,
             owner,
@@ -568,6 +628,33 @@ pub fn decoder<C: CancellationCheck + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn output_writes_credit_only_initialized_length_and_preserve_owners_on_failure() {
+        let check = || Ok(());
+        let pool = Budget::new(256, false);
+        let mut output = pool.allocate_now::<u8, _>(0, &check).unwrap();
+        output.write_at(0, &[1; 32], &check).unwrap();
+        assert_eq!((pool.usage().0, pool.pending_bytes()), (32, 0));
+        output.write_at(40, &[7; 8], &check).unwrap();
+        assert_eq!(
+            (output.len(), output.bytes(), pool.pending_bytes()),
+            (48, 64, 16)
+        );
+        assert_eq!(&output[32..40], &[0; 8]);
+        assert!(output.write_at(256, &[9], &check).is_err());
+        assert_eq!((output.len(), output.bytes(), pool.usage().0), (48, 64, 64));
+        let cancelled = || Err("cancelled".into());
+        assert!(output.write_at(0, &[9], &cancelled).is_err());
+        assert_eq!(output[0], 1);
+        let (values, lease) = output.into_parts();
+        assert_eq!(pool.pending_bytes(), 64);
+        let output = pool.adopt(values, lease).unwrap();
+        let alias = output.clone();
+        drop(output);
+        assert_eq!((pool.usage().0, pool.pending_bytes()), (64, 16));
+        drop(alias);
+        assert_eq!((pool.usage().0, pool.pending_bytes()), (0, 0));
+    }
     #[test]
     fn initialized_credit_keeps_spare_capacity_pending_and_tracks_final_alias() {
         static FREE: AtomicU64 = AtomicU64::new(100);
