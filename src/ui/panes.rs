@@ -14,7 +14,8 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio, panel: &str) {
     let key = egui::Id::new("dock-pane-content");
     let previous = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(key, true));
-    contents(ui, studio, panel);
+    let view = egui::Id::new((&studio.swap_id, panel));
+    super::fields::with_native_view(ui, view, |ui| contents(ui, studio, panel));
     ui.data_mut(|d| d.insert_temp(key, previous));
 }
 

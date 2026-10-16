@@ -3,7 +3,7 @@ use eframe::egui::{self, Response, Ui};
 use std::cell::RefCell;
 #[path = "native_scope.rs"]
 mod scope;
-pub use scope::native_scope;
+pub use scope::{native_scope, with_native_view};
 
 #[derive(Clone, Copy, Default)]
 pub struct FieldState<'a> {

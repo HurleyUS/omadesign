@@ -293,7 +293,8 @@ pub(super) fn pane(ui: &mut Ui, studio: &mut Studio, panel: &str) -> bool {
     let locked=studio.selection.iter().any(|&(layer,id)|!studio.layer_unlocked(layer)||studio.doc.find_shape(layer,id).is_some_and(|s|s.locked));
     ui.add_enabled_ui(!locked,|ui| match panel {
         "transform" => transform_studio(ui,studio,false),
-        "appearance"|"gradients" => color_studio(ui,studio),
+        "appearance" => color_studio(ui,studio),
+        "gradients" => paint_studio(ui,studio,true),
         "stroke" => stroke_studio(ui,studio),
         "character" => character_studio(ui,studio),
         "keyframes" => super::timeline_keyboard::editor(ui,studio),
@@ -595,12 +596,7 @@ fn color_row_contents(ui: &mut Ui, studio: &mut Studio, fill: bool) {
         let mut add = false;
         ui.horizontal(|ui| {
             add |= icons::tiny_icon(ui, ph::PLUS, label, false);
-            add |= ui
-                .add(
-                    eframe::egui::Button::new(RichText::new(label).size(11.0).color(fg_weak()))
-                        .frame(false),
-                )
-                .clicked();
+            ui.label(RichText::new(if fill {"Fill"} else {"Stroke"}).small().color(fg_weak()));
         });
         if add {
             let mut color = if fill {
@@ -756,7 +752,9 @@ fn color_row_contents(ui: &mut Ui, studio: &mut Studio, fill: bool) {
     }
 }
 
-fn color_studio(ui: &mut Ui, studio: &mut Studio) {
+fn color_studio(ui: &mut Ui, studio: &mut Studio) {paint_studio(ui,studio,false);}
+
+fn paint_studio(ui: &mut Ui, studio: &mut Studio, gradients_only:bool) {
     ui.horizontal(|ui| {
         heading(ui, "Appearance");
         ui.with_layout(Layout::right_to_left(eframe::egui::Align::Center), |ui| {
@@ -784,8 +782,7 @@ fn color_studio(ui: &mut Ui, studio: &mut Studio) {
             });
         });
     });
-    color_row(ui, studio, true);
-    color_row(ui, studio, false);
+    if !gradients_only {color_row(ui, studio, true);color_row(ui, studio, false);}
     let style = inspected_style(studio).clone();
     let mut gradient = if studio.fill_active {
         style.fill.gradient()
@@ -859,7 +856,7 @@ fn color_studio(ui: &mut Ui, studio: &mut Studio) {
             picker.response.request_focus();
         }
     });
-    super::svg_paint::show(ui, studio);
+    if !gradients_only {super::svg_paint::show(ui, studio);}
     if let Some(mut gradient) = gradient {
         let bounds = studio
             .primary()
@@ -907,8 +904,9 @@ fn color_studio(ui: &mut Ui, studio: &mut Studio) {
             },
         );
     }
+    if !gradients_only {
     ui.horizontal_wrapped(|ui| {
-        ui.menu_button("Color library", |ui| {
+        let menu=ui.menu_button(RichText::new(ph::PALETTE).font(icons::font(16.0)), |ui| {
             ui.set_width(236.0);
             heading(ui, "Quick colors");
             color_grid(ui, studio, false);
@@ -918,10 +916,11 @@ fn color_studio(ui: &mut Ui, studio: &mut Studio) {
                 color_grid(ui, studio, true);
             }
             if ui.button("Open palette library →").clicked() {
-                studio.libraries.sidebar = crate::app::libraries::Sidebar::Palettes;
+                super::panel_workspace::open(ui.ctx(),studio,"swatches");
                 ui.close();
             }
         });
+        super::agent::named(ui,menu.response,"Color library").on_hover_text("Color library");
     });
     if studio.selection.is_empty()
         || studio
@@ -934,6 +933,7 @@ fn color_studio(ui: &mut Ui, studio: &mut Studio) {
         stroke_studio(ui, studio);
     }
     object_appearance::show(ui, studio);
+    }
 }
 
 fn apply_gradient(studio: &mut Studio, gradient: Option<crate::gradient::Gradient>) {

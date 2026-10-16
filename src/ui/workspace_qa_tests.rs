@@ -87,7 +87,7 @@ fn human_qa_native_dimension_lock_preserves_ratio_and_one_undo() {
     let mut frame = |events| {
         keys::render(&ctx, events, |ui| {
             ui.set_max_width(304.0);
-            studios::pane(ui, &mut studio, "transform");
+            panes::show(ui, &mut studio, "transform");
         })
     };
     frame(vec![]);
@@ -119,4 +119,45 @@ fn human_qa_native_dimension_lock_preserves_ratio_and_one_undo() {
         crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(),
         after
     );
+}
+
+#[test]
+fn human_qa_parallel_paint_panes_have_independent_native_widget_ids() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    theme::apply(&ctx);
+    let mut studio = fixture();
+    let hit = studio.selection[0];
+    studio.doc.find_shape_mut(hit.0, hit.1).unwrap().style.fill =
+        crate::document::Fill::Gradient(crate::gradient::Gradient::new(
+            crate::gradient::GradientKind::Linear,
+            crate::color::Rgba::BLACK,
+            crate::color::Rgba::WHITE,
+        ));
+    let before = crate::project::encode(&studio.doc).unwrap();
+    let mut frame = || {
+        keys::render(&ctx, vec![], |ui| {
+            ui.columns(2, |columns| {
+                panes::show(&mut columns[0], &mut studio, "appearance");
+                panes::show(&mut columns[1], &mut studio, "gradients");
+            });
+        })
+    };
+    frame();
+    let output = frame();
+    drop(frame);
+    let controls: Vec<_> = output
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .unwrap()
+        .nodes
+        .iter()
+        .filter(|(_, node)| {
+            node.label() == Some("Fill type") && node.role() == egui::accesskit::Role::ComboBox
+        })
+        .collect();
+    assert_eq!(controls.len(), 2, "both real paint selectors must exist");
+    assert_ne!(controls[0].0, controls[1].0);
+    assert_eq!(before, crate::project::encode(&studio.doc).unwrap());
 }
