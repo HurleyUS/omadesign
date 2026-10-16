@@ -189,7 +189,15 @@ fn controls(ui: &mut Ui, studio: &mut Studio) {
             Edit::Key { id, .. } | Edit::Expression { id, .. } | Edit::Remap { id, .. } => *id,
         };
         let key = action_error_key(studio, id);
-        match apply_edit(studio, action) {
+        let accepted = match &action {
+            Edit::Expression {
+                id,
+                property,
+                source: Some(source),
+            } => validate_expression(studio, *id, *property, source),
+            _ => Ok(()),
+        };
+        match accepted.and_then(|()| apply_edit(studio, action)) {
             Ok(()) => {
                 ui.data_mut(|data| data.remove::<ActionError>(key));
                 let draft_key = animation_draft_key(studio, id);
@@ -221,6 +229,24 @@ fn controls(ui: &mut Ui, studio: &mut Studio) {
             }
         }
     }
+}
+
+/// Validate an explicit source draft with the existing bounded expression evaluator.
+/// Args: current studio, concrete composition/property and proposed source.
+/// Returns the existing parser/evaluation error without committing or changing the document.
+fn validate_expression(
+    studio: &Studio,
+    id: u64,
+    property: crate::motion::Prop,
+    source: &str,
+) -> Result<(), String> {
+    let mut candidate = studio.doc.motion.clone();
+    candidate.set_expression(id, property, Some(source.to_owned()))?;
+    let mut keep = || true;
+    crate::motion::expressions::Evaluation::new(&candidate, studio.playhead, &mut keep)
+        .value(id, property)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Clone)]
@@ -1132,8 +1158,8 @@ mod keyboard_tests {
         let before = f.studio.doc.motion.clone();
         f.press("Apply expression");
         let output = f.frame(false, vec![]);
-        keys::associated_error(&output, "Composition expression");
         assert_eq!(f.studio.doc.motion, before);
+        keys::associated_error(&output, "Composition expression");
         f.text("Composition expression", "value + time * 2");
         f.press("Apply expression");
         assert_eq!(
