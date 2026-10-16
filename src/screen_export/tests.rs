@@ -346,7 +346,6 @@ fn craft_screen_export_cubic_crop_uses_actual_extrema_not_sampled_points() {
     s.doc.find_shape_mut(layer, id).unwrap().geom = Geom::Path {
         anchors: vec![start, end],
         closed: true,
-        winding: false,
     };
     let asset = &s.doc.screen_export.assets[0];
     let doc = asset.document(&s.doc).unwrap();
