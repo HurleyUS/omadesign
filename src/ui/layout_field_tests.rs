@@ -467,7 +467,20 @@ fn keyboard_layout_inspector_empty_document_grid_named_property_and_variable_aut
     native_press(&ctx, &mut studio, "Named properties");
     native_edit(&ctx, &mut studio, "New property name", "Card opacity");
     native_press(&ctx, &mut studio, "Expose Opacity");
-    native_edit(&ctx, &mut studio, "Card opacity", "70.25");
+    let output = native_edit(&ctx, &mut studio, "Card opacity", "70.25");
+    keys::focused(&ctx, &output, "Card opacity");
+    let bounds = keys::named(&output, "Card opacity").1.bounds().unwrap();
+    let extent = studio.panel_workspaces.tasks["Layout"]
+        .groups
+        .iter()
+        .find(|group| group.panels.iter().any(|panel| panel == "properties"))
+        .unwrap()
+        .extent;
+    assert!(
+        bounds.x0 >= f64::from(ctx.content_rect().right() - extent)
+            && bounds.x1 <= f64::from(ctx.content_rect().right()),
+        "Named property escaped its real dock: {bounds:?}"
+    );
     native_frame(&ctx, &mut studio, keys::key(Key::Tab, Modifiers::NONE));
     assert!((studio.doc.find_shape(layer, root).unwrap().opacity - 0.7025).abs() < 0.00001);
     native_press(&ctx, &mut studio, "Design variables");

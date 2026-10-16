@@ -107,6 +107,7 @@ fn keyboard_svg_pattern_native_selection_scalars_draft_apply_errors_undo_and_reo
     );
     let output = press(&ctx, &mut studio, "Apply vector source");
     keys::associated_error(&output, "Vector definitions");
+    keys::focused(&ctx, &output, "Vector definitions");
     assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
     let id = pattern(&studio).id;
     edit(
@@ -147,6 +148,7 @@ fn keyboard_svg_filter_native_source_respects_graph_owner_lock_and_retires_undo_
     edit(&ctx, &mut studio, "Filter source", "<filter>");
     let output = press(&ctx, &mut studio, "Apply filter source");
     keys::associated_error(&output, "Filter source");
+    keys::focused(&ctx, &output, "Filter source");
     assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
     let id = studio.doc.layers[index]
         .svg_filter
