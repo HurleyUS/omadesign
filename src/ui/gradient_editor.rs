@@ -561,6 +561,7 @@ mod keyboard_tests {
         studio.doc = crate::document::Document::new("Native radial authoring", 300., 220., 72.);
         studio.persona = crate::tools::Persona::Motion;
         studio.show_welcome = false;
+        let background = studio.doc.layers[0].clone();
         assert!(studio.selection.is_empty());
         assert_eq!(
             studio
@@ -570,7 +571,7 @@ mod keyboard_tests {
                 .filter_map(|layer| layer.kind.shapes())
                 .flatten()
                 .count(),
-            0
+            1
         );
         studio_frame(&ctx, &mut studio, vec![]);
         studio_frame(&ctx, &mut studio, keys::key(Key::F8, Modifiers::NONE));
@@ -724,6 +725,7 @@ mod keyboard_tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("radial.oma");
         crate::project::save_to(&studio.doc, &path).unwrap();
+        assert_eq!(studio.doc.layers[0], background);
         assert_eq!(
             crate::project::encode(&crate::project::load_from(&path).unwrap()).unwrap(),
             crate::project::encode(&studio.doc).unwrap()

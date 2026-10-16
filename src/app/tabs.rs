@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn tabs_move_rasters_and_restore_independent_history_and_selection() {
         let mut studio = Studio::new();
-        studio.doc.layers = vec![Layer::raster("Background", 1280, 800).unwrap()];
+        studio.doc.layers[0] = Layer::raster("Background", 1280, 800).unwrap();
         studio.show_welcome = false;
         studio.finish_create(CreateKind::Rect, Pt::ZERO, Pt::new(20.0, 20.0));
         let selection = studio.selection.clone();
