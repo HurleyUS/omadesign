@@ -19,6 +19,49 @@ struct State {
     name: String,
     target: Option<Action>,
     error: String,
+    canvas_focus: Option<CanvasFocus>,
+}
+#[derive(Clone)]
+struct CanvasFocus {
+    document: String,
+    revision: u64,
+    from: Option<Id>,
+    frame: u64,
+}
+
+fn return_to_canvas(ui: &Ui, studio: &Studio, state: &mut State) {
+    let Some(request) = state.canvas_focus.take() else {
+        return;
+    };
+    if request.document != studio.swap_id
+        || request.revision != studio.canvas_gen
+        || studio.file_dialog_pending()
+        || studio.updates.freezing
+        || studio.op.is_some()
+        || studio.type_edit.is_some()
+    {
+        return;
+    }
+    let canvas = Id::new("studio-canvas");
+    let focused = ui.ctx().memory(|m| m.focused());
+    if focused == Some(canvas) || (focused.is_some() && focused != request.from) {
+        return;
+    }
+    if ui.ctx().cumulative_frame_nr() <= request.frame
+        || ui.input(|i| {
+            i.pointer.any_down() || i.key_down(egui::Key::Enter) || i.key_down(egui::Key::Space)
+        })
+    {
+        state.canvas_focus = Some(request);
+        ui.ctx().request_repaint();
+        return;
+    }
+    if let Some(response) = ui.ctx().read_response(canvas)
+        && response.enabled()
+        && ui.ctx().memory(|m| m.allows_interaction(response.layer_id))
+    {
+        response.request_focus();
+    }
 }
 fn load(path: PathBuf) -> State {
     match Library::load(&path) {
@@ -126,6 +169,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
     let mut state = ui
         .data_mut(|d| d.remove_temp::<State>(owner))
         .unwrap_or_else(|| load(path.clone()));
+    return_to_canvas(ui, studio, &mut state);
     studio.actions.check_document(&studio.swap_id);
     let selection = studio.action_selection();
     studio.actions.check_selection(&selection);
@@ -211,6 +255,13 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                         Ok(()) => {
                             state.target = Some(action.clone());
                             state.error.clear();
+                            state.canvas_focus = Some(CanvasFocus {
+                                document: studio.swap_id.clone(),
+                                revision: studio.canvas_gen,
+                                from: ui.ctx().memory(|m| m.focused()),
+                                frame: ui.ctx().cumulative_frame_nr(),
+                            });
+                            ui.ctx().request_repaint();
                         }
                         Err(error) => {
                             studio.actions.recording = None;
@@ -388,6 +439,65 @@ mod tests {
         super::super::theme::apply(&ctx);
         ctx.data_mut(|d| d.insert_temp(Id::new("action-library-file"), path.to_owned()));
         ctx
+    }
+    #[test]
+    fn craft_actions_record_returns_real_canvas_focus_and_records_native_group_shortcuts() {
+        let folder = std::env::temp_dir().join(format!(
+            "native-action-canvas-{}",
+            crate::document::next_id()
+        ));
+        let path = folder.join("actions.json");
+        let ctx = context(&path);
+        let mut studio = crate::app::symbols::tests::fixture();
+        studio.persona = crate::tools::Persona::Design;
+        let mut frame = |events| {
+            keys::render(&ctx, events, |ui| {
+                studio.handle_shortcuts(ui.ctx());
+                ui.columns(2, |columns| {
+                    show(&mut columns[0], &mut studio);
+                    super::super::canvas::show(&mut columns[1], &mut studio);
+                });
+            })
+        };
+        frame(vec![]);
+        frame(vec![]);
+        keys::tab_to(&ctx, "New action", &mut frame);
+        frame(keys::key(Key::Space, Modifiers::NONE));
+        frame(vec![]);
+        keys::tab_to(&ctx, "Record vector commands", &mut frame);
+        frame(keys::key(Key::Space, Modifiers::NONE));
+        frame(vec![]);
+        frame(vec![]);
+        let canvas = ctx.read_response(Id::new("studio-canvas")).unwrap();
+        assert!(canvas.enabled());
+        assert_eq!(ctx.memory(|m| m.focused()), Some(canvas.id));
+        for (key, modifiers) in [
+            (Key::G, Modifiers::CTRL | Modifiers::COMMAND),
+            (Key::D, Modifiers::CTRL | Modifiers::COMMAND),
+            (
+                Key::G,
+                Modifiers::CTRL | Modifiers::COMMAND | Modifiers::SHIFT,
+            ),
+        ] {
+            frame(keys::key(key, modifiers));
+            frame(vec![]);
+        }
+        keys::tab_to(&ctx, "Stop and save recording", &mut frame);
+        frame(keys::key(Key::Space, Modifiers::NONE));
+        frame(vec![]);
+        drop(frame);
+        assert!(studio.actions.recording.is_none());
+        assert_eq!(
+            Library::load(&path).unwrap().entries[0].steps,
+            vec![
+                Step::Group,
+                Step::Duplicate {
+                    delta: crate::geom::Pt::ZERO
+                },
+                Step::Ungroup
+            ]
+        );
+        std::fs::remove_dir_all(folder).unwrap();
     }
     #[test]
     fn craft_actions_native_record_save_cold_load_and_atomic_playback() {
