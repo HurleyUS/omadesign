@@ -138,6 +138,7 @@ pub fn composite_with_cancel(
 ) -> Result<Pixels, String> {
     cancel.check()?;
     doc.validate_hierarchy()?;
+    crate::motion::require_flat_artwork(doc, "Native float compositor")?;
     if doc.color.model == super::cms::Model::Cmyk
         && doc
             .layers
