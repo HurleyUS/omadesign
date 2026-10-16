@@ -2120,6 +2120,7 @@ mod tests {
     #[test]
     fn artboard_plate_follows_origin() {
         let mut doc = Document::new("t", 80.0, 80.0, 72.0);
+        doc.layers[0].visible = false;
         doc.width = 200.0;
         doc.artboards[0].origin = Pt::new(40.0, 0.0);
         doc.artboards[0].size = Pt::new(40.0, 80.0);
@@ -2146,6 +2147,7 @@ mod tests {
     #[test]
     fn export_images_preserve_dimensions_and_transparency() {
         let mut doc = Document::new("t", 64.0, 48.0, 72.0);
+        doc.layers[0].visible = false;
         apply(
             &mut doc,
             &Cmd::AddShape {

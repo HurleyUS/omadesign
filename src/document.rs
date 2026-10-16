@@ -3167,6 +3167,7 @@ mod tests {
     #[test]
     fn hit_test_finds_rect() {
         let mut doc = Document::new("t", 200.0, 100.0, 72.0);
+        doc.layers[0].visible = false;
         let s = Shape::new(
             Geom::Rect {
                 origin: Pt::new(10.0, 10.0),
@@ -3430,6 +3431,7 @@ mod tests {
     #[test]
     fn placed_raster_hit_test() {
         let mut doc = Document::new("t", 200.0, 100.0, 72.0);
+        doc.layers[0].visible = false;
         let mut data = vec![0u8; 8 * 8 * 4];
         for px in data.chunks_mut(4) {
             px[0] = 255;
