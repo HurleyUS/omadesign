@@ -118,6 +118,7 @@ fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
 /// Args: document and integer export scale. Returns an authoritative float RGBA buffer.
 pub fn composite(doc: &Document, scale: u32) -> Result<Pixels, String> {
     doc.validate_hierarchy()?;
+    crate::motion::require_flat_artwork(doc, "Native float compositor")?;
     if doc
         .layers
         .iter()

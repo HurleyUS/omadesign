@@ -365,10 +365,12 @@ fn portable_motion_cap_refuses_before_replacing_the_destination() {
 
 #[test]
 fn common_native_child_motion_refuses_the_rgba8_export_boundary() {
-    let mut doc = plain();
-    doc.motion.compositions.push(Composition::new(
-        crate::collaboration::native_tests::fixture(),
-    ));
+    let mut doc = crate::collaboration::native_tests::fixture();
+    for _ in 0..crate::motion::compositions::MAX_DEPTH {
+        let mut parent = plain();
+        parent.motion.compositions.push(Composition::new(doc));
+        doc = parent;
+    }
     let source = encode(&doc).unwrap();
     for result in [
         crate::compositor::render_export(&doc, 1),
@@ -378,9 +380,11 @@ fn common_native_child_motion_refuses_the_rgba8_export_boundary() {
     }
     assert_eq!(encode(&doc).unwrap(), source);
     let reopened = decode(&source).unwrap();
+    let original = crate::motion::compositions::documents(&doc).unwrap();
+    let decoded = crate::motion::compositions::documents(&reopened).unwrap();
     crate::collaboration::native_tests::assert_native_equal(
-        &doc.motion.compositions[0].document,
-        &reopened.motion.compositions[0].document,
+        original.last().unwrap(),
+        decoded.last().unwrap(),
     );
 }
 
@@ -424,4 +428,152 @@ fn streaming_motion_bounds_refuse_current_and_retained_trees_before_typed_fields
     let state = json!({"Value":vec![json!({"document":{}});128]});
     let multiple_states = json!({"version":27,"doc":{"collaboration":{"base":{"/motion/compositions":state},"changes":[{"edit":{"type":"write","writes":[{"path":"/motion/compositions","value":state}]}}]}}});
     validate_retained_json(&multiple_states.to_string()).unwrap();
+}
+
+/// Build supported flat artwork with authored rest, expressions and advanced keys.
+/// Args: none. Returns a small unprofiled U8 document with one ordinary vector shape.
+fn flat_exchange_fixture() -> Document {
+    let mut doc = plain();
+    let mut layer = Layer::vector("Rest artwork");
+    let shape = Shape::new(
+        Geom::Rect {
+            origin: crate::geom::Pt::new(2., 3.),
+            size: crate::geom::Pt::splat(12.),
+            radius: 0.,
+        },
+        Style {
+            fill: crate::document::Fill::Solid(crate::color::Rgba::rgb(20, 90, 160)),
+            stroke: None,
+        },
+    );
+    let id = shape.id;
+    layer.kind.shapes_mut().unwrap().push(shape);
+    doc.layers.push(layer);
+    doc.motion.set_key(id, Prop::X, 0., 0., Ease::Hold);
+    doc.motion.set_key(
+        id,
+        Prop::X,
+        1.,
+        5.,
+        Ease::CubicBezier {
+            x1: 0.1,
+            y1: -2.,
+            x2: 0.9,
+            y2: 3.,
+        },
+    );
+    doc.motion
+        .set_expression(id, Prop::Y, Some("time * 2".into()))
+        .unwrap();
+    doc
+}
+
+#[test]
+fn common_flat_u8_writer_entries_allow_rest_expressions_and_advanced_keys() {
+    let doc = flat_exchange_fixture();
+    assert!(!crate::deep_color::has_native(&doc));
+    let before = serde_json::to_value(&doc).unwrap();
+    let pdf = crate::formats::pdf::write(&doc).unwrap().0;
+    assert_eq!(
+        lopdf::Document::load_mem(&pdf).unwrap().get_pages().len(),
+        1
+    );
+    let idml = crate::formats::idml::write(&doc).unwrap().0;
+    let reopened = crate::formats::idml::read(&idml, "Flat Motion rest")
+        .unwrap()
+        .0;
+    assert!(
+        reopened
+            .layers
+            .iter()
+            .flat_map(|layer| layer.kind.shapes().unwrap_or_default())
+            .any(|shape| shape.style.fill == doc.layers[0].kind.shapes().unwrap()[0].style.fill)
+    );
+    let pixels = crate::deep_color::composite(&doc, 1).unwrap();
+    assert_eq!((pixels.w, pixels.h), (24, 24));
+    assert!(
+        pixels
+            .native
+            .as_ref()
+            .unwrap()
+            .samples
+            .chunks_exact(4)
+            .any(|rgba| rgba[3] == 1.)
+    );
+    assert_eq!(serde_json::to_value(&doc).unwrap(), before);
+}
+
+#[test]
+fn common_writer_entries_refuse_compositions_and_scenes_without_source_mutation() {
+    for scene in [false, true] {
+        let mut doc = flat_exchange_fixture();
+        if scene {
+            doc.motion.scene3d = Some(crate::scene3d::Scene::default());
+        } else {
+            doc.motion.compositions.push(Composition::new(plain()));
+        }
+        let before = serde_json::to_value(&doc).unwrap();
+        for (writer, result) in [
+            ("PDF", crate::formats::pdf::write(&doc).map(|_| ())),
+            ("IDML", crate::formats::idml::write(&doc).map(|_| ())),
+            (
+                "Native float compositor",
+                crate::deep_color::composite(&doc, 1).map(|_| ()),
+            ),
+        ] {
+            let error = result.unwrap_err();
+            assert!(
+                error.starts_with(&format!("MotionUnsupported: {writer}")),
+                "{error}"
+            );
+        }
+        assert_eq!(serde_json::to_value(&doc).unwrap(), before);
+        crate::compositor::render_export_preview(&doc, 32)
+            .expect("RGBA8 previews remain available");
+        assert_eq!(serde_json::to_value(&doc).unwrap(), before);
+    }
+}
+
+#[test]
+fn common_native_pdf_error_remains_first_and_float_export_refuses_complex_motion() {
+    const PDF_ERROR: &str = "PDF cannot preserve native pixel or mask samples yet. Export PSD, TIFF or an explicit 8-bit document copy.";
+    for mode in ["flat", "composition", "scene"] {
+        let mut doc = flat_exchange_fixture();
+        doc.color.depth = crate::deep_color::Depth::F32;
+        if mode == "composition" {
+            doc.motion.compositions.push(Composition::new(plain()));
+        }
+        if mode == "scene" {
+            doc.motion.scene3d = Some(crate::scene3d::Scene::default());
+        }
+        let before = serde_json::to_value(&doc).unwrap();
+        assert_eq!(crate::formats::pdf::write(&doc).unwrap_err(), PDF_ERROR);
+        let result = crate::export::encode_admitted(
+            &crate::export::Source::Document(doc.clone()),
+            crate::export::Settings {
+                format: crate::export::Format::Tiff,
+                scale: 1,
+                ai: None,
+            },
+            &crate::ml::NoProgress,
+        );
+        if mode == "flat" {
+            let bytes = result.unwrap().0;
+            let pixels = crate::deep_color::tiff::decode(bytes.as_slice())
+                .unwrap()
+                .unwrap();
+            assert_eq!((pixels.w, pixels.h), (24, 24));
+            assert_eq!(
+                pixels.native.as_ref().unwrap().depth,
+                crate::deep_color::Depth::F32
+            );
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("MotionUnsupported: Native float compositor")
+            );
+        }
+        assert_eq!(serde_json::to_value(&doc).unwrap(), before);
+    }
 }
