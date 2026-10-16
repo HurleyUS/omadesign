@@ -1419,8 +1419,8 @@ fn draw_shape_inner(
         for (fill,glyph_path) in crate::text::paint_paths(run,&shape.style.fill) {
             if fill.is_none(){continue;}
             let center=shape.geom.bbox().center();
-            let rotation=Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y);
-            let Some(glyph_path)=glyph_path.transform(rotation)else{continue;};
+            let Some(glyph_path)=crate::geom::path_geom(&glyph_path,false)
+                .and_then(|geometry|crate::geom::curve_path(&geometry,center,shape.rotation))else{continue;};
             if let Fill::Pattern(pattern) = &fill {
                 draw_pattern_fill(pm, pattern, &glyph_path, shape, xf, op, blend, fill_reveal, mask, true);
                 continue;
