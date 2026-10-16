@@ -253,7 +253,12 @@ pub(super) fn canvas_drop(ui: &Ui, studio: &mut Studio, response: &egui::Respons
                 Pt::new(response.rect.min.x, response.rect.min.y),
                 Pt::new(point.x, point.y),
             );
-            studio.place_vector_symbol(payload.main, centered(studio, payload.main, at));
+            if studio.place_vector_symbol(payload.main, centered(studio, payload.main, at))
+                && response.enabled()
+                && ui.ctx().memory(|m| m.allows_interaction(response.layer_id))
+            {
+                response.request_focus();
+            }
         } else {
             studio.status = "The dragged symbol changed. Drag the current definition again".into();
         }
@@ -370,6 +375,11 @@ mod tests {
             studio.history.len(),
             2,
             "creation and the actual drop are separate atomic commands"
+        );
+        assert_eq!(
+            ctx.memory(|m| m.focused()),
+            Some(Id::new("studio-canvas")),
+            "an accepted canvas drop returns real keyboard ownership to the canvas"
         );
     }
 }
