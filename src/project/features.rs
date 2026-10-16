@@ -458,7 +458,10 @@ mod tests {
         let mut envelope: serde_json::Value = serde_json::from_str(&encoded).unwrap();
         assert_eq!(envelope["version"], 5);
         for version in 0..=29 {
-            let supported = matches!(version, 1..=17 | 23 | 25..=28);
+            let supported = matches!(
+                version,
+                1..=17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28
+            );
             assert_eq!(supports_version(version), supported, "reader {version}");
             envelope["version"] = version.into();
             let result = super::super::decode(&envelope.to_string());

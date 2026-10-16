@@ -277,7 +277,7 @@ fn common_motion_retained_feature_gates_scan_base_all_writes_and_nested_children
                     .unwrap_err()
                     .contains(&format!("requires version {gate}"))
             );
-            envelope["version"] = 28.into();
+            envelope["version"] = (VERSION + 1).into();
             envelope["doc"] = serde_json::json!({"not_a_typed_document":true});
             assert!(
                 decode(&envelope.to_string())

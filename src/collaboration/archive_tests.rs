@@ -465,7 +465,7 @@ fn retained_source_integrity_and_future_project_versions_refuse_before_loss() {
     }
     value["version"] = 24.into();
     assert!(crate::project::decode(&value.to_string()).is_ok());
-    value["version"] = 28.into();
+    value["version"] = (crate::project::VERSION + 1).into();
     value["doc"]["collaboration"] = json!({"future_model_that_must_not_be_typed":true});
     assert!(
         crate::project::decode(&value.to_string())
@@ -546,7 +546,7 @@ fn withdrawn_pixels_remain_encoded_and_legacy_inline_recovery_still_opens() {
             .is_none()
     );
     let mut future = serde_json::to_value(&meta).unwrap();
-    future["version"] = json!(28);
+    future["version"] = json!(crate::project::VERSION + 1);
     future["doc"]["collaboration"] = json!({"future_model_that_must_not_be_typed":true});
     let future_bytes = serde_json::to_vec(&future).unwrap();
     fs::write(&path, &future_bytes).unwrap();
