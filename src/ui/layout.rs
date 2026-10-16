@@ -1239,10 +1239,35 @@ pub fn poll_image(ctx: &egui::Context, studio: &mut Studio) {
     }
 }
 
+/// Reveal the existing native value field created by an accepted numeric variable action.
+/// Args: UI, real field, document request, token identity and revision. Returns without editing values.
+fn focus_new_variable(ui: &Ui, response: &egui::Response, key: egui::Id, token: u64, revision: u64) {
+    let pending = ui.data(|data| data.get_temp::<(u64, u64)>(key));
+    if pending.is_some_and(|(_, expected)| expected != revision) {
+        ui.data_mut(|data| data.remove::<(u64, u64)>(key));
+        return;
+    }
+    if pending == Some((token, revision))
+        && response.enabled()
+        && ui.memory(|memory| memory.allows_interaction(response.layer_id))
+    {
+        response.request_focus();
+        super::welcome::focus_control(ui, response);
+        response.scroll_to_me_animation(None, egui::style::ScrollAnimation::none());
+        if ui.clip_rect().contains_rect(response.rect) {
+            ui.data_mut(|data| data.remove::<(u64, u64)>(key));
+        }
+        if ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("Reveal the newly created variable");
+        }
+    }
+}
+
 fn variables(ui: &mut Ui, studio: &mut Studio) {
     use crate::layout_tokens::{DesignToken, TokenProperty, TokenValue};
     egui::CollapsingHeader::new("Design variables").show(ui, |ui| {
         let blocked = keyboard::blocked(studio);
+        let focus = egui::Id::new(("new-layout-variable", &studio.swap_id, &studio.selection, studio.active_layer));
         studio.with_field_history(ui, "layout-design-variables", |ui, studio| {
             if blocked {
                 ui.disable();
@@ -1261,7 +1286,7 @@ fn variables(ui: &mut Ui, studio: &mut Studio) {
                                 changed |= super::color_picker::color_edit(ui, owner, color);
                             }
                             TokenValue::Number(value) => {
-                                changed |= native_number(
+                                let field = keyboard::number(
                                     ui,
                                     "value",
                                     &format!("Variable {}", token.name),
@@ -1271,6 +1296,8 @@ fn variables(ui: &mut Ui, studio: &mut Studio) {
                                     "",
                                     "",
                                 );
+                                focus_new_variable(ui, &field.response, focus, token.id, studio.canvas_gen);
+                                changed |= crate::app::input_history::record(field.response, field.changed);
                             }
                         }
                         let owner = ui.make_persistent_id("remove");
@@ -1330,8 +1357,14 @@ fn variables(ui: &mut Ui, studio: &mut Studio) {
                 .clicked()
                 {
                     let mut tokens = studio.doc.layout_tokens.clone();
-                    tokens.push(DesignToken::number(name.trim(), 16.0));
+                    let token = DesignToken::number(name.trim(), 16.0);
+                    let id = token.id;
+                    tokens.push(token);
                     studio.set_layout_tokens(tokens);
+                    if studio.doc.layout_tokens.iter().any(|token| token.id == id) {
+                        ui.data_mut(|data| data.insert_temp(focus, (id, studio.canvas_gen)));
+                        ui.ctx().request_repaint();
+                    }
                 }
             });
             if let Some((layer, id)) = studio.primary()
