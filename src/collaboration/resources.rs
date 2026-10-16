@@ -32,7 +32,11 @@ fn source_slot(path: &str) -> bool {
 
 /// Walk serialized native subtrees and their retained Cell payloads.
 /// Args: logical root, native value and visitor. Keeps source bytes opaque and composition traversal bounded.
-fn values(path: &str, value: &Value, visit: &mut impl FnMut(&str, &Value)) -> Result<(), String> {
+pub(super) fn values(
+    path: &str,
+    value: &Value,
+    visit: &mut impl FnMut(&str, &Value),
+) -> Result<(), String> {
     fn walk(
         path: &str,
         value: &Value,
@@ -50,7 +54,7 @@ fn values(path: &str, value: &Value, visit: &mut impl FnMut(&str, &Value)) -> Re
             return walk(path, value, depth, count, visit);
         }
         visit(path, value);
-        if path.ends_with("/sources") {
+        if super::protocol::relative_path(path) == "/sources" {
             return Ok(());
         }
         match value {
@@ -120,7 +124,7 @@ fn values_mut(
             return walk(path, value, depth, count, visit);
         }
         visit(path, value);
-        if path.ends_with("/sources") {
+        if super::protocol::relative_path(path) == "/sources" {
             return Ok(());
         }
         match value {
