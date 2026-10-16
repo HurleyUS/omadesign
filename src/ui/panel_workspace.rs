@@ -438,3 +438,27 @@ mod human_qa_tests {
         assert_eq!(layout,reopened);
     }
 }
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+    #[test]
+    fn human_qa_bottom_dock_drop_splits_along_its_real_horizontal_axis() {
+        let ctx=egui::Context::default();ctx.enable_accesskit();
+        let mut layout=Workspace::preset(&[("color",Place::Left),("timeline",Place::Bottom)]);
+        let mut areas=std::collections::HashMap::new();
+        let mut frame=|events|crate::ui::shared_fields_tests::headless(&ctx,egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1200.0,800.0))),events,..Default::default()},|ui|{
+            layout.show(ui,"split-test",PANELS,|ui,panel|{areas.insert(panel.to_owned(),ui.available_rect_before_wrap());ui.label(panel);});
+        });
+        frame(vec![]);let output=frame(vec![]);
+        let (_,node)=crate::ui::welcome::keyboard_tests::named(&output,"Color");let r=node.bounds().unwrap();let from=egui::pos2(((r.x0+r.x1)*0.5) as f32,((r.y0+r.y1)*0.5) as f32);
+        drop(frame);let target=areas["timeline"];let to=egui::pos2(target.left()+16.0,target.center().y);
+        let pointer=|pos,pressed|egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE};
+        for events in [vec![egui::Event::PointerMoved(from),pointer(from,true)],vec![egui::Event::PointerMoved(from+egui::vec2(20.0,0.0))],vec![egui::Event::PointerMoved(to)],vec![pointer(to,false)],vec![]] {
+            let _=crate::ui::shared_fields_tests::headless(&ctx,egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1200.0,800.0))),events,..Default::default()},|ui|{layout.show(ui,"split-test",PANELS,|ui,panel|{areas.insert(panel.to_owned(),ui.available_rect_before_wrap());ui.label(panel);});});
+        }
+        assert_eq!(layout.groups.len(),2);assert!(layout.groups.iter().all(|group|group.place==Place::Bottom));
+        let color=areas["color"];let timeline=areas["timeline"];assert!(color.right()<=timeline.left());assert_eq!(color.top(),timeline.top());assert_eq!(color.bottom(),timeline.bottom());
+        assert_eq!(layout,serde_json::from_slice(&serde_json::to_vec(&layout).unwrap()).unwrap());
+    }
+}

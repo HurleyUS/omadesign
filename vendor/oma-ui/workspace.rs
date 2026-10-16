@@ -698,8 +698,20 @@ impl Workspace {
                     let target = targets.iter().find(|(_, rect)| rect.contains(pointer));
                     let mut destination = None;
                     if let Some((panel, rect)) = target {
+                        let horizontal = before
+                            .iter()
+                            .find(|group| group.panels.contains(panel))
+                            .is_some_and(|group| matches!(group.place, Place::Top | Place::Bottom));
                         let edge = if pointer.y < rect.top() + 30.0 {
                             None
+                        } else if horizontal {
+                            if pointer.x < rect.left() + rect.width() * 0.25 {
+                                Some(false)
+                            } else if pointer.x > rect.right() - rect.width() * 0.25 {
+                                Some(true)
+                            } else {
+                                None
+                            }
                         } else if pointer.y < rect.top() + rect.height() * 0.25 {
                             Some(false)
                         } else if pointer.y > rect.bottom() - rect.height() * 0.25 {
@@ -709,7 +721,13 @@ impl Workspace {
                         };
                         let mut highlight = *rect;
                         if let Some(after) = edge {
-                            if after {
+                            if horizontal {
+                                if after {
+                                    highlight.min.x = rect.center().x;
+                                } else {
+                                    highlight.max.x = rect.center().x;
+                                }
+                            } else if after {
                                 highlight.min.y = rect.center().y;
                             } else {
                                 highlight.max.y = rect.center().y;
