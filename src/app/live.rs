@@ -664,8 +664,36 @@ mod tests {
         let index = if role == "Alice" { 0 } else { 1 };
         crate::collaboration::native_tests::edit(
             &mut doc.motion.compositions[index].document,
-            role,
+            "Alice",
         );
+    }
+
+    #[test]
+    fn live_collaboration_oversized_nested_native_edit_preserves_pending_artwork() {
+        let mut doc = crate::collaboration::native_tests::fixture();
+        http_motion(&mut doc);
+        let mut replica = Replica::new(
+            "oversized".into(),
+            "a".repeat(64),
+            collaboration::snapshot(&doc).unwrap(),
+        );
+        crate::collaboration::native_tests::edit(&mut doc, "Bob");
+        crate::collaboration::native_tests::edit(&mut doc.motion.compositions[1].document, "Bob");
+        replica.record(&doc).unwrap();
+        let artwork = serde_json::to_vec(&doc).unwrap();
+        let pending = serde_json::to_vec(&replica).unwrap();
+        let client = Client::new(crate::cloud::Identity {
+            cloud_url: "http://127.0.0.1:1".into(),
+            ..Default::default()
+        });
+        let error = client
+            .exchange_live(&replica, None, vec![], false)
+            .err()
+            .expect("oversized native operation must refuse before HTTP");
+        assert!(error.contains("190 KB"), "{error}");
+        assert_eq!(serde_json::to_vec(&doc).unwrap(), artwork);
+        assert_eq!(serde_json::to_vec(&replica).unwrap(), pending);
+        assert!(!replica.pending.is_empty());
     }
 
     #[test]
