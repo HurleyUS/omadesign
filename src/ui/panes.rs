@@ -2,7 +2,7 @@
 use super::icons::{self, ph};
 use crate::{
     app::Studio,
-    document::{Cmd, Fill, Style},
+    document::{Cmd, Style},
     geom::{Geom, Pt},
     tools::{Persona, Tool},
 };
@@ -425,7 +425,7 @@ fn shapes(ui: &mut Ui, studio: &mut Studio) {
                     let target = studio.asset_frame_target();
                     super::jobs::start(ui.ctx(), JOB, move || {
                         let geom = crate::shape_browser::icon_to_geom(&icon, 256.0)?;
-                        Ok((document, geom, icon.name.into(), target))
+                        Ok((document, geom, icon.name.to_owned(), target))
                     });
                 }
                 if (index + 1) % columns == 0 {
@@ -577,7 +577,7 @@ fn glyphs(ui: &mut Ui, studio: &mut Studio) {
         .data(|d| d.get_temp::<std::sync::Arc<Vec<char>>>(characters_key))
         .unwrap_or_else(|| {
             let mut values = std::collections::BTreeSet::new();
-            if let Ok(face) = ttf_parser::Face::parse(&bytes, 0) {
+            if let Ok(face) = rustybuzz::ttf_parser::Face::parse(&bytes, 0) {
                 if let Some(cmap) = face.tables().cmap {
                     for subtable in cmap.subtables {
                         if subtable.is_unicode() {
@@ -837,5 +837,38 @@ fn photo_presets(ui: &mut Ui, studio: &mut Studio) {
     }
     if icons::tiny_icon(ui, ph::PLUS, "Manage Photo presets", false) {
         super::photo::preset_library(ui.ctx(), studio);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn human_qa_registered_panes_draw_without_editing_artwork() {
+        let ctx = egui::Context::default();
+        let mut studio = Studio::new();
+        studio.show_welcome = false;
+        let before = crate::project::encode(&studio.doc).unwrap();
+        for &(panel, _) in super::super::panel_workspace::PANELS {
+            if panel == "layers" {
+                continue;
+            }
+            let _ = super::super::shared_fields_tests::headless(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(340.0, 650.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| show(ui, &mut studio, panel),
+            );
+            assert_eq!(
+                before,
+                crate::project::encode(&studio.doc).unwrap(),
+                "opening {panel} changed artwork"
+            );
+        }
     }
 }

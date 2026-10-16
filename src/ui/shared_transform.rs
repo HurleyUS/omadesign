@@ -274,6 +274,21 @@ mod tests {
         studio
     }
     #[test]
+    fn human_qa_linked_selection_preserves_each_object_ratio_and_one_undo() {
+        let mut studio=fixture();
+        let id=studio.selection[1].1;
+        studio.doc.find_shape_mut(0,id).unwrap().geom=crate::geom::Geom::Rect {origin:Pt::new(220.0,30.0),size:Pt::new(50.0,100.0),radius:0.0};
+        let before=crate::project::encode(&studio.doc).unwrap();
+        assert!(apply_constrained(&mut studio,[20.0,30.0,200.0,80.0,0.0],[false,false,true,false,false],true));
+        let shapes=studio.doc.layers[0].kind.shapes().unwrap();
+        assert_eq!(shapes[0].geom.bbox().size(),Pt::new(200.0,160.0));
+        assert_eq!(shapes[1].geom.bbox().size(),Pt::new(200.0,400.0));
+        let after=crate::project::encode(&studio.doc).unwrap();
+        assert_eq!(crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(),after);
+        studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);
+        studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
+    }
+    #[test]
     fn shared_transform_preserves_mixed_values_undo_and_native_roundtrip() {
         let mut studio = fixture();
         let before = studio.doc.clone();
