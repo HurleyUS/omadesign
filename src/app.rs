@@ -17,6 +17,7 @@ pub use hierarchy_edit::TreePlacement;
 mod key_hints;
 mod layer_groups;
 mod layout;
+pub(crate) use layout::LayoutStackField;
 mod layout_components;
 pub(crate) use layout_components::{ComponentPropertyTarget, ComponentPropertyEdit};
 mod layout_edit;
