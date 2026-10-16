@@ -138,6 +138,32 @@ pub(crate) fn validate_appearance(value: &Appearance) -> Result<(), String> {
     if !(0. ..=1.).contains(&value.opacity) || !(0. ..=1.).contains(&value.fill_opacity) {
         return Err("Graphic style opacity must be between zero and one".into());
     }
+    if let crate::document::Fill::Pattern(pattern) = &value.style.fill {
+        if pattern.id.is_empty()
+            || pattern
+                .id
+                .chars()
+                .any(|c| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '&'))
+        {
+            return Err("The graphic style has an invalid pattern reference".into());
+        }
+        let source = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\">{}</svg>",
+            pattern.definitions
+        );
+        let xml = roxmltree::Document::parse(&source)
+            .map_err(|e| format!("Invalid graphic style pattern: {e}"))?;
+        if !xml.descendants().any(|n| {
+            n.is_element()
+                && n.tag_name().name() == "pattern"
+                && n.attribute("id") == Some(pattern.id.as_str())
+        }) {
+            return Err("The graphic style's pattern definition is missing".into());
+        }
+    }
+    if let Some(image) = &value.image {
+        crate::layout_images::pixmap(image)?;
+    }
     Ok(())
 }
 impl Library {
@@ -291,6 +317,14 @@ mod tests {
         book.add("Keep".into(), sample()).unwrap();
         book.save(&path).unwrap();
         let original = std::fs::read(&path).unwrap();
+        let mut invalid: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        invalid["library"]["entries"][0]["appearance"]["style"]["fill"]["Pattern"]["id"] =
+            "missing".into();
+        let corrupt = serde_json::to_vec(&invalid).unwrap();
+        std::fs::write(&path, &corrupt).unwrap();
+        assert!(Library::load(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), corrupt);
+        std::fs::write(&path, &original).unwrap();
         book.entries[0].appearance.opacity = f32::NAN;
         assert!(book.save(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), original);

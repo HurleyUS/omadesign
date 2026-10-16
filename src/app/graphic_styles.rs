@@ -68,7 +68,10 @@ mod tests {
         let target = s.doc.find_shape(layer, target).unwrap();
         assert_eq!(Appearance::capture(target), appearance);
         assert_eq!(target.geom, geometry);
-        assert_eq!(target.mask.as_ref().unwrap().data(), &[128, 128, 128, 255]);
+        assert_eq!(
+            target.mask.as_ref().unwrap().data.as_slice(),
+            &[128, 128, 128, 255]
+        );
         let saved = crate::project::encode(&s.doc).unwrap();
         let reopened = crate::project::decode(&saved).unwrap();
         assert_eq!(crate::project::encode(&reopened).unwrap(), saved);
@@ -85,6 +88,15 @@ mod tests {
     {
         let mut s = crate::app::symbols::tests::fixture();
         let appearance = s.capture_graphic_style().unwrap();
+        let mut broken = appearance.clone();
+        broken.image = Some(crate::layout_images::ImageFill {
+            data: "not PNG data".into(),
+            fit: Default::default(),
+            focal: Pt::splat(0.5),
+        });
+        let original = crate::project::encode(&s.doc).unwrap();
+        assert!(s.apply_graphic_style(&broken).is_err());
+        assert_eq!(crate::project::encode(&s.doc).unwrap(), original);
         let (layer, target) = s.selection[1];
         s.doc.find_shape_mut(layer, target).unwrap().locked = true;
         let before = crate::project::encode(&s.doc).unwrap();
