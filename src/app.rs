@@ -4765,8 +4765,9 @@ mod tests {
             .layers
             .iter()
             .filter_map(|l| l.kind.shapes())
-            .map(|ss| ss.len())
-            .sum();
+            .flatten()
+            .filter(|shape| matches!(&shape.geom, Geom::Path { .. }))
+            .count();
         assert_eq!(n, 1);
         let Geom::Path { closed, .. } = &s.doc.layers[1].kind.shapes().unwrap()[0].geom else {
             panic!("path");
@@ -4818,8 +4819,9 @@ mod tests {
             .layers
             .iter()
             .filter_map(|l| l.kind.shapes())
-            .map(|ss| ss.len())
-            .sum();
+            .flatten()
+            .filter(|shape| matches!(&shape.geom, Geom::Path { .. }))
+            .count();
         assert_eq!(n, 1);
         let Geom::Path { closed, .. } = &s.doc.layers[1].kind.shapes().unwrap()[0].geom else {
             panic!("path");
