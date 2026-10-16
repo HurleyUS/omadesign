@@ -919,7 +919,23 @@ impl Geom {
         }
     }
 
+    /// Bound stored geometry in its local coordinate space.
+    /// Args: none. Returns its frame, including authored curve handles.
     pub fn bbox(&self) -> Bounds {
+        if matches!(self, Geom::Path { .. } | Geom::Paths { .. })
+            && self.anchors().all(|anchor| anchor.radius == 0.0)
+        {
+            let mut bounds = None::<Bounds>;
+            for anchor in self.anchors() {
+                for point in [anchor.pt, anchor.pt + anchor.h_in, anchor.pt + anchor.h_out] {
+                    match &mut bounds {
+                        Some(bounds) => bounds.union_pt(point),
+                        None => bounds = Some(Bounds::from_pt(point)),
+                    }
+                }
+            }
+            return bounds.unwrap_or(Bounds::from_pt(Pt::ZERO));
+        }
         match self {
             Geom::Text(run) if run.svg_text.is_some()=>if let Some(layout)=crate::text::svg_type::layout(run){return layout.bounds;},
             Geom::Text(run) if run.frame.is_some() => return crate::text_geometry::frame_bounds(run).unwrap(),
@@ -1654,6 +1670,30 @@ mod tests {
         };
         assert!(g.contains(Pt::new(5.0, 5.0)));
         assert!(!g.contains(Pt::new(20.0, 5.0)));
+    }
+
+    #[test]
+    fn path_bounds_keep_constant_axes_exact_and_preserve_rounded_extensions() {
+        let mut start = Anchor::corner(Pt::new(46.45, 0.0));
+        start.h_out = Pt::new(0.0, 30.0);
+        let mut end = Anchor::corner(Pt::new(46.45, 100.0));
+        end.h_in = Pt::new(0.0, -30.0);
+        let anchors = vec![start, end];
+        let expected = Bounds { min: start.pt, max: end.pt };
+        assert_eq!(Geom::Path { anchors: anchors.clone(), closed: false }.bbox(), expected);
+        assert_eq!(Geom::Paths {
+            paths: vec![PathContour { anchors, closed: false }], winding: false,
+        }.bbox(), expected);
+
+        let mut rounded = Anchor::corner(Pt::new(10.0, 0.0));
+        rounded.h_in = Pt::new(1.0, 0.0);
+        rounded.h_out = Pt::new(0.0, 1.0);
+        rounded.radius = 10.0;
+        let geometry = Geom::Path {
+            anchors: vec![Anchor::corner(Pt::ZERO), rounded, Anchor::corner(Pt::splat(10.0))],
+            closed: false,
+        };
+        assert!(geometry.bbox().max.x > 11.0);
     }
 
     #[test]
