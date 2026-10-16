@@ -80,6 +80,7 @@ pub(super) fn image(
                 item.visible = keep.contains(&i);
             }
             if let Some(object) = object {
+                let children:HashSet<_>=crate::layout::descendants(&document,index,object).into_iter().collect();
                 if let Some(shapes) = document
                     .layers
                     .get_mut(index)
@@ -100,7 +101,7 @@ pub(super) fn image(
                             .and_then(|s| s.layout.parent);
                     }
                     for shape in shapes {
-                        shape.visible = shape.id == object || parents.contains(&shape.id);
+                        shape.visible = shape.id == object || parents.contains(&shape.id) || (shape.visible && children.contains(&shape.id));
                     }
                 }
             }
