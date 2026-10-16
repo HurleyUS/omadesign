@@ -20,6 +20,8 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                 ui.set_min_width(300.);
                 ui.set_max_width(420.);
                 egui::ScrollArea::vertical()
+                    .id_salt(owner.with("controls-scroll"))
+                    .animated(false)
                     .max_height(600.)
                     .show(ui, |ui| controls(ui, studio));
             });
@@ -442,18 +444,23 @@ fn action_error(ui: &mut Ui, studio: &Studio, id: u64, group: &[egui::Id]) {
             .filter_map(|id| ui.ctx().read_response(*id))
             .collect::<Vec<_>>();
         if !responses.is_empty() {
-            ui.scope(|ui| {
+            let shown = ui.scope(|ui| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                 let fields = responses.iter().collect::<Vec<_>>();
                 if error.reveal {
-                    if super::welcome::reveal_control_error(ui, &fields, &error.message) {
-                        error.reveal = false;
-                        ui.data_mut(|data| data.insert_temp(key, error));
-                    }
+                    super::welcome::reveal_control_error(ui, &fields, &error.message)
                 } else {
                     super::welcome::control_error(ui, &fields, &error.message);
+                    false
                 }
             });
+            if error.reveal && shown.inner
+                && ui.clip_rect().contains_rect(shown.response.rect)
+                && responses.iter().all(|field| ui.clip_rect().contains_rect(field.rect))
+            {
+                error.reveal = false;
+                ui.data_mut(|data| data.insert_temp(key, error));
+            }
         }
     }
 }
