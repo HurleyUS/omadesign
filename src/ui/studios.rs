@@ -531,6 +531,7 @@ fn bounds_fields(
     ui.horizontal(|ui| {
         let available = (ui.available_width() - 22.0 - ui.spacing().item_spacing.x).max(0.0);
         ui.allocate_ui_with_layout(vec2(available, 0.0), Layout::top_down(eframe::egui::Align::Min), |ui| {
+            ui.set_max_width(available);
             ui.columns(2, |columns| {
                 size_changed[0] = number_field(&mut columns[0], "W", width, min_size..=20000.0, "");
                 size_changed[1] = number_field(&mut columns[1], "H", height, min_size..=20000.0, "");
@@ -2577,7 +2578,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
             continue;
         }
         let indent = (ancestors.len() as f32 * 12.0).min(ui.available_width()*0.3);
-        ui.push_id(studio.doc.layers[i].id, |ui| {
+        super::fields::native_scope(ui,eframe::egui::Id::new(("layer-row",&studio.swap_id,studio.doc.layers[i].id)), |ui| {
             let active = studio.active_layer == Some(i);
             let header = Frame::new()
                 .fill(if studio.selected_layer == Some(studio.doc.layers[i].id) {
@@ -2794,7 +2795,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                             ui.skip_ahead_auto_ids(skipped);
                         }
                         next_row = shape.visual_index + 1;
-                        ui.push_id(shape.id, |ui| {
+                        super::fields::native_scope(ui,eframe::egui::Id::new(("object-row",&studio.swap_id,studio.doc.layers[i].id,shape.id)), |ui| {
                             Frame::new()
                                 .fill(if studio.selection.contains(&(i, shape.id)) {
                                     accent_soft()

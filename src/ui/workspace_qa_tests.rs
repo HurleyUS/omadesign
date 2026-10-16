@@ -93,7 +93,7 @@ fn human_qa_native_dimension_lock_preserves_ratio_and_one_undo() {
     frame(vec![]);
     let output = frame(vec![]);
     let at = point(&output, "Constrain proportions");
-    assert!(at.x < 304.0, "the actual lock must fit the dock");
+    assert!(at.x < 304.0, "the actual lock must fit the dock: {at:?}");
     frame(vec![Event::PointerMoved(at), pointer(at, true)]);
     frame(vec![pointer(at, false)]);
     keys::tab_to(&ctx, "W", &mut frame);
