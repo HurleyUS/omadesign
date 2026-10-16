@@ -174,7 +174,7 @@ package() {
 for arch in $ARCHITECTURES; do
   package "$arch-unknown-linux-gnu/" "$arch-unknown-linux-gnu"
 done
-sh scripts/package-installer.sh "$VERSION"
+sh scripts/package-installer.sh "$VERSION" "$ARCHITECTURES"
 
 echo
 ls -lh "$DIST"/*.tar.gz
