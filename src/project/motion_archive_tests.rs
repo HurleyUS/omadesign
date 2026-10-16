@@ -406,3 +406,22 @@ fn layer_only_exchange_guard_refuses_complex_motion_and_keeps_flat_design_routes
             .contains("MotionUnsupported")
     );
 }
+
+#[test]
+fn streaming_motion_bounds_refuse_current_and_retained_trees_before_typed_fields() {
+    use serde_json::json;
+    let mut deep = json!({});
+    for _ in 0..9 {
+        deep = json!({"motion":{"compositions":[{"document":deep}]}});
+    }
+    let wide = json!({"motion":{"compositions":vec![json!({"document":{}});129]}});
+    for (document, error) in [(deep, "CompositionDepth"), (wide, "CompositionLimit")] {
+        let current = json!({"version":27,"doc":document});
+        assert!(decode(&current.to_string()).unwrap_err().contains(error));
+        let retained = json!({"version":27,"doc":{"collaboration":{"base":{"/motion/compositions":{"Value":current["doc"]["motion"]["compositions"]}}}}});
+        assert!(decode(&retained.to_string()).unwrap_err().contains(error));
+    }
+    let state = json!({"Value":vec![json!({"document":{}});128]});
+    let multiple_states = json!({"version":27,"doc":{"collaboration":{"base":{"/motion/compositions":state},"changes":[{"edit":{"type":"write","writes":[{"path":"/motion/compositions","value":state}]}}]}}});
+    validate_retained_json(&multiple_states.to_string()).unwrap();
+}

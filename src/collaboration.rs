@@ -293,23 +293,6 @@ fn native_cell(path: &str, cell: &Cell) -> bool {
                 .map_or(true, |color| color != Default::default())
         }
         Cell::Value(_) if path.starts_with("/color/") => true,
-        Cell::Value(value) if path == "/motion/compositions" => {
-            value.as_array().into_iter().flatten().any(|comp| {
-                crate::motion::compositions::serialized_documents(&comp["document"]).map_or(
-                    true,
-                    |docs| {
-                        docs.into_iter().any(|(_, doc)| {
-                            doc.get("color").is_some_and(|color| {
-                                serde_json::from_value::<crate::deep_color::cms::DocumentColor>(
-                                    color.clone(),
-                                )
-                                .map_or(true, |color| color != Default::default())
-                            })
-                        })
-                    },
-                )
-            })
-        }
         _ => false,
     }
 }
