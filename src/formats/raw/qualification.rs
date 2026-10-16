@@ -9,6 +9,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+#[path = "qualification/consumer.rs"]
+mod consumer;
 #[path = "qualification/reference.rs"]
 mod reference;
 #[path = "qualification/storage.rs"]

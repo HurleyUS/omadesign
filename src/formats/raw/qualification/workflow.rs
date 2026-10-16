@@ -388,7 +388,7 @@ pub(super) fn resource_sample(stage: &str, started: Instant) -> Value {
     let (admitted, limit) = crate::resources::global().usage();
     json!({"stage":stage,"elapsed_ms":started.elapsed().as_secs_f64()*1000.,
         "rss_bytes":bytes("VmRSS:"),"process_high_water_bytes":bytes("VmHWM:"),
-        "host_available_bytes":crate::resources::available_memory(),"admitted_bytes":admitted,"pool_limit_bytes":limit})
+        "host_available_bytes":crate::resources::available_memory(),"admitted_bytes":admitted,"pending_bytes":crate::resources::global().pending_bytes(),"pool_limit_bytes":limit})
 }
 
 /// Keep unknown camera/mode identity visible as missing evidence.

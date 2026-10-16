@@ -2953,6 +2953,7 @@ dependencies = [
  "mlua",
  "mozjpeg-sys",
  "ort",
+ "png",
  "rayon",
  "resvg",
  "rfd",

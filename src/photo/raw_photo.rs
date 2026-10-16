@@ -79,28 +79,51 @@ impl EncodedPhoto {
 }
 
 struct BoundedWriter<'a> {
-    inner: Cursor<Vec<u8>>,
+    buffer: resources::Allocation<u8>,
+    position: u64,
     limit: u64,
-    progress: &'a dyn crate::ml::Progress,
+    cancel: &'a Cancellation,
+}
+impl<'a> BoundedWriter<'a> {
+    fn new(limit: u64, cancel: &'a Cancellation) -> Result<Self, String> {
+        Self::in_pool(resources::global(), limit, cancel)
+    }
+    fn in_pool(
+        pool: &Arc<resources::Budget>,
+        limit: u64,
+        cancel: &'a Cancellation,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            buffer: pool.allocate::<u8, _>(0, cancel)?,
+            position: 0,
+            limit,
+            cancel,
+        })
+    }
+    fn finish(self) -> EncodedPhoto {
+        let (bytes, memory) = self.buffer.into_parts();
+        EncodedPhoto {
+            bytes,
+            _memory: memory,
+        }
+    }
 }
 impl std::io::Write for BoundedWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.progress.check().map_err(std::io::Error::other)?;
+        self.cancel.check().map_err(std::io::Error::other)?;
         let end = self
-            .inner
-            .position()
+            .position
             .checked_add(bytes.len() as u64)
             .filter(|end| *end <= self.limit)
             .ok_or_else(|| {
                 std::io::Error::other("Photo encoder exceeded its admitted output size")
             })?;
-        let buffer = self.inner.get_mut();
-        if end as usize > buffer.capacity() {
-            buffer
-                .try_reserve_exact(end as usize - buffer.len())
-                .map_err(std::io::Error::other)?;
-        }
-        std::io::Write::write(&mut self.inner, bytes)
+        let position = usize::try_from(self.position).map_err(std::io::Error::other)?;
+        self.buffer
+            .write_at(position, bytes, self.cancel)
+            .map_err(std::io::Error::other)?;
+        self.position = end;
+        Ok(bytes.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
@@ -108,14 +131,52 @@ impl std::io::Write for BoundedWriter<'_> {
 }
 impl std::io::Seek for BoundedWriter<'_> {
     fn seek(&mut self, from: std::io::SeekFrom) -> std::io::Result<u64> {
-        let position = std::io::Seek::seek(&mut self.inner, from)?;
-        if position > self.limit {
-            return Err(std::io::Error::other(
-                "Photo encoder seek exceeded its admitted output size",
-            ));
+        self.cancel.check().map_err(std::io::Error::other)?;
+        let position = match from {
+            std::io::SeekFrom::Start(position) => Some(position),
+            std::io::SeekFrom::Current(offset) => self.position.checked_add_signed(offset),
+            std::io::SeekFrom::End(offset) => (self.buffer.len() as u64).checked_add_signed(offset),
         }
+        .filter(|position| *position <= self.limit)
+        .ok_or_else(|| {
+            std::io::Error::other("Photo encoder seek exceeded its admitted output size")
+        })?;
+        self.position = position;
         Ok(position)
     }
+}
+
+/// Stream sixteen-bit PNG rows without a second full-frame endian conversion.
+/// Args: admitted straight RGBA samples, geometry, output and cancellation owner. Returns after the complete PNG trailer.
+fn png16(
+    data: &[u16],
+    w: u32,
+    h: u32,
+    output: &mut BoundedWriter<'_>,
+    cancel: &Cancellation,
+) -> Result<(), String> {
+    use std::io::Write;
+    let mut row = resources::global().allocate::<u8, _>(w as usize * 8, cancel)?;
+    let mut encoder = png::Encoder::new(output, w, h);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Sixteen);
+    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+    {
+        let mut stream = writer
+            .stream_writer_with_size(64 * 1024)
+            .map_err(|e| e.to_string())?;
+        for source in data.chunks_exact(w as usize * 4) {
+            cancel.check()?;
+            for (sample, target) in source.iter().zip(row.as_mut_slice().chunks_exact_mut(2)) {
+                target.copy_from_slice(&sample.to_be_bytes());
+            }
+            stream
+                .write_all(row.as_slice())
+                .map_err(|e| e.to_string())?;
+        }
+        stream.finish().map_err(|e| e.to_string())?;
+    }
+    writer.finish().map_err(|e| e.to_string())
 }
 
 /// Account development's source-sized float buffers and output before allocating.
@@ -134,10 +195,11 @@ fn development_memory(
     let output = u64::from(output.0)
         .checked_mul(u64::from(output.1))
         .ok_or("Photo output dimensions overflow")?;
-    let per_source = 12
-        + if now { 6 } else { 0 }
-        + if params.optics.active() { 4 } else { 0 }
-        + if params.clarity.abs() > 0.001 { 12 } else { 0 };
+    let per_source = if params.clarity.abs() > 0.001 {
+        24 + if params.optics.active() { 4 } else { 0 }
+    } else {
+        0
+    } + if now { 6 } else { 0 };
     let demand = count
         .checked_mul(per_source)
         .and_then(|n| n.checked_add(output.checked_mul(4 * channel_bytes)?))
@@ -585,32 +647,40 @@ impl PhotoImage {
             .checked_mul(9)
             .and_then(|n| n.checked_add(1024 * 1024))
             .ok_or("Photo encoded size overflow")?;
-        let memory = development_memory(dimensions, output, 2, &params, cancel, false)?;
-        memory.resize(
-            memory
-                .bytes()
-                .checked_add(limit.checked_mul(2).ok_or("Photo encoded size overflow")?)
-                .ok_or("Photo memory demand overflow")?,
+        let sixteen = self.raw.is_some() && format != image::ImageFormat::Jpeg;
+        let memory = development_memory(
+            dimensions,
+            output,
+            if sixteen { 2 } else { 1 },
+            &params,
             cancel,
+            false,
         )?;
-        let mut bytes = BoundedWriter {
-            inner: Cursor::new(Vec::new()),
-            limit,
-            progress: cancel,
-        };
-        if let Some(raw) = &self.raw
-            && format != image::ImageFormat::Jpeg
-        {
+        let mut bytes = BoundedWriter::new(limit, cancel)?;
+        if sixteen {
+            let raw = self.raw.as_ref().unwrap();
             let (w, h, data) = develop_checked::<u16>(
                 DevelopSource::linear(raw.width, raw.height, &raw.pixels),
                 &params,
                 cancel,
             )?;
-            let rgba = image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(w, h, data)
-                .ok_or("Invalid developed pixels")?;
-            image::DynamicImage::ImageRgba16(rgba)
-                .write_to(&mut bytes, format)
-                .map_err(|e| e.to_string())?;
+            memory.resize(data.capacity() as u64 * 2, cancel)?;
+            let data = resources::global().adopt(data, memory)?;
+            let _codec =
+                resources::global().reserve(32 * 1024 * 1024 + u64::from(w) * 32, cancel)?;
+            if format == image::ImageFormat::Png {
+                png16(&data, w, h, &mut bytes, cancel)?;
+            } else {
+                use image::{EncodableLayout, ImageEncoder};
+                image::codecs::tiff::TiffEncoder::new(&mut bytes)
+                    .write_image(
+                        data.as_slice().as_bytes(),
+                        w,
+                        h,
+                        image::ExtendedColorType::Rgba16,
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
         } else {
             let (w, h, data) = if let Some(raw) = &self.raw {
                 develop_checked::<u8>(
@@ -621,15 +691,16 @@ impl PhotoImage {
             } else {
                 develop_checked::<u8>(DevelopSource::rgba(&self.full), &params, cancel)?
             };
-            let out = RgbaImage { w, h, data };
+            memory.resize(data.capacity() as u64, cancel)?;
+            let data = resources::global().adopt(data, memory)?;
+            let _codec =
+                resources::global().reserve(32 * 1024 * 1024 + u64::from(w) * 16, cancel)?;
             if format == image::ImageFormat::Jpeg {
-                let mut rgb = photo_buffer(out.w as usize * out.h as usize * 3)?;
-                for (index, (pixel, target)) in out
-                    .data
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .zip(rgb.chunks_exact_mut(3))
+                let mut rgb =
+                    resources::global().allocate::<u8, _>(w as usize * h as usize * 3, cancel)?;
+                for (index, (pixel, target)) in data
+                    .chunks_exact(4)
+                    .zip(rgb.as_mut_slice().chunks_exact_mut(3))
                     .enumerate()
                 {
                     if index % 4096 == 0 {
@@ -640,24 +711,25 @@ impl PhotoImage {
                         *out = ((u32::from(*channel) * alpha + 127) / 255 + 255 - alpha) as u8;
                     }
                 }
+                drop(data);
                 image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95)
-                    .encode(&rgb, out.w, out.h, image::ExtendedColorType::Rgb8)
+                    .encode(rgb.as_slice(), w, h, image::ExtendedColorType::Rgb8)
                     .map_err(|e| e.to_string())?;
             } else {
-                let rgba = image::RgbaImage::from_raw(out.w, out.h, out.data)
-                    .ok_or("Invalid photo pixels")?;
-                image::DynamicImage::ImageRgba8(rgba)
-                    .write_to(&mut bytes, format)
-                    .map_err(|e| e.to_string())?;
+                use image::ImageEncoder;
+                if format == image::ImageFormat::Png {
+                    image::codecs::png::PngEncoder::new(&mut bytes)
+                        .write_image(data.as_slice(), w, h, image::ExtendedColorType::Rgba8)
+                        .map_err(|e| e.to_string())?;
+                } else {
+                    image::codecs::tiff::TiffEncoder::new(&mut bytes)
+                        .write_image(data.as_slice(), w, h, image::ExtendedColorType::Rgba8)
+                        .map_err(|e| e.to_string())?;
+                }
             }
         }
         cancel.check()?;
-        let bytes = bytes.inner.into_inner();
-        memory.resize(bytes.capacity() as u64, cancel)?;
-        Ok(EncodedPhoto {
-            bytes,
-            _memory: memory,
-        })
+        Ok(bytes.finish())
     }
 
     pub fn export_to(&self, path: &Path) -> Result<(), String> {
@@ -674,6 +746,59 @@ impl PhotoImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoded_growth_admits_old_and_new_capacity_before_reallocation() {
+        use std::io::Write;
+        let cancel = Cancellation::default();
+        let pool = resources::Budget::new(100, false);
+        let mut writer = BoundedWriter::in_pool(&pool, 512, &cancel).unwrap();
+        writer.write_all(&[7; 40]).unwrap();
+        assert_eq!(writer.buffer.bytes(), 40);
+        assert!(
+            writer.write_all(&[9; 20]).is_err(),
+            "40 old + 80 replacement must not fit a 100-byte pool"
+        );
+        assert_eq!(writer.buffer.as_slice(), &[7; 40]);
+        assert_eq!(pool.usage().0, 40);
+        drop(writer);
+        assert_eq!(pool.usage().0, 0);
+        let pool = resources::Budget::new(256, false);
+        let mut writer = BoundedWriter::in_pool(&pool, 128, &cancel).unwrap();
+        writer.write_all(&[7; 40]).unwrap();
+        writer.write_all(&[9; 20]).unwrap();
+        assert_eq!((pool.usage().0, pool.pending_bytes()), (80, 20));
+        cancel.cancel();
+        assert!(writer.write_all(&[1]).is_err());
+        let output = writer.finish();
+        assert_eq!(
+            pool.pending_bytes(),
+            80,
+            "opaque transfer must restore pending charge"
+        );
+        let owner = pool.adopt(output.bytes, output._memory).unwrap();
+        assert_eq!(
+            (owner.len(), pool.usage().0, pool.pending_bytes()),
+            (60, 80, 20)
+        );
+        drop(owner);
+        assert_eq!(pool.usage().0, 0);
+    }
+
+    #[test]
+    fn streamed_png16_rows_preserve_endian_precision_and_straight_alpha() {
+        let cancel = Cancellation::default();
+        let data: Vec<u16> = (0..19 * 7)
+            .flat_map(|n| [n * 433, n * 177, n * 59, n * 479])
+            .collect();
+        let mut writer = BoundedWriter::new(19 * 7 * 9 + 1024 * 1024, &cancel).unwrap();
+        png16(&data, 19, 7, &mut writer, &cancel).unwrap();
+        let output = writer.finish().into_allocation().unwrap();
+        let decoded = image::load_from_memory(output.as_slice()).unwrap();
+        assert_eq!(decoded.color(), image::ColorType::Rgba16);
+        assert_eq!(decoded.to_rgba16().as_raw().as_slice(), data);
+        assert!(data.iter().any(|sample| sample % 257 != 0));
+    }
 
     #[test]
     fn detached_raw_preview_levels_remain_admitted_after_photo_and_source_drop() {
