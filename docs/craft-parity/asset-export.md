@@ -21,3 +21,11 @@ PPI records actual PNG pHYs, JPEG JFIF and TIFF resolution tags. PNG uses intege
 Unchanged integer rows keep the exact native feature-29 wire. New sizing metadata requires native feature 30, including embedded documents and retained/deleted/withdrawn collaboration values. Live metadata editing remains unavailable under the existing fail-closed policy. Application versioning is separate and unchanged.
 
 Qualified production is `7cda60b2`: the initial 42 passes at818484ab, three corrected passes ata7ea1e37 and two final gate passes at7cda60b2 remain separate. The original failures are retained. A genuine7c desktop build exercised invalid input, actual clipboard paste, fractional/PPI native export, one full-document Undo/Redo and cold reopen/resave. Independent readers verified the three actual native PNG/SVG files plus seven small density/native-precision outputs. No human acceptance or full-parity claim. Extra formats, per-format compression/quality controls, presets, bleed, subfolders and drag-to-collect remain open.
+
+## Presets and subfolders
+
+Pending execution: Mobile creates PNG rows at1x,2x,3x with their ordinary filename suffixes. Density creates the reference ldpi(.75x),mdpi(1x),hdpi(1.5x),xhdpi(2x),xxhdpi(3x),xxxhdpi(4x) folders. Presets change the existing settings draft; Save commits one ordinary metadata command and Undo restores the previous catalog.
+
+Subfolders accept one portable folder name per row; empty names derive from size or vector format. Folder metadata requires native feature31, including current, embedded, deleted and retained values. Default integer/fractional rows keep their previous wires. This is a native document-format version, not an application version change.
+
+Batch publication holds destination directory handles, refuses subfolder links/files and changed directory identities, and uses no-replace hardlinks. Failed/cancelled output removes only operation-owned files and unchanged empty directories; existing and concurrent output remains intact. Unix uses the already-pinned rustix filesystem API; other platforms retain their existing explicit batch refusal. This source is unrun; no new parity claim yet.
