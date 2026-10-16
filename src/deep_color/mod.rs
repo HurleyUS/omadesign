@@ -231,7 +231,6 @@ pub(crate) fn byte(v: f32) -> u8 {
 
 mod sample_bytes {
     use super::*;
-    use base64::Engine;
     use serde::{Deserializer, Serializer};
     use std::io::{Read, Write};
     pub fn serialize<S: Serializer>(
@@ -255,16 +254,40 @@ mod sample_bytes {
             .map_err(serde::ser::Error::custom)?
             .finish()
             .map_err(serde::ser::Error::custom)?;
-        let length = packed
-            .len()
-            .checked_add(2)
-            .and_then(|n| (n / 3).checked_mul(4))
-            .ok_or_else(|| serde::ser::Error::custom("Encoded samples overflow"))?;
-        let _memory = resources::global()
-            .reserve_now(length as u64, &storage::check)
-            .map_err(serde::ser::Error::custom)?;
-        serializer
-            .serialize_str(&base64::engine::general_purpose::STANDARD.encode(packed.as_slice()))
+        serializer.collect_str(&base64::display::Base64Display::new(
+            packed.as_slice(),
+            &base64::engine::general_purpose::STANDARD,
+        ))
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use base64::Engine;
+
+        #[test]
+        fn streaming_samples_preserve_exact_standard_zstd_le_float_wire() {
+            #[derive(serde::Serialize, serde::Deserialize)]
+            struct Samples(#[serde(serialize_with = "serialize", deserialize_with = "deserialize")] Arc<Allocation<f32>>);
+            let values: Vec<_> = (0..8193).map(|i| match i % 4 {
+                0 => f32::from_bits(0x3e800001 + i), 1 => -0.25, 2 => 2.5, _ => 0.,
+            }).collect();
+            let mut reference = zstd::stream::write::Encoder::new(Vec::new(), 3).unwrap();
+            for chunk in values.chunks(1024) {
+                let mut bytes = [0u8; 4096];
+                for (value, target) in chunk.iter().zip(bytes.chunks_exact_mut(4)) {
+                    target.copy_from_slice(&value.to_le_bytes());
+                }
+                reference.write_all(&bytes[..chunk.len() * 4]).unwrap();
+            }
+            let expected = serde_json::to_vec(&base64::engine::general_purpose::STANDARD.encode(reference.finish().unwrap())).unwrap();
+            let source = Samples(storage::adopt(values.clone()).unwrap());
+            let mut writer = storage::Builder::new().unwrap();
+            serde_json::to_writer(&mut writer, &source).unwrap();
+            let encoded = writer.finish().unwrap();
+            assert_eq!(encoded.as_slice(), expected);
+            let reopened: Samples = serde_json::from_slice(&encoded).unwrap();
+            assert!(reopened.0.iter().zip(values).all(|(a, b)| a.to_bits() == b.to_bits()));
+        }
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
