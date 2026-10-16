@@ -1,7 +1,7 @@
 {
   "format": 1,
   "generator": "cargo-about 0.9.2 / scripts/update-third-party.py; Zstandard additions from locked Cargo metadata; unioned actual integrated tiff/CMS and retained VectorCraft MIT records; Affinity path dependency and exact MIT notices checked from locked/vendor source with pure Node inventory",
-  "cargo_lock_sha256": "2d8bfe975c4728afa77671de352c37bcbdca25614a5db1ec3a79043379ff955b",
+  "cargo_lock_sha256": "7b8ef0da7e7f90f9a8b74e0d0ad77dc89170632b1f759893c6c78151c951527b",
   "components": [
     {
       "name": "ab_glyph",

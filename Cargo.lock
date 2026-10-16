@@ -2954,6 +2954,7 @@ dependencies = [
  "mozjpeg-sys",
  "omadesign-affinity",
  "ort",
+ "png",
  "rayon",
  "resvg",
  "rfd",

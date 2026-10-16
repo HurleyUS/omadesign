@@ -119,7 +119,7 @@ impl Studio {
         if layers.len() > 1024 {
             return Err("The brand asset contains too many layers".into());
         }
-        let mut total_pixels = 0usize;
+        let mut legacy_pixels = 0usize;
         let mut total_shapes = 0usize;
         let mut largest_id = 0;
         let mut vector_masks = 0usize;
@@ -129,7 +129,20 @@ impl Studio {
                 .into_iter()
                 .flatten()
             {
-                total_pixels += checked_pixels(pixels.w, pixels.h, pixels.data.len())?;
+                pixels.validate_native()?;
+                if pixels.native.is_some() {
+                    let count = (pixels.w as usize)
+                        .checked_mul(pixels.h as usize)
+                        .filter(|&count| count > 0)
+                        .and_then(|count| count.checked_mul(4));
+                    if count != Some(pixels.data.len()) {
+                        return Err("The asset contains invalid native display pixels".into());
+                    }
+                } else {
+                    legacy_pixels = legacy_pixels
+                        .checked_add(checked_pixels(pixels.w, pixels.h, pixels.data.len())?)
+                        .ok_or("The asset image dimensions overflow")?;
+                }
             }
             total_shapes += layer.kind.shapes().map_or(0, <[Shape]>::len);
             if let Some(shapes) = layer.kind.shapes() {
@@ -144,7 +157,7 @@ impl Studio {
                 }
             }
         }
-        if total_pixels > MAX_PIXELS || total_shapes > 100_000 {
+        if legacy_pixels > MAX_PIXELS || total_shapes > 100_000 {
             return Err("The brand asset is too large to place safely".into());
         }
         if vector_masks as f64

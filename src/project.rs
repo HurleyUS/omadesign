@@ -898,6 +898,127 @@ mod tests {
     use crate::geom::{Geom, Pt};
 
     #[test]
+    fn admitted_project_output_survives_roundtrip_write_failure_and_last_alias() {
+        use crate::{deep_color::Depth, document::Layer};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct FailWrite<'a> {
+            owner: &'a Arc<crate::resources::Allocation<u8>>,
+            checks: AtomicUsize,
+        }
+        impl crate::ml::Progress for FailWrite<'_> {
+            fn report(&self, _: &str, _: usize, _: usize) {}
+            fn cancelled(&self) -> bool {
+                false
+            }
+            fn check(&self) -> Result<(), String> {
+                assert!(crate::resources::global().usage().0 >= self.owner.bytes());
+                if self.checks.fetch_add(1, Ordering::Relaxed) == 2 {
+                    Err("injected project write failure".into())
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        let before = crate::resources::global().usage().0;
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join(".qa-runs");
+        std::fs::create_dir_all(&parent).unwrap();
+        let directory = parent.join(format!(
+            "admitted-project-{}-{}",
+            std::process::id(),
+            crate::document::next_id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("image.oma");
+        let samples: Vec<_> = (0..17 * 11)
+            .flat_map(|n| [n as f32 / 193., 0.12345679, 0.8765432, 1.])
+            .collect();
+        let pixels = Pixels::from_samples(17, 11, Depth::F32, samples.clone()).unwrap();
+        let mut doc = Document::new("admitted project", 17., 11., 72.);
+        doc.transparent = true;
+        doc.color.depth = Depth::F32;
+        doc.color.intent = 1;
+        doc.layers = vec![Layer::placed_raster(
+            "RAW",
+            pixels,
+            Pt::ZERO,
+            Pt::new(17., 11.),
+        )];
+        let owner = encode_admitted(&doc).unwrap();
+        let weak = Arc::downgrade(owner.lease());
+        let alias = owner.clone();
+        let decoded = decode(std::str::from_utf8(owner.as_slice()).unwrap()).unwrap();
+        assert_eq!(
+            decoded.layers[0]
+                .kind
+                .pixels()
+                .unwrap()
+                .samples()
+                .unwrap()
+                .as_slice(),
+            samples
+        );
+        drop(decoded);
+        std::fs::write(&path, b"previous project").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        let failure = FailWrite {
+            owner: &owner,
+            checks: AtomicUsize::new(0),
+        };
+        assert!(
+            save_encoded_to(&doc, &path, &owner, &failure)
+                .unwrap_err()
+                .contains("injected project write")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous project");
+        assert_eq!(
+            std::fs::read_dir(&directory).unwrap().count(),
+            1,
+            "failed temporary write leaked"
+        );
+        save_to(&doc, &path).unwrap();
+        let reopened = load_from(&path).unwrap();
+        assert_eq!(reopened.color, doc.color);
+        assert_eq!(
+            reopened.layers[0]
+                .kind
+                .pixels()
+                .unwrap()
+                .samples()
+                .unwrap()
+                .as_slice(),
+            samples
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o640
+            );
+        }
+        let blocked = directory.join("blocked.oma");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("keep"), b"preserved").unwrap();
+        assert!(save_encoded_to(&doc, &blocked, &owner, &crate::ml::NoProgress).is_err());
+        assert_eq!(std::fs::read(blocked.join("keep")).unwrap(), b"preserved");
+        drop(owner);
+        assert!(weak.upgrade().is_some());
+        drop(alias);
+        assert!(weak.upgrade().is_none());
+        drop(reopened);
+        drop(doc);
+        assert_eq!(crate::resources::global().usage().0, before);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn stacked_typography_versions_preserve_combined_appearance_and_ranges() {
         use crate::geom::{CharSpan, Leading, TypeRun};
         use crate::text_geometry::{TextFrame, TextOnPath};
