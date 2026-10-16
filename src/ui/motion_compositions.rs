@@ -565,6 +565,7 @@ fn animation_controls(
             egui::TextEdit::multiline(&mut draft.source)
                 .id(expression_owner)
                 .code_editor()
+                .lock_focus(false)
                 .desired_rows(3)
                 .hint_text("value + sin(time * tau) * 40"),
         );

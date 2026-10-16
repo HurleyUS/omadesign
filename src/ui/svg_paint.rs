@@ -120,7 +120,7 @@ pub(super) fn editor(ui: &mut Ui, pattern: &mut SvgPattern, instance: egui::Id) 
         let id = ui.make_persistent_id("pattern-source");
         let mut source = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| pattern.definitions.to_string());
         let label = ui.label("Vector definitions");
-        let source_response = control(ui, id.with("editor"), "Vector definitions", |ui| ui.add(egui::TextEdit::multiline(&mut source).id(id.with("editor")).code_editor().desired_rows(8)).labelled_by(label.id));
+        let source_response = control(ui, id.with("editor"), "Vector definitions", |ui| ui.add(egui::TextEdit::multiline(&mut source).id(id.with("editor")).code_editor().lock_focus(false).desired_rows(8)).labelled_by(label.id));
         if source_response.changed() { ui.data_mut(|d| d.insert_temp(id, source.clone())); }
         let apply = control(ui, id.with("apply"), "Apply vector source", |ui| ui.button("Apply vector source"));
         if apply.clicked() {

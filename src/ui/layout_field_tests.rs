@@ -431,6 +431,23 @@ fn keyboard_layout_inspector_empty_document_grid_named_property_and_variable_aut
     native_press(&ctx, &mut studio, "Grid");
     native_press(&ctx, &mut studio, "Column tracks");
     native_press(&ctx, &mut studio, "Add Column track");
+    assert_eq!(
+        studio
+            .doc
+            .find_shape(layer, root)
+            .unwrap()
+            .layout
+            .stack
+            .as_ref()
+            .unwrap()
+            .column_tracks,
+        vec![GridTrack::default()]
+    );
+    let mut output = native_frame(&ctx, &mut studio, vec![]);
+    for _ in 0..3 {
+        output = keys::tab(true, |events| native_frame(&ctx, &mut studio, events));
+    }
+    keys::focused(&ctx, &output, "Column 0 share");
     native_edit(&ctx, &mut studio, "Column 0 share", "2.25");
     native_frame(&ctx, &mut studio, keys::key(Key::Tab, Modifiers::NONE));
     assert_eq!(

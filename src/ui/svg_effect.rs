@@ -23,6 +23,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut crate::app::Studio) {
         studio.doc.layers[index].id,
     ));
     let owner = super::svg_paint::source_owner(ui, key, studio.canvas_gen);
+    let editable = studio.layer_unlocked(index) && studio.doc.layer_visible(index);
     ui.push_id(("svg-effect", studio.doc.layers[index].id), |ui| {
         ui.collapsing("SVG filter graph", |ui| {
           ui.push_id(owner.instance, |ui| {
@@ -31,15 +32,15 @@ pub(super) fn show(ui: &mut Ui, studio: &mut crate::app::Studio) {
             let id = ui.make_persistent_id("source");
             let mut source = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| graph.definitions.to_string());
             let mut affected = Vec::new();
-            ui.add_enabled_ui(studio.doc.layer_editable(index), |ui| {
+            ui.add_enabled_ui(editable, |ui| {
                 let label = ui.label("Filter source");
-                let response = super::svg_paint::control(ui, id.with("editor"), "Filter source", |ui| ui.add(egui::TextEdit::multiline(&mut source).id(id.with("editor")).code_editor().desired_rows(9)).labelled_by(label.id));
+                let response = super::svg_paint::control(ui, id.with("editor"), "Filter source", |ui| ui.add(egui::TextEdit::multiline(&mut source).id(id.with("editor")).code_editor().lock_focus(false).desired_rows(9)).labelled_by(label.id));
                 if response.changed() { ui.data_mut(|d| d.insert_temp(id, source.clone())); }
                 affected.push(response);
                 let apply = super::svg_paint::control(ui, id.with("apply"), "Apply filter source", |ui| ui.button("Apply filter source"));
                 let accepted = apply.clicked();
                 affected.push(apply);
-                if accepted && studio.doc.layer_editable(index) {
+                if accepted && editable && ui.is_enabled() {
                     let filters = graph.filters.iter().map(|s| format!("url(#{s})")).collect::<Vec<_>>().join(" ");
                     let candidate = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><defs>{source}</defs><g filter=\"{filters}\"><rect width=\"10\" height=\"10\"/></g></svg>");
                     if let Ok(tree) = usvg::Tree::from_str(&candidate, &crate::svg_source::options()) {
@@ -60,7 +61,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut crate::app::Studio) {
             ui.collapsing("Original filter source", |ui| {
                 let mut source = graph.original_definitions.as_ref();
                 let original = id.with("original-source");
-                super::svg_paint::control(ui, original, "Original filter source", |ui| ui.add(egui::TextEdit::multiline(&mut source).id(original).code_editor().desired_rows(6).interactive(false)));
+                super::svg_paint::control(ui, original, "Original filter source", |ui| ui.add(egui::TextEdit::multiline(&mut source).id(original).code_editor().lock_focus(false).desired_rows(6).interactive(false)));
             });
           });
         });
