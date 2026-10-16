@@ -116,6 +116,7 @@ fn retained_archives_cold_reopen_undo_remote_restore_and_recovery_pruning() {
     let rich = rich(&fonts);
     fs::write(originals.join("original.bin"), rich.sources[0].bytes()).unwrap();
     let expected = snapshot(&rich).unwrap();
+    let empty = neutral();
     let mut cases = Vec::new();
     for mode in ["base-deleted", "write-withdrawn"] {
         let directory = root.join(mode);
@@ -126,7 +127,7 @@ fn retained_archives_cold_reopen_undo_remote_restore_and_recovery_pruning() {
             snapshot(if mode == "base-deleted" {
                 &rich
             } else {
-                &neutral()
+                &empty
             })
             .unwrap(),
         );
