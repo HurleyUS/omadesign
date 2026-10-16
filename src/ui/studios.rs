@@ -3185,11 +3185,13 @@ fn inspector_keeps_its_width_across_frames_and_personas() {
 
 #[test]
 fn expanded_keyframes_and_effects_respect_the_resized_panel() {
-    use eframe::egui::{self, Event, Id, Modifiers, PointerButton, Pos2, Rect};
+    use crate::ui::workspace::{Place, Workspace};
+    use eframe::egui::{self, Event, Modifiers, PointerButton, Pos2, Rect};
 
     fn frame(
         ctx: &egui::Context,
         studio: &mut Studio,
+        layout: &mut Workspace,
         time: &mut f64,
         events: Vec<Event>,
     ) -> (f32, Vec<(String, Rect)>) {
@@ -3203,8 +3205,14 @@ fn expanded_keyframes_and_effects_respect_the_resized_panel() {
                 ..Default::default()
             },
             |ui| {
-                right_panel(ui, studio);
-                width = 1600.0 - ui.available_width();
+                let outer = ui.available_rect_before_wrap();
+                let center = layout.show(
+                    ui,
+                    "resized-inspector-fixture",
+                    &[("properties", "Properties")],
+                    |ui, _| inspector_content(ui, studio),
+                );
+                width = outer.right() - center.right();
             },
         );
         fn texts(shape: &egui::Shape, out: &mut Vec<(String, Rect)>) {
@@ -3225,8 +3233,14 @@ fn expanded_keyframes_and_effects_respect_the_resized_panel() {
         (width, labels)
     }
 
-    fn open_section(ctx: &egui::Context, studio: &mut Studio, time: &mut f64, title: &str) {
-        let mut labels = frame(ctx, studio, time, vec![]).1;
+    fn open_section(
+        ctx: &egui::Context,
+        studio: &mut Studio,
+        layout: &mut Workspace,
+        time: &mut f64,
+        title: &str,
+    ) {
+        let mut labels = frame(ctx, studio, layout, time, vec![]).1;
         for _ in 0..8 {
             if labels.iter().any(|(text, _)| text == title) {
                 break;
@@ -3234,6 +3248,7 @@ fn expanded_keyframes_and_effects_respect_the_resized_panel() {
             labels = frame(
                 ctx,
                 studio,
+                layout,
                 time,
                 vec![
                     Event::PointerMoved(egui::pos2(1490., 800.)),
@@ -3247,7 +3262,7 @@ fn expanded_keyframes_and_effects_respect_the_resized_panel() {
             )
             .1;
             for _ in 0..4 {
-                labels = frame(ctx, studio, time, vec![]).1;
+                labels = frame(ctx, studio, layout, time, vec![]).1;
             }
         }
         let pos = labels
@@ -3256,11 +3271,12 @@ fn expanded_keyframes_and_effects_respect_the_resized_panel() {
             .unwrap_or_else(|| panic!("Missing {title}"))
             .1
             .center();
-        frame(ctx, studio, time, vec![Event::PointerMoved(pos)]);
+        frame(ctx, studio, layout, time, vec![Event::PointerMoved(pos)]);
         for pressed in [true, false] {
             frame(
                 ctx,
                 studio,
+                layout,
                 time,
                 vec![Event::PointerButton {
                     pos,
@@ -3270,24 +3286,15 @@ fn expanded_keyframes_and_effects_respect_the_resized_panel() {
                 }],
             );
         }
-        frame(ctx, studio, time, vec![]);
-        frame(ctx, studio, time, vec![]);
+        frame(ctx, studio, layout, time, vec![]);
+        frame(ctx, studio, layout, time, vec![]);
     }
 
     for target_width in [256.0, 288.0, 420.0] {
         let ctx = egui::Context::default();
         crate::ui::theme::apply(&ctx);
-        ctx.data_mut(|data| {
-            data.insert_persisted(
-                Id::new("studios"),
-                egui::containers::panel::PanelState {
-                    outer_rect: Rect::from_min_size(
-                        egui::pos2(1600.0 - target_width, 0.0),
-                        vec2(target_width, 1400.0),
-                    ),
-                },
-            );
-        });
+        let mut layout = Workspace::preset(&[("properties", Place::Right)]);
+        layout.groups[0].extent = target_width;
         let mut studio = Studio::new();
         studio.doc = crate::document::Document::new("Panel sizing", 1.0, 1.0, 72.0);
         let shape = crate::document::Shape::new(
@@ -3306,8 +3313,14 @@ fn expanded_keyframes_and_effects_respect_the_resized_panel() {
         studio.active_layer = Some(0);
         studio.persona = Persona::Motion;
         let mut time = 0.0;
-        frame(&ctx, &mut studio, &mut time, vec![]);
-        open_section(&ctx, &mut studio, &mut time, "Keyframe controls");
+        frame(&ctx, &mut studio, &mut layout, &mut time, vec![]);
+        open_section(
+            &ctx,
+            &mut studio,
+            &mut layout,
+            &mut time,
+            "Keyframe controls",
+        );
         for reveal in [0.0, 0.000123, 0.5000123, 0.99021, 1.0] {
             studio.pose_drag.insert(
                 id,
@@ -3318,7 +3331,7 @@ fn expanded_keyframes_and_effects_respect_the_resized_panel() {
                     ..crate::motion::Pose::identity()
                 },
             );
-            let (width, labels) = frame(&ctx, &mut studio, &mut time, vec![]);
+            let (width, labels) = frame(&ctx, &mut studio, &mut layout, &mut time, vec![]);
             assert!(
                 (width - target_width).abs() <= 1.0,
                 "Keyframes grew {target_width}px panel to {width}px at {reveal}"
@@ -3330,11 +3343,11 @@ fn expanded_keyframes_and_effects_respect_the_resized_panel() {
         }
         studio.pose_drag.clear();
         studio.persona = Persona::Design;
-        open_section(&ctx, &mut studio, &mut time, "Effects");
+        open_section(&ctx, &mut studio, &mut layout, &mut time, "Effects");
         for (name, make) in crate::filter::Fx::catalog() {
             studio.doc.find_shape_mut(0, id).unwrap().filters.items = vec![make()];
             for _ in 0..3 {
-                let (width, _) = frame(&ctx, &mut studio, &mut time, vec![]);
+                let (width, _) = frame(&ctx, &mut studio, &mut layout, &mut time, vec![]);
                 assert!(
                     (width - target_width).abs() <= 1.0,
                     "{name} grew {target_width}px panel to {width}px"
@@ -3344,7 +3357,7 @@ fn expanded_keyframes_and_effects_respect_the_resized_panel() {
         studio.tool = Tool::Trace;
         studio.trace_opts.colors = 1;
         for _ in 0..3 {
-            let (width, _) = frame(&ctx, &mut studio, &mut time, vec![]);
+            let (width, _) = frame(&ctx, &mut studio, &mut layout, &mut time, vec![]);
             assert!(
                 (width - target_width).abs() <= 1.0,
                 "Trace grew {target_width}px panel to {width}px"
