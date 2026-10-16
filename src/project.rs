@@ -43,17 +43,61 @@ pub fn encode_admitted(
     let mut packed = doc.clone();
     pack_rasters(&mut packed)?;
     let svg_sources = crate::svg_source::pack_sources(&mut packed);
-    let mut output = crate::deep_color::storage::Builder::new()?;
-    serde_json::to_writer(
-        &mut output,
-        &File {
-            version: features::required_version(doc),
-            doc: packed,
-            svg_sources,
-        },
-    )
-    .map_err(|e| e.to_string())?;
-    output.finish()
+    encode_prepared(&File {
+        version: features::required_version(doc),
+        doc: packed,
+        svg_sources,
+    })
+}
+
+/// Admit a prepared portable value without retaining old and replacement output buffers.
+/// Args: immutable envelope. Returns its one exact-sized encoded owner or a serialization error.
+fn encode_prepared<T: Serialize>(
+    value: &T,
+) -> Result<std::sync::Arc<crate::resources::Allocation<u8>>, String> {
+    use std::io::{self, Write};
+    struct Size(usize);
+    impl Write for Size {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| io::Error::other("Project size overflows"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    struct Output<'a> {
+        writer: &'a mut crate::deep_color::storage::Builder<u8>,
+        remaining: usize,
+    }
+    impl Write for Output<'_> {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if bytes.len() > self.remaining {
+                return Err(io::Error::other("Project changed during encoding"));
+            }
+            self.writer.write_all(bytes)?;
+            self.remaining -= bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut size = Size(0);
+    serde_json::to_writer(&mut size, value).map_err(|e| e.to_string())?;
+    let mut writer = crate::deep_color::storage::Builder::with_capacity(size.0)?;
+    let mut output = Output {
+        writer: &mut writer,
+        remaining: size.0,
+    };
+    serde_json::to_writer(&mut output, value).map_err(|e| e.to_string())?;
+    if output.remaining != 0 {
+        return Err("Project changed during encoding".into());
+    }
+    writer.finish()
 }
 
 pub fn decode(s: &str) -> Result<Document, String> {
@@ -812,6 +856,32 @@ mod tests {
     use super::*;
     use crate::document::{Cmd, Shape, Style, apply};
     use crate::geom::{Geom, Pt};
+
+    #[test]
+    fn admitted_project_output_refuses_size_drift_and_releases_its_owner() {
+        struct Changing {
+            grow: bool,
+            calls: std::cell::Cell<u8>,
+        }
+        impl Serialize for Changing {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let first = self.calls.replace(self.calls.get() + 1) == 0;
+                serializer.serialize_str(if first == self.grow { "a" } else { "different" })
+            }
+        }
+        let pool = crate::resources::global();
+        let before = (pool.usage().0, pool.pending_bytes());
+        for grow in [false, true] {
+            let changing = Changing {
+                grow,
+                calls: std::cell::Cell::new(0),
+            };
+            let error = encode_prepared(&changing).unwrap_err();
+            assert!(error.contains("Project changed during encoding"));
+            assert_eq!(changing.calls.get(), 2);
+            assert_eq!((pool.usage().0, pool.pending_bytes()), before);
+        }
+    }
 
     #[test]
     fn admitted_project_output_survives_roundtrip_write_failure_and_last_alias() {
