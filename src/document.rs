@@ -1331,6 +1331,9 @@ impl Document {
                 return Err(format!("Layer {} references a missing original source", layer.name));
             }
         }
+        if let Some(replica) = &self.collaboration {
+            crate::collaboration::resources::validate(replica)?;
+        }
         Ok(())
     }
     /// Editing layout needs vector state only. Preserve layer indices without

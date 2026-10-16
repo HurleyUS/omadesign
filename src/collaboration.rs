@@ -7,8 +7,11 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
+mod archive_tests;
+#[cfg(test)]
 pub(crate) mod native_tests;
 mod pixels;
+pub(crate) mod resources;
 pub mod transport;
 
 pub const PROTOCOL: u32 = 2;
@@ -698,15 +701,9 @@ impl Replica {
     /// Inspect the entire retained log before a peer can round-trip authoritative content.
     /// Args: none. Returns the minimum lossless live protocol, including withdrawn native edits.
     pub fn required_protocol(&self) -> u32 {
-        if self.base.iter().any(|(path, cell)| native_cell(path, cell))
-            || self.changes.iter().any(|c| match &c.edit {
-                Edit::Write { writes } => writes.iter().any(|w| {
-                    w.value
-                        .as_ref()
-                        .is_some_and(|cell| native_cell(&w.path, cell))
-                }),
-                _ => false,
-            })
+        if self
+            .retained_cells()
+            .any(|(path, cell)| native_cell(path, cell))
         {
             2
         } else {
@@ -714,7 +711,46 @@ impl Replica {
         }
     }
 
+    /// Visit every retained payload, including withdrawn edits and deleted objects.
+    /// Args: none. Returns base and write cells with their logical property paths.
+    pub(crate) fn retained_cells(&self) -> impl Iterator<Item = (&str, &Cell)> {
+        self.base
+            .iter()
+            .map(|(path, cell)| (path.as_str(), cell))
+            .chain(
+                self.changes
+                    .iter()
+                    .flat_map(|change| match &change.edit {
+                        Edit::Write { writes } => writes.as_slice(),
+                        Edit::Toggle { .. } => &[],
+                    })
+                    .filter_map(|write| {
+                        write.value.as_ref().map(|cell| (write.path.as_str(), cell))
+                    }),
+            )
+    }
+
+    /// Update resource references without replaying or decoding historical documents.
+    /// Args: none. Returns mutable base and write cells with their logical paths.
+    pub(crate) fn retained_cells_mut(&mut self) -> impl Iterator<Item = (&str, &mut Cell)> {
+        self.base
+            .iter_mut()
+            .map(|(path, cell)| (path.as_str(), cell))
+            .chain(
+                self.changes
+                    .iter_mut()
+                    .flat_map(|change| match &mut change.edit {
+                        Edit::Write { writes } => writes.as_mut_slice(),
+                        Edit::Toggle { .. } => &mut [],
+                    })
+                    .filter_map(|write| {
+                        write.value.as_mut().map(|cell| (write.path.as_str(), cell))
+                    }),
+            )
+    }
+
     fn rendered(&self) -> Result<(Document, BTreeSet<String>), String> {
+        resources::validate(self)?;
         let cells = self.cells();
         let value = inflate("", &cells).ok_or("Live document has no root")?;
         preflight_pixels(&value, &cells, PIXEL_BUDGET)?;
@@ -776,6 +812,7 @@ impl Replica {
             doc.layers[layer].kind.shapes_mut().unwrap().push(shape);
         }
         unpack_pixels(&mut doc, &cells, PIXEL_BUDGET)?;
+        doc.validate_sources()?;
         crate::deep_color::cms::validate_profile(&doc.color.icc_profile, doc.color.model)?;
         if doc.color.intent > 3 {
             return Err("Invalid live document rendering intent".into());
