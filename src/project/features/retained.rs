@@ -1,4 +1,6 @@
-use super::{COLOR, COMPOSITIONS, EXPRESSIONS, NATIVE, PSD_TYPE, SCENE3D, SMART, SOURCE};
+use super::{
+    ADVANCED_LAYOUT, COLOR, COMPOSITIONS, EXPRESSIONS, NATIVE, PSD_TYPE, SCENE3D, SMART, SOURCE,
+};
 use serde::Deserialize;
 use serde::de::{MapAccess, SeqAccess, Visitor};
 
@@ -13,6 +15,33 @@ struct Seen {
     items: usize,
     motion_count: usize,
     motion_depth: usize,
+    explicit_grid: bool,
+    baseline_align: bool,
+    named_properties: bool,
+}
+
+fn layout_property(path: &str) -> Option<&'static str> {
+    let (_, tail) = path.rsplit_once("/layout/")?;
+    let mut fields = tail.split('/');
+    match (fields.next()?, fields.next()?) {
+        ("grid", "row" | "column") => Some("layout-placement"),
+        ("grid", "row_span" | "column_span") => Some("layout-span"),
+        ("stack", "column_tracks" | "row_tracks") => Some(if fields.next().is_some() {
+            "layout-track-member"
+        } else {
+            "layout-tracks"
+        }),
+        ("stack", "align") => Some("layout-align"),
+        ("breakpoints", _) if fields.next() == Some("align") => Some("layout-align"),
+        ("component", "Main") if fields.next() == Some("properties") => {
+            Some(if fields.next().is_some() {
+                "layout-property-member"
+            } else {
+                "layout-properties"
+            })
+        }
+        _ => None,
+    }
 }
 
 fn composition_bounds<E: serde::de::Error>(value: &Seen) -> Result<(usize, usize), E> {
@@ -33,8 +62,19 @@ fn field_version(key: &str, value: &Seen) -> u32 {
     if !value.exists {
         return 1;
     }
-    let path = key.rsplit('/').next().unwrap_or(key);
+    let path = layout_property(key).unwrap_or_else(|| key.rsplit('/').next().unwrap_or(key));
     match path {
+        "grid" if value.explicit_grid => ADVANCED_LAYOUT,
+        "stack" | "breakpoints" if value.baseline_align => ADVANCED_LAYOUT,
+        "Main" if value.named_properties => ADVANCED_LAYOUT,
+        "column_tracks" | "row_tracks" | "layout-tracks" | "layout-properties"
+            if value.present && value.word != Some("List") =>
+        {
+            ADVANCED_LAYOUT
+        }
+        "layout-placement" | "layout-track-member" | "layout-property-member" => ADVANCED_LAYOUT,
+        "layout-span" if value.number != Some(1) => ADVANCED_LAYOUT,
+        "layout-align" if value.word == Some("Baseline") => ADVANCED_LAYOUT,
         "collaboration" => 24,
         "expressions" if value.present => EXPRESSIONS,
         "compositions" if value.present => COMPOSITIONS,
@@ -102,20 +142,24 @@ impl<'de> Deserialize<'de> for Seen {
                     "Cmyk" => Some("Cmyk"),
                     "Hold" => Some("Hold"),
                     "CubicBezier" => Some("CubicBezier"),
-                    _ if s.starts_with('/') => match s.rsplit('/').next() {
-                        Some("source_attachment") => Some("source_attachment"),
-                        Some("sources") => Some("sources"),
-                        Some("native") => Some("native"),
-                        Some("psd_type") => Some("psd_type"),
-                        Some("psd_smart") => Some("psd_smart"),
-                        Some("cmyk") => Some("cmyk"),
-                        Some("icc_profile") => Some("icc_profile"),
-                        Some("expressions") => Some("expressions"),
-                        Some("compositions") => Some("compositions"),
-                        Some("scene3d") => Some("scene3d"),
-                        Some("ease") => Some("ease"),
-                        _ => None,
-                    },
+                    "Baseline" => Some("Baseline"),
+                    "List" => Some("List"),
+                    _ if s.starts_with('/') => {
+                        layout_property(s).or_else(|| match s.rsplit('/').next() {
+                            Some("source_attachment") => Some("source_attachment"),
+                            Some("sources") => Some("sources"),
+                            Some("native") => Some("native"),
+                            Some("psd_type") => Some("psd_type"),
+                            Some("psd_smart") => Some("psd_smart"),
+                            Some("cmyk") => Some("cmyk"),
+                            Some("icc_profile") => Some("icc_profile"),
+                            Some("expressions") => Some("expressions"),
+                            Some("compositions") => Some("compositions"),
+                            Some("scene3d") => Some("scene3d"),
+                            Some("ease") => Some("ease"),
+                            _ => None,
+                        })
+                    }
                     _ => None,
                 };
                 Ok(Seen {
@@ -136,6 +180,7 @@ impl<'de> Deserialize<'de> for Seen {
                     result.items = result.items.saturating_add(1);
                     result.motion_count = result.motion_count.saturating_add(child.motion_count);
                     result.motion_depth = result.motion_depth.max(child.motion_depth);
+                    result.baseline_align |= child.baseline_align;
                 }
                 Ok(result)
             }
@@ -162,6 +207,14 @@ impl<'de> Deserialize<'de> for Seen {
                     count += 1;
                     result.present = true;
                     result.version = result.version.max(child.version);
+                    result.explicit_grid |= match key.as_str() {
+                        "row" | "column" => child.exists,
+                        "row_span" | "column_span" => child.exists && child.number != Some(1),
+                        _ => false,
+                    };
+                    result.baseline_align |= key == "align" && child.word == Some("Baseline");
+                    result.named_properties |=
+                        key == "properties" && child.present && child.word != Some("List");
                     if key != "collaboration" {
                         result.motion_count =
                             result.motion_count.saturating_add(child.motion_count);
@@ -211,6 +264,9 @@ impl<'de> Deserialize<'de> for Seen {
                     result.word = child.word;
                     result.number = child.number;
                     result.items = child.items;
+                    result.explicit_grid = child.explicit_grid;
+                    result.baseline_align = child.baseline_align;
+                    result.named_properties = child.named_properties;
                 }
                 if let Some(property) = property
                     && let Some(value) = written
@@ -295,6 +351,86 @@ pub(super) fn source_version(source: &crate::source_attachment::SourceAttachment
         };
     }
     SOURCE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn layout28_retained_base_and_withdrawn_writes_share_the_canonical_predicates() {
+        let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+            "../../../site/shared/liveProtocol.fixtures.json"
+        ))
+        .unwrap();
+        let mut checked = 0;
+        for fixture in fixtures
+            .iter()
+            .filter(|fixture| fixture["name"].as_str().unwrap().starts_with("layout28"))
+        {
+            let name = fixture["name"].as_str().unwrap();
+            let path = fixture["path"].as_str().unwrap();
+            let required = fixture["error"] == true;
+            for in_base in [true, false] {
+                let mut replica = json!({"session":"layout-retained","actor":"a","base":{},"changes":[
+                    {"id":{"actor":"a","seq":1},"clock":1,"seen":{},"edit":{"type":"write","writes":[]}},
+                    {"id":{"actor":"a","seq":2},"clock":2,"seen":{},"edit":{"type":"toggle","target":{"actor":"a","seq":1},"enabled":false}}
+                ]});
+                if in_base {
+                    replica["base"][path] = fixture["cell"].clone();
+                } else {
+                    replica["changes"][0]["edit"]["writes"] =
+                        json!([{"path":path,"value":fixture["cell"]}]);
+                }
+                let typed: crate::collaboration::Replica =
+                    serde_json::from_value(replica.clone()).unwrap();
+                assert_eq!(
+                    replica_version(&typed).unwrap() >= ADVANCED_LAYOUT,
+                    required,
+                    "{name}, base={in_base}"
+                );
+                let envelope = json!({"version":27,"doc":{"collaboration":replica}});
+                let text = envelope.to_string();
+                assert_eq!(
+                    serialized_version(&text).unwrap().0 >= ADVANCED_LAYOUT,
+                    required,
+                    "{name}, base={in_base}"
+                );
+                assert_eq!(
+                    crate::project::validate_retained_json(&text).is_err(),
+                    required,
+                    "{name}, base={in_base}"
+                );
+                assert_eq!(
+                    value_version(&envelope).unwrap() >= ADVANCED_LAYOUT,
+                    required,
+                    "{name}, base={in_base}"
+                );
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 75);
+    }
+
+    #[test]
+    fn layout28_retained_source_keeps_empty_list_markers_legacy() {
+        for path in [
+            "/@entities/91/layout/stack/row_tracks",
+            "/@entities/91/layout/component/Main/properties",
+        ] {
+            assert!(value_version(&json!({(path):"List"})).unwrap() < ADVANCED_LAYOUT);
+        }
+        let original = json!({"version":28,"doc":{"layers":[{"kind":{"Vector":{"shapes":[{"layout":{"grid":{"row":0}}}]}}}]}}).to_string().into_bytes();
+        let source = crate::source_attachment::SourceAttachment::new(
+            "retained.oma",
+            "oma",
+            original.clone(),
+        )
+        .unwrap();
+        assert_eq!(source_version(&source), ADVANCED_LAYOUT);
+        assert_eq!(source.bytes(), original);
+    }
 }
 
 fn psd_profile(bytes: &[u8]) -> bool {
