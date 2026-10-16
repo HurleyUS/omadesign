@@ -415,3 +415,6 @@ fn egui_shortcuts(ui: &mut Ui, studio: &mut Studio) {
 mod shared_fields_tests;
 #[cfg(test)]
 mod shared_keyboard_tests;
+
+#[cfg(test)]
+mod workspace_qa_tests;

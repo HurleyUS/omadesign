@@ -400,86 +400,99 @@ impl Workspace {
             };
             let mut content = |ui: &mut Ui| {
                 ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
-                ui.horizontal_wrapped(|ui| {
-                    for (tab, panel) in saved.panels.iter().enumerate() {
-                        let response = scope::native_scope(
-                            ui,
-                            egui::Id::new(id).with(("panel-tab", panel)),
-                            |ui| {
-                                ui.add(
-                                    egui::Button::new(panel_label(panel))
-                                        .selected(tab == group.active)
-                                        .sense(egui::Sense::click_and_drag()),
+                egui::ScrollArea::horizontal()
+                    .id_salt((id, "dock-tabs", saved.panels.first()))
+                    .max_height(28.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for (tab, panel) in saved.panels.iter().enumerate() {
+                                let response = scope::native_scope(
+                                    ui,
+                                    egui::Id::new(id).with(("panel-tab", panel)),
+                                    |ui| {
+                                        ui.add(
+                                            egui::Button::new(panel_label(panel))
+                                                .wrap_mode(egui::TextWrapMode::Extend)
+                                                .selected(tab == group.active)
+                                                .sense(egui::Sense::click_and_drag()),
+                                        )
+                                    },
                                 )
-                            },
-                        )
-                        .inner;
-                        response.dnd_set_drag_payload(PanelDrag {
-                            workspace: id.into(),
-                            panel: panel.clone(),
-                        });
-                        if response.has_focus() {
-                            ui.painter().rect_stroke(
-                                response.rect.expand(2.),
-                                3.,
-                                egui::Stroke::new(2., ui.visuals().selection.stroke.color),
-                                egui::StrokeKind::Outside,
-                            );
-                        }
-                        if focus_next.as_ref() == Some(panel)
-                            && response.enabled()
-                            && ui.memory(|memory| memory.allows_interaction(response.layer_id))
-                        {
-                            let already_focused = response.has_focus();
-                            response.request_focus();
-                            if !already_focused && response.gained_focus() {
-                                response.widget_info(|| {
-                                    egui::WidgetInfo::selected(
-                                        egui::WidgetType::Button,
-                                        response.enabled(),
-                                        tab == group.active,
-                                        panel_label(panel),
-                                    )
+                                .inner;
+                                response.dnd_set_drag_payload(PanelDrag {
+                                    workspace: id.into(),
+                                    panel: panel.clone(),
                                 });
-                            }
-                            focus_delivered = true;
-                        }
-                        if response.clicked() {
-                            group.active = tab;
-                            self.focus = Some(panel.clone());
-                        }
-                        response.context_menu(|ui| {
-                            for (label, place) in [
-                                ("Move left", Place::Left),
-                                ("Move right", Place::Right),
-                                ("Move top", Place::Top),
-                                ("Move bottom", Place::Bottom),
-                                ("Float", Place::Floating),
-                            ] {
-                                if ui.button(label).clicked() {
-                                    command = Some((panel.clone(), Some(place), None));
-                                    ui.close();
+                                if response.has_focus() {
+                                    ui.painter().rect_stroke(
+                                        response.rect.expand(2.),
+                                        3.,
+                                        egui::Stroke::new(2., ui.visuals().selection.stroke.color),
+                                        egui::StrokeKind::Outside,
+                                    );
                                 }
-                            }
-                            ui.menu_button("Tab with", |ui| {
-                                for other in before
-                                    .iter()
-                                    .flat_map(|g| &g.panels)
-                                    .filter(|other| *other != panel)
+                                if focus_next.as_ref() == Some(panel)
+                                    && response.enabled()
+                                    && ui.memory(|memory| {
+                                        memory.allows_interaction(response.layer_id)
+                                    })
                                 {
-                                    if ui.button(panel_label(other)).clicked() {
-                                        command = Some((panel.clone(), None, Some(other.clone())));
+                                    let already_focused = response.has_focus();
+                                    response.request_focus();
+                                    if !already_focused && response.gained_focus() {
+                                        response.widget_info(|| {
+                                            egui::WidgetInfo::selected(
+                                                egui::WidgetType::Button,
+                                                response.enabled(),
+                                                tab == group.active,
+                                                panel_label(panel),
+                                            )
+                                        });
+                                    }
+                                    focus_delivered = true;
+                                }
+                                if response.clicked() {
+                                    group.active = tab;
+                                    self.focus = Some(panel.clone());
+                                }
+                                response.context_menu(|ui| {
+                                    for (label, place) in [
+                                        ("Move left", Place::Left),
+                                        ("Move right", Place::Right),
+                                        ("Move top", Place::Top),
+                                        ("Move bottom", Place::Bottom),
+                                        ("Float", Place::Floating),
+                                    ] {
+                                        if ui.button(label).clicked() {
+                                            command = Some((panel.clone(), Some(place), None));
+                                            ui.close();
+                                        }
+                                    }
+                                    ui.menu_button("Tab with", |ui| {
+                                        for other in before
+                                            .iter()
+                                            .flat_map(|g| &g.panels)
+                                            .filter(|other| *other != panel)
+                                        {
+                                            if ui.button(panel_label(other)).clicked() {
+                                                command = Some((
+                                                    panel.clone(),
+                                                    None,
+                                                    Some(other.clone()),
+                                                ));
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+                                    if ui.button("Close").clicked() {
+                                        command = Some((panel.clone(), None, None));
                                         ui.close();
                                     }
-                                }
-                            });
-                            if ui.button("Close").clicked() {
-                                command = Some((panel.clone(), None, None));
-                                ui.close();
+                                });
                             }
                         });
-                    }
-                });
+                    });
                 ui.separator();
                 if let Some(panel) = saved.panels.get(group.active) {
                     ui.push_id(panel, |ui| body(ui, panel));

@@ -9,7 +9,7 @@
   ],
   "sha256": {
     "fields.rs": "7b1502c5c94082ba182d3c8d81aa29cca8cf1cb61f0b66d4a55ebd4682a35064",
-    "workspace.rs": "5bddb546d0ed48d65e990339751ae3542620ae91bb18c7222b0586890d8e56fd",
+    "workspace.rs": "20b882346cdec40e52f2df08547b94b4eb7885d4b827ecae96c8dbe6dc888062",
     "native_scope.rs": "5ca4d208655a3a9a90dc45104d705ce125438c68b0d62ca5821b452bf0cf46b0"
   },
   "directory": "vendor/oma-ui",

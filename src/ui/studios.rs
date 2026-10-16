@@ -2479,7 +2479,7 @@ fn object_name(
             .rect_filled(rect, 4.0, crate::ui::theme::bg_widget_hover());
     }
     let text = RichText::new(name)
-        .size(11.0)
+        .size(12.0)
         .color(if strong { fg() } else { fg_weak() });
     let galley = eframe::egui::WidgetText::from(text).into_galley(
         ui,
@@ -2627,13 +2627,20 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                         .max(42.0);
                         if studio.layer_rename.as_ref().map(|(index, _)| *index) == Some(i) {
                             if let Some((_, buffer)) = studio.layer_rename.as_mut() {
+                                let focus_id=eframe::egui::Id::new(("focus-layer-rename",&studio.swap_id,layer.id));
+                                let first=ui.data_mut(|data|data.remove_temp::<bool>(focus_id)).unwrap_or(false);
                                 let response = ui.add(
                                     eframe::egui::TextEdit::singleline(buffer)
+                                        .id(focus_id.with("edit"))
                                         .desired_width(name_width)
                                         .font(eframe::egui::TextStyle::Small),
                                 );
-                                if response.lost_focus() {
-                                    start_rename = Some(usize::MAX);
+                                let response=super::agent::named(ui,response,"Rename layer");
+                                if first {response.request_focus();}
+                                if response.has_focus() && ui.input(|input|input.key_pressed(eframe::egui::Key::Escape)) {
+                                    studio.layer_rename=None;response.surrender_focus();
+                                } else if !first && (response.lost_focus() || (response.has_focus() && ui.input(|input|input.key_pressed(eframe::egui::Key::Enter)))) {
+                                    response.surrender_focus();start_rename=Some(usize::MAX);
                                 }
                             }
                         } else {
@@ -2975,8 +2982,6 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                     });
                 }
             }
-        } else {
-            studio.layer_rename = Some((i, studio.doc.layers[i].name.clone()));
         }
     }
     if let Some(i) = activate {
@@ -2997,6 +3002,12 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                 }
                 studio.selected_layer = None;
             }
+        }
+    }
+    if let Some(index)=start_rename.filter(|index|*index!=usize::MAX) {
+        if let Some(layer)=studio.doc.layers.get(index) {
+            studio.layer_rename=Some((index,layer.name.clone()));
+            ui.data_mut(|data|data.insert_temp(eframe::egui::Id::new(("focus-layer-rename",&studio.swap_id,layer.id)),true));
         }
     }
     if let Some(i) = vis {
