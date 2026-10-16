@@ -320,6 +320,13 @@ pub(crate) fn value_version(value: &serde_json::Value) -> Result<u32, String> {
 /// Args: base and all writes. Returns their greatest required reader version.
 pub(super) fn replica_version(replica: &crate::collaboration::Replica) -> Result<u32, String> {
     let mut version = 24;
+    for change in &replica.changes {
+        if let crate::collaboration::Edit::Write { writes } = &change.edit {
+            for write in writes.iter().filter(|write| write.value.is_none()) {
+                version=version.max(field_version(&write.path,&Seen::default()));
+            }
+        }
+    }
     for (path, cell) in replica.retained_cells() {
         let seen = match cell {
             crate::collaboration::Cell::Value(value) => {

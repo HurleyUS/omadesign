@@ -81,8 +81,9 @@ fn craft_export_sizing_feature30_current_embedded_retained_and_withdrawn_metadat
         "/@compositions/42/document/screen_export/rows/8/export_resolution/Width",
     ] {
         for value in [
-            serde_json::json!(null),
-            serde_json::json!("Variant"),
+            serde_json::json!({"Value":null}),
+            serde_json::json!("List"),
+            serde_json::json!({"Variant":"Width"}),
             serde_json::json!({"Value":{"Width":512}}),
         ] {
             for base in [false, true] {
@@ -116,6 +117,17 @@ fn craft_export_sizing_feature30_current_embedded_retained_and_withdrawn_metadat
                 );
             }
         }
+        let mut doc=Document::new("Deleted resolution",10.,10.,96.);
+        doc.collaboration=Some(serde_json::from_value(serde_json::json!({"session":"sizes","actor":"a","base":{},"changes":[
+            {"id":{"actor":"a","seq":1},"clock":1,"seen":{},"edit":{"type":"write","writes":[{"path":path,"value":null}]}},
+            {"id":{"actor":"a","seq":2},"clock":2,"seen":{},"edit":{"type":"toggle","target":{"actor":"a","seq":1},"enabled":false}}
+        ]})).unwrap());
+        assert_eq!(doc.collaboration.as_ref().unwrap().protocol_requirement().unwrap(),1);
+        let encoded=crate::project::encode(&doc).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&encoded).unwrap()["version"],30);
+        crate::project::decode(&encoded).unwrap();
+        let mut wire:serde_json::Value=serde_json::from_str(&encoded).unwrap();wire["version"]=29.into();
+        assert!(crate::project::validate_retained_json(&wire.to_string()).unwrap_err().contains("requires version 30"));
     }
 }
 
