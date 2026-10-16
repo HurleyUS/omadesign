@@ -471,28 +471,28 @@ impl Shape {
             let rotation = tiny_skia::Transform::from_rotate_at(self.rotation.to_degrees(), center.x, center.y);
             pb.push_path(&path.transform(rotation)?);
         } else if matches!(geometry, Geom::Path { .. } | Geom::Paths { .. }) {
-            // Path bounds sample every contour. Compute the unchanged rotation
-            // center once, not once for every cubic control point (quadratic on
-            // detailed imported paths). Keep world_point's exact arithmetic.
             let center = self.geom.bbox().center();
-            let world_point = |point: Pt| point.rotate_about(center, self.rotation);
+            let rotation = tiny_skia::Transform::from_rotate_at(self.rotation.to_degrees(), center.x, center.y);
+            let mut local = tiny_skia::PathBuilder::new();
             for (anchors, closed) in geometry.path_contours() {
                 let segments = crate::geom::path_cubics(anchors, closed);
                 if let Some(first) = segments.first() {
-                    let p = world_point(first[0]);
-                    pb.move_to(p.x, p.y);
+                    let p = first[0];
+                    local.move_to(p.x, p.y);
                     for [a, c1, c2, b] in segments {
-                        let [a, c1, c2, b] = [a, c1, c2, b].map(world_point);
                         if (c1 - a).length_sq() < 1e-10 && (c2 - b).length_sq() < 1e-10 {
-                            pb.line_to(b.x, b.y);
+                            local.line_to(b.x, b.y);
                         } else {
-                            pb.cubic_to(c1.x, c1.y, c2.x, c2.y, b.x, b.y);
+                            local.cubic_to(c1.x, c1.y, c2.x, c2.y, b.x, b.y);
                         }
                     }
                     if closed {
-                        pb.close();
+                        local.close();
                     }
                 }
+            }
+            if let Some(path) = local.finish().and_then(|path| path.transform(rotation)) {
+                pb.push_path(&path);
             }
         } else {
             for contour in self.world_contours(segs) {
