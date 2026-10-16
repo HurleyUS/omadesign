@@ -349,6 +349,7 @@ mod tests {
     fn keyboard_authoring_selection_skips_hidden_locked_and_stale_items() {
         let mut studio = Studio::new();
         studio.doc = Document::new("Keyboard selection", 128., 96., 72.);
+        studio.doc.layers[0].locked = true;
         studio.show_welcome = false;
         let mut ids = Vec::new();
         for _ in 0..3 {
