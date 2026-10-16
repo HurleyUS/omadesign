@@ -19,11 +19,24 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                 }
                 ui.set_min_width(300.);
                 ui.set_max_width(420.);
-                egui::ScrollArea::vertical()
+                let clip = ui.clip_rect();
+                let available = ui.available_rect_before_wrap().intersect(clip);
+                let height = (available.bottom() - ui.next_widget_position().y).clamp(0., 600.);
+                let scrolled = egui::ScrollArea::vertical()
                     .id_salt(owner.with("controls-scroll"))
                     .animated(false)
-                    .max_height(600.)
+                    .min_scrolled_height(0.)
+                    .max_height(height)
                     .show(ui, |ui| controls(ui, studio));
+                #[cfg(test)]
+                for composition in &studio.doc.motion.compositions {
+                    let key = action_error_key(studio, composition.id);
+                    if ui.data(|data| data.get_temp::<ActionError>(key)).is_some() {
+                        eprintln!("Composition popup: available={available:?}, clip={clip:?}, max_height={height}, inner={:?}, content={:?}, offset={:?}", scrolled.inner_rect, scrolled.content_size, scrolled.state.offset);
+                    }
+                }
+                #[cfg(not(test))]
+                let _ = scrolled;
             });
         response
     })
@@ -613,8 +626,9 @@ fn animation_controls(
             let error = action_error_key(studio, comp.id);
             ui.data_mut(|data| data.remove::<ActionError>(error));
         }
+        action_error(ui, studio, comp.id, &[source.id]);
         ui.label("time in seconds · expression rotation in radians");
-        let mut expression_controls = vec![source.id];
+        let mut expression_controls = Vec::new();
         ui.horizontal(|ui| {
             if super::keyboard_controls::button(ui, "apply-expression", "Apply expression")
                 .clicked()
