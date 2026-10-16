@@ -1242,7 +1242,8 @@ mod tests {
         // Packed rasters are base64 PNGs. A buffer is raw only when its length
         // is exactly w*h*4. Dimensions whose product does not fit in usize must
         // take that same fallback, not abort the multiply.
-        let doc = Document::new("overflow", 1.0, 1.0, 72.0);
+        let mut doc = Document::new("overflow", 1.0, 1.0, 72.0);
+        doc.layers[0] = crate::document::Layer::raster("Overflow raster", 1, 1).unwrap();
         let encoded = encode(&doc).unwrap();
         let restored = decode(&encoded).unwrap();
         assert_eq!(
