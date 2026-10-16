@@ -554,6 +554,8 @@ mod tests {
             let ctx = egui::Context::default();
             let mut studio = Studio::new();
             studio.history.clear();
+            let original_shapes = studio.doc.layers.iter()
+                .filter_map(|layer| layer.kind.shapes()).flatten().cloned().collect::<Vec<_>>();
             let plugin = plugins::inspect(
                 &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("plugins/studio-starter/main.lua"),
@@ -601,12 +603,10 @@ mod tests {
                         .any(|l| l.kind.shapes().is_some_and(|s| s.len() == 48))
                 );
                 studio.undo();
-                assert!(
-                    studio
-                        .doc
-                        .layers
-                        .iter()
-                        .all(|l| l.kind.shapes().is_none_or(|s| s.is_empty()))
+                assert_eq!(
+                    studio.doc.layers.iter().filter_map(|layer| layer.kind.shapes())
+                        .flatten().cloned().collect::<Vec<_>>(),
+                    original_shapes
                 );
             }
         }
