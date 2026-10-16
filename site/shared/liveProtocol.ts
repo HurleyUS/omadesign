@@ -106,6 +106,7 @@ const nonzero = (value: unknown): boolean => {
 };
 function commonProtocol(path: string, value: unknown): Protocol {
   const p = relativePath(path);
+  refuseFutureLayout(p, value);
   const parts = p.split("/").slice(1),
     root = parts[0];
   if (root && !documentFields.has(root))
@@ -230,6 +231,46 @@ function commonProtocol(path: string, value: unknown): Protocol {
   }
   return 1;
 }
+
+/** Refuse stored Layout-28 data before a protocol-3 reader can discard it. */
+function refuseFutureLayout(path: string, value: unknown): void {
+  const marker = path.lastIndexOf("/layout");
+  if (marker < 0 || !/^\/(?:@entities|layers)\//.test(path)) return;
+  const tail = path.slice(marker + 7);
+  if (tail && !tail.startsWith("/")) return;
+  const fields = tail.split("/").slice(1), field = fields[0];
+  let unsupported = false;
+  if (field === "grid" && fields.length > 1) {
+    unsupported = ["row", "column"].includes(fields[1])
+      ? value != null
+      : ["row_span", "column_span"].includes(fields[1])
+        ? value !== 1
+        : true;
+  } else if (field === "stack" || field === "breakpoints") {
+    const property = fields[field === "breakpoints" ? 2 : 1];
+    if (["column_tracks", "row_tracks"].includes(property))
+      unsupported = fields.length > 2 || !Array.isArray(value) || value.length !== 0;
+    else if (value != null) {
+      const variants: Record<string, string[]> = {
+        align: ["Start", "Center", "End", "Stretch"],
+        flow: ["Stack", "Wrap", "Grid"],
+        direction: ["Vertical", "Horizontal"],
+        justify: ["Start", "Center", "End", "SpaceBetween", "SpaceAround", "SpaceEvenly"],
+      };
+      if (property in variants) unsupported = !variants[property].includes(value as string);
+    }
+  } else if (field === "component") {
+    if (fields.length === 1 && value != null)
+      unsupported = typeof value === "string"
+        ? !["Main", "Instance"].includes(value)
+        : !object(value) || Object.keys(value).some(k => !["Main", "Instance"].includes(k));
+    else if (fields[1] === "Main" && fields[2] === "properties")
+      unsupported = fields.length > 3 || !Array.isArray(value) || value.length !== 0;
+    else if (fields.length > 1) unsupported = !["Main", "Instance"].includes(fields[1]);
+  }
+  if (unsupported)
+    throw new LiveProtocolError("Unsupported retained Layout feature or variant (feature 28 is outside live protocol 3).");
+}
 function valueProtocol(path: string, value: unknown, depth = 0): Protocol {
   if (depth > 128)
     throw new LiveProtocolError(
@@ -304,10 +345,12 @@ function valueProtocol(path: string, value: unknown, depth = 0): Protocol {
     throw new LiveProtocolError("Unsupported retained document version.");
   if (relativePath(path) === "/sources") return required;
   if (object(value) || Array.isArray(value)) {
+    if ("path" in value && typeof value.path === "string" && "value" in value)
+      return Math.max(required, encodedProtocol(value.path, value.value, depth + 1)) as Protocol;
     for (const [key, child] of Object.entries(value))
       required = Math.max(
         required,
-        valueProtocol(
+        key.startsWith("/") ? encodedProtocol(key, child, depth + 1) : valueProtocol(
           `${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`,
           child,
           depth + 1,
@@ -317,18 +360,21 @@ function valueProtocol(path: string, value: unknown, depth = 0): Protocol {
   return required;
 }
 export function cellProtocol(path: string, cell: unknown): Protocol {
+  return encodedProtocol(path, cell, 0);
+}
+function encodedProtocol(path: string, cell: unknown, depth: number): Protocol {
   if (cell == null) return 1;
   if (cell === "Object" || cell === "List") {
-    return valueProtocol(path, cell === "List" ? [] : {});
+    return valueProtocol(path, cell === "List" ? [] : {}, depth);
   }
   if (!object(cell) || Object.keys(cell).length !== 1)
     throw new LiveProtocolError("Unsupported live cell.");
   if ("Pixels" in cell) {
-    const required = valueProtocol(path, null);
+    const required = valueProtocol(path, null, depth);
     return Math.max(required, cell.Pixels?.native != null ? 2 : 1) as Protocol;
   }
-  if ("Value" in cell) return valueProtocol(path, cell.Value);
-  if ("Variant" in cell) return valueProtocol(path, cell.Variant);
+  if ("Value" in cell) return valueProtocol(path, cell.Value, depth);
+  if ("Variant" in cell) return valueProtocol(path, cell.Variant, depth);
   throw new LiveProtocolError("Unsupported live cell.");
 }
 export function seedProtocol(seed: unknown): Protocol {

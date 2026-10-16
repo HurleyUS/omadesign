@@ -51,6 +51,15 @@ describe("Canonical retained protocol policy", () => {
       expect(preflightCreate(seed, 3)).toBe(3);
     }
   });
+  it("refuses every advanced Layout fixture even with offer 3 and after withdrawal", () => {
+    for (const c of fixtures.filter((c: any) => c.error && c.name.startsWith("layout28"))) {
+      const seed = JSON.stringify({ "": "Object", [c.path]: c.cell });
+      expect(() => preflightCreate(seed, 3)).toThrow("Unsupported");
+      const edit = { edit: { type: "write", writes: [{ path: c.path, value: c.cell }] } };
+      const remove = { edit: { type: "write", writes: [{ path: c.path, value: null }] } };
+      expect(() => changesProtocol([edit, remove, {edit:{type:"toggle",enabled:false}}])).toThrow("Unsupported");
+    }
+  });
   it("refuses unknown cells and excessive nesting without assigning Motion capability", () => {
     expect(() => cellProtocol("/name", { Future: 1 })).toThrow("Unsupported");
     let value: any = 1;

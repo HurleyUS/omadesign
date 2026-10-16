@@ -523,6 +523,19 @@ describe("Motion semantic capability and historical certification",()=>{
 });
 
 describe("Complete common reader capability",()=>{
+  it("refuses Layout28 before quota, room, log or presence mutation even with offer 3", async()=>{
+    const {readFileSync}=await import("node:fs");
+    const fixtures=JSON.parse(readFileSync(new URL("../shared/liveProtocol.fixtures.json",import.meta.url),"utf8"));
+    const {t,owner,projectId,session,left,exchange}=await setup();
+    const rows=()=>t.run(async ctx=>({room:await ctx.db.get(session),quota:await ctx.db.query("cloudLiveQuotas").take(10),clients:await ctx.db.query("cloudLiveClients").withIndex("by_session_actor",q=>q.eq("session",session)).take(10),log:await ctx.db.query("cloudLiveChanges").withIndex("by_session_revision",q=>q.eq("session",session)).take(100)}));
+    const before=await rows();
+    for(const c of fixtures.filter((c:any)=>c.error && c.name.startsWith("layout28"))) {
+      await expect(owner.mutation(api.live.create,{projectId,protocol:3,seed:JSON.stringify({"":"Object",[c.path]:c.cell})})).rejects.toThrow("Unsupported");
+      const operation={...write(alice,1,"layout"),edit:{type:"write" as const,writes:[{path:c.path,value:c.cell}]}};
+      await expect(owner.mutation(api.live.exchange,{...left,...exchange,protocol:3,changes:[operation]})).rejects.toThrow("Unsupported");
+      expect(await rows()).toEqual(before);
+    }
+  });
   it("rejects known common-only creates and edits before any state change, while 3 retains exact wire cells",async()=>{
     const {readFileSync}=await import("node:fs");
     const fixtures=JSON.parse(readFileSync(new URL("../shared/liveProtocol.fixtures.json",import.meta.url),"utf8"));

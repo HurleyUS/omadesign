@@ -107,6 +107,7 @@ fn nonzero(value: &Value) -> Result<bool, String> {
 
 fn common(path: &str, value: &Value) -> Result<u32, String> {
     let p = relative_path(path);
+    refuse_future_layout(p, value)?;
     let parts: Vec<_> = p.split('/').skip(1).collect();
     let root = parts.first().copied().unwrap_or("");
     let document_fields = [
@@ -293,6 +294,77 @@ fn common(path: &str, value: &Value) -> Result<u32, String> {
     Ok(1)
 }
 
+/// Refuse advanced layout before a protocol-3 reader can discard it.
+/// Args: document-relative property and stored value. Returns an error for feature 28 or unknown layout variants.
+fn refuse_future_layout(path: &str, value: &Value) -> Result<(), String> {
+    let Some((owner, tail)) = path.rsplit_once("/layout") else {
+        return Ok(());
+    };
+    if !(owner.starts_with("/@entities/") || owner.starts_with("/layers/"))
+        || (!tail.is_empty() && !tail.starts_with('/'))
+    {
+        return Ok(());
+    }
+    let fields: Vec<_> = tail.split('/').skip(1).collect();
+    let field = fields.first().copied().unwrap_or("");
+    let unsupported = match field {
+        "grid" => match fields.get(1).copied() {
+            None => false,
+            Some("row" | "column") => !value.is_null(),
+            Some("row_span" | "column_span") => value.as_u64() != Some(1),
+            _ => true,
+        },
+        "stack" | "breakpoints" => {
+            let property = if field == "breakpoints" {
+                fields.get(2).copied()
+            } else {
+                fields.get(1).copied()
+            };
+            match property {
+                Some("column_tracks" | "row_tracks") => {
+                    fields.len() > 2 || !value.as_array().is_some_and(Vec::is_empty)
+                }
+                Some("align") if !value.is_null() => {
+                    !matches!(value.as_str(), Some("Start" | "Center" | "End" | "Stretch"))
+                }
+                Some("flow") if !value.is_null() => {
+                    !matches!(value.as_str(), Some("Stack" | "Wrap" | "Grid"))
+                }
+                Some("direction") if !value.is_null() => {
+                    !matches!(value.as_str(), Some("Vertical" | "Horizontal"))
+                }
+                Some("justify") if !value.is_null() => !matches!(
+                    value.as_str(),
+                    Some(
+                        "Start" | "Center" | "End" | "SpaceBetween" | "SpaceAround" | "SpaceEvenly"
+                    )
+                ),
+                _ => false,
+            }
+        }
+        "component" => match fields.get(1).copied() {
+            None if value.is_null() => false,
+            None => match value {
+                Value::String(variant) => !["Main", "Instance"].contains(&variant.as_str()),
+                Value::Object(map) => map
+                    .keys()
+                    .any(|key| !["Main", "Instance"].contains(&key.as_str())),
+                _ => true,
+            },
+            Some("Main") if fields.get(2) == Some(&"properties") => {
+                fields.len() > 3 || !value.as_array().is_some_and(Vec::is_empty)
+            }
+            Some("Main" | "Instance") => false,
+            _ => true,
+        },
+        _ => false,
+    };
+    if unsupported {
+        return Err("Unsupported retained Layout feature or variant (feature 28 is outside live protocol 3)".into());
+    }
+    Ok(())
+}
+
 fn scan(path: &str, value: &Value) -> Result<u32, String> {
     let mut result = Ok(1u32);
     super::resources::values(path, value, &mut |property, value| {
@@ -438,6 +510,57 @@ mod tests {
             } else {
                 assert!(result.is_err(), "{}", case["name"]);
             }
+        }
+    }
+    #[test]
+    fn future_layout_refuses_retained_receive_and_materialization_without_mutation() {
+        let fixtures: Value =
+            serde_json::from_str(include_str!("../../site/shared/liveProtocol.fixtures.json"))
+                .unwrap();
+        let doc = crate::document::Document::new("Layout refusal", 8., 8., 72.);
+        for case in fixtures.as_array().unwrap().iter().filter(|case| {
+            case["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("layout28"))
+                && case["error"] == true
+        }) {
+            let mut replica = Replica::new(
+                "layout".into(),
+                "a".repeat(64),
+                crate::collaboration::snapshot(&doc).unwrap(),
+            );
+            let path = case["path"].as_str().unwrap().to_owned();
+            let value: Cell = serde_json::from_value(case["cell"].clone()).unwrap();
+            let before = serde_json::to_vec(&replica).unwrap();
+            let change = Change {
+                id: Id {
+                    actor: "b".repeat(64),
+                    seq: 1,
+                },
+                clock: 1,
+                seen: Default::default(),
+                edit: Edit::Write {
+                    writes: vec![Write {
+                        path: path.clone(),
+                        value: Some(value.clone()),
+                    }],
+                },
+            };
+            assert!(replica.receive([change]).is_err(), "{}", case["name"]);
+            assert_eq!(
+                serde_json::to_vec(&replica).unwrap(),
+                before,
+                "{}",
+                case["name"]
+            );
+            replica.base.insert(path, value);
+            let retained = serde_json::to_vec(&replica).unwrap();
+            assert!(
+                replica.document_for_protocol(&doc, 3).is_err(),
+                "{}",
+                case["name"]
+            );
+            assert_eq!(serde_json::to_vec(&replica).unwrap(), retained);
         }
     }
     #[test]
