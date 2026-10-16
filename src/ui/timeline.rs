@@ -648,9 +648,10 @@ mod tests {
         ];
         s.playhead = 1.;
         s.key_selection(Ease::Linear);
-        let ids = [s.doc.layers[0].id, s.doc.layers[1].id];
+        let mut ids = [s.doc.layers[0].id, s.doc.layers[1].id];
+        ids.sort_unstable();
         assert_eq!(row_ids(&s), ids);
-        assert_eq!(shape_name(&s, ids[1]), "Second image");
+        assert_eq!(shape_name(&s, s.doc.layers[1].id), "Second image");
         let ctx = egui::Context::default();
         crate::ui::theme::apply(&ctx);
         let (rect, _) = frame(&ctx, &mut s, vec![]);
@@ -659,11 +660,13 @@ mod tests {
             &mut s,
             pos2(rect.left() + 20., rect.top() + 18. + ROW * 1.5),
         );
-        assert_eq!(s.selection, vec![(1, crate::document::RASTER_ID)]);
+        let second = s.doc.layers.iter().position(|layer| layer.id == ids[1]).unwrap();
+        assert_eq!(s.selection, vec![(second, crate::document::RASTER_ID)]);
         let x = rect.left() + LABEL + (rect.width() - LABEL - PAD) * 0.5;
         click(&ctx, &mut s, pos2(x, rect.top() + 18. + ROW * 0.5));
-        assert_eq!(s.selection, vec![(0, crate::document::RASTER_ID)]);
-        assert_eq!(s.active_layer, Some(0));
+        let first = s.doc.layers.iter().position(|layer| layer.id == ids[0]).unwrap();
+        assert_eq!(s.selection, vec![(first, crate::document::RASTER_ID)]);
+        assert_eq!(s.active_layer, Some(first));
         assert_eq!(s.selected_key.unwrap().0, ids[0]);
         s.forget_stale_key();
         assert!(s.selected_key.is_some());

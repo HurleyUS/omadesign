@@ -2491,15 +2491,20 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
             });
             let mut opacity = studio.doc.layers[i].opacity * 100.0;
             ui.horizontal(|ui| {
-                ui.label("Layer opacity");
-                input_history::changed(ui.add(
+                let label = ui.label("Layer opacity");
+                let response = ui.add(
                     eframe::egui::DragValue::new(&mut opacity)
                         .range(0.0..=100.0)
                         .suffix("%")
                         .speed(0.5)
                         .max_decimals(0),
-                )
-                .on_hover_text("Layer opacity"));
+                ).labelled_by(label.id).on_hover_text("Layer opacity");
+                response.widget_info(|| {
+                    let mut info = eframe::egui::WidgetInfo::drag_value(response.enabled(), f64::from(opacity));
+                    info.label = Some("Layer opacity".into());
+                    info
+                });
+                input_history::changed(response);
             });
             let layer = &studio.doc.layers[i];
             if blend != layer.blend || (opacity / 100.0 - layer.opacity).abs() > 0.0001 {
