@@ -145,12 +145,75 @@ fn float_vector_preserves_hdr_negative_and_distinct_authoring_under_same_display
     .unwrap();
     let mut decoder = tiff::decoder::Decoder::new(Cursor::new(encoded.as_slice())).unwrap();
     assert_eq!(decoder.dimensions().unwrap(), (2, 1));
+    assert_eq!(
+        decoder
+            .get_tag_u16_vec(tiff::tags::Tag::ExtraSamples)
+            .unwrap(),
+        [2]
+    );
     let tiff::decoder::DecodingResult::F32(decoded) = decoder.read_image().unwrap() else {
         panic!("float TIFF reduced")
     };
     assert_eq!(decoded.as_slice(), output.samples().unwrap().as_slice());
     if let Some(directory) = std::env::var_os("OMADESIGN_FLOAT_VECTOR_QA_DIR") {
         let file = std::path::PathBuf::from(directory).join("float-vector-hdr.tif");
+        assert!(file.starts_with("/home"));
+        assert!(!file.exists());
+        std::fs::write(file, encoded.as_slice()).unwrap();
+    }
+    unchanged(&doc, &before);
+}
+
+#[test]
+fn float_vector_native_rgb_tiff_declares_straight_alpha_and_exact_u16_samples() {
+    let mut doc = document(1, 1, vec![]);
+    doc.color.depth = Depth::U16;
+    doc.layers = vec![Layer::placed_raster(
+        "Authored 16-bit alpha",
+        Pixels::from_samples(
+            1,
+            1,
+            Depth::U16,
+            vec![
+                1000. / 65535.,
+                2000. / 65535.,
+                3000. / 65535.,
+                16000. / 65535.,
+            ],
+        )
+        .unwrap(),
+        Pt::ZERO,
+        Pt::splat(1.),
+    )];
+    let before = serde_json::to_string(&doc).unwrap();
+    let (encoded, _) = crate::export::encode_admitted(
+        &crate::export::Source::Document(doc.clone()),
+        crate::export::Settings {
+            format: crate::export::Format::Tiff,
+            ..Default::default()
+        },
+        &NoProgress,
+    )
+    .unwrap();
+    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(encoded.as_slice())).unwrap();
+    assert_eq!(
+        decoder
+            .get_tag_u16_vec(tiff::tags::Tag::ExtraSamples)
+            .unwrap(),
+        [2]
+    );
+    assert_eq!(
+        decoder
+            .get_tag_u16_vec(tiff::tags::Tag::BitsPerSample)
+            .unwrap(),
+        [16; 4]
+    );
+    let tiff::decoder::DecodingResult::U16(samples) = decoder.read_image().unwrap() else {
+        panic!("native TIFF depth changed")
+    };
+    assert_eq!(samples, [1000, 2000, 3000, 16000]);
+    if let Some(directory) = std::env::var_os("OMADESIGN_FLOAT_VECTOR_QA_DIR") {
+        let file = std::path::PathBuf::from(directory).join("float-vector-u16-alpha.tif");
         assert!(file.starts_with("/home"));
         assert!(!file.exists());
         std::fs::write(file, encoded.as_slice()).unwrap();

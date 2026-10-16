@@ -332,20 +332,7 @@ fn encode_inner_admitted(
                 )
                 .map_err(|e| e.to_string())?;
         } else {
-            let mut encoder = image::codecs::tiff::TiffEncoder::new(&mut bytes);
-            if !doc.color.icc_profile.is_empty() {
-                encoder
-                    .set_icc_profile(doc.color.icc_profile.clone())
-                    .map_err(|e| e.to_string())?;
-            }
-            encoder
-                .write_image(
-                    raster.as_bytes(),
-                    raster.width(),
-                    raster.height(),
-                    raster.color().into(),
-                )
-                .map_err(|e| e.to_string())?;
+            crate::deep_color::tiff::write_rgb(&mut bytes, &raster, &doc.color.icc_profile)?;
         }
     } else {
         raster
