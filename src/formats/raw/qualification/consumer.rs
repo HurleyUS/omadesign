@@ -155,6 +155,67 @@ fn native_roundtrip(
 }
 
 #[test]
+#[ignore = "failed native102MP save/reopen only; scheduled pinned source and shared heavy helper required"]
+fn scheduled_x2d_native_project_roundtrip() {
+    let manifest = parse_manifest(MANIFEST).unwrap();
+    let case = manifest
+        .cases
+        .iter()
+        .find(|case| case.id == "coverage-6565")
+        .unwrap();
+    assert!(case.identity.active_dimensions.is_none());
+    let bindings: Bindings =
+        serde_json::from_str(&std::env::var("OMA_RAW_CASE_BINDINGS").unwrap()).unwrap();
+    let source = bindings.source.as_ref().expect("pinned source binding");
+    verify_hash(source, case.source.sha256.as_deref()).unwrap();
+    let path = PathBuf::from(std::env::var_os("OMA_RAW_CONSUMER_OUTPUT").unwrap());
+    let scratch = storage::root::Scratch::create(&path).unwrap();
+    let receipts = create_scratch(&PathBuf::from(
+        std::env::var_os("OMA_RAW_CONSUMER_RECEIPTS").unwrap(),
+    ))
+    .unwrap();
+    let references: Vec<_> = case
+        .references
+        .iter()
+        .map(|reference| {
+            (
+                reference,
+                bindings
+                    .references
+                    .get(&reference.id)
+                    .expect("retained reference binding")
+                    .clone(),
+            )
+        })
+        .collect();
+    let storage = storage::CaseStorage::new(case, source, &references, scratch.path()).unwrap();
+    let started = Instant::now();
+    let native = match native_roundtrip(source, scratch.path(), &storage) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            json!({"passed":false,"error":error,"resources":workflow::resource_sample("native_failure_released",started)})
+        }
+    };
+    let runner = std::env::current_exe().unwrap();
+    let packet = json!({"schema_version":1,"case":case.id,"camera_qualified":false,"full_candidate":false,
+        "active_dimensions":case.identity.active_dimensions,"native":native,
+        "runner":{"revision":std::env::var("OMA_RAW_REVISION").unwrap(),"sha256":hash_file(&runner).unwrap(),"host_sha256":host_identity().unwrap(),"cargo_lock_sha256":hash_file(&Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock")).unwrap()},
+        "source_after_sha256":hash_file(source).unwrap(),"manifest_sha256":format!("{:x}",Sha256::digest(MANIFEST.as_bytes())),
+        "boundary":"Native102MP placement/project save/reopen only; earlier Photo/reference/export/sidecar/cancel proof remains at its original producer commit. No repeated Photo workflow, reference generation or camera-mode promotion."});
+    storage.check_next(1024 * 1024).unwrap();
+    write_json(&receipts.join("native-only.json"), &packet).unwrap();
+    eprintln!("RAW_NATIVE_CONSUMER {packet}");
+    assert_eq!(
+        packet["source_after_sha256"].as_str(),
+        case.source.sha256.as_deref()
+    );
+    assert_eq!(
+        native["passed"], true,
+        "actual native save/reopen remains failed"
+    );
+}
+
+#[test]
 #[ignore = "one scheduled pinned X2D case; global heavy helper, private bindings and storage plan required"]
 fn scheduled_x2d_available_workflow_keeps_required_identity_failure() {
     let manifest = parse_manifest(MANIFEST).unwrap();
