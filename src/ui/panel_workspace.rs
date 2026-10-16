@@ -384,7 +384,8 @@ mod persona_tests {
             },
             |ui| show(ui, &mut studio),
         );
-        assert_eq!(studio.persona, crate::tools::Persona::Design);
+        assert_eq!(studio.persona, crate::tools::Persona::Pixel);
+        assert_eq!(studio.panel_workspaces.active, "Pixel");
     }
 }
 

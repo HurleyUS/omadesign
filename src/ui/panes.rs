@@ -92,6 +92,10 @@ fn pathfinder(ui: &mut Ui, studio: &mut Studio) {
 }
 
 fn navigator(ui: &mut Ui, studio: &mut Studio) {
+    if studio.persona == Persona::Photo {
+        photo_navigator(ui, studio);
+        return;
+    }
     let edge = ui.available_width().min(260.0).max(48.0);
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(edge, edge), egui::Sense::click_and_drag());
@@ -160,6 +164,72 @@ fn navigator(ui: &mut Ui, studio: &mut Studio) {
     });
 }
 
+fn photo_navigator(ui: &mut Ui, studio: &mut Studio) {
+    let texture = if studio.photo.show_original {
+        studio.photo.orig_tex.clone()
+    } else {
+        studio
+            .photo
+            .tex
+            .clone()
+            .or_else(|| studio.photo.orig_tex.clone())
+    };
+    let Some(texture) = texture else {
+        return;
+    };
+    let size = texture.size_vec2();
+    let factor = (ui.available_width().min(260.0) / size.x).min(200.0 / size.y);
+    let (rect, response) = ui.allocate_exact_size(size * factor, egui::Sense::click_and_drag());
+    ui.painter().image(
+        texture.id(),
+        rect,
+        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+    if let Some(canvas) = ui
+        .ctx()
+        .read_response(egui::Id::new("studio-photo-canvas"))
+        .map(|r| r.rect)
+    {
+        let full = studio.photo.selected().map_or(size, |image| {
+            let (w, h) = image.dimensions();
+            let (w, h) = if studio.photo.show_original {
+                (w, h)
+            } else {
+                image.develop.output_dim(w, h)
+            };
+            egui::vec2(w as f32, h as f32)
+        });
+        let visible = full * studio.photo.fit_scale * studio.photo.view_scale;
+        let origin = canvas.center() + studio.photo.view_offset - visible * 0.5;
+        let map = |point: egui::Pos2| rect.min + (point - origin) / visible * rect.size();
+        let viewport = egui::Rect::from_min_max(map(canvas.min), map(canvas.max)).intersect(rect);
+        ui.painter().rect_stroke(
+            viewport,
+            0.0,
+            egui::Stroke::new(1.0, super::theme::accent()),
+            egui::StrokeKind::Inside,
+        );
+        if (response.clicked() || response.dragged())
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            studio.photo.view_offset = -((pointer - rect.center()) / rect.size()) * visible;
+        }
+    }
+    ui.horizontal(|ui| {
+        if icons::tiny_icon(ui, ph::FRAME_CORNERS, "Fit photo", false) {
+            studio.photo.view_scale = 1.0;
+            studio.photo.view_offset = egui::Vec2::ZERO;
+        }
+        ui.add(
+            egui::DragValue::new(&mut studio.photo.view_scale)
+                .range(0.1..=20.0)
+                .speed(0.01)
+                .prefix("×"),
+        );
+    });
+}
+
 fn command_name(cmd: &Cmd) -> &'static str {
     match cmd {
         Cmd::Batch(commands) => commands.first().map_or("Edit", command_name),
@@ -192,6 +262,49 @@ fn command_name(cmd: &Cmd) -> &'static str {
 }
 
 fn history(ui: &mut Ui, studio: &mut Studio) {
+    if studio.persona == Persona::Photo {
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    studio.photo.can_undo(),
+                    egui::Button::new(egui::RichText::new(ph::ARROW_UP).font(icons::font(16.0))),
+                )
+                .on_hover_text("Undo photo edit")
+                .clicked()
+            {
+                studio.photo.undo();
+            }
+            if ui
+                .add_enabled(
+                    studio.photo.can_redo(),
+                    egui::Button::new(egui::RichText::new(ph::ARROW_DOWN).font(icons::font(16.0))),
+                )
+                .on_hover_text("Redo photo edit")
+                .clicked()
+            {
+                studio.photo.redo();
+            }
+        });
+        let steps = studio.photo.history_steps();
+        for (index, count) in steps.iter().enumerate().rev() {
+            if ui
+                .selectable_label(
+                    index + 1 == steps.len(),
+                    format!(
+                        "{}  Adjust {count} photo{}",
+                        index + 1,
+                        if *count == 1 { "" } else { "s" }
+                    ),
+                )
+                .clicked()
+            {
+                while studio.photo.history_steps().len() > index + 1 && studio.photo.can_undo() {
+                    studio.photo.undo();
+                }
+            }
+        }
+        return;
+    }
     ui.horizontal(|ui| {
         ui.add_enabled_ui(
             studio.history.can_undo() || studio.doc.collaboration.is_some(),
