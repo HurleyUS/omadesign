@@ -5085,7 +5085,7 @@ mod tests {
             fn drawn(shape:&eframe::egui::Shape,id:eframe::egui::TextureId)->bool {match shape {eframe::egui::Shape::Mesh(mesh)=>mesh.texture_id==id,eframe::egui::Shape::Vec(shapes)=>shapes.iter().any(|s|drawn(s,id)),_=>false}}
             let texture=s.screen_tex.as_ref().map(|t|t.id());
             let visible=texture.is_some_and(|id|output.shapes.iter().any(|s|drawn(&s.shape,id)));
-            let pixels=texture.and_then(|id|output.textures_delta.set.iter().find(|(key,_)|*key==id)).map(|(_,delta)| {let eframe::egui::ImageData::Color(image)=&delta.image;image.pixels.clone()});
+            let pixels=texture.and_then(|id|output.textures_delta.set.get(&id).and_then(|updates|updates.last())).map(|delta| {let eframe::egui::ImageData::Color(image)=&delta.image;image.pixels.clone()});
             output.textures_delta.clear();
             (pixels,visible)
         };
