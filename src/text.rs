@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
+pub(crate) mod font_inventory;
+
 const PREFERRED: &[&str] = &[
     "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
     "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",

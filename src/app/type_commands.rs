@@ -4,6 +4,8 @@ use crate::{geom::CharSpan, text::CharacterRewrite};
 use std::ops::Range;
 #[path = "type_search.rs"]
 pub(crate) mod search;
+#[path = "type_fonts.rs"]
+pub(crate) mod fonts;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextScope {
@@ -42,6 +44,7 @@ pub(crate) enum TypeCommand {
     Punctuation(SmartPunctuation),
     Insert(String),
     Replace(search::Replacement),
+    Font(fonts::Replacement),
 }
 pub(crate) const SPECIAL_CHARACTERS: &[(&str, &str)] = &[
     ("Bullet •", "•"),
@@ -134,6 +137,7 @@ fn rewritten_caret(at: usize, edits: &[CharacterRewrite]) -> usize {
 /// Rewrite content while carrying word/sentence/quote context across styled intervals.
 /// Args: source run, original range and command. Returns only actual character replacements.
 fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<CharacterRewrite> {
+    if matches!(command, TypeCommand::Font(_)) { return vec![]; }
     if let TypeCommand::Replace(replacement) = command {
         return search::rewrites(run, range, replacement);
     }
@@ -231,7 +235,7 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
                     c.to_string()
                 }
             }
-            TypeCommand::Insert(_) | TypeCommand::Replace(_) => unreachable!(),
+            TypeCommand::Insert(_) | TypeCommand::Replace(_) | TypeCommand::Font(_) => unreachable!(),
         };
         previous = text.chars().last().or(previous);
         if !chars[index..end].iter().copied().eq(text.chars()) {
@@ -333,6 +337,10 @@ impl Studio {
     }
 
     fn capture_type_target(&self, scope: TextScope, hidden: bool, skip_locked: bool) -> Result<TypeCommandTarget, String> {
+        self.capture_type_target_filtered(scope, hidden, skip_locked, |_| Ok(true))
+    }
+    fn capture_type_target_filtered(&self, scope: TextScope, hidden: bool, skip_locked: bool,
+        include: impl Fn(&TypeRun) -> Result<bool, String>) -> Result<TypeCommandTarget, String> {
         if !self.type_commands_available() {
             return Err("Finish the current operation before editing text".into());
         }
@@ -368,13 +376,15 @@ impl Studio {
             {
                 continue;
             }
+            let head = self.story_head(hit);
+            let Some(Geom::Text(run)) = self.doc.find_shape(head.0,head.1).map(|shape| &shape.geom) else {continue};
+            if !include(run)? {continue;}
             if !self.type_command_writable(hit, hidden) {
                 if skip_locked { continue; }
                 return Err(
                     "Unlock the text, its parent layers and every frame in its story".into(),
                 );
             }
-            let head = self.story_head(hit);
             if !hits.contains(&head) {
                 hits.push(head);
             }
@@ -440,7 +450,9 @@ impl Studio {
             if range.as_ref().is_some_and(|r| r.end > count) {
                 return Err("The text selection changed".into());
             }
-            let changed = if let TypeCommand::Insert(text) = &command {
+            let changed = if let TypeCommand::Font(replacement) = &command {
+                crate::text::font_inventory::replace(&mut run, &replacement.from, &replacement.to)?
+            } else if let TypeCommand::Insert(text) = &command {
                 if text.is_empty() {
                     false
                 } else {

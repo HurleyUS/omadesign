@@ -1,0 +1,177 @@
+//! Find Font targets existing text stories and the ordinary typed Type edit route.
+use super::*;
+use crate::text::font_inventory::{self, Info, Request, Status};
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Clone)]
+pub(crate) struct Replacement {
+    pub from: Vec<Request>,
+    pub to: String,
+}
+#[derive(Clone)]
+pub(crate) struct Target {
+    owner: TypeCommandTarget,
+    from: Vec<Request>,
+    find: bool,
+}
+#[derive(Clone, Debug)]
+pub(crate) struct Usage {
+    pub key: String,
+    pub info: Info,
+    pub from: Vec<Request>,
+    pub runs: usize,
+    pub stories: Vec<(usize, u64)>,
+}
+fn matching(run: &TypeRun, from: &[Request]) -> Result<bool, String> {
+    Ok(font_inventory::uses(run)?
+        .iter()
+        .any(|u| from.contains(&u.request)))
+}
+impl Studio {
+    /// List authored font usage, including hidden and locked stories, without editing or substituting names.
+    /// Args: none. Returns rows grouped by available family/style/version or exact unavailable request.
+    pub(crate) fn font_usage(&self) -> Result<Vec<Usage>, String> {
+        let mut found: BTreeMap<Request, (String, usize, BTreeSet<(usize, u64)>, BTreeSet<char>)> =
+            BTreeMap::new();
+        let mut seen = BTreeSet::new();
+        for (layer, l) in self.doc.layers.iter().enumerate() {
+            for shape in l.kind.shapes().unwrap_or(&[]) {
+                if !matches!(shape.geom, Geom::Text(_)) {
+                    continue;
+                }
+                let hit = self.story_head((layer, shape.id));
+                if !seen.insert(hit) {
+                    continue;
+                }
+                let Some(Geom::Text(run)) = self.doc.find_shape(hit.0, hit.1).map(|s| &s.geom)
+                else {
+                    continue;
+                };
+                let chars: Vec<_> = run.content.chars().collect();
+                for usage in font_inventory::uses(run)? {
+                    let row = found.entry(usage.request).or_default();
+                    row.0 = run.font.clone();
+                    row.1 += 1;
+                    row.2.insert(hit);
+                    row.3.extend(chars[usage.range].iter().copied());
+                }
+            }
+        }
+        let mut rows: BTreeMap<String, Usage> = BTreeMap::new();
+        let mut characters: BTreeMap<String, (String, BTreeSet<char>)> = BTreeMap::new();
+        for (request, (fallback, runs, stories, chars)) in found {
+            let info = font_inventory::describe(&request, &fallback, &chars);
+            let key = if info.status == Status::Exact {
+                info.identity.clone().unwrap()
+            } else {
+                format!("{request:?}")
+            };
+            let all = characters.entry(key.clone()).or_default();
+            all.0 = fallback;
+            all.1.extend(chars);
+            if let Some(row) = rows.get_mut(&key) {
+                row.from.push(request);
+                row.runs += runs;
+                row.stories.extend(stories);
+                row.stories.sort();
+                row.stories.dedup();
+            } else {
+                rows.insert(
+                    key.clone(),
+                    Usage {
+                        key,
+                        info,
+                        from: vec![request],
+                        runs,
+                        stories: stories.into_iter().collect(),
+                    },
+                );
+            }
+        }
+        for row in rows.values_mut() {
+            let (fallback, chars) = characters.get(&row.key).unwrap();
+            row.info.missing_glyphs =
+                font_inventory::describe(&row.from[0], fallback, chars).missing_glyphs;
+        }
+        Ok(rows.into_values().collect())
+    }
+    /// Capture only stories using the chosen source font; unrelated locked text is not a destination.
+    /// Args: selection/document scope and the row's actual authored requests. Returns an ordinary stale-checked Type target.
+    pub(crate) fn capture_font_change(
+        &self,
+        scope: TextScope,
+        from: &[Request],
+    ) -> Result<Target, String> {
+        let owner =
+            self.capture_type_target_filtered(scope, true, false, |run| matching(run, from))?;
+        Ok(Target {
+            owner,
+            from: from.to_vec(),
+            find: false,
+        })
+    }
+    /// Capture visible writable stories for the explicit Find selection action.
+    /// Args: row requests. Returns a read-only navigation owner, with locked/hidden stories excluded.
+    pub(crate) fn capture_font_find(&self, from: &[Request]) -> Result<Target, String> {
+        let owner = self.capture_type_target_filtered(TextScope::Document, false, true, |run| {
+            matching(run, from)
+        })?;
+        Ok(Target {
+            owner,
+            from: from.to_vec(),
+            find: true,
+        })
+    }
+    /// Check a font command's captured artwork, selection, live draft and story permissions.
+    /// Args: captured target. Returns false after a stale owner or eligibility change.
+    pub(crate) fn font_target_current(&self, target: &Target) -> bool {
+        self.type_command_current(&target.owner)
+            && (!target.find
+                || target
+                    .owner
+                    .hits
+                    .iter()
+                    .all(|&hit| self.type_command_writable(hit, false)))
+    }
+    /// Replace a reported font through the same Type command used for ordinary text/history edits.
+    /// Args: captured replacement owner and an available native font reference. Returns changed story count.
+    pub(crate) fn replace_font_usage(
+        &mut self,
+        target: &Target,
+        to: &str,
+    ) -> Result<usize, String> {
+        if target.find || !self.font_target_current(target) {
+            return Err("The font destination changed. Reopen Find Font".into());
+        }
+        self.apply_type_command(
+            &target.owner,
+            TypeCommand::Font(Replacement {
+                from: target.from.clone(),
+                to: to.into(),
+            }),
+        )
+    }
+    /// Select actual visible editable text stories using a font, without a search history command.
+    /// Args: captured Find owner. Returns selected story count; explicit navigation finishes an existing Type draft.
+    pub(crate) fn select_font_usage(&mut self, target: &Target) -> Result<usize, String> {
+        if !target.find || !self.font_target_current(target) {
+            return Err("The font destination changed. Reopen Find Font".into());
+        }
+        let hits = target.owner.hits.clone();
+        if self.type_edit.is_some() {
+            self.commit_type_edit();
+        }
+        self.selection = hits;
+        self.selected_layer = None;
+        self.active_layer = self.selection.first().map(|hit| hit.0);
+        self.individual_object = (self.selection.len() == 1).then(|| self.selection[0]);
+        self.node_sel.clear();
+        self.tool = Tool::Select;
+        self.status = format!("Selected {} text stories", self.selection.len());
+        Ok(self.selection.len())
+    }
+}
+
+#[cfg(test)]
+#[path = "type_fonts_tests.rs"]
+mod tests;
