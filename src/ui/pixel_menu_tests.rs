@@ -41,6 +41,33 @@ impl Seat {
         output
     }
     fn click(&mut self, studio: &mut Studio, name: &str) {
+        for _ in 0..3 {
+            self.frame(studio, vec![]);
+        }
+        assert!(
+            self.output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some(name)),
+            "missing menu {name}; actual labels: {:?}",
+            self.output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| node.label().map(|label| (
+                    label,
+                    node.bounds(),
+                    node.is_disabled()
+                )))
+                .collect::<Vec<_>>()
+        );
         let bounds = keys::named(&self.output, name).1.bounds().unwrap();
         let pos = egui::pos2(
             ((bounds.x0 + bounds.x1) / 2.) as f32,
