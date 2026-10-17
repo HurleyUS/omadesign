@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     document::{Cmd, Document, Fill, Layer, Shape, Style},
-    geom::TypeRun,
+    geom::{Geom, Pt, TypeRun},
     tools::Persona,
     ui::welcome::keyboard_tests as keys,
 };
