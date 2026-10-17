@@ -1,0 +1,182 @@
+use super::*;
+use crate::{
+    document::{Document, Layer, Shape, Style},
+    geom::Pt,
+    ui::{
+        panes,
+        welcome::keyboard_tests as keys,
+        workspace::{Place, Workspace},
+    },
+};
+use egui::{Event, Key, Modifiers, Pos2, Rect, vec2};
+
+struct Seat {
+    ctx: egui::Context,
+    dock: Workspace,
+    screen: egui::Vec2,
+    clip: Rect,
+    time: f64,
+    output: egui::FullOutput,
+}
+impl Seat {
+    fn new() -> Self {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::ui::theme::apply(&ctx);
+        let mut dock = Workspace::preset(&[("layout", Place::Right)]);
+        dock.groups[0].extent = 256.;
+        Self {
+            ctx,
+            dock,
+            screen: vec2(1200., 800.),
+            clip: Rect::NOTHING,
+            time: 0.,
+            output: Default::default(),
+        }
+    }
+    fn frame(&mut self, s: &mut Studio, mut events: Vec<Event>) -> egui::FullOutput {
+        self.time += 0.2;
+        let modifiers = events
+            .iter()
+            .find_map(|e| match e {
+                Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        events.insert(0, Event::ModifiersChanged(modifiers));
+        let mut output = self.ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.screen)),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                self.dock.show(
+                    ui,
+                    "layout-sizing-dock",
+                    &[("layout", "Auto Layout")],
+                    |ui, _| {
+                        self.clip = ui.clip_rect();
+                        egui::ScrollArea::vertical()
+                            .id_salt(("pane-body", "layout"))
+                            .min_scrolled_height(0.)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| panes::show(ui, s, "layout"));
+                    },
+                );
+            },
+        );
+        output.textures_delta.clear();
+        self.output = output.clone();
+        output
+    }
+    fn settle(&mut self, s: &mut Studio) {
+        for _ in 0..4 {
+            self.frame(s, vec![]);
+        }
+    }
+    fn bounds(&self, name: &str) -> Rect {
+        let b = keys::named(&self.output, name).1.bounds().unwrap();
+        Rect::from_min_max(
+            egui::pos2(b.x0 as f32, b.y0 as f32),
+            egui::pos2(b.x1 as f32, b.y1 as f32),
+        )
+    }
+}
+fn editor() -> (Studio, u64) {
+    let mut s = Studio::new();
+    s.show_welcome = false;
+    s.persona = Persona::Layout;
+    s.doc = Document::new("Responsive Auto Layout sizing", 500., 300., 96.);
+    s.doc.workspace = Some(Persona::Layout);
+    let mut root = crate::layout::make_frame(Pt::new(40., 40.), Pt::new(240., 160.));
+    root.name = "Sizing frame".into();
+    root.layout.stack = Some(AutoStack {
+        padding: [16.; 4],
+        ..Default::default()
+    });
+    let id = root.id;
+    let mut child = Shape::new(
+        Geom::rect(Pt::new(56., 56.), Pt::new(80., 48.)),
+        Style::default(),
+    );
+    child.name = "Frame content".into();
+    child.layout.parent = Some(id);
+    let mut unrelated = Shape::new(
+        Geom::rect(Pt::new(350., 220.), Pt::new(30., 30.)),
+        Style::default(),
+    );
+    unrelated.name = "Unrelated artwork".into();
+    let mut layer = Layer::vector("Layout artwork");
+    layer
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .extend([root, child, unrelated]);
+    s.doc.layers = vec![layer];
+    s.active_layer = Some(0);
+    s.selection = vec![(0, id)];
+    s.mark();
+    s.history.clear();
+    (s, id)
+}
+fn saved(s: &Studio) -> String {
+    crate::project::encode(&s.doc).unwrap()
+}
+fn visible(shape: &egui::Shape, clip: Rect, label: &str) -> bool {
+    match shape {
+        egui::Shape::Text(t) if t.galley.text() == label => {
+            clip.contains_rect(Rect::from_min_size(t.pos, t.galley.size()))
+        }
+        egui::Shape::Vec(shapes) => shapes.iter().any(|s| visible(s, clip, label)),
+        _ => false,
+    }
+}
+#[test]
+fn craft_layout_sizing_controls_fit_actual_resized_docks_without_mutation() {
+    let (mut s, _) = editor();
+    let before = saved(&s);
+    let mut seat = Seat::new();
+    let mut ids = None;
+    for (screen, width) in [
+        (vec2(1200., 800.), 256.),
+        (vec2(900., 650.), 288.),
+        (vec2(1400., 900.), 420.),
+        (vec2(900., 650.), 256.),
+    ] {
+        seat.screen = screen;
+        seat.dock.groups[0].extent = width;
+        seat.settle(&mut s);
+        let current = [
+            keys::named(&seat.output, "Width sizing").0,
+            keys::named(&seat.output, "Height sizing").0,
+        ];
+        if let Some(old) = ids {
+            assert_eq!(current, old, "resizing changed actual native owners");
+        }
+        ids = Some(current);
+        for name in ["Width sizing", "Height sizing"] {
+            let r = seat.bounds(name);
+            assert!(
+                seat.clip.contains_rect(r),
+                "{width}px {name} outside real dock: {r:?}, clip={:?}",
+                seat.clip
+            );
+            assert!(
+                r.width() >= 64. && r.height() >= 20.,
+                "unusable sizing control {r:?}"
+            );
+            assert!(
+                seat.output.shapes.iter().any(|p| visible(
+                    &p.shape,
+                    p.clip_rect.intersect(seat.clip),
+                    name
+                )),
+                "{width}px sizing label not fully painted: {name}"
+            );
+        }
+        assert_eq!(saved(&s), before);
+        assert_eq!(s.history.len(), 0);
+    }
+}

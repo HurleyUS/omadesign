@@ -17,6 +17,10 @@ pub(super) mod keyboard;
 #[path = "layout_field_tests.rs"]
 mod field_tests;
 
+#[cfg(test)]
+#[path = "layout_sizing_tests.rs"]
+mod sizing_tests;
+
 fn label(ui: &mut Ui, text: &str) {
     ui.add_space(8.0);
     ui.label(RichText::new(text).strong().size(11.0));
