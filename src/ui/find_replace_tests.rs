@@ -303,6 +303,8 @@ fn craft_find_replace_native_footer_keeps_single_line_buttons_when_the_window_na
     let mut seat = Seat::new();
     let before = wire(&s);
     seat.open(&mut s);
+    seat.type_field(&mut s, "Find text", "cat");
+    seat.invoke(&mut s, "Find next");
     for width in [1600., 800., 420.] {
         seat.size = egui::vec2(width, 700.);
         for _ in 0..3 {
@@ -318,6 +320,27 @@ fn craft_find_replace_native_footer_keeps_single_line_buttons_when_the_window_na
         ] {
             let (_, node) = keys::named(&seat.out, name);
             let b = node.bounds().unwrap();
+            let label = if name == "Close Find and Replace" {
+                "Close"
+            } else {
+                name
+            };
+            fn visible(shape: &egui::Shape, clip: egui::Rect, label: &str) -> bool {
+                match shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        clip.contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                    }
+                    egui::Shape::Vec(shapes) => shapes.iter().any(|s| visible(s, clip, label)),
+                    _ => false,
+                }
+            }
+            assert!(
+                seat.out
+                    .shapes
+                    .iter()
+                    .any(|s| visible(&s.shape, s.clip_rect, label)),
+                "{width}px {name} is not fully painted inside its real scroll clip"
+            );
             assert!(
                 b.y1 - b.y0 <= height,
                 "{width}px {name} squeezed to multiple lines: {b:?}"

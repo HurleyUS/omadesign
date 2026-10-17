@@ -253,6 +253,7 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
         .backdrop_color(super::theme::bg_window().gamma_multiply(0.55))
         .show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 430.));
+            ui.set_max_height((ctx.content_rect().height() - 100.).max(100.));
             ui.heading("Find and Replace");
             egui::ScrollArea::vertical()
                 .id_salt(owner.with("scroll"))
