@@ -1,5 +1,3 @@
-/home/michael/Projects/omadesign/.worktrees/craft-gap-stack/src/ui/channels.rs:
-
 //! Native channel controls call the same admitted plane and ordinary history routes.
 use super::{
     fields,

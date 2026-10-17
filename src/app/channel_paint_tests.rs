@@ -213,7 +213,7 @@ fn craft_channel_paint_escape_selection_change_tab_and_target_changes_retire_ges
 fn craft_channel_paint_clear_and_clipboard_refusal_never_touch_layer_samples() {
     let mut s = studio();
     let source = bytes(&s);
-    let original = s.doc.layers[0].kind.pixels().unwrap().clone();
+    let original = serde_json::to_value(&s.doc.layers[0]).unwrap();
     let ctx = eframe::egui::Context::default();
     s.copy_selection(&ctx);
     assert!(s.status.contains("not available"));
@@ -222,7 +222,7 @@ fn craft_channel_paint_clear_and_clipboard_refusal_never_touch_layer_samples() {
     assert_eq!(bytes(&s), source);
     s.clear_selected_pixels();
     assert!(s.doc.channels[0].plane.samples.iter().all(|v| *v == 0.));
-    assert_eq!(s.doc.layers[0].kind.pixels(), Some(&original));
+    assert_eq!(serde_json::to_value(&s.doc.layers[0]).unwrap(), original);
     s.undo();
     assert_eq!(bytes(&s), source);
     s.paint_mask = true;
