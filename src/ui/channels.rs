@@ -619,11 +619,13 @@ pub(super) fn paint_target(ui: &Ui, studio: &Studio, rect: egui::Rect) {
         let p = studio.view.to_screen(p);
         rect.min + egui::vec2(p.x, p.y)
     };
+    if overlay.is_none() {
     painter.rect_filled(
         egui::Rect::from_two_pos(screen(crate::geom::Pt::ZERO), screen(studio.doc.size())),
         0.,
         egui::Color32::BLACK,
     );
+    }
     let mut mesh = egui::Mesh::with_texture(cached.texture.id());
     for (x, y, u, v) in [
         (0., 0., 0., 0.),

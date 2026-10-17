@@ -5084,7 +5084,16 @@ mod tests {
             let mut output=ctx.run_ui(eframe::egui::RawInput {screen_rect:Some(Rect::from_min_size(Pos2::ZERO,vec2(400.,300.))),events,..Default::default()},|ui|{s.handle_shortcuts(ui.ctx());show(ui,s);});
             fn drawn(shape:&eframe::egui::Shape,id:eframe::egui::TextureId)->bool {match shape {eframe::egui::Shape::Mesh(mesh)=>mesh.texture_id==id,eframe::egui::Shape::Vec(shapes)=>shapes.iter().any(|s|drawn(s,id)),_=>false}}
             let texture=s.screen_tex.as_ref().map(|t|t.id());
-            let visible=texture.is_some_and(|id|output.shapes.iter().any(|s|drawn(&s.shape,id)));
+            fn overdraw(shape:&eframe::egui::Shape,id:eframe::egui::TextureId,point:Pos2,seen:&mut bool)->bool {
+                match shape {
+                    eframe::egui::Shape::Mesh(mesh) => {if mesh.texture_id==id {*seen=true;}false},
+                    eframe::egui::Shape::Rect(rect) => *seen && rect.rect.contains(point) && rect.fill.a()==255,
+                    eframe::egui::Shape::Vec(shapes) => shapes.iter().any(|shape|overdraw(shape,id,point,seen)),
+                    _=>false,
+                }
+            }
+            let local=s.view.to_screen(Pt::new(90.,70.));let probe=s.canvas_rect.unwrap().min+vec2(local.x,local.y);
+            let visible=texture.is_some_and(|id| {let mut seen=false;let covered=output.shapes.iter().filter(|shape|shape.clip_rect.contains(probe)).any(|shape|overdraw(&shape.shape,id,probe,&mut seen));seen && !covered && output.shapes.iter().any(|shape|drawn(&shape.shape,id))});
             let pixels=texture.and_then(|id|output.textures_delta.set.get(&id).and_then(|updates|updates.last())).map(|delta| {let eframe::egui::ImageData::Color(image)=&delta.image;image.pixels.clone()});
             output.textures_delta.clear();
             (pixels,visible)
