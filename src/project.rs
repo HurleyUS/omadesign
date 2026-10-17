@@ -353,6 +353,7 @@ pub(crate) fn normalize_decoded_document(
         if let Some(replica) = &doc.collaboration {
             crate::collaboration::resources::validate(replica)?;
         }
+        crate::channels::validate(&doc.channels)?;
         crate::layout_components::validate_properties(doc)?;
         for layer in &mut doc.layers {
             if version < 7 {

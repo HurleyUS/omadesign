@@ -25,7 +25,7 @@ impl Studio {
         let space = self
             .pixel_sel_space
             .or_else(|| self.selection_target_space())?;
-        (mask.len() == space.w as usize * space.h as usize).then_some(space)
+        (mask.len() == space.w as usize * space.h as usize && crate::channels::valid_placement(space.transform)).then_some(space)
     }
 
     pub(crate) fn select_all_pixels(&mut self) {
@@ -55,6 +55,8 @@ impl Studio {
         self.try_replace_pixel_selection(values,space);
     }
 
+    /// Admit replacement coverage before changing the current selection.
+    /// Args: owned mask and coordinate system. Returns false while preserving the current owner on failure.
     pub(crate) fn try_replace_pixel_selection(&mut self, values: Vec<u8>, space: SelectionSpace) -> bool {
         match crate::deep_color::storage::adopt(values) {
             Ok(values) => self.replace_pixel_selection_admitted(values, space),
@@ -65,7 +67,7 @@ impl Studio {
     /// Retain a complete admitted selection without copying or releasing its owner.
     /// Args: coverage and its coordinate system. Returns whether dimensions were accepted.
     pub(crate) fn replace_pixel_selection_admitted(&mut self, values: std::sync::Arc<crate::resources::Allocation<u8>>, space: SelectionSpace) -> bool {
-        if crate::deep_color::storage::count(space.w,space.h,1).ok()!=Some(values.len()) || space.transform.invert().is_none() {
+        if crate::deep_color::storage::count(space.w,space.h,1).ok()!=Some(values.len()) || !crate::channels::valid_placement(space.transform) {
             self.status="Selection dimensions or placement changed".into();return false;
         }
         self.pixel_sel = Some(values);

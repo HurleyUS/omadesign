@@ -40,6 +40,8 @@ impl Studio {
             selection: self.pixel_sel_gen,
         })
     }
+    /// Check the captured document and selection before installing a worker result.
+    /// Args: original owner guard. Returns true only while both sources remain current.
     pub(crate) fn channels_current(&self, target: &Target) -> bool {
         available(self).is_ok()
             && target.document == self.swap_id
@@ -198,7 +200,9 @@ pub(crate) fn selection(
             Err("Make a selection before subtracting or intersecting a channel".into())
         };
     };
-    if before.len() != crate::deep_color::storage::count(target.w, target.h, 1)? {
+    if !channels::valid_placement(target.transform)
+        || before.len() != crate::deep_color::storage::count(target.w, target.h, 1)?
+    {
         return Err("Selection dimensions changed".into());
     }
     let next = masking::resample_admitted(&next, source, target)?;

@@ -1430,7 +1430,7 @@ impl Document {
         self.validate_artwork_masks()?;
         crate::layout::validate_hierarchy(self)?;
         crate::layout_tokens::validate_tokens(self)?;
-        crate::channels::validate(&self.channels)?;
+        crate::channels::validate_metadata(&self.channels)?;
         self.screen_export.validate()
     }
 

@@ -94,6 +94,12 @@ fn craft_channels_current_embedded_retained_deleted_and_underdeclared_readers_re
         .compositions
         .push(crate::motion::compositions::Composition::new(doc.clone()));
     for d in [&doc, &parent] {
+        assert!(crate::collaboration::snapshot(d).is_err());
+        let error = match crate::formats::psd::encode_admitted(d, false) {
+            Ok(_) => panic!("Dropped embedded channels"),
+            Err(error) => error,
+        };
+        assert!(error.contains("SavedChannelsUnsupported"));
         let encoded = crate::project::encode(d).unwrap();
         let mut v: serde_json::Value = serde_json::from_str(&encoded).unwrap();
         assert_eq!(v["version"], 32);
@@ -138,8 +144,12 @@ fn craft_channels_invalid_scalar_payloads_names_and_transforms_preserve_source_a
     bad.width = 4;
     assert!(bad.validate().is_err());
     bad = original.clone();
-    bad.transform = [0.; 6];
-    assert!(bad.validate().is_err());
+    for transform in [[0.; 6], [1e-40, 0., 0., 1., 0., 0.]] {
+        bad.transform = transform;
+        assert!(bad.validate().is_err());
+    }
+    bad.transform = [-1., 0., 0., 1., 4., 0.];
+    assert!(bad.validate().is_ok());
     for name in ["", "  ", "bad\nname"] {
         assert!(
             validate(&[Channel {
@@ -240,4 +250,65 @@ fn craft_channels_cancellation_keeps_shared_sources_and_releases_generated_alloc
     let inverted = p.inverted(&storage::check).unwrap();
     assert_eq!(inverted.samples.as_slice(), [1., 0.75, 0.5, 0.]);
     assert_eq!(p.samples.as_slice(), [0., 0.25, 0.5, 1.]);
+}
+
+#[test]
+fn craft_channels_native_reader_validates_unit_coverage_before_normalization() {
+    let mut doc = fixture();
+    doc.channels.push(Channel {
+        id: crate::document::next_id(),
+        name: "Alpha".into(),
+        plane: plane(&[0., 0.5, 1.]),
+    });
+    let encoded = crate::project::encode(&doc).unwrap();
+    let mut wire: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    let mut invalid = doc.channels[0].plane.clone();
+    invalid.samples = storage::adopt(vec![0., 1.25, 1.]).unwrap();
+    wire["doc"]["saved_channels"][0]["plane"] = serde_json::to_value(invalid).unwrap();
+    let damaged = wire.to_string();
+    let before = damaged.clone();
+    let error = crate::project::decode(&damaged).unwrap_err();
+    assert!(error.contains("Channel coverage"), "{error}");
+    assert_eq!(damaged, before);
+    let reopened = crate::project::decode(&encoded).unwrap();
+    assert_eq!(reopened.channels[0].plane.samples.as_slice(), [0., 0.5, 1.]);
+}
+
+#[test]
+fn craft_channels_cmyk_components_use_authoritative_ink_planes_with_unchanged_icc() {
+    let profile = include_bytes!("../formats/psd/fixtures/fogra39l-cc0.icc").to_vec();
+    let pixels = Pixels::from_cmyk(
+        2,
+        1,
+        Depth::F32,
+        vec![0.125, 0.25, 0.375, 0.5, 1., 0.875, 0.75, 0.5, 0.25, 1.],
+        profile.clone(),
+        1,
+    )
+    .unwrap();
+    let mut doc = Document::new("Ink channels", 2., 1., 96.);
+    doc.transparent = true;
+    doc.color.model = crate::deep_color::cms::Model::Cmyk;
+    doc.color.depth = Depth::F32;
+    doc.color.icc_profile = profile;
+    doc.color.intent = 1;
+    doc.layers = vec![Layer::placed_raster("CMYKA", pixels, Pt::ZERO, Pt::ZERO)];
+    let original = crate::project::encode(&doc).unwrap();
+    for (index, expected) in [[0.125, 0.875], [0.25, 0.75], [0.375, 0.5], [0.5, 0.25]]
+        .into_iter()
+        .enumerate()
+    {
+        let plane = render(&doc, Target::Color(index), &storage::check).unwrap();
+        assert_eq!((plane.width, plane.height), (2, 1));
+        assert!(
+            plane
+                .samples
+                .iter()
+                .zip(expected)
+                .all(|(a, b)| (*a - b).abs() < 1e-7),
+            "{:?}",
+            plane.samples
+        );
+    }
+    assert_eq!(crate::project::encode(&doc).unwrap(), original);
 }

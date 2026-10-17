@@ -16,15 +16,21 @@ pub struct Plane {
     pub samples: Arc<Allocation<f32>>,
 }
 impl Plane {
-    /// Validate scalar storage and its document placement without changing samples.
-    /// Args: none. Returns a readable error for damaged dimensions, placement or coverage.
-    pub fn validate(&self) -> Result<(), String> {
+    /// Validate a scalar grid and placement without reading every sample.
+    /// Args: none. Returns an error for damaged dimensions or placement.
+    fn validate_grid(&self) -> Result<(), String> {
         if self.samples.len() != storage::count(self.width, self.height, 1)? {
             return Err("Channel dimensions do not match its samples".into());
         }
-        if self.transform.iter().any(|v| !v.is_finite()) || self.placement().invert().is_none() {
+        if !valid_placement(self.placement()) {
             return Err("Channel placement must be finite and invertible".into());
         }
+        Ok(())
+    }
+    /// Validate all authored coverage at an input or publication boundary.
+    /// Args: none. Returns an error for damaged scalar data without changing it.
+    pub fn validate(&self) -> Result<(), String> {
+        self.validate_grid()?;
         if self
             .samples
             .iter()
@@ -156,6 +162,16 @@ impl Target {
 /// Check stored channel identities, names and complete scalar payloads.
 /// Args: saved channels. Returns an error before typed mutation or native publication.
 pub fn validate(channels: &[Channel]) -> Result<(), String> {
+    validate_metadata(channels)?;
+    for channel in channels {
+        channel.plane.validate()?;
+    }
+    Ok(())
+}
+
+/// Validate channel identities and placement during ordinary artwork edits.
+/// Args: already admitted channels. Returns structural errors without rereading every pixel.
+pub(crate) fn validate_metadata(channels: &[Channel]) -> Result<(), String> {
     let mut ids = HashSet::new();
     for channel in channels {
         if channel.id == 0 || !ids.insert(channel.id) {
@@ -167,7 +183,7 @@ pub fn validate(channels: &[Channel]) -> Result<(), String> {
         {
             return Err("Channel names need 1–64 printable characters".into());
         }
-        channel.plane.validate()?;
+        channel.plane.validate_grid()?;
     }
     Ok(())
 }
@@ -294,3 +310,15 @@ fn render_scaled(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// Check a channel or selection placement before passing it to the raster mapper.
+/// Args: affine transform. Returns false for singular, nonfinite or nonrepresentable inverses.
+pub(crate) fn valid_placement(transform: tiny_skia::Transform) -> bool {
+    transform.is_finite()
+        && (f64::from(transform.sx) * f64::from(transform.sy)
+            - f64::from(transform.kx) * f64::from(transform.ky))
+            != 0.
+        && transform
+            .invert()
+            .is_some_and(|inverse| inverse.is_finite())
+}
