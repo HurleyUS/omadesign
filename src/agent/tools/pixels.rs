@@ -318,7 +318,10 @@ mod precision_tests {
     fn craft_selection_precision_agent_native_alpha_and_selection_are_each_applied_once(){
         let mut s=fixture(1);let weight=f32::from_bits(0x3eaa8001);s.replace_pixel_selection_float(vec![weight],crate::app::masking::SelectionSpace{w:1,h:1,transform:tiny_skia::Transform::identity()});
         execute(&mut s,"paint_stroke",&json!({"layer":0,"points":[[0,0]],"color":"#FF000080","size":8,"hardness":1,"opacity":1,"flow":1})).unwrap();
-        let actual=s.doc.layers[0].kind.pixels().unwrap().sample(0);assert_eq!(&actual[..3],&[1.,0.,0.]);assert!((actual[3]-weight*(128./255.)).abs()<1e-8);
+        let mut dab=crate::deep_color::surface::Surface::new(1,1).unwrap();
+        paint::stamp(&mut dab,Pt::ZERO,&paint::Brush{size:8.,hardness:1.,opacity:1.,flow:1.,spacing:0.2,color:crate::color::Rgba::WHITE,..Default::default()},false);
+        let coverage=dab.pixels()[0].alpha() as f32/255.;assert!(coverage>0.9 && coverage<1.);
+        let actual=s.doc.layers[0].kind.pixels().unwrap().sample(0);let expected=(128./255.)*(coverage*weight);assert_eq!(&actual[..3],&[1.,0.,0.]);assert!((actual[3]-expected).abs()<1e-8,"actual {} expected {expected} dab {coverage} selection {weight}",actual[3]);
     }
     #[test]
     fn craft_selection_precision_agent_invert_keeps_combine_and_feather_options(){
