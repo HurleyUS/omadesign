@@ -11,8 +11,11 @@ const BASE: &str = concat!(
 );
 fn alternate() -> String {
     let source = crate::typography::fingerprint(&std::fs::read(BASE).unwrap());
-    crate::text::all_fonts_cached()
+    let fonts = crate::text::all_fonts_cached();
+    fonts
         .iter()
+        .filter(|font| font.name == "DejaVu Sans")
+        .chain(fonts.iter().filter(|font| font.name != "DejaVu Sans"))
         .find_map(|font| {
             let path = font.path.to_string_lossy().into_owned();
             let data = crate::text::font_bytes_for(&TypeRun {
@@ -127,6 +130,7 @@ fn craft_find_font_core_replaces_selection_preserving_other_styles_one_undo_and_
     let (mut s, hit, other) = editor();
     let before = wire(&s);
     let original = run(&s, hit).clone();
+    let before_png = crate::compositor::export_png(&s.doc, 1).unwrap();
     let untouched = s.doc.layers[0].kind.shapes().unwrap()[1].clone();
     let target = s
         .capture_font_change(TextScope::Selection, &from())
@@ -138,10 +142,13 @@ fn craft_find_font_core_replaces_selection_preserving_other_styles_one_undo_and_
     assert_eq!(run(&s, hit).paragraphs, original.paragraphs);
     assert_eq!(run(&s, hit).manual_kern, original.manual_kern);
     assert_eq!(run(&s, hit).origin, original.origin);
+    assert_ne!(run(&s, hit).contours, original.contours);
     assert_eq!(s.doc.find_shape(0, untouched.id), Some(&untouched));
     assert_eq!(s.history.len(), 1);
     reopen(&s);
     let after = wire(&s);
+    let after_png = crate::compositor::export_png(&s.doc, 1).unwrap();
+    assert_ne!(before_png, after_png);
     s.undo();
     assert_eq!(wire(&s), before);
     s.redo();
@@ -150,6 +157,16 @@ fn craft_find_font_core_replaces_selection_preserving_other_styles_one_undo_and_
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(std::path::Path::new(&root).join("font-before.oma"), before).unwrap();
         std::fs::write(std::path::Path::new(&root).join("font-selected.oma"), after).unwrap();
+        std::fs::write(
+            std::path::Path::new(&root).join("font-before.png"),
+            before_png,
+        )
+        .unwrap();
+        std::fs::write(
+            std::path::Path::new(&root).join("font-selected.png"),
+            after_png,
+        )
+        .unwrap();
     }
 }
 #[test]
