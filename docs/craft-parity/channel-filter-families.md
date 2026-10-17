@@ -8,4 +8,10 @@ The same worker owns preview and full Apply. Cancellation is checked inside para
 
 Remove Background remains a layer operation. Selecting saved alpha or Quick Mask disables it and invalidates a captured RGB removal result, preventing a scalar edit from falling through to underlying artwork.
 
-This source is unqualified pending the current affected group, genuine desktop workflow and independent sample inspection. The checks cover all choices, explicit spatial/tonal equations, strength and selection, working-buffer release, native fields, one Undo and reopen. The larger Craft filter catalog, advanced filter options, calculations, color/spot channels, interchange and full parity remain open. No app-version, schema or dependency change is involved. Michael's current QA window stays open and untouched.
+The complete affected group passed 38 tests at `61bd0dde`; six compatibility checks passed separately at `e9292fd4`. The final target-safety change passed eight background-removal tests at `c5e360ea`. These are separate exact-source results. The two earlier compile failures remain recorded with zero executed tests.
+
+The genuine `c5e360ea` desktop build passed. Native editing and an independent Node reader checked 480,000 samples per operation: Invert at strength 0.375 through the original soft selection and radius-2 Grow Alpha matched exact float bits. Quick Mask Unsharp Mask at radius 3, amount 1.5 and threshold 0 differed by at most 8.940696716308594e-7 against a 5e-6 bound. Actual Undo/Redo and a fresh-process native save/reopen matched exactly; artwork, profiles and other channels were preserved. Remove Background was visibly disabled for Quick Mask. This establishes the bounded software workflow, not human acceptance or the larger Craft filter catalog.
+
+The build and examples are in `dist/omadesign-channel-filter-families-qa-c5e360ea`. Exact receipts, source identities, independent equations, outputs and screenshots are retained under the shared handoff `implementation/craft-channel-filter-families`. No user desktop, settings or documents were changed. The earlier recorded QA process was absent on recovery; only the two private test app processes were launched and stopped.
+
+Advanced filter options, calculations, color/spot channels, interchange and full parity remain open. No app-version, schema or dependency change is involved.
