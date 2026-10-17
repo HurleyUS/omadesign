@@ -75,6 +75,7 @@ mod text_geometry;
 mod type_commands;
 mod find_replace;
 mod find_font;
+mod find_font_recovery;
 mod templates;
 pub mod theme;
 mod timeline;

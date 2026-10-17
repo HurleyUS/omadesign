@@ -29,8 +29,14 @@ struct Draft {
     error: Option<String>,
     notice: Option<String>,
     refreshing: bool,
+    recovery: super::find_font_recovery::State,
 }
-fn control(ui: &mut Ui, id: Id, name: &str, widget: impl FnOnce(&mut Ui) -> Response) -> Response {
+pub(super) fn control(
+    ui: &mut Ui,
+    id: Id,
+    name: &str,
+    widget: impl FnOnce(&mut Ui) -> Response,
+) -> Response {
     let r = super::fields::native_scope(ui, id, widget).inner;
     ui.ctx()
         .accesskit_node_builder(r.id, |node| node.set_label(name));
@@ -80,12 +86,19 @@ fn open(ctx: &egui::Context, s: &Studio) {
         error: None,
         notice: None,
         refreshing: false,
+        recovery: Default::default(),
     };
     refresh(&mut d, s);
     ctx.data_mut(|data| data.insert_temp(Id::new(ID), d));
 }
 /// Read the actual Find Font modal lifetime.
 /// Args: context. Returns whether the captured dialog is open.
+pub(super) fn instance_current(ctx: &egui::Context, instance: Id) -> bool {
+    ctx.data(|d| {
+        d.get_temp::<Draft>(Id::new(ID))
+            .is_some_and(|d| d.instance == instance)
+    })
+}
 pub(super) fn is_open(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<Draft>(Id::new(ID)).is_some())
 }
@@ -167,6 +180,7 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
         if current {
             match result {
                 Ok(n) => {
+                    s.refresh_font_rendering();
                     refresh(&mut d, s);
                     d.notice = Some(format!("{n} installed faces rescanned"));
                 }
@@ -177,6 +191,7 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
     current = d.owner.as_ref().is_ok_and(|t| s.font_target_current(t));
     let owner = Id::new((ID, &d.document, d.instance));
     let mut action = None;
+    let mut added = false;
     let modal = egui::Modal::new(Id::new(ID))
         .backdrop_color(super::theme::bg_window().gamma_multiply(0.55))
         .show(ctx, |ui| {
@@ -298,6 +313,39 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
                         action =
                             actions(ui, owner, find.is_some(), change.is_some(), all.is_some());
                     });
+                    if current
+                        && !d.refreshing
+                        && d.rows.iter().any(|r| r.info.status != Status::Exact)
+                    {
+                        let needs = d
+                            .rows
+                            .iter()
+                            .filter(|r| r.info.status != Status::Exact)
+                            .map(|r| crate::text::font_recovery::Need {
+                                family: r.info.family.clone(),
+                                style: r.info.style.clone(),
+                                request: r.from.iter().find_map(|r| {
+                                    if let crate::text::font_inventory::Request::Named {
+                                        weight,
+                                        slant,
+                                        ..
+                                    } = r
+                                    {
+                                        Some((*weight, *slant))
+                                    } else {
+                                        None
+                                    }
+                                }),
+                            })
+                            .collect();
+                        added = super::find_font_recovery::show(
+                            ui,
+                            s,
+                            d.instance,
+                            needs,
+                            &mut d.recovery,
+                        );
+                    }
                     if d.refreshing {
                         ui.spinner();
                         ui.label("Refreshing installed fonts…");
@@ -311,6 +359,11 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
                     }
                 });
         });
+    if added && current {
+        s.refresh_font_rendering();
+        refresh(&mut d, s);
+        d.notice = Some("Font files added. The document font list has been refreshed".into());
+    }
     let close = modal.should_close() || action == Some("done");
     if !close && let Some(action) = action {
         let result = match action {
@@ -362,6 +415,7 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
         }
     }
     if close {
+        super::find_font_recovery::cancel(ctx);
         super::jobs::cancel::<usize>(ctx, REFRESH);
         ctx.data_mut(|data| {
             data.remove::<Draft>(Id::new(ID));

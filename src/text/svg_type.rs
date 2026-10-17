@@ -116,7 +116,7 @@ pub(crate) struct Layout {
 }
 
 pub(crate) fn paint_tree(run: &TypeRun, fill: bool) -> Option<Arc<usvg::Tree>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Arc<usvg::Tree>>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<(String, u64), Arc<usvg::Tree>>>> = OnceLock::new();
     let mut source = source(run)?;
     let xml = roxmltree::Document::parse(&source).ok()?;
     let mut edits = Vec::new();
@@ -135,8 +135,9 @@ pub(crate) fn paint_tree(run: &TypeRun, fill: bool) -> Option<Arc<usvg::Tree>> {
     for (range, value) in edits.into_iter().rev() {
         source.replace_range(range, &value);
     }
+    let key = (source.clone(), super::FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed));
     let cache = CACHE.get_or_init(Default::default);
-    if let Some(tree) = cache.lock().unwrap().get(&source).cloned() {
+    if let Some(tree) = cache.lock().unwrap().get(&key).cloned() {
         return Some(tree);
     }
     let tree = Arc::new(usvg::Tree::from_str(&renderer_source(&source), &options_for(run)).ok()?);
@@ -144,7 +145,7 @@ pub(crate) fn paint_tree(run: &TypeRun, fill: bool) -> Option<Arc<usvg::Tree>> {
     if cache.len() >= 64 {
         cache.clear();
     }
-    cache.insert(source, tree.clone());
+    cache.insert(key, tree.clone());
     Some(tree)
 }
 
@@ -767,6 +768,7 @@ pub(crate) fn options() -> usvg::Options<'static> {
     if cached.as_ref().is_none_or(|(r, _)| *r != revision) {
             let mut db = usvg::fontdb::Database::new();
             db.load_system_fonts();
+            db.load_fonts_dir(crate::project::data_dir().join("fonts"));
             if let Some(fonts) = super::DYNAMIC_FONTS.get() && let Ok(fonts) = fonts.lock() {
                 for font in fonts.iter() { let _ = db.load_font_file(&font.path); }
             }
@@ -1306,10 +1308,11 @@ pub(crate) fn renderer_source(source: &str) -> String {
 }
 
 pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Arc<Layout>>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<(String, u64), Arc<Layout>>>> = OnceLock::new();
     let source = source(run)?;
+    let key = (source.clone(), super::FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed));
     let cache = CACHE.get_or_init(Default::default);
-    if let Some(found) = cache.lock().unwrap().get(&source).cloned() {
+    if let Some(found) = cache.lock().unwrap().get(&key).cloned() {
         return Some(found);
     }
     let tree = usvg::Tree::from_str(&renderer_source(&source), &options_for(run)).ok()?;
@@ -1475,7 +1478,7 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
     if cache.len() >= 64 {
         cache.clear();
     }
-    cache.insert(source, result.clone());
+    cache.insert(key, result.clone());
     Some(result)
 }
 

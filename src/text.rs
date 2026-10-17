@@ -9,6 +9,7 @@ use std::sync::{Mutex, OnceLock};
 
 pub(crate) mod font_inventory;
 pub(crate) mod font_catalog;
+pub(crate) mod font_recovery;
 
 const PREFERRED: &[&str] = &[
     "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
@@ -224,6 +225,7 @@ fn scan_fonts() -> Vec<FontFace> {
             break;
         }
     }
+    walk_ttfs(&crate::project::data_dir().join("fonts"), &mut out, &mut seen, 0);
     out.sort_by_cached_key(|f| f.name.to_lowercase());
     out.truncate(FONT_CAP);
     out

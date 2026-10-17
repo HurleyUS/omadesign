@@ -61,6 +61,28 @@ impl Studio {
             .flatten();
         crate::text::font_catalog::Catalog::new(references)
     }
+    /// Rebuild derived text geometry after installed faces change, without adding history.
+    /// Args: none. Returns no value; captured font command owners retire with the render revision.
+    pub(crate) fn refresh_font_rendering(&mut self) {
+        for layer in &mut self.doc.layers {
+            for shape in layer.kind.shapes_mut().unwrap_or(&mut []) {
+                if let Geom::Text(run) = &mut shape.geom {
+                    run.layout = None;
+                }
+                crate::text::fill_contours(&mut shape.geom);
+            }
+        }
+        if let Some(edit) = &mut self.type_edit {
+            if let Geom::Text(run) = &mut edit.before {
+                run.layout = None;
+            }
+            crate::text::fill_contours(&mut edit.before);
+        }
+        crate::text_geometry::reflow(&mut self.doc);
+        self.canvas_key = None;
+        self.interaction_render.clear();
+        self.mark_interaction();
+    }
     /// List authored font usage, including hidden and locked stories, without editing or substituting names.
     /// Args: none. Returns rows grouped by available family/style/version or exact unavailable request.
     pub(crate) fn font_usage(&self) -> Result<Vec<Usage>, String> {

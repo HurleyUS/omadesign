@@ -37,7 +37,11 @@ pub(super) fn name(face: &rustybuzz::ttf_parser::Face<'_>, ids: &[u16]) -> Optio
     ids.iter().find_map(|id| {
         face.names()
             .into_iter()
-            .filter(|n| n.name_id == *id)
+            .filter(|n| {
+                n.name_id == *id
+                    && n.language() == rustybuzz::ttf_parser::Language::English_UnitedStates
+            })
+            .chain(face.names().into_iter().filter(|n| n.name_id == *id))
             .filter_map(|n| n.to_string())
             .map(|n| n.trim().to_owned())
             .find(|n| !n.is_empty())
@@ -181,8 +185,16 @@ pub(crate) fn describe_with(
                 let (missing_glyphs, key) = missing_glyphs;
                 return Info {
                     identity: Some(key),
-                    family: resolved_family.clone(),
-                    style: resolved_style.clone(),
+                    family: if info.weight.0 == *weight && info.style == style {
+                        resolved_family.clone()
+                    } else {
+                        family.clone()
+                    },
+                    style: if info.weight.0 == *weight && info.style == style {
+                        resolved_style.clone()
+                    } else {
+                        requested_style(*weight, *slant)
+                    },
                     version,
                     status: if info.weight.0 == *weight && info.style == style {
                         Status::Exact
@@ -193,20 +205,31 @@ pub(crate) fn describe_with(
                     missing_glyphs,
                 };
             }
-            absent(
-                family.clone(),
-                format!(
-                    "{}{}",
-                    weight,
-                    match slant {
-                        1 => " Italic",
-                        2 => " Oblique",
-                        _ => "",
-                    }
-                ),
-            )
+            absent(family.clone(), requested_style(*weight, *slant))
         }
     }
+}
+fn requested_style(weight: u16, slant: u8) -> String {
+    let weight = match weight {
+        100 => "Thin".into(),
+        200 => "Extra Light".into(),
+        300 => "Light".into(),
+        400 => "Regular".into(),
+        500 => "Medium".into(),
+        600 => "Semi Bold".into(),
+        700 => "Bold".into(),
+        800 => "Extra Bold".into(),
+        900 => "Black".into(),
+        n => n.to_string(),
+    };
+    format!(
+        "{weight}{}",
+        match slant {
+            1 => " Italic",
+            2 => " Oblique",
+            _ => "",
+        }
+    )
 }
 fn first_family(value: &str) -> String {
     let mut quote = None;
