@@ -8,4 +8,8 @@ The Pixel Color pane shows the actual foreground used by the brush (or the curre
 
 The implementation follows the local PhotoCraft reference's natural spline, point/drawing modes, smoothing and constant endpoints. Native evaluation uses original float inputs rather than an eight-bit lookup table. This layer does not implement color-channel Curves, reusable adjustment layers, eyedroppers, presets, curve-file interchange or full PhotoCraft parity. Existing Live/PSD refusal for saved channels remains.
 
-Source and tests are being qualified at an exact committed revision. Draft source is not a runtime or human acceptance claim. Public release/version reconciliation remains separate.
+Production source `811a0bdbcc12b1f5eb6f579f90071200e85c5997` passed all eight directly affected Curves tests in 27.10 seconds, including actual native graph/numeric/Apply/Cancel and full-document Undo/reopen. The preceding `f9f2db19` cohort passed 28 tests and failed one drawing test; that failure led to the exact-entry smoothing correction, with assertions preserved. Foreground and existing paint/channel passes remain attached to that earlier receipt rather than becoming a new combined total.
+
+The genuine current desktop also passed actual point input, proxy/Original, drawing/smoothing/fitting, Cancel, Apply, single Undo/Redo and fresh-process load/resave. An independent Node reader checked all 480,000 native adjusted samples against the declared linear curve (maximum absolute error 3.624e-8), unchanged artwork and exact Cancel/Undo/Redo/cold files. Native Ctrl+V accepted an alpha hex foreground without changing the project or inserting an Undo step. This is software/native UI evidence, not human acceptance.
+
+Run [the isolated QA launcher](../../dist/omadesign-channel-curves-qa-811a0bdb/run) to test it. The existing human QA window stays open. Public release/version reconciliation and complete parity remain open.
