@@ -1,5 +1,3 @@
-/home/michael/Projects/omadesign/.worktrees/craft-gap-stack/src/ui/type_inspector_tests.rs:
-
 use crate::{
     app::Studio,
     document::{Document, Layer, Shape, Style},
