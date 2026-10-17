@@ -73,7 +73,7 @@ fn canvas_focus(seat: &Seat) {
         }
     }
     let rect = response.rect.shrink(2.);
-    let stroke = seat.ctx.style().visuals.selection.stroke;
+    let stroke = seat.ctx.global_style().visuals.selection.stroke;
     assert!(
         seat.output
             .shapes
