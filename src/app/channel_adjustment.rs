@@ -241,6 +241,8 @@ pub(crate) mod tests {
         for kind in Kind::ALL {
             let mut studio = fixture();
             let before = crate::project::encode(&studio.doc).unwrap();
+            let original_layers = serde_json::to_value(&studio.doc.layers).unwrap();
+            let original_color = studio.doc.color.clone();
             let history = studio.history.len();
             let settings = family_tests::settings(kind);
             let filter = Filter::from_raster(&settings);
@@ -270,8 +272,11 @@ pub(crate) mod tests {
                 after,
                 "{kind:?}"
             );
-            assert_eq!(reopened.layers, studio.doc.layers);
-            assert_eq!(reopened.color, studio.doc.color);
+            assert_eq!(
+                serde_json::to_value(&reopened.layers).unwrap(),
+                original_layers
+            );
+            assert_eq!(reopened.color, original_color);
             assert_eq!(
                 reopened
                     .channels

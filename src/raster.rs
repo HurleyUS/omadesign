@@ -243,7 +243,7 @@ impl Kind {
                 Parameter::new(2, "Gamma", 0.1, 4.0, 0.01),
             ],
             Self::HueSaturation => &[
-                Parameter::new(0, "Hue (°)", -180.0, 180.0, 1),
+                Parameter::new(0, "Hue (°)", -180.0, 180.0, 1.0),
                 Parameter::new(1, "Saturation", -1.0, 1.0, 0.01),
                 Parameter::new(2, "Lightness", -1.0, 1.0, 0.01),
             ],
@@ -260,16 +260,16 @@ impl Kind {
             Self::Threshold | Self::AlphaThreshold | Self::Solarize => {
                 &[Parameter::new(0, "Threshold", 0.0, 1.0, 0.01)]
             }
-            Self::Posterize => &[Parameter::new(0, "Levels", 2.0, 32.0, 1)],
+            Self::Posterize => &[Parameter::new(0, "Levels", 2.0, 32.0, 1.0)],
             Self::GaussianBlur | Self::FeatherAlpha => {
                 &[Parameter::new(0, "Radius (px)", 0.0, 100.0, 0.1)]
             }
             Self::GrowAlpha | Self::ShrinkAlpha => {
-                &[Parameter::new(0, "Radius (px)", 1.0, 20.0, 1)]
+                &[Parameter::new(0, "Radius (px)", 1.0, 20.0, 1.0)]
             }
             Self::MotionBlur => &[
                 Parameter::new(0, "Distance (px)", 1.0, 100.0, 0.1),
-                Parameter::new(1, "Angle (°)", -180.0, 180.0, 1),
+                Parameter::new(1, "Angle (°)", -180.0, 180.0, 1.0),
             ],
             Self::Sharpen => &[Parameter::new(0, "Amount", 0.0, 2.0, 0.01)],
             Self::UnsharpMask => &[
@@ -279,7 +279,7 @@ impl Kind {
             ],
             Self::EdgeDetect | Self::Emboss => &[Parameter::new(0, "Amount", 0.1, 5.0, 0.01)],
             Self::Pixelate | Self::Halftone => {
-                &[Parameter::new(0, "Cell size (px)", 2.0, 100.0, 1)]
+                &[Parameter::new(0, "Cell size (px)", 2.0, 100.0, 1.0)]
             }
             Self::Noise => &[Parameter::new(0, "Grain amount", 0.0, 1.0, 0.01)],
             Self::Vignette => &[
@@ -287,7 +287,7 @@ impl Kind {
                 Parameter::new(1, "Inner radius", 0.0, 1.2, 0.01),
             ],
             Self::Swirl => &[
-                Parameter::new(0, "Twist (°)", -720.0, 720.0, 1),
+                Parameter::new(0, "Twist (°)", -720.0, 720.0, 1.0),
                 Parameter::new(1, "Radius", 0.05, 1.5, 0.01),
             ],
             Self::Ripple => &[
