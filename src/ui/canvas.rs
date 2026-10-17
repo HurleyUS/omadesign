@@ -521,7 +521,7 @@ fn pen_snap_point(studio: &mut Studio, point: Pt, modifiers: eframe::egui::Modif
 }
 
 fn handle_pointer(studio: &mut Studio, resp: &eframe::egui::Response, space: bool) {
-    if super::channel_adjustment::is_open(&resp.ctx) { return; }
+    if super::channel_adjustment::is_open(&resp.ctx) || super::quick_mask::is_open(&resp.ctx) { return; }
     if space {
         return;
     }
@@ -1051,7 +1051,7 @@ fn is_text_hit(studio: &Studio, hit: (usize, u64)) -> bool {
 }
 
 fn start_drag(studio: &mut Studio, pick: Pt, snap: Pt, shift: bool, alt: bool) {
-    if studio.channel_target.is_some() && matches!(studio.tool, Tool::Brush | Tool::Eraser) {
+    if (studio.channel_target.is_some() || studio.quick_mask_painting()) && matches!(studio.tool, Tool::Brush | Tool::Eraser) {
         studio.start_channel_stroke(pick, studio.tool == Tool::Eraser);
         return;
     }
@@ -5074,6 +5074,26 @@ mod tests {
         assert_eq!(crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(),after);
     }
 
+    #[test]
+    fn craft_quick_mask_actual_canvas_q_pointer_escape_undo_and_selection_return() {
+        use eframe::egui::{Event,Key,Modifiers};
+        let (ctx,mut s)=pen_input_studio();s.persona=crate::tools::Persona::Pixel;s.tool=Tool::Brush;s.view.offset=Pt::ZERO;s.brushes.selected=None;s.brush.size=12.;s.brush.opacity=0.8;
+        let frame=|s:&mut Studio,events| {
+            let mut output=ctx.run_ui(eframe::egui::RawInput {screen_rect:Some(Rect::from_min_size(Pos2::ZERO,vec2(400.,300.))),events,..Default::default()},|ui|{s.handle_shortcuts(ui.ctx());show(ui,s);});
+            output.textures_delta.clear();
+        };
+        frame(&mut s,vec![]);frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::F8,Modifiers::NONE));frame(&mut s,vec![]);
+        assert!(ctx.read_response(eframe::egui::Id::new("studio-canvas")).unwrap().has_focus());
+        let before=crate::project::encode(&s.doc).unwrap();let history=s.history.len();
+        frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::Q,Modifiers::NONE));assert!(s.doc.quick_mask.is_some());
+        let entered=crate::project::encode(&s.doc).unwrap();let pos=Pos2::new(80.,80.);let end=Pos2::new(140.,100.);
+        frame(&mut s,vec![Event::PointerMoved(pos),pen_pointer_button(pos,true,Modifiers::NONE)]);assert!(matches!(s.op,Some(Op::ChannelStroke(_))));
+        frame(&mut s,vec![Event::PointerMoved(end),pen_pointer_button(end,false,Modifiers::NONE)]);assert!(s.op.is_none());assert_eq!(s.history.len(),history+2);
+        let painted=crate::project::encode(&s.doc).unwrap();assert_ne!(entered,painted);assert!(s.doc.layers[0].kind.shapes().unwrap().is_empty());assert!(s.doc.quick_mask.as_ref().unwrap().channel.plane.samples.iter().any(|v|*v<1.));
+        s.undo();assert_eq!(crate::project::encode(&s.doc).unwrap(),entered);s.redo();assert_eq!(crate::project::encode(&s.doc).unwrap(),painted);
+        frame(&mut s,vec![Event::PointerMoved(pos),pen_pointer_button(pos,true,Modifiers::NONE)]);frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::Escape,Modifiers::NONE));assert!(s.op.is_none());assert_eq!(crate::project::encode(&s.doc).unwrap(),painted);
+        frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::Q,Modifiers::NONE));assert!(s.doc.quick_mask.is_none());assert!(s.pixel_sel.is_some());assert_eq!(crate::project::encode(&s.doc).unwrap(),before);
+    }
     #[test]
     fn unrelated_touch_does_not_cancel_or_change_a_mouse_brush_stroke() {
         use eframe::egui::{Event, Modifiers, TouchDeviceId, TouchId, TouchPhase};
