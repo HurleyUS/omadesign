@@ -545,10 +545,7 @@ pub(crate) fn apply_float_with_cancel(
     cancel: &(dyn crate::resources::CancellationCheck + Sync),
 ) -> Result<Allocation<[f32; 4]>, String> {
     cancel.check()?;
-    if !settings.strength.is_finite()
-        || !(0. ..=1.).contains(&settings.strength)
-        || settings.values.iter().any(|v| !v.is_finite())
-    {
+    if !settings.strength.is_finite() || settings.values.iter().any(|v| !v.is_finite()) {
         return Err("Filter settings must be finite".into());
     }
     let count = (w as usize)
@@ -1125,8 +1122,11 @@ where
                 let d = step as f32 - (n - 1) as f32 * 0.5;
                 let p = premul(sample(src, w, h, x + d * theta.cos(), y + d * theta.sin()));
                 for ch in 0..C {
-                    sum[ch] += p[ch] / n as f32;
+                    sum[ch] += if C == 1 { p[ch] } else { p[ch] / n as f32 };
                 }
+            }
+            if C == 1 {
+                sum[0] /= n as f32;
             }
             unpremul(sum)
         })

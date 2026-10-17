@@ -344,3 +344,63 @@ fn craft_channel_filter_families_mid_kernel_cancellation_releases_owned_working_
     assert_eq!(pool.pending_bytes(), pending);
     assert!(source.iter().all(|v| *v == [0.25, 0.5, 0.75, 1.]));
 }
+
+#[test]
+fn craft_channel_filter_families_motion_keeps_constant_coverage_exact() {
+    for value in [1., 0.125] {
+        let source = plane(&[value; 32], 8);
+        for length in [12., 37., 100.] {
+            let output = filtered(&source, Kind::MotionBlur, &[length, 0.]);
+            assert!(
+                output
+                    .samples
+                    .iter()
+                    .all(|v| v.to_bits() == value.to_bits()),
+                "length {length}"
+            );
+        }
+    }
+}
+
+#[test]
+fn craft_channel_filter_families_rgb_strength_keeps_legacy_clamping() {
+    let source = [
+        [-0., 0.25, 0.75, 0.],
+        [0.2, 0.8, 0.3, 0.4],
+        [0.4, 0.1, 0.9, 1.],
+        [0.6, 0.3, 0.7, 0.5],
+    ];
+    for kind in Kind::ALL {
+        let mut settings = Settings::new(kind);
+        let full = crate::raster::apply_float(&source, 2, 2, &settings, None).unwrap();
+        settings.strength = 1.5;
+        let above = crate::raster::apply_float(&source, 2, 2, &settings, None).unwrap();
+        assert_eq!(
+            above
+                .iter()
+                .flatten()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            full.iter()
+                .flatten()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            "{kind:?}"
+        );
+        settings.strength = -0.5;
+        let below = crate::raster::apply_float(&source, 2, 2, &settings, None).unwrap();
+        assert_eq!(
+            below
+                .iter()
+                .flatten()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            source
+                .iter()
+                .flatten()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            "{kind:?}"
+        );
+    }
+}
