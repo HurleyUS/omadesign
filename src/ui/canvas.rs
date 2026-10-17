@@ -3489,6 +3489,7 @@ fn draw_overlays(
         studio.cancel_type_ime();
     }
     let edit = studio.type_edit.clone();
+    let motion = studio.is_motion();
     if let Some(edit) = edit {
         let preview = crate::app::type_ime::Preview::new(&mut studio.doc, Some(&edit));
         let start = edit.caret.min(edit.anchor);
@@ -3515,7 +3516,7 @@ fn draw_overlays(
                     if let Some(area) = draw_type_caret(
                         p,
                         rect,
-                        shape_transform(studio, li, shape),
+                        shape_transform_with(&preview, li, shape, |id| studio.pose_drag.get(&id).copied().unwrap_or_else(|| if motion { preview.motion.pose(id, studio.playhead) } else { crate::motion::Pose::identity() })),
                         studio.view,
                         shape,
                         caret,

@@ -367,7 +367,7 @@ fn craft_nested_selection_motion_move_keys_only_the_top_target_in_parent_coordin
         ] {
             s.doc
                 .motion
-                .key(id, prop, 1., value, crate::motion::Ease::Linear);
+                .set_key(id, prop, 1., value, crate::motion::Ease::Linear);
         }
         s.selection = vec![(0, if whole_frame { ids[1] } else { ids[2] })];
         let original = bytes(&s);

@@ -12,10 +12,17 @@ pub(super) fn shape_transform(
     layer: usize,
     shape: &crate::document::Shape,
 ) -> Transform {
-    let parent = compositor::shape_parent_transform_with(&studio.doc, layer, shape.id, |id| {
-        studio.live_pose(id)
-    });
-    compositor::frame_transform(shape, parent, studio.live_pose(shape.id))
+    shape_transform_with(&studio.doc, layer, shape, |id| studio.live_pose(id))
+}
+
+pub(super) fn shape_transform_with(
+    doc: &crate::document::Document,
+    layer: usize,
+    shape: &crate::document::Shape,
+    pose: impl Fn(u64) -> crate::motion::Pose,
+) -> Transform {
+    let parent = compositor::shape_parent_transform_with(doc, layer, shape.id, &pose);
+    compositor::frame_transform(shape, parent, pose(shape.id))
 }
 
 pub(super) fn transform_anchors(anchors: &[Anchor], transform: Transform) -> Vec<Anchor> {
