@@ -159,10 +159,10 @@ fn svg_type_flow_retains_story_reflows_edits_and_exports_standard_text() {
         };
         run.replace_text(0, 8, "Short", None);
         let font = run.font.clone();
-        run.font = crate::text::default_path()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        let options=options();
+        let face=options.fontdb.query(&usvg::fontdb::Query {families:&[usvg::fontdb::Family::SansSerif],..Default::default()}).unwrap();
+        run.font=match &options.fontdb.face(face).unwrap().source {usvg::fontdb::Source::File(path)|usvg::fontdb::Source::SharedFile(path,_)=>path.to_string_lossy().into_owned(),_=>panic!("The flow fixture needs a real installed font")};
+        assert_ne!(run.font,font,"The flow fixture needs two actual available font families");
         run.set_character_style(0, 5, |span| {
             span.font = Some(font.clone());
             span.px = Some(29.);
