@@ -193,6 +193,9 @@ fn craft_nested_selection_subtree_resize_and_rotation_follow_actual_world_handle
     for rotate in [false, true] {
         let (ctx, mut s, ids) = fixture();
         s.selection = vec![(0, ids[1])];
+        let child = s.doc.find_shape_mut(0, ids[2]).unwrap();
+        child.layout.constraint_x = crate::layout::Constraint::Scale;
+        child.layout.constraint_y = crate::layout::Constraint::Scale;
         frame(&ctx, &mut s, vec![]);
         let original = bytes(&s);
         let history = s.history.len();
@@ -328,8 +331,9 @@ fn craft_nested_selection_gradient_native_drag_uses_same_local_coordinates() {
     let n = s.history.len();
     let shape = s.doc.find_shape(0, ids[2]).unwrap();
     let bounds = shape.geom.bbox();
-    let a = bounds.min;
-    let b = bounds.max;
+    let size = bounds.max - bounds.min;
+    let a = bounds.min + Pt::new(size.x * 0.2, size.y * 0.3);
+    let b = bounds.min + Pt::new(size.x * 0.8, size.y * 0.7);
     let from = expected(&s, ids, a);
     let to = expected(&s, ids, b);
     drag(&ctx, &mut s, from, to);
@@ -341,11 +345,107 @@ fn craft_nested_selection_gradient_native_drag_uses_same_local_coordinates() {
         .fill
         .gradient()
         .unwrap();
-    assert!(gradient.from[0].abs() < 0.001 && gradient.from[1].abs() < 0.001);
-    assert!((gradient.to[0] - 1.).abs() < 0.001 && (gradient.to[1] - 1.).abs() < 0.001);
+    assert!((gradient.from[0] - 0.2).abs() < 0.001 && (gradient.from[1] - 0.3).abs() < 0.001);
+    assert!((gradient.to[0] - 0.8).abs() < 0.001 && (gradient.to[1] - 0.7).abs() < 0.001);
     assert_eq!(s.history.len(), n + 1);
     let after = bytes(&s);
     assert_eq!(crate::project::encode(&reopen(&s)).unwrap(), after);
     s.undo();
     assert_eq!(bytes(&s), original);
+}
+
+#[test]
+fn craft_nested_selection_motion_move_keys_only_the_top_target_in_parent_coordinates() {
+    for whole_frame in [false, true] {
+        let (_ctx, mut s, ids) = fixture();
+        s.persona = Persona::Motion;
+        s.playhead = 1.;
+        for (id, prop, value) in [
+            (ids[0], crate::motion::Prop::Rotation, 0.2),
+            (ids[0], crate::motion::Prop::Width, 1.25),
+            (ids[0], crate::motion::Prop::Height, 0.65),
+        ] {
+            s.doc
+                .motion
+                .key(id, prop, 1., value, crate::motion::Ease::Linear);
+        }
+        s.selection = vec![(0, if whole_frame { ids[1] } else { ids[2] })];
+        let original = bytes(&s);
+        let n = s.history.len();
+        let point = s.doc.find_shape(0, ids[2]).unwrap().geom.bbox().center();
+        let before = expected(&s, ids, point);
+        s.op = Some(Op::Move {
+            orig: snapshot_moving(&s),
+            start: before,
+            selection_on_click: s.selection.clone(),
+        });
+        let delta = Pt::new(21., -14.);
+        continue_drag(&mut s, before + delta, false, false);
+        end_drag(&mut s, before + delta, false, false, false);
+        close(expected(&s, ids, point), before + delta);
+        assert_eq!(s.history.len(), n + 1);
+        if whole_frame {
+            assert_eq!(s.doc.motion.pose(ids[2], 1.).dx, 0.);
+            assert_eq!(s.doc.motion.pose(ids[2], 1.).dy, 0.);
+        }
+        let after = bytes(&s);
+        assert_eq!(crate::project::encode(&reopen(&s)).unwrap(), after);
+        s.undo();
+        assert_eq!(bytes(&s), original);
+        s.redo();
+        assert_eq!(bytes(&s), after);
+    }
+}
+
+#[test]
+fn craft_nested_selection_animated_text_native_caret_matches_the_painted_story() {
+    let (ctx, mut s, ids) = fixture();
+    let mut run = crate::geom::TypeRun {
+        origin: Pt::new(100., 130.),
+        content: "Nested text".into(),
+        px: 20.,
+        ..Default::default()
+    };
+    run.contours = crate::text::shape(&run);
+    let caret = crate::text::caret_pt(&run, 3);
+    let index = crate::text::hit_char(&run, caret);
+    s.doc.find_shape_mut(0, ids[2]).unwrap().geom = Geom::Text(run);
+    s.tool = Tool::Text;
+    s.persona = Persona::Motion;
+    s.pose_drag.insert(
+        ids[0],
+        Pose {
+            width_scale: 1.2,
+            height_scale: 0.8,
+            rotation: 0.1,
+            ..Pose::identity()
+        },
+    );
+    s.pose_drag.insert(
+        ids[2],
+        Pose {
+            dx: 5.,
+            dy: -3.,
+            rotation: -0.1,
+            ..Pose::identity()
+        },
+    );
+    frame(&ctx, &mut s, vec![]);
+    let position = at(&s, expected(&s, ids, caret));
+    let original = bytes(&s);
+    frame(
+        &ctx,
+        &mut s,
+        vec![Event::PointerMoved(position), button(position, true)],
+    );
+    frame(&ctx, &mut s, vec![button(position, false)]);
+    assert_eq!(s.type_edit.as_ref().expect("native text edit").caret, index);
+    let run = s.selected_type().unwrap();
+    let (top, bottom) = crate::text::caret_segment(&run, index);
+    let expected_top = at(&s, expected(&s, ids, top));
+    let expected_bottom = at(&s, expected(&s, ids, bottom));
+    let painted = frame(&ctx, &mut s, vec![]);
+    assert!(painted.iter().any(|item|matches!(&item.shape,eframe::egui::Shape::LineSegment{points,stroke} if (stroke.width-1.5).abs()<0.001&&points[0].distance(expected_top)<0.003&&points[1].distance(expected_bottom)<0.003)),"actual caret paint follows nested animated text");
+    assert_eq!(bytes(&s), original);
+    assert_eq!(s.history.len(), 0);
 }

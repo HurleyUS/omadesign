@@ -3515,9 +3515,8 @@ fn draw_overlays(
                     if let Some(area) = draw_type_caret(
                         p,
                         rect,
-                        &preview,
+                        shape_transform(studio, li, shape),
                         studio.view,
-                        li,
                         shape,
                         caret,
                         anchor,
@@ -3550,9 +3549,8 @@ fn draw_overlays(
 fn draw_type_caret(
     p: &eframe::egui::Painter,
     rect: Rect,
-    doc: &crate::document::Document,
+    transform: tiny_skia::Transform,
     v: crate::compositor::View,
-    layer: usize,
     shape: &crate::document::Shape,
     caret: usize,
     anchor: usize,
@@ -3561,22 +3559,7 @@ fn draw_type_caret(
     let Geom::Text(run) = &shape.geom else {
         return None;
     };
-    let screen = |point| {
-        let mut point = shape.world_point(point);
-        let mut parent = shape.layout.parent;
-        let mut visited = std::collections::HashSet::new();
-        while let Some(id) = parent {
-            if !visited.insert(id) || visited.len() > 64 {
-                break;
-            }
-            let Some(frame) = doc.find_shape(layer, id) else {
-                break;
-            };
-            point = frame.world_point(point);
-            parent = frame.layout.parent;
-        }
-        win(rect, v, point)
-    };
+    let screen = |point| win(rect, v, map_point(transform, point));
     if let Some(quads) = crate::text_geometry::selection_quads(run, caret, anchor) {
         for quad in quads {
             p.add(eframe::egui::Shape::convex_polygon(
