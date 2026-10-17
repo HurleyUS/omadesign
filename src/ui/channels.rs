@@ -21,6 +21,7 @@ use std::{
     },
 };
 const JOB: &str = "channel-operation";
+const PREVIEW: &str = "channel-scalar-preview";
 fn owner(studio: &Studio) -> Id {
     Id::new(("channels", &studio.swap_id))
 }
@@ -36,6 +37,8 @@ struct State {
     error: String,
     name_error: String,
     textures: HashMap<u64, (usize, egui::TextureHandle)>,
+    preview: Option<(u64, Target, egui::TextureHandle)>,
+    failed: Option<(u64, Target)>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -47,6 +50,8 @@ impl Default for State {
             error: String::new(),
             name_error: String::new(),
             textures: HashMap::new(),
+            preview: None,
+            failed: None,
         }
     }
 }
@@ -64,6 +69,12 @@ enum Change {
         Arc<crate::resources::Allocation<u8>>,
         crate::app::masking::SelectionSpace,
     ),
+}
+struct RenderedChannel {
+    document: String,
+    generation: u64,
+    target: Target,
+    result: Result<Plane, String>,
 }
 struct Finished {
     target: actions::Target,
@@ -138,6 +149,26 @@ fn start(ctx: &egui::Context, studio: &Studio, work: Work) -> Result<(), String>
 /// Retire stale owners and collect the existing worker even while Channels is hidden.
 /// Args: context and displayed editor. Returns nothing; late results cannot modify another document.
 pub(super) fn poll(ctx: &egui::Context, studio: &mut Studio) {
+    if let Some(Ok(preview)) = jobs::poll::<RenderedChannel>(ctx, PREVIEW) {
+        if preview.document == studio.swap_id && preview.generation == studio.canvas_gen {
+            let key = owner(studio);
+            let mut state = ctx.data(|d| d.get_temp::<State>(key)).unwrap_or_default();
+            if state.selected == preview.target {
+                match preview.result {
+                    Ok(plane) => {
+                        let texture = plane_texture(ctx, &plane, 128, "selected-channel");
+                        state.preview = Some((preview.generation, preview.target, texture));
+                        state.failed = None;
+                    }
+                    Err(error) => {
+                        state.failed = Some((preview.generation, preview.target));
+                        state.error = error;
+                    }
+                }
+                ctx.data_mut(|d| d.insert_temp(key, state));
+            }
+        }
+    }
     let Some(run) = ctx.data(|d| d.get_temp::<Run>(run_id())) else {
         return;
     };
@@ -206,19 +237,29 @@ fn thumbnail(
     {
         return texture.clone();
     }
-    let w = 40usize;
-    let h = ((channel.plane.height as f64 / channel.plane.width.max(1) as f64 * 40.).round()
-        as usize)
-        .clamp(1, 40);
+    let texture = plane_texture(
+        ui.ctx(),
+        &channel.plane,
+        40,
+        &format!("channel-{}", channel.id),
+    );
+    state
+        .textures
+        .insert(channel.id, (pointer, texture.clone()));
+    texture
+}
+fn plane_texture(ctx: &egui::Context, plane: &Plane, edge: u32, name: &str) -> egui::TextureHandle {
+    let w = edge.max(1).min(plane.width.max(1)) as usize;
+    let h = ((plane.height as f64 / plane.width.max(1) as f64 * w as f64).round() as usize)
+        .clamp(1, edge.max(1) as usize);
     let mut pixels = vec![0; w * h * 4];
     for y in 0..h {
         for x in 0..w {
-            let sx = x * channel.plane.width as usize / w;
-            let sy = y * channel.plane.height as usize / h;
-            let v = (channel
-                .plane
+            let sx = x * plane.width as usize / w;
+            let sy = y * plane.height as usize / h;
+            let v = (plane
                 .samples
-                .get(sy * channel.plane.width as usize + sx)
+                .get(sy * plane.width as usize + sx)
                 .copied()
                 .unwrap_or(0.)
                 * 255.)
@@ -226,16 +267,13 @@ fn thumbnail(
             pixels[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&[v, v, v, 255]);
         }
     }
-    let texture = ui.ctx().load_texture(
-        format!("channel-{}", channel.id),
+    ctx.load_texture(
+        name,
         egui::ColorImage::from_rgba_unmultiplied([w, h], &pixels),
         egui::TextureOptions::LINEAR,
-    );
-    state
-        .textures
-        .insert(channel.id, (pointer, texture.clone()));
-    texture
+    )
 }
+
 /// Draw concrete channel rows and real selection/history actions.
 /// Args: native pane and current editor. Returns nothing; previews are never used as selection data.
 pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
@@ -251,8 +289,13 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
     state
         .textures
         .retain(|id, _| studio.doc.channels.iter().any(|c| c.id == *id));
-    let _ = super::pane_previews::image(ui, studio, None, None);
+    let composite = super::pane_previews::image(ui, studio, None, None);
     let cmyk = studio.doc.color.model == crate::deep_color::cms::Model::Cmyk;
+    if let Target::Color(index) = state.selected
+        && index >= if cmyk { 4 } else { 3 }
+    {
+        state.selected = Target::Composite;
+    }
     for target in std::iter::once(Target::Composite)
         .chain((0..if cmyk { 4 } else { 3 }).map(Target::Color))
         .chain(std::iter::once(Target::Transparency))
@@ -456,6 +499,45 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
     if !state.error.is_empty() {
         ui.colored_label(ui.visuals().error_fg_color, &state.error);
     }
+    let texture = if state.selected == Target::Composite {
+        composite
+    } else {
+        let cached = state
+            .preview
+            .as_ref()
+            .filter(|(generation, target, _)| {
+                *generation == studio.canvas_gen && *target == state.selected
+            })
+            .map(|(_, _, texture)| texture.clone());
+        if cached.is_none()
+            && state.failed != Some((studio.canvas_gen, state.selected))
+            && !jobs::is_running::<RenderedChannel>(ui.ctx(), PREVIEW)
+        {
+            let doc = studio.doc.clone();
+            let document = studio.swap_id.clone();
+            let generation = studio.canvas_gen;
+            let target = state.selected;
+            jobs::start(ui.ctx(), PREVIEW, move || {
+                Ok(RenderedChannel {
+                    document,
+                    generation,
+                    target,
+                    result: crate::channels::preview(
+                        &doc,
+                        target,
+                        128,
+                        &crate::deep_color::storage::check,
+                    ),
+                })
+            });
+        }
+        cached
+    };
+    if let Some(texture) = texture {
+        let size = texture.size_vec2();
+        let factor = (ui.available_width().min(256.) / size.x).min(2.);
+        ui.add(egui::Image::new(&texture).fit_to_exact_size(size * factor));
+    }
     ui.data_mut(|d| d.insert_temp(key, state));
 }
 
@@ -559,6 +641,7 @@ mod tests {
         studio.redo();
         assert_eq!(crate::project::encode(&studio.doc).unwrap(), saved);
         jobs::cancel::<Finished>(&ctx, JOB);
+        jobs::cancel::<RenderedChannel>(&ctx, PREVIEW);
     }
     #[test]
     fn craft_channels_native_worker_retires_changed_document_and_selection_owner() {

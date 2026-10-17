@@ -1746,6 +1746,10 @@ impl Document {
             bump_id(token.id);
             max = max.max(token.id);
         }
+        for channel in &self.channels {
+            bump_id(channel.id);
+            max = max.max(channel.id);
+        }
         for id in self.screen_export.assets.iter().map(|a|a.id).chain(self.screen_export.rows.iter().map(|r|r.id)) {
             bump_id(id);
             max = max.max(id);

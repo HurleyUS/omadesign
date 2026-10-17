@@ -60,11 +60,11 @@ fn craft_channels_scalar_native32_preserves_exact_samples_aliases_and_legacy_def
         !crate::deep_color::has_native(&doc),
         "auxiliary scalar channels do not change painted RGB precision"
     );
-    assert!(
-        crate::formats::psd::encode_admitted(&doc, false)
-            .unwrap_err()
-            .contains("SavedChannelsUnsupported")
-    );
+    let error = match crate::formats::psd::encode_admitted(&doc, false) {
+        Ok(_) => panic!("Saved channels were silently dropped"),
+        Err(error) => error,
+    };
+    assert!(error.contains("SavedChannelsUnsupported"));
     let without = crate::compositor::export_png(&fixture(), 1).unwrap();
     let with = crate::compositor::export_png(&doc, 1).unwrap();
     assert_eq!(
