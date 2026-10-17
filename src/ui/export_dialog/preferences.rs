@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 pub(super) struct Options {
     pub format: Format,
     pub scale: u32,
+    pub embed_fonts: bool,
     pub ai: bool,
     pub upscale: upscale::Settings,
     pub scope: export::target::Scope,
@@ -16,6 +17,7 @@ impl Default for Options {
         Self {
             format: Format::Png,
             scale: 1,
+            embed_fonts: false,
             ai: false,
             upscale: Default::default(),
             scope: Default::default(),

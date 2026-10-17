@@ -11,6 +11,8 @@ pub(crate) mod font_inventory;
 pub mod variations;
 mod font_instances;
 pub(crate) mod font_export;
+pub(crate) mod webfonts;
+pub(crate) mod svg_fonts;
 pub(crate) mod font_catalog;
 pub(crate) mod font_recovery;
 

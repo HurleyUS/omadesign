@@ -174,7 +174,7 @@ fn checksum(data: &[u8]) -> u32 {
 }
 /// Extract a collection face as a standalone SFNT without changing any outline or naming tables.
 /// Args: shared font bytes and actual collection face index. Returns checked native font data.
-fn face_bytes(data: &[u8], index: u32) -> Result<Vec<u8>, String> {
+pub(super) fn face_bytes(data: &[u8], index: u32) -> Result<Vec<u8>, String> {
     let invalid = || "The selected font has an invalid table directory".to_owned();
     let read = |at: usize| {
         data.get(at..at.checked_add(4)?)

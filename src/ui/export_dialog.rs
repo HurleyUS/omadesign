@@ -35,6 +35,7 @@ struct Dialog {
     preset_name: String,
     format: Format,
     scale: u32,
+    embed_fonts: bool,
     ai: bool,
     upscale: upscale::Settings,
     copy: bool,
@@ -134,6 +135,7 @@ pub(crate) fn open(ctx: &Context, studio: &mut Studio, format: Format, copy: boo
         preset_name: String::new(),
         format: options.format,
         scale: options.scale,
+        embed_fonts: options.embed_fonts,
         ai: options.ai,
         upscale: options.upscale,
         copy,
@@ -173,6 +175,7 @@ impl Dialog {
         preferences::Options {
             format: self.format,
             scale: self.scale,
+            embed_fonts: self.embed_fonts,
             ai: self.ai,
             upscale: self.upscale,
             scope: self.scope.clone(),
@@ -532,6 +535,7 @@ pub(super) fn show(ctx: &Context, studio: &mut Studio) {
                             let response = ui.scope_builder(egui::UiBuilder::new().id(property.with(&preset.name)), |ui| ui.selectable_label(false, &preset.name)).inner;
                             if available && response.clicked() {
                                 dialog.format = preset.options.format; dialog.scale = preset.options.scale;
+                                dialog.embed_fonts = preset.options.embed_fonts;
                                 dialog.ai = preset.options.ai; dialog.upscale = preset.options.upscale;
                                 chosen = true; ui.close();
                             }
@@ -616,6 +620,11 @@ pub(super) fn show(ctx: &Context, studio: &mut Studio) {
                     ui.small("RAW PNG and TIFF retain 16-bit precision.");
                 }
             } else { ui.small("Vector and layered formats keep their native structure."); }
+            if dialog.format == Format::Svg {
+                let response=ui.scope_builder(egui::UiBuilder::new().id(owner.with("embed-fonts")), |ui| ui.checkbox(&mut dialog.embed_fonts, "Embed fonts")).inner;
+                super::welcome::focus_control(ui,&response);
+                response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, response.enabled(), dialog.embed_fonts, "Embed SVG fonts"));
+            }
         });
         settings = export::Settings { format: dialog.format, scale: dialog.scale,
             ai: (dialog.format.raster() && dialog.ai).then_some(dialog.upscale) };
@@ -793,11 +802,16 @@ pub(super) fn save_to(ctx: &Context, studio: &Studio, mut path: PathBuf) -> Resu
         );
     }
     let copy = dialog.copy;
+    let embed_fonts = dialog.embed_fonts;
     dialog.busy = true;
     dialog.error = None;
     ctx.data_mut(|d| d.insert_temp(id(), dialog));
     jobs::start_with_progress(ctx, JOB, 1, move |progress| {
-        let notes = export::save(&source, settings, &path, progress.as_ref())?;
+        let notes = if settings.format == Format::Svg {
+            let (bytes, notes) = export::encode_svg_admitted(&source, embed_fonts, progress.as_ref())?;
+            export::write_atomic(&path, bytes.as_slice(), progress.as_ref())?;
+            notes
+        } else { export::save(&source, settings, &path, progress.as_ref())? };
         let photo = if copy {
             Some(PhotoImage::load(&path)?)
         } else {
@@ -868,6 +882,22 @@ mod tests {
         let output = frame(ctx, studio, vec![]);
         keys::focused(ctx, &output, control);
         output
+    }
+
+    #[test]
+    fn craft_svg_fonts_native_export_choice_keeps_captured_owner_and_options() {
+        let ctx=Context::default();ctx.enable_accesskit();crate::ui::theme::apply(&ctx);
+        let mut studio=keyboard_studio(&ctx,false);
+        choose(&ctx,&mut studio,"Export format",Format::Svg.label());
+        let output=keys::tab_to(&ctx,"Embed SVG fonts",|events|frame(&ctx,&mut studio,events));
+        keys::focused(&ctx,&output,"Embed SVG fonts");
+        let before=crate::project::encode(&studio.doc).unwrap();
+        let was=dialog(&ctx).embed_fonts;
+        frame(&ctx,&mut studio,keys::key(Key::Space,Modifiers::NONE));
+        let current=dialog(&ctx);assert_ne!(current.embed_fonts,was);assert_eq!(current.options().embed_fonts,current.embed_fonts);
+        assert_eq!(current.owner,studio.swap_id);assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);
+        let serialized=serde_json::to_vec(&current.options()).unwrap();let options:preferences::Options=serde_json::from_slice(&serialized).unwrap();assert_eq!(options.embed_fonts,current.embed_fonts);
+        let legacy:preferences::Options=serde_json::from_str("{}").unwrap();assert!(!legacy.embed_fonts);
     }
 
     #[test]

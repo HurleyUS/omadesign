@@ -187,8 +187,16 @@ pub fn encode_admitted(
     progress: &dyn Progress,
 ) -> Result<(EncodedBytes, Vec<String>), String> {
     crate::formats::raw::Cancellation::with_progress(progress, |cancel| {
-        encode_inner_admitted(source, settings, progress, cancel, None)
+        encode_inner_admitted(source, settings, progress, cancel, None, false)
     })
+}
+
+/// Export SVG with the selected text portability through the existing admitted writer.
+/// Args: captured document, font embedding choice and progress. Returns owned SVG bytes and notes.
+pub fn encode_svg_admitted(source: &Source, embed_fonts: bool, progress: &dyn Progress) -> Result<(EncodedBytes, Vec<String>), String> {
+    if !matches!(source, Source::Document(_)) { return Err("SVG requires document artwork".into()); }
+    let settings = Settings {format: Format::Svg, ..Default::default()};
+    crate::formats::raw::Cancellation::with_progress(progress, |cancel| encode_inner_admitted(source, settings, progress, cancel, None, embed_fonts))
 }
 
 /// Encode custom document sizing through the same admitted still-image writer.
@@ -201,7 +209,7 @@ pub fn encode_scaled_admitted(
 ) -> Result<(EncodedBytes, Vec<String>), String> {
     dimensions_scaled(source, settings, options)?;
     crate::formats::raw::Cancellation::with_progress(progress, |cancel| {
-        encode_inner_admitted(source, settings, progress, cancel, Some(options))
+        encode_inner_admitted(source, settings, progress, cancel, Some(options), false)
     })
 }
 fn encode_inner_admitted(
@@ -210,6 +218,7 @@ fn encode_inner_admitted(
     progress: &dyn Progress,
     cancel: &crate::formats::raw::Cancellation,
     options: Option<RasterOptions>,
+    svg_fonts: bool,
 ) -> Result<(EncodedBytes, Vec<String>), String> {
     if let Some(options) = options {
         dimensions_scaled(source, settings, options)?;
@@ -245,7 +254,7 @@ fn encode_inner_admitted(
             return Ok((output.bytes, output.warnings));
         }
         let output = match settings.format {
-            Format::Svg => (crate::svg::export(doc)?.into_bytes(), vec![]),
+            Format::Svg => (if svg_fonts { crate::svg::export_embedded(doc)? } else { crate::svg::export(doc)? }.into_bytes(), vec![]),
             Format::Pdf => crate::formats::pdf::write(doc)?,
             Format::Ora => crate::formats::openraster::write(doc)?,
             Format::Idml => crate::formats::idml::write(doc)?,

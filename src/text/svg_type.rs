@@ -1024,6 +1024,14 @@ pub(crate) fn object_paint(run: &TypeRun, fill: &crate::document::Fill) -> TypeR
 }
 
 pub(crate) fn export_fragment(run: &TypeRun, id: u64, outlines: bool) -> Option<String> {
+    export_fragment_inner(run, id, outlines, false)
+}
+
+pub(crate) fn export_fragment_embedded(run: &TypeRun, id: u64) -> Option<String> {
+    export_fragment_inner(run, id, false, true)
+}
+
+fn export_fragment_inner(run: &TypeRun, id: u64, outlines: bool, embedded: bool) -> Option<String> {
     let original = source(run)?;
     let fonts: std::collections::BTreeMap<_, _> = std::iter::once(&run.font)
         .chain(run.spans.iter().filter_map(|s| s.font.as_ref()))
@@ -1033,7 +1041,7 @@ pub(crate) fn export_fragment(run: &TypeRun, id: u64, outlines: bool) -> Option<
         font.starts_with("omatype:")
             || family.is_none() && **font != run.svg_text.as_ref().unwrap().base_font
     });
-    let source = if outlines || portable {
+    let source = if outlines || portable && !embedded {
         layout(run)?.tree.to_string(&usvg::WriteOptions::default())
     } else {
         original
@@ -1048,7 +1056,7 @@ pub(crate) fn export_fragment(run: &TypeRun, id: u64, outlines: bool) -> Option<
     for node in xml.descendants().filter(|n| n.is_element()) {
         for attr in node.attributes() {
             let mut value = attr.value().to_owned();
-            if attr.name() == "font-family" {
+            if attr.name() == "font-family" && !embedded {
                 for (font, family) in &fonts {
                     if let Some(family) = family {
                         let alias = quoted_family(font);
@@ -1324,6 +1332,21 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
         return Some(found);
     }
     let tree = usvg::Tree::from_str(&renderer_source(&source), &options_for(run)).ok()?;
+    let result = Arc::new(layout_tree(run, tree));
+    let mut cache = cache.lock().unwrap();
+    if cache.len() >= 64 { cache.clear(); }
+    cache.insert(key, result.clone());
+    Some(result)
+}
+
+/// Resolve imported text against its already loaded, bounded embedded font database.
+/// Args: captured text and actual SVG parser options. Returns the same native layout and resolved font ranges.
+pub(crate) fn layout_with_options(run: &TypeRun, options: &usvg::Options<'_>) -> Option<Layout> {
+    let source = renderer_source(&source(run)?);
+    Some(layout_tree(run, usvg::Tree::from_str(&source, options).ok()?))
+}
+
+fn layout_tree(run: &TypeRun, tree: usvg::Tree) -> Layout {
     let mut text_nodes = Vec::new();
     texts(tree.root(), &mut text_nodes);
     let order = visual_characters(&text_nodes, &run.content);
@@ -1332,6 +1355,7 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
     let mut carets = Vec::new();
     let mut starts = std::collections::HashSet::new();
     let mut styles = Vec::new();
+    let mut resolved_fonts = HashMap::new();
     let mut used = vec![false; run.content.chars().count()];
     let mut bounds: Option<crate::geom::Bounds> = None;
     let mut stroke_width = 0_f32;
@@ -1387,15 +1411,11 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
                     *value = true;
                 }
                 let transform = text.abs_transform().pre_concat(glyph.transform());
-                let font = tree
-                    .fontdb()
-                    .face(glyph.font)
-                    .and_then(|f| match &f.source {
-                        usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _) => {
-                            Some(p.to_string_lossy().into_owned())
-                        }
-                        _ => None,
-                    });
+                let (font, axes) = resolved_fonts.entry(glyph.font).or_insert_with(|| {
+                    let font = super::webfonts::reference(tree.fontdb(), glyph.font);
+                    let axes = tree.fontdb().with_face_data(glyph.font, |bytes,index| rustybuzz::ttf_parser::Face::parse(bytes,index).ok().map(|face|face.variation_axes().into_iter().map(|a|a.tag.to_bytes()).collect::<Vec<_>>())).flatten().unwrap_or_default();
+                    (font, axes)
+                });
                 let fill = span.fill.as_ref().and_then(|fill| {
                     if let usvg::Paint::Color(c) = fill.paint() {
                         Some(crate::document::Fill::Solid(crate::color::Rgba::new(
@@ -1413,6 +1433,7 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
                         at + i,
                         crate::geom::CharSpan {
                             font: font.clone(),
+                            font_variations: (!axes.is_empty() && font.as_ref().is_some_and(|f|f.starts_with("omatype:"))).then(|| super::variations::FontVariations::new(span.variations.iter().filter(|v|axes.contains(&v.tag)).map(|v|(v.tag,v.value)).collect()).ok()).flatten(),
                             px: Some(glyph.font_size()),
                             fill: fill.clone(),
                             ..Default::default()
@@ -1474,20 +1495,14 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
             }
         }
     }
-    let result = Arc::new(Layout {
+    Layout {
         tree,
         contours,
         carets,
         styles,
         bounds: bounds.unwrap_or_else(|| crate::geom::Bounds::from_pt(run.map_point(run.origin))),
         stroke_width,
-    });
-    let mut cache = cache.lock().unwrap();
-    if cache.len() >= 64 {
-        cache.clear();
     }
-    cache.insert(key, result.clone());
-    Some(result)
 }
 
 fn flow_source_root(run: &TypeRun) -> TextNode {

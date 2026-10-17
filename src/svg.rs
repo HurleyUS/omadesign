@@ -364,12 +364,13 @@ fn write_shape(
     shape: &Shape,
     extra: &str,
     text_as_paths: bool,
+    embedded: Option<&crate::text::svg_fonts::Embedded>,
 ) {
     if shape.mask.is_some() {
         let mut plain = shape.clone();
         plain.mask = None;
         let mut nested = String::new();
-        write_shape(&mut nested, defs, grad_id, &plain, "", text_as_paths);
+        write_shape(&mut nested, defs, grad_id, &plain, "", text_as_paths, embedded);
         if let Some(id) = object_mask_definition(defs, shape) {
             body.push_str(&format!(
                 "<g{extra}><g mask=\"url(#{id})\">{nested}</g></g>"
@@ -403,7 +404,7 @@ fn write_shape(
         plain.opacity = 1.;
         plain.blend = crate::color::Blend::Normal;
         let mut fill = String::new();
-        write_shape(&mut fill, defs, grad_id, &plain, "", text_as_paths);
+        write_shape(&mut fill, defs, grad_id, &plain, "", text_as_paths, embedded);
         plain.style.fill = Fill::None;
         plain.layout.image = None;
         let mut centered = stroke.clone();
@@ -417,7 +418,7 @@ fn write_shape(
             grad_id,
             &plain,
             &format!(" mask=\"url(#{id})\""),
-            text_as_paths,
+            text_as_paths, embedded,
         );
         edge = edge.replace(
             &format!("id=\"oma-{}\"", shape.id),
@@ -455,7 +456,7 @@ fn write_shape(
                     " visibility=\"hidden\""
                 }
             ));
-            write_shape(body, defs, grad_id, &background, "", text_as_paths);
+            write_shape(body, defs, grad_id, &background, "", text_as_paths, embedded);
             let clip_id = format!("oma-image-clip-{}", shape.id);
             defs.push_str(&format!("<clipPath id=\"{clip_id}\" clipPathUnits=\"userSpaceOnUse\"><path d=\"{}\"/></clipPath>",path_data(&background)));
             body.push_str(&format!("<image href=\"data:image/png;base64,{}\" x=\"{:.4}\" y=\"{:.4}\" width=\"{:.4}\" height=\"{:.4}\" preserveAspectRatio=\"none\" clip-path=\"url(#{clip_id})\"/>",image.data,placed.min.x,placed.min.y,placed.width(),placed.height()));
@@ -463,7 +464,7 @@ fn write_shape(
                 background.style.fill = Fill::None;
                 background.style.stroke = shape.style.stroke.clone();
                 let mut stroke = String::new();
-                write_shape(&mut stroke, defs, grad_id, &background, "", text_as_paths);
+                write_shape(&mut stroke, defs, grad_id, &background, "", text_as_paths, embedded);
                 body.push_str(&stroke.replace(
                     &format!("id=\"oma-{}\"", shape.id),
                     &format!("id=\"oma-image-stroke-{}\"", shape.id),
@@ -484,14 +485,14 @@ fn write_shape(
         },
         extra
     );
-    if let Geom::Text(run)=&shape.geom && run.svg_text.is_some() {
+    if let Geom::Text(run)=&shape.geom && embedded.is_none() && run.svg_text.is_some() {
         let painted;let run=if shape.style.fill!=run.svg_text.as_ref().unwrap().base_fill{painted=crate::text::svg_type::object_paint(run,&shape.style.fill);&painted}else{run};
         body.push_str(&format!("<g opacity=\"{}\"{extra}>",shape.opacity));
         if let Some(fragment)=crate::text::svg_type::export_fragment(run,shape.id,text_as_paths || !run.font_variations.is_empty() || run.spans.iter().any(|s|s.font_variations.as_ref().is_some_and(|v|!v.is_empty()))){body.push_str(&fragment);}
-        if shape.style.stroke.is_some(){let mut native=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());native.style.fill=Fill::None;write_shape(body,defs,grad_id,&native,"",true);}
+        if shape.style.stroke.is_some(){let mut native=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());native.style.fill=Fill::None;write_shape(body,defs,grad_id,&native,"",true, embedded);}
         body.push_str("</g>");return;
     }
-    if let Geom::Text(run)=&shape.geom && crate::text::has_character_paint(run) {
+    if let Geom::Text(run)=&shape.geom && embedded.is_none() && crate::text::has_character_paint(run) {
         body.push_str(&format!("<g opacity=\"{}\"{extra}>",shape.opacity));
         for (index,(fill,contours)) in crate::text::paint_groups(run,&shape.style.fill).into_iter().enumerate() {
             if fill.is_none(){continue;}
@@ -500,7 +501,7 @@ fn write_shape(
             defs.push_str(&format!("<clipPath id=\"{id}\" clipPathUnits=\"userSpaceOnUse\"><path d=\"{}\" clip-rule=\"nonzero\"/></clipPath>",path_data(&part)));
             let bounds=part.geom.bbox();let paint=fill_reference(defs,grad_id,&fill,shape);body.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{paint}\" fill-opacity=\"{}\" clip-path=\"url(#{id})\"/>",bounds.min.x-1.,bounds.min.y-1.,bounds.width()+2.,bounds.height()+2.,paint_opacity(&fill)));
         }
-        if shape.style.stroke.is_some(){let mut stroke=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());stroke.style.fill=Fill::None;write_shape(body,defs,grad_id,&stroke,"",true);}
+        if shape.style.stroke.is_some(){let mut stroke=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());stroke.style.fill=Fill::None;write_shape(body,defs,grad_id,&stroke,"",true, embedded);}
         body.push_str("</g>");return;
     }
     let fill_attr = match &shape.style.fill {
@@ -572,6 +573,10 @@ fn write_shape(
         }
         _ => String::new(),
     };
+    if let Some(fragment) = embedded.and_then(|fonts| fonts.fragments.get(&shape.id)) {
+        body.push_str(&format!("<g id=\"oma-{}\" {fill_attr}{stroke_attr} opacity=\"{}\"{extra}>{fragment}</g>", shape.id, shape.opacity));
+        return;
+    }
     // Animation and portable project faces use glyph outlines: an SVG recipient
     // may not have the brand font. Text stays editable in the original document.
     if let Geom::Text(run) = &shape.geom
@@ -662,14 +667,22 @@ pub fn export(doc: &Document) -> Result<String, String> {
     if !doc.motion.compositions.is_empty() || doc.motion.scene3d.is_some() {
         return Err("CompositionUnsupported: SVG cannot preserve nested composition timing; use Lottie, motion project or raster animation".into());
     }
-    export_inner(doc, false, false)
+    export_inner(doc, false, false, false)
+}
+
+/// Export editable Unicode text with its permitted OpenType fonts included.
+/// Args: immutable artwork. Returns portable SVG or a named error when text needs outlines.
+pub fn export_embedded(doc: &Document) -> Result<String, String> {
+    if crate::deep_color::has_native(doc) { return Err("SVG cannot preserve native pixel or mask samples".into()); }
+    crate::motion::require_flat_artwork(doc, "SVG")?;
+    export_inner(doc, false, false, true)
 }
 
 pub fn export_frame(doc: &Document, layer: usize, frame_id: u64) -> Result<String, String> {
     export_inner(
         &crate::layout_export::frame_document(doc, layer, frame_id)?,
         false,
-        true,
+        true, false,
     )
 }
 
@@ -711,7 +724,7 @@ pub fn animated_export(doc: &Document) -> Result<SvgExport, String> {
         }
     }
     Ok(SvgExport {
-        svg: export_inner(doc, true, true)?,
+        svg: export_inner(doc, true, true, false)?,
         warnings: export_warnings(doc),
     })
 }
@@ -1104,7 +1117,7 @@ fn write_animated_shape(
             grad_id,
             &component,
             &xf_attr(&component),
-            true,
+            true, None,
         );
         let spin = gradient_motion(motion, &component, &times, SpinTarget::Fill);
         insert_gradient_motion(defs, defs_at, &spin, *grad_id);
@@ -1218,7 +1231,7 @@ fn write_animated_shape(
             grad_id,
             &component,
             &xf_attr(&component),
-            true,
+            true, None,
         );
         let spin = gradient_motion(motion, &component, &times, SpinTarget::Stroke);
         insert_gradient_motion(defs, defs_at, &spin, *grad_id);
@@ -1246,7 +1259,7 @@ pub(crate) fn shape_fragment(shape: &Shape) -> String {
         &mut (shape.id as usize),
         shape,
         &xf_attr(shape),
-        true,
+        true, None,
     );
     body = body.replace(
         &format!("id=\"oma-{}\"", shape.id),
@@ -1339,6 +1352,7 @@ fn write_shape_tree(
     motion: &crate::motion::Motion,
     animate: bool,
     text_as_paths: bool,
+    embedded: Option<&crate::text::svg_fonts::Embedded>,
 ) {
     let frames: std::collections::HashSet<_> = shapes
         .iter()
@@ -1365,6 +1379,7 @@ fn write_shape_tree(
         motion: &crate::motion::Motion,
         animate: bool,
         text_as_paths: bool,
+        embedded: Option<&crate::text::svg_fonts::Embedded>,
         depth: usize,
     ) {
         if depth >= 64 {
@@ -1442,7 +1457,7 @@ fn write_shape_tree(
                     body.push_str(&format!("<g mask=\"url(#{id})\">"));
                 }
                 let defs_at = defs.len();
-                write_shape(body, defs, grad_id, &background, "", false);
+                write_shape(body, defs, grad_id, &background, "", false, embedded);
                 if animate {
                     let times = motion.sample_times(shape.id);
                     let stroke_has_gradient = shape
@@ -1473,6 +1488,7 @@ fn write_shape_tree(
                     motion,
                     animate,
                     text_as_paths,
+                    embedded,
                     depth + 1,
                 );
                 if shape.layout.clip {
@@ -1497,7 +1513,7 @@ fn write_shape_tree(
                 body.push_str("</g>\n");
             } else {
                 extra.push_str(&xf_attr(shape));
-                write_shape(body, defs, grad_id, shape, &extra, text_as_paths);
+                write_shape(body, defs, grad_id, shape, &extra, text_as_paths, embedded);
             }
             if independent {
                 let content = body.split_off(appearance_start);
@@ -1547,6 +1563,7 @@ fn write_shape_tree(
         motion,
         animate,
         text_as_paths,
+        embedded,
         0,
     );
 }
@@ -1557,7 +1574,7 @@ pub(crate) fn export_posed(
     doc: &Document,
     poses: &std::collections::HashMap<u64, crate::motion::Pose>,
 ) -> Result<String, String> {
-    let source = export_inner(doc, false, true)?;
+    let source = export_inner(doc, false, true, false)?;
     let xml = roxmltree::Document::parse(&source).map_err(|e| e.to_string())?;
     let mut edits = Vec::new();
     for node in xml.descendants().filter(|n| n.is_element()) {
@@ -1589,13 +1606,14 @@ pub(crate) fn export_posed(
     Ok(output)
 }
 
-fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<String, String> {
+fn export_inner(doc: &Document, animate: bool, text_as_paths: bool, embed_fonts: bool) -> Result<String, String> {
     doc.validate_hierarchy()?;
+    let embedded = embed_fonts.then(|| crate::text::svg_fonts::Embedded::new(doc)).transpose()?;
     let mut body = String::new();
     let mut layer_outputs = std::collections::HashMap::<u64, String>::new();
     let mut defs = String::new();
     let mut grad_id = 0usize;
-    let mut css = String::new();
+    let mut css = embedded.as_ref().map_or_else(String::new, |fonts| fonts.css.clone());
     let motion = &doc.motion;
     let looping = if motion.looped { "infinite" } else { "1" };
     if animate && !motion.is_empty() {
@@ -1699,7 +1717,7 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
                     &mut css,
                     motion,
                     animate,
-                    text_as_paths,
+                    text_as_paths, embedded.as_ref(),
                 );
             }
             LayerKind::Raster { pixels, .. } => {

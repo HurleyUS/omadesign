@@ -367,7 +367,8 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
     for (range, replacement) in edits {
         normalized.replace_range(range, &replacement);
     }
-    let options = crate::text::svg_type::options();
+    let mut options = crate::text::svg_type::options();
+    crate::text::webfonts::load(&xml, &mut options)?;
     let tree = usvg::Tree::from_str(&normalized, &options)
         .map_err(|e| format!("Could not parse SVG: {e}"))?;
     let type_xml=roxmltree::Document::parse_with_options(&normalized,roxmltree::ParsingOptions{allow_dtd:true,nodes_limit:400000,entity_resolver:None}).map_err(|e|e.to_string())?;
@@ -384,6 +385,7 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
         warnings,
         metadata,
         tree: &tree,
+        options: &options,
         definitions: normalized_definitions(&tree).into(),
         raw_definitions: raw_definitions(&xml, &sheet).into(),
         definition_cache: HashMap::new(),
@@ -407,6 +409,7 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
 }
 
 struct Reader<'a> {
+    options: &'a usvg::Options<'static>,
     doc: Document,
     warnings: Vec<String>,
     metadata: HashMap<String, Metadata>,
@@ -917,7 +920,7 @@ impl Reader<'_> {
     fn rich_type(&mut self,text:&usvg::Text,parent:Option<u64>)->Result<bool,String> {
         let Some((mut svg,content))=self.rich_text.get(text.id()).cloned() else {return Ok(false);};
         let glyph=text.layouted().iter().flat_map(|s|&s.positioned_glyphs).next();
-        let font=glyph.and_then(|g|self.tree.fontdb().face(g.font)).and_then(|face|match &face.source{usvg::fontdb::Source::File(p)|usvg::fontdb::Source::SharedFile(p,_)=>Some(p.to_string_lossy().into_owned()),_=>None}).unwrap_or_default();
+        let font=glyph.and_then(|g|crate::text::webfonts::reference(self.tree.fontdb(),g.font)).unwrap_or_default();
         let px=text.chunks().iter().flat_map(|c|c.spans()).next().map_or(16.,|s|s.font_size().get());
         svg.base_font=font.clone();svg.base_px=px;
         for chunk in text.chunks(){for span in chunk.spans(){for family in span.font().families(){if let usvg::FontFamily::Named(requested)=family && !self.tree.fontdb().faces().any(|face|face.families.iter().any(|(name,_)|name.eq_ignore_ascii_case(requested))){
@@ -926,6 +929,13 @@ impl Reader<'_> {
         }}}}
         let t=text.abs_transform();
         let mut run=TypeRun{content,font,px,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
+        if let Some(layout) = crate::text::svg_type::layout_with_options(&run, self.options) {
+            for (at, style) in layout.styles {
+                if let Some(font) = style.font.filter(|f| f.starts_with("omatype:")) {
+                    run.set_character_style(at, at+1, |s| {s.font=Some(font.clone()); s.font_variations=style.font_variations.clone();});
+                }
+            }
+        }
         run.contours=crate::text::shape(&run);
         let fill=text.chunks().iter().flat_map(|c|c.spans()).next().and_then(|s|s.fill()).map(|f|paint(f.paint(),f.opacity().get(),text.abs_transform(),Geom::Text(run.clone()).bbox()).unwrap_or_else(||{warn(&mut self.warnings,"SVG type source paint retained; changing object paint replaces it.".into());Fill::Solid(Rgba::BLACK)})).unwrap_or(Fill::None);
         run.svg_text.as_mut().unwrap().base_fill=fill.clone();
