@@ -183,6 +183,7 @@ fn craft_type_content_native_punctuation_dialog_blocks_background_undo_and_appli
     seat.invoke(&mut s, "Apply smart punctuation");
     assert!(!is_open(&seat.ctx));
     assert_eq!(content(&s), "«hello wORLD» – …");
+    keys::focused(&seat.ctx, &seat.output, "Artwork canvas");
     assert_eq!(s.history.len(), 1);
     let after = wire(&s);
     emit("native-punctuation.oma", &s);
@@ -208,6 +209,7 @@ fn craft_type_content_native_stale_dialog_and_live_cancel_leave_text_and_draft_i
     seat.frame(&mut s, keys::key(Key::Escape, Modifiers::NONE));
     seat.frame(&mut s, vec![]);
     assert!(!is_open(&seat.ctx));
+    keys::focused(&seat.ctx, &seat.output, "Artwork canvas");
     assert_eq!(wire(&s), before);
     assert_eq!(
         s.type_edit.as_ref().map(|e| (e.caret, e.anchor)),

@@ -434,3 +434,66 @@ fn craft_type_content_batch_rewrite_refuses_invalid_ranges_and_preserves_large_s
     assert_eq!(run.spans.len(), 1);
     assert_eq!(run.spans[0].end, 25000);
 }
+
+#[test]
+fn craft_type_content_rotated_point_area_path_and_affine_type_keep_the_original_frame() {
+    for mode in 0..4 {
+        let (mut s, hit) = editor("small mixed letters become wider");
+        if mode == 1 {
+            s.convert_text_frame(true);
+        }
+        if mode == 2 {
+            let guide = Shape::new(
+                Geom::Line {
+                    a: Pt::new(30., 150.),
+                    b: Pt::new(450., 105.),
+                },
+                Style {
+                    fill: Fill::None,
+                    stroke: None,
+                },
+            );
+            let id = guide.id;
+            s.doc.layers[0].kind.shapes_mut().unwrap().push(guide);
+            s.selection = vec![hit, (0, id)];
+            s.attach_text_path();
+            s.selection = vec![hit];
+        }
+        let shape = s.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.rotation = 0.37;
+        if mode == 3
+            && let Geom::Text(r) = &mut shape.geom
+        {
+            r.apply_affine([1.1, 0.13, 0.2, 0.9, 3., -4.]);
+        }
+        s.mark();
+        s.history.clear();
+        let source = s.doc.find_shape(hit.0, hit.1).unwrap().clone();
+        let Geom::Text(r) = &source.geom else {
+            unreachable!()
+        };
+        let point = r.origin;
+        let anchor = r
+            .map_point(point)
+            .rotate_about(source.geom.bbox().center(), source.rotation);
+        let before = wire(&s);
+        apply(&mut s, TypeCommand::Case(TextCase::Upper));
+        let after = s.doc.find_shape(hit.0, hit.1).unwrap();
+        let Geom::Text(r) = &after.geom else {
+            unreachable!()
+        };
+        let actual = r
+            .map_point(point)
+            .rotate_about(after.geom.bbox().center(), after.rotation);
+        assert!(
+            (anchor - actual).length() < 0.0001,
+            "mode {mode}: {anchor:?} → {actual:?}"
+        );
+        assert_eq!(after.rotation, source.rotation);
+        assert_eq!(after.style, source.style);
+        assert_eq!(s.history.len(), 1);
+        reopen(&s);
+        s.undo();
+        assert_eq!(wire(&s), before);
+    }
+}

@@ -240,6 +240,23 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
     result
 }
 
+/// Keep a rewritten text object's existing rotation frame instead of moving its baseline.
+/// Args: original shape and rewritten run. Returns live text with its visible anchor preserved.
+fn placed_text(shape: &Shape, run: TypeRun) -> Geom {
+    let mut geom = Geom::Text(run);
+    crate::text::fill_contours(&mut geom);
+    if shape.rotation.abs() > 1e-5 {
+        let delta = shape.geom.bbox().center() - geom.bbox().center();
+        let shift = delta - delta.rotate(shape.rotation);
+        if shift.length() > 0.
+            && let Geom::Text(run) = &mut geom
+        {
+            run.apply_affine([1., 0., 0., 1., shift.x, shift.y]);
+        }
+    }
+    geom
+}
+
 impl Studio {
     fn type_commands_available(&self) -> bool {
         !self.show_welcome
@@ -439,7 +456,7 @@ impl Studio {
                 run.rewrite_characters(&edits)?
             };
             if changed {
-                plans.push(((layer, id), Geom::Text(run)));
+                plans.push(((layer, id), placed_text(shape, run)));
             }
         }
         let changed = plans.len();
