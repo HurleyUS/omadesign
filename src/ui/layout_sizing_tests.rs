@@ -98,13 +98,21 @@ fn editor() -> (Studio, u64) {
     });
     let id = root.id;
     let mut child = Shape::new(
-        Geom::rect(Pt::new(56., 56.), Pt::new(80., 48.)),
+        Geom::Rect {
+            origin: Pt::new(56., 56.),
+            size: Pt::new(80., 48.),
+            radius: 0.,
+        },
         Style::default(),
     );
     child.name = "Frame content".into();
     child.layout.parent = Some(id);
     let mut unrelated = Shape::new(
-        Geom::rect(Pt::new(350., 220.), Pt::new(30., 30.)),
+        Geom::Rect {
+            origin: Pt::new(350., 220.),
+            size: Pt::new(30., 30.),
+            radius: 0.,
+        },
         Style::default(),
     );
     unrelated.name = "Unrelated artwork".into();
