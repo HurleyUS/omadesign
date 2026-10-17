@@ -306,3 +306,39 @@ mod tests {
         assert!(face_bytes(&bad, 0).is_err());
     }
 }
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+    #[test]
+    fn craft_find_font_refresh_reloads_replaced_native_file_and_preserves_portable_bytes() {
+        let source = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/assets/fonts/EBGaramond.ttf"
+        ))
+        .unwrap();
+        let alternate = PREFERRED
+            .iter()
+            .find_map(|p| std::fs::read(p).ok().filter(|b| b != &source))
+            .expect("Installed native fallback font");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".artifacts/font-recovery-tests")
+            .join(format!("refresh-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("replace.ttf");
+        std::fs::write(&path, &source).unwrap();
+        let probe = TypeRun {
+            font: path.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        assert_eq!(*font_bytes_for(&probe).unwrap(), source);
+        let managed = format!("omatype:{:032x}", crate::typography::fingerprint(&source));
+        register_memory_font(&managed, "Portable face", Arc::new(source.clone())).unwrap();
+        std::fs::write(&path, &alternate).unwrap();
+        assert_eq!(*font_bytes_for(&probe).unwrap(), source);
+        refresh_fonts();
+        assert_eq!(*font_bytes_for(&probe).unwrap(), alternate);
+        assert_eq!(*project_font_bytes(&managed).unwrap(), source);
+        std::fs::remove_file(path).unwrap();
+    }
+}

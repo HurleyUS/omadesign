@@ -180,6 +180,20 @@ fn craft_find_font_native_menu_filter_style_selected_change_undo_and_reopen() {
     seat.open(&mut s);
     assert_eq!(wire(&s), before);
     assert_eq!(s.history.len(), 0);
+    seat.invoke(&mut s, "Refresh");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while super::super::jobs::frame_progress::<usize>(&seat.ctx, "type-find-font-refresh").is_some()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Installed font refresh did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        seat.frame(&mut s, vec![]);
+    }
+    seat.frame(&mut s, vec![]);
+    assert_eq!(wire(&s), before);
+    assert_eq!(s.history.len(), 0);
     let catalog = s.font_catalog();
     let family = catalog
         .families()

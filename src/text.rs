@@ -304,6 +304,9 @@ pub(crate) fn refresh_fonts() -> usize {
     let count = found.len();
     *RESCANNED_FONTS.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()) = Some(found);
     if let Some(list) = FONT_LIST.get() { *list.lock().unwrap_or_else(|e| e.into_inner()) = None; }
+    if let Some(bytes) = BYTES.get() {
+        bytes.lock().unwrap_or_else(|e| e.into_inner()).retain(|path, _| path.to_string_lossy().starts_with("omatype:"));
+    }
     INSTALLED_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     FONT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     count
@@ -319,7 +322,7 @@ pub fn all_fonts_cached() -> Arc<[FontFace]> {
     if let Some(m) = DYNAMIC_FONTS.get()
         && let Ok(g) = m.lock()
     {
-        for f in g.iter() {
+        for f in g.iter().filter(|f| f.path.is_file()) {
             if !v.iter().any(|e| e.path == f.path) {
                 v.push(f.clone());
             }
