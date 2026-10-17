@@ -34,61 +34,32 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
             let y = number(args, "y", 0.)?;
             let width = number(args, "width", w as f32)?;
             let height = number(args, "height", h as f32)?;
-            let old = studio.pixel_sel_mask(li).map(|m| m.into_owned());
-            let mut values = match kind.as_str() {
-                "rect" => paint::fill_rect_mask(w, h, x, y, x + width, y + height),
-                "ellipse" => paint::fill_ellipse_mask(w, h, x, y, x + width, y + height),
-                "polygon" => {
-                    let pts = points(&args["points"])?;
-                    if pts.len() < 3 {
-                        return Err("Polygon needs at least 3 points".into());
-                    }
-                    paint::fill_poly_mask(w, h, &pts)
-                }
-                "wand" => paint::wand_mask(
-                    &*pixels.to_pixmap().ok_or("Invalid pixels")?,
-                    Pt::new(x, y),
-                    number(args, "tolerance", 32.)?.clamp(0., 510.),
-                ),
-                "all" => vec![255; w as usize * h as usize],
-                "none" => {
-                    studio.set_pixel_sel(None);
-                    studio.mark();
-                    return Ok(json!({"revision":studio.canvas_gen,"selected_pixels":0}));
-                }
-                "invert" => {let values=old.as_ref().map_or_else(||vec![1.;w as usize*h as usize],|m|m.iter().map(|v|1.-v).collect());let space=SelectionSpace{w,h,transform:crate::compositor::layer_pixel_transform(layer)};studio.replace_pixel_selection_float(values,space);studio.mark();return Ok(json!({"revision":studio.canvas_gen,"selected_pixels":studio.pixel_sel.as_ref().map(|m|paint::selected_count(m))}));},
-                _ => return Err("Unknown pixel selection kind".into()),
+            let old=studio.owned_pixel_sel_mask(li);
+            if studio.pixel_sel.is_some() && old.is_none(){return Err("Cannot map the selection under current memory pressure".into());}
+            let space=SelectionSpace{w,h,transform:crate::compositor::layer_pixel_transform(layer)};
+            let values=if kind=="invert"{
+                crate::deep_color::storage::collect((0..w as usize*h as usize).map(|i|old.as_ref().map_or(1.,|m|1.-m[i])))?
+            }else{
+                let values=match kind.as_str(){
+                    "rect"=>paint::fill_rect_mask(w,h,x,y,x+width,y+height),
+                    "ellipse"=>paint::fill_ellipse_mask(w,h,x,y,x+width,y+height),
+                    "polygon"=>{let pts=points(&args["points"])?;if pts.len()<3{return Err("Polygon needs at least 3 points".into());}paint::fill_poly_mask(w,h,&pts)},
+                    "wand"=>paint::wand_mask(&*pixels.to_pixmap().ok_or("Invalid pixels")?,Pt::new(x,y),number(args,"tolerance",32.)?.clamp(0.,510.)),
+                    "all"=>vec![255;w as usize*h as usize],
+                    "none"=>{studio.set_pixel_sel(None);studio.mark();return Ok(json!({"revision":studio.canvas_gen,"selected_pixels":0}));},
+                    _=>return Err("Unknown pixel selection kind".into()),
+                };crate::selection_coverage::from_bytes(&values,&crate::deep_color::storage::check)?
             };
-            let values = crate::selection_coverage::from_bytes(&values,&crate::deep_color::storage::check)?;
-            let mut values = match args["combine"].as_str().unwrap_or("replace") {
-                "replace" => values.to_vec(),
-                "add" => crate::selection_coverage::combine(old.as_deref(), &values, paint::PixelCombine::Add)?.to_vec(),
-                "subtract" => {
-                    crate::selection_coverage::combine(old.as_deref(), &values, paint::PixelCombine::Subtract)?.to_vec()
-                }
-                "intersect" => values
-                    .iter()
-                    .zip(old.unwrap_or_else(|| vec![0.; values.len()]))
-                    .map(|(a, b)| (*a).min(b))
-                    .collect(),
-                _ => return Err("Unknown selection combination".into()),
+            let mut values=match args["combine"].as_str().unwrap_or("replace"){
+                "replace"=>values,
+                "add"=>crate::selection_coverage::combine(old.as_ref().map(|m|m.as_slice()),&values,paint::PixelCombine::Add)?,
+                "subtract"=>crate::selection_coverage::combine(old.as_ref().map(|m|m.as_slice()),&values,paint::PixelCombine::Subtract)?,
+                "intersect"=>crate::deep_color::storage::collect(values.iter().enumerate().map(|(i,v)|v.min(old.as_ref().map_or(0.,|m|m[i]))))?,
+                _=>return Err("Unknown selection combination".into()),
             };
-            let radius = args["feather"].as_u64().unwrap_or(0);
-            if radius > 1024 {
-                return Err("Feather radius must be 0–1024".into());
-            }
-            if radius > 0 {
-                values = crate::app::pixel_selection::edit(&values,SelectionSpace{w,h,transform:tiny_skia::Transform::identity()},crate::app::pixel_selection::Edit::Feather{radius:radius as u32}).ok_or("Selection is empty")?.0;
-            }
-            let space = SelectionSpace {
-                w,
-                h,
-                transform: crate::compositor::layer_pixel_transform(layer),
-            };
-            studio.active_layer = Some(li);
-            studio.selection = vec![(li, 0)];
-            studio.replace_pixel_selection_float(values, space);
-            studio.mark();
+            let radius=args["feather"].as_u64().unwrap_or(0);if radius>1024{return Err("Feather radius must be 0–1024".into());}
+            if radius>0{values=crate::app::pixel_selection::edit_admitted(&values,space,crate::app::pixel_selection::Edit::Feather{radius:radius as u32})?.ok_or("Selection is empty")?.0;}
+            studio.active_layer=Some(li);studio.selection=vec![(li,0)];studio.replace_pixel_selection_admitted(values,space);studio.mark();
         } else if name == "paint_stroke" {
             if layer.psd_smart.is_some() && !boolean(args, "mask", false)? {
                 return Err("Edit or replace the smart source, or rasterize an explicit copy before painting".into());
@@ -178,19 +149,12 @@ pub fn execute(studio: &mut Studio, name: &str, args: &Value) -> Result<Value, S
                     )?;
                     after.set_sample_allocation(samples)?;
                 } else {
-                    let brush = if operation == "erase" {
-                        paint::Brush {
-                            color: crate::color::Rgba::WHITE,
-                            ..brush
-                        }
-                    } else {
-                        brush
-                    };
+                    let color=before.paint_color(brush.color)?;
+                    let brush=paint::Brush{color:crate::color::Rgba::WHITE,..brush};
                     paint::stamp(&mut overlay, pts[0], &brush, false);
                     for pair in pts.windows(2) {
                         paint::stroke_to(&mut overlay, pair[0], pair[1], &brush, false);
                     }
-                    let color=before.paint_color(brush.color)?;
                     let samples=crate::deep_color::storage::collect((0..w as usize*h as usize).flat_map(|i|{let p=before.sample(i);let amount=overlay.pixels()[i].alpha() as f32/255.*selection.as_ref().map_or(1.,|m|m[i]);if operation=="erase"{[p[0],p[1],p[2],p[3]*(1.-amount)]}else{crate::deep_color::blend_pixel(p,color,crate::color::Blend::Normal,amount)}}))?;
                     after.set_sample_allocation(samples)?;
                 }
@@ -344,4 +308,22 @@ fn mask(studio: &mut Studio, li: usize, args: &Value) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod precision_tests {
+    use super::*;
+    fn fixture(w:u32)->Studio{let mut s=Studio::new();s.doc=crate::document::Document::new("Precise agent selection",w as f32,1.,96.);let pixels=Pixels::from_samples(w,1,crate::deep_color::Depth::F32,vec![0.;w as usize*4]).unwrap();s.doc.layers=vec![crate::document::Layer::placed_raster("Native",pixels,Pt::ZERO,Pt::new(w as f32,1.))];s.active_layer=Some(0);s}
+    #[test]
+    fn craft_selection_precision_agent_native_alpha_and_selection_are_each_applied_once(){
+        let mut s=fixture(1);let weight=f32::from_bits(0x3eaa8001);s.replace_pixel_selection_float(vec![weight],crate::app::masking::SelectionSpace{w:1,h:1,transform:tiny_skia::Transform::identity()});
+        execute(&mut s,"paint_stroke",&json!({"layer":0,"points":[[0,0]],"color":"#FF000080","size":8,"hardness":1,"opacity":1,"flow":1})).unwrap();
+        let actual=s.doc.layers[0].kind.pixels().unwrap().sample(0);assert_eq!(&actual[..3],&[1.,0.,0.]);assert!((actual[3]-weight*(128./255.)).abs()<1e-8);
+    }
+    #[test]
+    fn craft_selection_precision_agent_invert_keeps_combine_and_feather_options(){
+        let mut s=fixture(2);let a=0.2001;let b=0.6001;s.replace_pixel_selection_float(vec![a,b],crate::app::masking::SelectionSpace{w:2,h:1,transform:tiny_skia::Transform::identity()});
+        execute(&mut s,"set_pixel_selection",&json!({"layer":0,"kind":"invert","combine":"intersect","feather":1})).unwrap();
+        let expected=(f64::from(a)+f64::from(1.-b))/9.;for actual in s.pixel_sel.as_ref().unwrap().iter(){assert!((f64::from(*actual)-expected).abs()<1e-8);}
+    }
 }

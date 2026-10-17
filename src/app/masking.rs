@@ -262,6 +262,12 @@ impl Studio {
         Some(SelectionMask::Mapped(values))
     }
 
+    /// Share a mapped selection with a worker instead of copying its full grid.
+    /// Args: target layer. Returns the existing admitted source or transformed owner.
+    pub(crate) fn owned_pixel_sel_mask(&self,layer:usize)->Option<std::sync::Arc<crate::resources::Allocation<f32>>>{
+        match self.cached_pixel_sel_mask(layer)?{SelectionMask::Borrowed(_)=>self.pixel_sel.clone(),SelectionMask::Mapped(values)=>Some(values)}
+    }
+
     pub fn set_pixel_sel(&mut self, mask: Option<Vec<u8>>) {
         let mask = match mask.map(|values| crate::selection_coverage::from_bytes(&values,&crate::deep_color::storage::check)).transpose() {
             Ok(mask) => mask,
@@ -671,7 +677,7 @@ impl Studio {
         let Some(layer) = self.raster_target() else {
             return false;
         };
-        let Some(mask) = self.pixel_sel_mask(layer).map(|mask| mask.to_vec()) else {
+        let Some(mask) = self.owned_pixel_sel_mask(layer) else {
             return false;
         };
         if !mask.iter().any(|value| *value > 0.) {
@@ -689,11 +695,8 @@ impl Studio {
             let before = pixels.clone();
             let samples = crate::deep_color::storage::collect(
                 (0..pixels.w as usize * pixels.h as usize).flat_map(|i| {
-                    if mask[i] > 0. {
-                        [0.; 4]
-                    } else {
-                        pixels.sample(i)
-                    }
+                    let p=pixels.sample(i);
+                    if mask[i]==1.{[0.;4]}else if mask[i]==0.{p}else{[p[0],p[1],p[2],p[3]*(1.-mask[i])]}
                 }),
             );
             let mut after = before.clone();
@@ -719,7 +722,7 @@ impl Studio {
         for (index, &selected) in mask.iter().enumerate() {
             if selected != 0. {
                 let offset = index * 4;
-                after.as_mut_slice()[offset..offset + 4].fill(0);
+                if selected==1.{after.as_mut_slice()[offset..offset+4].fill(0);}else{after.as_mut_slice()[offset+3]=(before[offset+3] as f32*(1.-selected)).round() as u8;}
             }
         }
         if after.as_slice() == before.as_slice() {
@@ -1271,5 +1274,20 @@ mod tests {
         assert_eq!(studio.history.len(), history);
         studio.active_layer = Some(30);
         assert_eq!(studio.mask_target(), None);
+    }
+}
+
+#[cfg(test)]
+mod precision_tests {
+    use super::*;
+    #[test]
+    fn craft_selection_precision_delete_uses_original_float_weight_and_one_undo() {
+        let mut s=Studio::new();s.doc=crate::document::Document::new("Selection clear",1.,1.,96.);
+        let original=Pixels::from_samples(1,1,crate::deep_color::Depth::F32,vec![0.25,0.5,0.75,0.5]).unwrap();
+        s.doc.layers=vec![crate::document::Layer::placed_raster("Native",original.clone(),Pt::ZERO,Pt::new(1.,1.))];s.active_layer=Some(0);
+        let weight=f32::from_bits(0x3eaa8001);s.replace_pixel_selection_float(vec![weight],SelectionSpace{w:1,h:1,transform:tiny_skia::Transform::identity()});
+        let before=crate::project::encode(&s.doc).unwrap();let history=s.history.len();assert!(s.clear_selected_pixels());
+        let actual=s.doc.layers[0].kind.pixels().unwrap().sample(0);assert_eq!(&actual[..3],&[0.25,0.5,0.75]);assert_eq!(actual[3].to_bits(),(0.5*(1.-weight)).to_bits());
+        assert_eq!(s.history.len(),history+1);s.undo();assert_eq!(crate::project::encode(&s.doc).unwrap(),before);s.redo();assert_eq!(s.doc.layers[0].kind.pixels().unwrap().sample(0),actual);
     }
 }

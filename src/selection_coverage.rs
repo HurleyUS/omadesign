@@ -234,6 +234,19 @@ pub fn mask_pixels(values: &[f32], w: u32, h: u32) -> Result<crate::document::Pi
         return Err("Selection dimensions changed".into());
     }
     validate(values)?;
+    if values
+        .iter()
+        .all(|v| (f32::from((*v * 255.).round() as u8) / 255.).to_bits() == v.to_bits())
+    {
+        return crate::document::Pixels::from_byte_allocation(
+            w,
+            h,
+            storage::collect(values.iter().flat_map(|v| {
+                let b = (*v * 255.).round() as u8;
+                [b, b, b, 255]
+            }))?,
+        );
+    }
     crate::document::Pixels::from_sample_allocation(
         w,
         h,
@@ -337,7 +350,16 @@ mod tests {
         .unwrap();
         assert_eq!(subtract[0].to_bits(), (a - a / 2.).to_bits());
         assert_eq!(subtract[2].to_bits(), values[2].to_bits());
+        let bytes = mask_pixels(&[0., 64. / 255., 128. / 255., 1.], 4, 1).unwrap();
+        assert!(bytes.native.is_none());
+        assert_eq!(
+            bytes.data.as_slice(),
+            &[
+                0, 0, 0, 255, 64, 64, 64, 255, 128, 128, 128, 255, 255, 255, 255, 255
+            ]
+        );
         let pixels = mask_pixels(&values, 3, 1).unwrap();
+        assert!(pixels.native.is_some());
         for (i, v) in values.iter().enumerate() {
             assert_eq!(pixels.sample(i)[0].to_bits(), v.to_bits());
         }
