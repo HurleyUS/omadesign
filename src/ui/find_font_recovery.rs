@@ -61,7 +61,11 @@ pub(super) fn show(
     let ctx = ui.ctx().clone();
     let owner = Id::new(("find-font-files", &s.swap_id, instance));
     let pick_key = owner.with("picked-folder");
-    if let Some(pick) = ctx.data_mut(|data| data.remove_temp::<Pick>(pick_key)) {
+    if let Some(pick) = ctx.data_mut(|data| {
+        let pick = data.get_temp::<Pick>(pick_key);
+        data.remove::<Pick>(pick_key);
+        pick
+    }) {
         if pick.owner == s.swap_id && pick.instance == instance {
             state.folder = pick.path.to_string_lossy().into_owned();
         }

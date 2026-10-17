@@ -32,16 +32,19 @@ pub(crate) struct Search {
 }
 const FILE_LIMIT: u64 = 256 << 20;
 fn regular(path: &Path) -> Result<File, String> {
-    let mut options = OpenOptions::new();
-    options.read(true);
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let f = options
-        .open(path)
-        .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+    let f: File = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|e| format!("Could not read {}: {e}", path.display()))?
+    .into();
+    #[cfg(not(unix))]
+    let f = File::open(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
     let m = f.metadata().map_err(|e| e.to_string())?;
     if !m.is_file() || m.len() > FILE_LIMIT {
         return Err("Choose a regular font file no larger than 256 MiB".into());
@@ -414,6 +417,7 @@ pub(crate) fn install(
         return Err("Add fewer font files: selected files exceed 1 GiB".into());
     }
     std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
+    let count = found.len();
     let mut installed = vec![];
     for (i, found) in found.iter().enumerate() {
         progress.check()?;
@@ -477,7 +481,7 @@ pub(crate) fn install(
             path: path.clone(),
         });
         installed.push(path);
-        progress.report("Adding font files", i + 1, found.len());
+        progress.report("Adding font files", i + 1, count);
     }
     Ok(installed)
 }

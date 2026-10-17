@@ -65,7 +65,7 @@ impl Studio {
     /// Args: none. Returns no value; captured font command owners retire with the render revision.
     pub(crate) fn refresh_font_rendering(&mut self) {
         for layer in &mut self.doc.layers {
-            for shape in layer.kind.shapes_mut().unwrap_or(&mut []) {
+            for shape in layer.kind.shapes_mut().into_iter().flatten() {
                 if let Geom::Text(run) = &mut shape.geom {
                     run.layout = None;
                 }
