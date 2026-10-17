@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 mod features;
 
-pub(crate) const VERSION: u32 = features::EXPORT_FOLDERS;
+pub(crate) const VERSION: u32 = features::CHANNELS;
 
 /// Check whether this build implements a project version.
 /// Args: envelope version. Returns false for unimplemented reserved formats.
@@ -48,6 +48,7 @@ pub(crate) fn encode_envelope_admitted<T: Serialize>(
     crate::motion::compositions::validate(doc)?;
     for document in crate::motion::compositions::documents(doc)? {
         document.screen_export.validate()?;
+        crate::channels::validate(&document.channels)?;
         document.validate_sources()?;
         if let Some(replica) = &document.collaboration {
             crate::collaboration::resources::validate(replica)?;
