@@ -1,0 +1,351 @@
+use super::*;
+use crate::document::{Layer, Shape as Object, Style};
+use crate::motion::Pose;
+use eframe::egui::{Event, Modifiers};
+
+fn fixture() -> (eframe::egui::Context, Studio, [u64; 3]) {
+    let (ctx, mut s) = super::tests::pen_input_studio();
+    s.tool = Tool::Select;
+    s.view.offset = Pt::ZERO;
+    s.view.scale = 1.;
+    let mut outer = crate::layout::make_frame(Pt::new(40., 30.), Pt::new(260., 220.));
+    outer.rotation = 0.38;
+    outer.layout.clip = false;
+    outer.style.fill = Fill::None;
+    outer.style.stroke = None;
+    let mut inner = crate::layout::make_frame(Pt::new(80., 65.), Pt::new(170., 145.));
+    inner.rotation = -0.21;
+    inner.layout.parent = Some(outer.id);
+    inner.layout.clip = false;
+    inner.style.fill = Fill::None;
+    inner.style.stroke = None;
+    let mut object = Object::new(
+        Geom::Path {
+            anchors: vec![
+                Anchor::corner(Pt::new(105., 95.)),
+                Anchor::corner(Pt::new(175., 95.)),
+                Anchor::corner(Pt::new(175., 155.)),
+                Anchor::corner(Pt::new(105., 155.)),
+            ],
+            closed: true,
+        },
+        Style {
+            fill: Fill::Solid(crate::color::Rgba::from_hex(0xd42c36)),
+            stroke: None,
+        },
+    );
+    object.rotation = 0.3;
+    object.layout.parent = Some(inner.id);
+    object.geom.anchor_mut(0).unwrap().h_out = Pt::new(20., 0.);
+    let ids = [outer.id, inner.id, object.id];
+    let mut layer = Layer::vector("Nested artwork");
+    layer
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .extend([outer, inner, object]);
+    s.doc.layers = vec![layer];
+    s.selection = vec![(0, ids[2])];
+    s.active_layer = Some(0);
+    s.dirty = false;
+    (ctx, s, ids)
+}
+fn close(a: Pt, b: Pt) {
+    assert!((a - b).length() < 0.003, "{a:?} != {b:?}");
+}
+fn expected(s: &Studio, ids: [u64; 3], mut point: Pt) -> Pt {
+    for id in ids.into_iter().rev() {
+        let shape = s.doc.find_shape(0, id).unwrap();
+        point = shape.world_point(point);
+        point = s.live_pose(id).map(shape.world_bbox().center(), point);
+    }
+    point
+}
+fn at(s: &Studio, point: Pt) -> Pos2 {
+    win(s.canvas_rect.unwrap(), s.view, point)
+}
+fn button(point: Pos2, pressed: bool) -> Event {
+    super::tests::pen_pointer_button(point, pressed, Modifiers::NONE)
+}
+fn frame(
+    ctx: &eframe::egui::Context,
+    s: &mut Studio,
+    events: Vec<Event>,
+) -> Vec<eframe::egui::epaint::ClippedShape> {
+    super::tests::canvas_frame(ctx, s, events)
+}
+fn drag(ctx: &eframe::egui::Context, s: &mut Studio, from: Pt, to: Pt) {
+    let from = at(s, from);
+    let to = at(s, to);
+    frame(ctx, s, vec![Event::PointerMoved(from), button(from, true)]);
+    frame(ctx, s, vec![Event::PointerMoved(to)]);
+    frame(ctx, s, vec![button(to, false)]);
+    frame(ctx, s, vec![]);
+}
+fn bytes(s: &Studio) -> String {
+    crate::project::encode(&s.doc).unwrap()
+}
+fn reopen(s: &Studio) -> crate::document::Document {
+    crate::project::decode(&bytes(s)).unwrap()
+}
+
+#[test]
+fn craft_nested_selection_native_paint_handles_and_click_do_not_change_document() {
+    let (ctx, mut s, ids) = fixture();
+    frame(&ctx, &mut s, vec![]);
+    let shape = s.doc.find_shape(0, ids[2]).unwrap();
+    let original = bytes(&s);
+    let history = s.history.len();
+    let transform = shape_transform(&s, 0, shape);
+    for anchor in shape.geom.anchors() {
+        close(
+            map_point(transform, anchor.pt),
+            expected(&s, ids, anchor.pt),
+        );
+    }
+    let angle = selection_angle(&s);
+    assert!((angle - 0.47).abs() < 1e-5);
+    let bounds = posed_bounds(&s).unwrap();
+    let top = expected(&s, ids, shape.geom.bbox().min);
+    close(bounds.min.rotate(angle), top);
+    assert!(matches!(hit_handle(&s, top), Some(HandleKind::Scale(0, _))));
+    let center = expected(&s, ids, shape.geom.bbox().center());
+    assert_eq!(hit_shape(&s, center, 0.), Some((0, ids[2])));
+    // Native pointer ownership selects the actual child without changing artwork or history.
+    s.selection.clear();
+    s.individual_object = Some((0, ids[2]));
+    let pos = at(&s, center);
+    frame(
+        &ctx,
+        &mut s,
+        vec![Event::PointerMoved(pos), button(pos, true)],
+    );
+    frame(&ctx, &mut s, vec![button(pos, false)]);
+    assert_eq!(s.selection, vec![(0, ids[2])]);
+    assert_eq!(bytes(&s), original);
+    assert_eq!(s.history.len(), history);
+    let painted = frame(&ctx, &mut s, vec![]);
+    let contour: Vec<_> = s.doc.find_shape(0, ids[2]).unwrap().world_contours(64)[0]
+        .iter()
+        .map(|p| {
+            let mut p = *p;
+            for id in [ids[1], ids[0]] {
+                p = s.doc.find_shape(0, id).unwrap().world_point(p);
+            }
+            at(&s, p)
+        })
+        .collect();
+    assert!(painted.iter().any(|item|matches!(&item.shape,eframe::egui::Shape::Path(path) if path.points.len()==contour.len() && path.points.iter().zip(&contour).all(|(a,b)|a.distance(*b)<0.003))),"actual painted selection path");
+}
+
+#[test]
+fn craft_nested_selection_node_and_handle_native_drag_undo_reopen() {
+    for handle in [false, true] {
+        let (ctx, mut s, ids) = fixture();
+        s.tool = Tool::Node;
+        frame(&ctx, &mut s, vec![]);
+        let original = bytes(&s);
+        let history = s.history.len();
+        let shape = s.doc.find_shape(0, ids[2]).unwrap();
+        let anchor = *shape.geom.anchors().next().unwrap();
+        let local = if handle {
+            anchor.pt + anchor.h_out
+        } else {
+            anchor.pt
+        };
+        let from = expected(&s, ids, local);
+        let to = from + Pt::new(17., -11.);
+        let inverse = shape_transform(&s, 0, shape).invert().unwrap();
+        let target = map_point(inverse, to);
+        assert_eq!(
+            hit_shape_node(&s, 0, shape, from, 2.),
+            Some(if handle {
+                NodeHit::HandleOut(0)
+            } else {
+                NodeHit::Point(0)
+            })
+        );
+        drag(&ctx, &mut s, from, to);
+        assert_eq!(s.history.len(), history + 1);
+        let shape = s.doc.find_shape(0, ids[2]).unwrap();
+        let actual = *shape.geom.anchors().next().unwrap();
+        // A pivot-preserving geometry edit must land the actual painted node at the pointer.
+        let point = if handle {
+            actual.pt + actual.h_out
+        } else {
+            actual.pt
+        };
+        close(map_point(shape_transform(&s, 0, shape), point), to);
+        assert!((target - local).length() > 1.);
+        let after = bytes(&s);
+        assert_ne!(after, original);
+        let cold = reopen(&s);
+        assert_eq!(crate::project::encode(&cold).unwrap(), after);
+        s.undo();
+        assert_eq!(bytes(&s), original);
+        s.redo();
+        assert_eq!(bytes(&s), after);
+    }
+}
+
+#[test]
+fn craft_nested_selection_subtree_resize_and_rotation_follow_actual_world_handles() {
+    for rotate in [false, true] {
+        let (ctx, mut s, ids) = fixture();
+        s.selection = vec![(0, ids[1])];
+        frame(&ctx, &mut s, vec![]);
+        let original = bytes(&s);
+        let history = s.history.len();
+        let point = Pt::new(175., 155.);
+        let before = expected(&s, ids, point);
+        let angle = selection_angle(&s);
+        let bounds = posed_bounds(&s).unwrap();
+        if rotate {
+            let center = bounds.center().rotate(angle);
+            let from = bounds.rotate_handle().rotate(angle);
+            let to = center + (from - center).rotate(0.25);
+            drag(&ctx, &mut s, from, to);
+            let shape = s.doc.find_shape(0, ids[2]).unwrap();
+            let anchor = shape.geom.anchors().nth(2).unwrap().pt;
+            close(expected(&s, ids, anchor), before.rotate_about(center, 0.25));
+        } else {
+            let from = bounds.handle(2).rotate(angle);
+            let to = (bounds.min + (bounds.max - bounds.min) * 1.3).rotate(angle);
+            drag(&ctx, &mut s, from, to);
+            let shape = s.doc.find_shape(0, ids[2]).unwrap();
+            let anchor = shape.geom.anchors().nth(2).unwrap().pt;
+            let destination =
+                Bounds::from_min_size(bounds.min, Pt::new(bounds.width(), bounds.height()) * 1.3);
+            close(
+                expected(&s, ids, anchor),
+                bounds
+                    .map_pt(before.rotate(-angle), destination)
+                    .rotate(angle),
+            );
+        }
+        assert_eq!(s.history.len(), history + 1);
+        let after = bytes(&s);
+        assert_eq!(crate::project::encode(&reopen(&s)).unwrap(), after);
+        s.undo();
+        assert_eq!(bytes(&s), original);
+        s.redo();
+        assert_eq!(bytes(&s), after);
+    }
+}
+
+#[test]
+fn craft_nested_selection_motion_nonuniform_pose_picking_clipping_and_nodes_match_painter() {
+    let (ctx, mut s, ids) = fixture();
+    s.persona = Persona::Motion;
+    s.playhead = 1.;
+    s.pose_drag.insert(
+        ids[0],
+        Pose {
+            dx: 12.,
+            dy: -9.,
+            rotation: 0.2,
+            width_scale: 1.25,
+            height_scale: 0.65,
+            ..Pose::identity()
+        },
+    );
+    s.pose_drag.insert(
+        ids[1],
+        Pose {
+            dx: 4.,
+            dy: 3.,
+            rotation: -0.1,
+            width_scale: 0.8,
+            height_scale: 1.4,
+            ..Pose::identity()
+        },
+    );
+    s.pose_drag.insert(
+        ids[2],
+        Pose {
+            rotation: 0.12,
+            width_scale: 1.1,
+            height_scale: 0.9,
+            ..Pose::identity()
+        },
+    );
+    let shape = s.doc.find_shape(0, ids[2]).unwrap();
+    let center = expected(&s, ids, shape.geom.bbox().center());
+    assert_eq!(hit_shape(&s, center, 0.), Some((0, ids[2])));
+    let anchors = posed_anchors(&s, 0, shape).unwrap();
+    for (a, b) in anchors.iter().zip(shape.geom.anchors()) {
+        close(a.pt, expected(&s, ids, b.pt));
+        close(a.pt + a.h_out, expected(&s, ids, b.pt + b.h_out));
+    }
+    assert_eq!(
+        hit_shape_node(&s, 0, shape, anchors[0].pt, 1.),
+        Some(NodeHit::Point(0))
+    );
+    let bounds = posed_bounds(&s).unwrap();
+    for a in &anchors {
+        assert!(bounds.inflate(0.001).contains(a.pt));
+    }
+    let pm = compositor::render_view_posed(
+        &s.doc,
+        compositor::View {
+            scale: 1.,
+            offset: Pt::ZERO,
+        },
+        400,
+        300,
+        Draft::none(),
+        Some(1.),
+        Some(&s.pose_drag),
+    )
+    .unwrap();
+    assert!(
+        pm.pixel(center.x.round() as u32, center.y.round() as u32)
+            .unwrap()
+            .red()
+            > 150,
+        "actual painted interior"
+    );
+    // A clipping frame and locked ancestor must reject picking, not merely hide an outline.
+    s.doc.find_shape_mut(0, ids[1]).unwrap().locked = true;
+    assert_ne!(hit_shape(&s, center, 0.), Some((0, ids[2])));
+    s.doc.find_shape_mut(0, ids[1]).unwrap().locked = false;
+    s.doc.find_shape_mut(0, ids[1]).unwrap().layout.clip = true;
+    let outside = expected(&s, ids, Pt::new(260., 150.));
+    assert!(
+        s.doc
+            .layout_hit_point_with(0, ids[2], outside, |id| s.live_pose(id))
+            .is_none()
+    );
+    frame(&ctx, &mut s, vec![]);
+}
+
+#[test]
+fn craft_nested_selection_gradient_native_drag_uses_same_local_coordinates() {
+    let (ctx, mut s, ids) = fixture();
+    s.tool = Tool::Gradient;
+    frame(&ctx, &mut s, vec![]);
+    let original = bytes(&s);
+    let n = s.history.len();
+    let shape = s.doc.find_shape(0, ids[2]).unwrap();
+    let bounds = shape.geom.bbox();
+    let a = bounds.min;
+    let b = bounds.max;
+    let from = expected(&s, ids, a);
+    let to = expected(&s, ids, b);
+    drag(&ctx, &mut s, from, to);
+    let gradient = s
+        .doc
+        .find_shape(0, ids[2])
+        .unwrap()
+        .style
+        .fill
+        .gradient()
+        .unwrap();
+    assert!(gradient.from[0].abs() < 0.001 && gradient.from[1].abs() < 0.001);
+    assert!((gradient.to[0] - 1.).abs() < 0.001 && (gradient.to[1] - 1.).abs() < 0.001);
+    assert_eq!(s.history.len(), n + 1);
+    let after = bytes(&s);
+    assert_eq!(crate::project::encode(&reopen(&s)).unwrap(), after);
+    s.undo();
+    assert_eq!(bytes(&s), original);
+}
