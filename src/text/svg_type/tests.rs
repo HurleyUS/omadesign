@@ -175,7 +175,7 @@ fn svg_type_flow_retains_story_reflows_edits_and_exports_standard_text() {
         let current = crate::compositor::render_export(&reopened, 1).unwrap();
         assert!(error(&old, &current) > 0.1);
         let svg = crate::svg::export(&reopened).unwrap();
-        assert!(svg.contains("data-oma-flow"));
+        assert!(svg.contains("data-oma-flow"),"run font {:?}; range fonts {:?}; original base {:?}; emitted {}", types(&reopened)[0].font,types(&reopened)[0].spans.iter().map(|s|(&s.font,&s.font_variations)).collect::<Vec<_>>(),types(&reopened)[0].svg_text.as_ref().map(|s|&s.base_font),&svg[..svg.len().min(1400)]);
         assert!(error(&render(&svg), &current) < 0.1);
         let again = crate::formats::svg::read(&svg, "Flow SVG").unwrap().0;
         assert_eq!(types(&again)[0].content, types(&reopened)[0].content);

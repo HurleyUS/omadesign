@@ -1332,7 +1332,7 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
         return Some(found);
     }
     let tree = usvg::Tree::from_str(&renderer_source(&source), &options_for(run)).ok()?;
-    let result = Arc::new(layout_tree(run, tree));
+    let result = Arc::new(layout_tree(run, tree, false));
     let mut cache = cache.lock().unwrap();
     if cache.len() >= 64 { cache.clear(); }
     cache.insert(key, result.clone());
@@ -1343,10 +1343,10 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
 /// Args: captured text and actual SVG parser options. Returns the same native layout and resolved font ranges.
 pub(crate) fn layout_with_options(run: &TypeRun, options: &usvg::Options<'_>) -> Option<Layout> {
     let source = renderer_source(&source(run)?);
-    Some(layout_tree(run, usvg::Tree::from_str(&source, options).ok()?))
+    Some(layout_tree(run, usvg::Tree::from_str(&source, options).ok()?, true))
 }
 
-fn layout_tree(run: &TypeRun, tree: usvg::Tree) -> Layout {
+fn layout_tree(run: &TypeRun, tree: usvg::Tree, embedded: bool) -> Layout {
     let mut text_nodes = Vec::new();
     texts(tree.root(), &mut text_nodes);
     let order = visual_characters(&text_nodes, &run.content);
@@ -1412,8 +1412,8 @@ fn layout_tree(run: &TypeRun, tree: usvg::Tree) -> Layout {
                 }
                 let transform = text.abs_transform().pre_concat(glyph.transform());
                 let (font, axes) = resolved_fonts.entry(glyph.font).or_insert_with(|| {
-                    let font = super::webfonts::reference(tree.fontdb(), glyph.font);
-                    let axes = tree.fontdb().with_face_data(glyph.font, |bytes,index| rustybuzz::ttf_parser::Face::parse(bytes,index).ok().map(|face|face.variation_axes().into_iter().map(|a|a.tag.to_bytes()).collect::<Vec<_>>())).flatten().unwrap_or_default();
+                    let font = if embedded { super::webfonts::reference(tree.fontdb(), glyph.font) } else { tree.fontdb().face(glyph.font).and_then(|f|match &f.source {usvg::fontdb::Source::File(p)|usvg::fontdb::Source::SharedFile(p,_)=>Some(p.to_string_lossy().into_owned()),_=>None}) };
+                    let axes = if embedded {tree.fontdb().with_face_data(glyph.font, |bytes,index| rustybuzz::ttf_parser::Face::parse(bytes,index).ok().map(|face|face.variation_axes().into_iter().map(|a|a.tag.to_bytes()).collect::<Vec<_>>())).flatten().unwrap_or_default()} else {Vec::new()};
                     (font, axes)
                 });
                 let fill = span.fill.as_ref().and_then(|fill| {
