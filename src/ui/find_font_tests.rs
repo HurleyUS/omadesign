@@ -484,3 +484,35 @@ fn craft_find_font_recovery_cold_child() {
         std::fs::read(root.join("recovered.png")).unwrap()
     );
 }
+
+#[test]
+fn craft_variable_font_native_named_style_change_preserves_face_ranges_undo_and_reopen() {
+    let mut s=editor();let mut seat=Seat::new();
+    let before=wire(&s);let before_png=crate::compositor::export_png(&s.doc,1).unwrap();
+    let original=s.doc.layers[0].kind.shapes().unwrap().to_vec();
+    let first_id=original[0].id;
+    seat.open(&mut s);
+    let d=seat.ctx.data(|d|d.get_temp::<Draft>(Id::new(ID))).unwrap();
+    assert_eq!(d.family,"EB Garamond");
+    assert_eq!(d.catalog.styles(&d.family).iter().map(|c|c.style.as_str()).collect::<Vec<_>>(),["Regular","Medium","SemiBold","Bold","ExtraBold"]);
+    let ctx=seat.ctx.clone();keys::tab_to(&ctx,"Font style",|e|seat.frame(&mut s,e));
+    seat.frame(&mut s,keys::key(Key::End,Modifiers::NONE));seat.frame(&mut s,vec![]);
+    keys::focused(&seat.ctx,&seat.out,"Font style");
+    assert_eq!(seat.ctx.data(|d|d.get_temp::<Draft>(Id::new(ID))).unwrap().style.as_deref(),Some("ExtraBold"));
+    seat.invoke(&mut s,"Change");
+    assert_eq!(s.history.len(),1);
+    let first=s.doc.find_shape(0,first_id).unwrap();
+    let Geom::Text(t)=&first.geom else {panic!("Lost native text")};
+    let Geom::Text(old)=&original[0].geom else {unreachable!()};
+    assert_eq!(t.font_variations.settings(),&[(*b"wght",800.)]);
+    assert_eq!(crate::text::project_font_bytes(&t.font).unwrap().as_slice(), include_bytes!("../../tests/assets/fonts/EBGaramond.ttf"));
+    assert_eq!((t.content.clone(),t.spans.clone(),t.paragraphs.clone(),t.manual_kern.clone(),t.transform),(old.content.clone(),old.spans.clone(),old.paragraphs.clone(),old.manual_kern.clone(),old.transform));
+    assert_eq!(&s.doc.layers[0].kind.shapes().unwrap()[1],&original[1]);
+    let after=wire(&s);let png=crate::compositor::export_png(&s.doc,1).unwrap();assert_ne!(png,before_png);
+    let reopened=crate::project::decode(&after).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(),after);
+    assert_eq!(crate::compositor::export_png(&reopened,1).unwrap(),png);
+    if let Some(root)=std::env::var_os("OMADESIGN_VARIABLE_FONT_QA") {let root=std::path::PathBuf::from(root);std::fs::create_dir_all(&root).unwrap();std::fs::write(root.join("named-before.oma"),&before).unwrap();std::fs::write(root.join("named-after.oma"),&after).unwrap();std::fs::write(root.join("named-after.png"),png).unwrap();}
+    seat.invoke(&mut s,"Done");seat.canvas_focus(&mut s);
+    s.undo();assert_eq!(wire(&s),before);s.redo();assert_eq!(wire(&s),after);
+}

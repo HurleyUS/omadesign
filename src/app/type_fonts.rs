@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(crate) struct Replacement {
     pub from: Vec<Request>,
     pub to: String,
+    pub variations: crate::text::variations::FontVariations,
 }
 #[derive(Clone)]
 pub(crate) struct Target {
@@ -232,6 +233,11 @@ impl Studio {
         target: &Target,
         to: &str,
     ) -> Result<usize, String> {
+        self.replace_font_usage_at(target, to, &Default::default())
+    }
+    /// Apply one real font face and named variable instance through the existing typed command.
+    /// Args: captured story owner, portable face and validated axis coordinates. Returns changed story count.
+    pub(crate) fn replace_font_usage_at(&mut self, target: &Target, to: &str, variations: &crate::text::variations::FontVariations) -> Result<usize, String> {
         if target.find || !self.font_target_current(target) {
             return Err("The font destination changed. Reopen Find Font".into());
         }
@@ -240,6 +246,7 @@ impl Studio {
             TypeCommand::Font(Replacement {
                 from: target.from.clone(),
                 to: to.into(),
+                variations: variations.clone(),
             }),
         )
     }

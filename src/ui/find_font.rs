@@ -397,7 +397,7 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
                         .catalog
                         .choice(&d.family, d.style.as_deref(), &row.from[0])?;
                     let reference = d.catalog.reference(&choice)?;
-                    s.replace_font_usage(&target, &reference)
+                    s.replace_font_usage_at(&target, &reference, &choice.variations)
                         .map(|n| Some(format!("Changed {n} text objects")))
                 }),
             _ => Ok(None),

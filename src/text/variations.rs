@@ -287,6 +287,8 @@ mod tests {
         light.font_variations = point(400.);
         let mut heavy = light.clone();
         heavy.font_variations = point(800.);
+        light.contours = super::super::shape(&light);
+        heavy.contours = super::super::shape(&heavy);
         let a = super::super::compose(&light);
         let b = super::super::compose(&heavy);
         assert_ne!(a[0].width, b[0].width);

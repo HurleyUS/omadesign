@@ -458,7 +458,7 @@ impl Studio {
                 return Err("The text selection changed".into());
             }
             let changed = if let TypeCommand::Font(replacement) = &command {
-                crate::text::font_inventory::replace(&mut run, &replacement.from, &replacement.to)?
+                crate::text::font_inventory::replace_at(&mut run, &replacement.from, &replacement.to, &replacement.variations)?
             } else if let TypeCommand::Insert(text) = &command {
                 if text.is_empty() {
                     false

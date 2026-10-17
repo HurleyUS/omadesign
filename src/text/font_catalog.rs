@@ -13,6 +13,8 @@ pub(crate) struct Choice {
     pub style: String,
     pub weight: u16,
     pub slant: u8,
+    pub aliases: Vec<String>,
+    pub variations: super::variations::FontVariations,
 }
 impl Catalog {
     /// Collect installed faces and actual document fonts into one read-only resolver.
@@ -54,25 +56,25 @@ impl Catalog {
                     .iter()
                     .any(|(n, _)| n.eq_ignore_ascii_case(family))
             })
-            .filter_map(|f| {
-                let style = self
-                    .db
-                    .with_face_data(f.id, |data, index| {
-                        let face = rustybuzz::ttf_parser::Face::parse(data, index).ok()?;
-                        font_inventory::name(&face, &[17, 2])
-                    })
-                    .flatten()?;
-                Some(Choice {
-                    id: f.id,
-                    family: f.families.first()?.0.clone(),
-                    style,
-                    weight: f.weight.0,
-                    slant: match f.style {
-                        fontdb::Style::Italic => 1,
-                        fontdb::Style::Oblique => 2,
-                        _ => 0,
-                    },
-                })
+            .flat_map(|f| {
+                self.db.with_face_data(f.id, |data, index| {
+                    let Some(face) = rustybuzz::ttf_parser::Face::parse(data, index).ok() else { return vec![] };
+                    let Some(style) = font_inventory::name(&face, &[17, 2]) else { return vec![] };
+                    let Some(family) = f.families.first().map(|v| v.0.clone()) else { return vec![] };
+                    let (aliases, instances) = super::font_instances::read(&face);
+                    let normal = Choice { id:f.id, family, style, weight:f.weight.0,
+                        slant:match f.style { fontdb::Style::Italic=>1, fontdb::Style::Oblique=>2, _=>0 },
+                        aliases, variations:Default::default() };
+                    std::iter::once(normal.clone()).chain(instances.into_iter().map(|instance| {
+                        let mut choice = normal.clone();choice.style=instance.style;choice.aliases=instance.aliases;
+                        for (tag,value) in instance.variations.settings() {
+                            if tag==b"wght" {choice.weight=value.clamp(1.,1000.).round() as u16;}
+                            else if tag==b"ital" {choice.slant=u8::from(*value>=0.5);}
+                            else if tag==b"slnt" && *value!=0. {choice.slant=2;}
+                        }
+                        choice.variations=instance.variations;choice
+                    })).collect::<Vec<_>>()
+                }).unwrap_or_default()
             })
             .collect();
         choices.sort_by_key(|f| (f.weight, f.slant, f.style.clone()));
@@ -91,7 +93,7 @@ impl Catalog {
         if let Some(style) = style {
             return choices
                 .into_iter()
-                .find(|f| f.style == style)
+                .find(|f| f.style == style || f.aliases.iter().any(|a| a.eq_ignore_ascii_case(style)))
                 .ok_or_else(|| {
                     "This font style is no longer available. Refresh the font list".into()
                 });
@@ -140,17 +142,8 @@ impl Catalog {
         });
         choices
             .into_iter()
-            .find(|f| {
-                Some(f.id) == id
-                    || self.db.face(id.unwrap_or(f.id)).is_some_and(|face| {
-                        face.weight.0 == f.weight
-                            && match face.style {
-                                fontdb::Style::Italic => f.slant == 1,
-                                fontdb::Style::Oblique => f.slant == 2,
-                                _ => f.slant == 0,
-                            }
-                    })
-            })
+            .filter(|f| Some(f.id) == id)
+            .min_by_key(|f| (u8::from(f.slant!=slant), f.weight.abs_diff(weight)))
             .ok_or_else(|| "Choose an available font family".into())
     }
     /// Bind a selected face to the existing portable font loader.

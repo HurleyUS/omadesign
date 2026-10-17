@@ -143,7 +143,16 @@ pub(crate) fn describe_with(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            info.style = format!("{} ({shown})", info.style);
+            let named = match source.as_ref() {
+                Request::Stored(reference) => font_bytes_for(&TypeRun { font:reference.clone(), ..Default::default() })
+                    .and_then(|bytes| {
+                        let face=rustybuzz::ttf_parser::Face::parse(&bytes,0).ok()?;
+                        let settings=super::variations::FontVariations::new(coordinates.iter().map(|(t,v)|(*t,f32::from_bits(*v))).collect()).ok()?;
+                        super::font_instances::read(&face).1.into_iter().find(|i| super::font_instances::same_point(&face,&settings,&i.variations)).map(|i| i.style)
+                    }),
+                _=>None,
+            };
+            info.style = format!("{} ({shown})", named.as_deref().unwrap_or(&info.style));
             info.identity = info.identity.map(|id| format!("{id}:{coordinates:?}"));
             if let Some(resolved) = &mut info.resolved {
                 *resolved = format!("{resolved} ({shown})");
@@ -478,13 +487,19 @@ pub(crate) fn uses(run: &TypeRun) -> Result<Vec<Use>, String> {
 /// Replace one reported face through native font overrides without touching other character metadata.
 /// Args: text, exact authored source requests and available replacement reference. Returns whether text changed.
 pub(crate) fn replace(run: &mut TypeRun, from: &[Request], to: &str) -> Result<bool, String> {
+    replace_at(run, from, to, &Default::default())
+}
+/// Replace matching authored font intervals with an original face at one editable design-space point.
+/// Args: native text, source requests, available font reference and validated coordinates.
+/// Returns whether text changed, preserving unmatched character metadata and ranges.
+pub(crate) fn replace_at(run: &mut TypeRun, from: &[Request], to: &str, point: &super::variations::FontVariations) -> Result<bool, String> {
     if !present(to) || stored(to, &BTreeSet::new()).is_none() {
         return Err("Choose an available font".into());
     }
     let uses = uses(run)?;
     let ranges: Vec<_> = uses
         .iter()
-        .filter(|u| from.contains(&u.request) && u.request != Request::Stored(to.into()))
+        .filter(|u| from.contains(&u.request) && u.request != native_request(to, point))
         .map(|u| u.range.clone())
         .collect();
     if ranges.is_empty() {
@@ -513,7 +528,7 @@ pub(crate) fn replace(run: &mut TypeRun, from: &[Request], to: &str) -> Result<b
         && !reset_svg
     {
         run.font = to.into();
-        run.font_variations = Default::default();
+        run.font_variations = point.clone();
         for span in &mut run.spans {
             if span
                 .font
@@ -521,14 +536,14 @@ pub(crate) fn replace(run: &mut TypeRun, from: &[Request], to: &str) -> Result<b
                 .is_some_and(|f| from.contains(&Request::Stored(f.clone())))
             {
                 span.font = Some(to.into());
-                span.font_variations = None;
+                span.font_variations = (!point.is_empty()).then(|| point.clone());
             }
         }
     } else {
         let count = run.content.chars().count();
         if count == 0 {
             run.font = to.into();
-            run.font_variations = Default::default();
+            run.font_variations = point.clone();
         } else {
             let original = run.character_style_runs(0, count);
             let mut span_at = 0;
@@ -540,9 +555,9 @@ pub(crate) fn replace(run: &mut TypeRun, from: &[Request], to: &str) -> Result<b
                 let mut span = original[span_at].clone();
                 span.start = usage.range.start;
                 span.end = usage.range.end;
-                if from.contains(&usage.request) && usage.request != Request::Stored(to.into()) {
+                if from.contains(&usage.request) && usage.request != native_request(to, point) {
                     span.font = Some(to.into());
-                    span.font_variations = reset_svg.then(Default::default);
+                    span.font_variations = (reset_svg || !point.is_empty()).then(|| point.clone());
                 }
                 changed.push(span);
             }

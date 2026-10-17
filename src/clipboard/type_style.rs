@@ -359,6 +359,7 @@ mod tests {
             ..Default::default()
         };
         let mut source = source;
+        source.font = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/assets/fonts/EBGaramond.ttf").into();
         source.set_character_style(3, 5, |s| s.features = vec![(*b"smcp", 0)]);
         let rich = RichText::from_run(&source, 0, 8);
         let mut target = TypeRun {
