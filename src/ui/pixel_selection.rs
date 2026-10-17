@@ -7,7 +7,7 @@ use crate::app::{
 use eframe::egui::{self, Context, Id, Ui};
 use std::sync::{Arc, Mutex};
 
-type Preview = (Arc<Vec<u8>>, SelectionSpace);
+type Preview = (Arc<crate::resources::Allocation<f32>>, SelectionSpace);
 type Job = Arc<Mutex<Option<Option<Preview>>>>;
 
 #[derive(Clone)]
@@ -15,7 +15,7 @@ struct Session {
     instance: Id,
     document: String,
     generation: u64,
-    source: Arc<crate::resources::Allocation<u8>>,
+    source: Arc<crate::resources::Allocation<f32>>,
     space: SelectionSpace,
     settings: Edit,
     initial: Edit,
@@ -267,7 +267,7 @@ pub(super) fn show(ctx: &Context, studio: &mut Studio) {
     }
     if available && apply {
         if let Some((values, space)) = session.preview {
-            studio.replace_pixel_selection((*values).clone(), space);
+            studio.replace_pixel_selection_admitted(values, space);
         }
         ctx.request_repaint();
         return;
@@ -281,7 +281,7 @@ pub(super) fn show(ctx: &Context, studio: &mut Studio) {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let result =
-                pixel_selection::edit(&source, space, settings).map(|(v, s)| (Arc::new(v), s));
+                pixel_selection::edit_admitted(&source, space, settings).ok().flatten();
             *job.lock().unwrap() = Some(result);
             ctx.request_repaint();
         });

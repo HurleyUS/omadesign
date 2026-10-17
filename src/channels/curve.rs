@@ -217,13 +217,13 @@ impl Evaluator<'_> {
 pub(crate) fn apply(
     source: &Plane,
     curve: &Curve,
-    selection: Option<&[u8]>,
+    selection: Option<&[f32]>,
     cancel: &dyn CancellationCheck,
 ) -> Result<Plane, String> {
     source.validate()?;
     let evaluator = curve.prepare()?;
     cancel.check()?;
-    if selection.is_some_and(|mask| mask.len() != source.samples.len()) {
+    if selection.is_some_and(|mask| mask.len() != source.samples.len() || crate::selection_coverage::validate(mask).is_err()) {
         return Err("Channel curve selection dimensions changed".into());
     }
     if evaluator.identity {
@@ -240,7 +240,7 @@ pub(crate) fn apply(
         cancel.check()?;
         for (j, (before, dst)) in chunk.iter().zip(out).enumerate() {
             let i = index * 16384 + j;
-            let weight = selection.map_or(1., |mask| f32::from(mask[i]) / 255.);
+            let weight = selection.map_or(1., |mask| mask[i]);
             let mapped = evaluator.sample(*before);
             *dst = if weight == 0. || mapped.to_bits() == before.to_bits() {
                 *before

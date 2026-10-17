@@ -19,7 +19,7 @@ struct Outlines {
 }
 pub fn outlines(
     ctx: &egui::Context,
-    mask: &[u8],
+    mask: &[f32],
     w: u32,
     h: u32,
     generation: u64,
@@ -51,7 +51,7 @@ pub fn outlines(
             let values = (0..sh)
                 .flat_map(|y| {
                     let input = &input;
-                    (0..sw).map(move |x| u8::from(input[(y * step * w + x * step) as usize] >= 128))
+                    (0..sw).map(move |x| u8::from(input[(y * step * w + x * step) as usize] >= 0.5))
                 })
                 .collect::<Vec<_>>();
             let contours = crate::trace::trace_mask(&values, sw, sh)
