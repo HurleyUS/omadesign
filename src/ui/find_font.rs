@@ -153,7 +153,6 @@ fn actions(
             ("change", "Change", can_change),
             ("all", "Change All", can_all),
             ("refresh", "Refresh", true),
-            ("done", "Done", true),
         ] {
             if control(ui, owner.with(key), label, |ui| {
                 ui.add_enabled(enabled, egui::Button::new(label))
@@ -350,7 +349,7 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
                         ui.spinner();
                         ui.label("Refreshing installed fonts…");
                     }
-                    if !current || d.refreshing {
+                    {
                         if control(ui, owner.with("close"), "Done", |ui| ui.button("Done"))
                             .clicked()
                         {

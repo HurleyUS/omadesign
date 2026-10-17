@@ -369,7 +369,10 @@ fn craft_find_font_native_missing_folder_paste_search_explicit_add_redraw_no_his
         s.font_usage()
             .unwrap()
             .iter()
-            .any(|r| r.info.family == "Oma Font QA" && r.info.status == Status::Missing)
+            .any(|r| r.info.family == "Oma Font QA" && r.info.status == Status::Missing),
+        "actual requests: {:?}; document: {}",
+        s.font_usage().unwrap(),
+        before
     );
     let mut seat = Seat::new();
     seat.open(&mut s);
