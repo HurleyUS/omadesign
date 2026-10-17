@@ -135,6 +135,8 @@ pub(crate) fn apply(
             let weight = selection.map_or(1., |s| s[i]);
             *out = if weight == 0. || before.to_bits() == mapped.to_bits() {
                 before
+            } else if weight == 1. {
+                mapped
             } else {
                 (before + (mapped - before) * weight).clamp(0., 1.)
             };

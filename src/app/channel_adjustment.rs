@@ -252,8 +252,27 @@ pub(crate) mod tests {
         );
         for quick in [false, true] {
             if quick {
-                studio.channel_target = None;
+                studio.select_channel_target(None).unwrap();
+                studio.replace_pixel_selection_admitted(
+                    studio.pixel_sel.clone().unwrap(),
+                    SelectionSpace {
+                        transform: tiny_skia::Transform::identity(),
+                        ..space
+                    },
+                );
                 studio.set_quick_mask(true).unwrap();
+                assert!(
+                    studio
+                        .doc
+                        .quick_mask
+                        .as_ref()
+                        .unwrap()
+                        .channel
+                        .plane
+                        .samples
+                        .iter()
+                        .any(|v| *v > 0.)
+                );
             }
             let before = crate::project::encode(&studio.doc).unwrap();
             let history = studio.history.len();
