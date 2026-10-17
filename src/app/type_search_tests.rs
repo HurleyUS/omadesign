@@ -442,3 +442,104 @@ fn craft_find_replace_linked_story_is_replaced_once_and_locked_members_refuse() 
     assert_eq!(wire(&s), locked);
     assert!(s.capture_text_search(TextScope::Document).is_err());
 }
+
+#[test]
+fn craft_find_replace_whole_word_selection_uses_actual_word_and_style_boundaries() {
+    let (mut s, hits) = editor(&["catalog cat"]);
+    s.begin_type_edit(hits[0], Pt::new(30., 65.));
+    {
+        let e = s.type_edit.as_mut().unwrap();
+        e.anchor = 0;
+        e.caret = 3;
+    }
+    let target = s.capture_text_search(TextScope::Selection).unwrap();
+    let q = Query {
+        find: "cat".into(),
+        whole_word: true,
+        match_case: false,
+    };
+    let before = wire(&s);
+    assert!(s.text_search_matches(&target, &q).unwrap().is_empty());
+    assert_eq!(
+        s.replace_text_search(&target, &q, "dog", None)
+            .unwrap()
+            .matches,
+        0
+    );
+    assert_eq!(wire(&s), before);
+    let plain = Query {
+        whole_word: false,
+        ..q.clone()
+    };
+    assert_eq!(s.text_search_matches(&target, &plain).unwrap().len(), 1);
+    let mut run = TypeRun {
+        content: "catalog".into(),
+        ..Default::default()
+    };
+    run.set_character_style(0, 3, |style| {
+        style.fill = Some(Fill::Solid(Rgba::from_hex(0xff0000)))
+    });
+    assert_eq!(
+        ranges(&run, 0..7, &q),
+        vec![0..3],
+        "true style-run edges retain the reference contract"
+    );
+}
+
+#[test]
+fn craft_find_replace_batched_paragraph_rewrites_match_existing_literal_edit_semantics() {
+    let mut source = TypeRun {
+        content: "AB\nCD\nEF".into(),
+        ..Default::default()
+    };
+    source.paragraphs = vec![
+        ParagraphStyle {
+            start: 0,
+            align: TextAlign::Center,
+            ..Default::default()
+        },
+        ParagraphStyle {
+            start: 3,
+            align: TextAlign::End,
+            ..Default::default()
+        },
+        ParagraphStyle {
+            start: 6,
+            keep_with_next: 2,
+            ..Default::default()
+        },
+    ];
+    source.set_character_style(0, 3, |style| {
+        style.fill = Some(Fill::Solid(Rgba::from_hex(0xdd2255)))
+    });
+    source.set_character_style(3, 6, |style| style.px = Some(32.));
+    source.manual_kern.insert(5, 1.5);
+    let edits = [
+        CharacterRewrite {
+            start: 1,
+            end: 4,
+            text: "x\ny".into(),
+        },
+        CharacterRewrite {
+            start: 6,
+            end: 8,
+            text: "\nlast".into(),
+        },
+    ];
+    let mut expected = source.clone();
+    for edit in edits.iter().rev() {
+        let inherited = expected.character_style(edit.start);
+        expected.replace_text(edit.start, edit.end, &edit.text, Some(inherited));
+    }
+    source.rewrite_text_ranges(&edits).unwrap();
+    assert_eq!(source.content, expected.content);
+    assert_eq!(source.paragraphs, expected.paragraphs);
+    assert_eq!(source.manual_kern, expected.manual_kern);
+    for i in 0..source.content.chars().count() {
+        assert_eq!(
+            source.character_style(i),
+            expected.character_style(i),
+            "scalar style {i}"
+        );
+    }
+}

@@ -69,11 +69,10 @@ fn ranges(run: &TypeRun, range: Range<usize>, query: &Query) -> Vec<Range<usize>
         prefix[i] = k;
     }
     let mut edges: std::collections::BTreeSet<_> = run
-        .character_style_runs(range.start, range.end)
+        .character_style_runs(0, chars.len())
         .into_iter()
         .flat_map(|s| [s.start, s.end])
         .collect();
-    edges.extend([range.start, range.end]);
     fn leaves(
         node: &crate::text::svg_type::TextNode,
         at: &mut usize,
@@ -94,6 +93,8 @@ fn ranges(run: &TypeRun, range: Range<usize>, query: &Query) -> Vec<Range<usize>
     if let Some(svg) = &run.svg_text {
         leaves(&svg.root, &mut 0, &mut edges);
     }
+    let boundaries = edges.clone();
+    edges.extend([range.start, range.end]);
     let edges: Vec<_> = edges
         .into_iter()
         .filter(|&i| range.start <= i && i <= range.end)
@@ -113,7 +114,8 @@ fn ranges(run: &TypeRun, range: Range<usize>, query: &Query) -> Vec<Range<usize>
                 let a = i + 1 - k;
                 let b = i + 1;
                 let whole = !query.whole_word
-                    || ((a == start || !word(chars[a - 1])) && (b == end || !word(chars[b])));
+                    || ((boundaries.contains(&a) || !word(chars[a - 1]))
+                        && (boundaries.contains(&b) || !word(chars[b])));
                 if whole {
                     found.push(a..b);
                     k = 0;
