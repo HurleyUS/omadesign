@@ -501,3 +501,54 @@ fn craft_nested_selection_motion_frame_handles_key_the_parent_once_and_keep_chil
         assert_eq!(bytes(&s), after);
     }
 }
+
+#[test]
+fn craft_nested_selection_nonuniform_frame_resize_preserves_typed_child_rotation_and_constraints() {
+    let (ctx, mut s, ids) = fixture();
+    let mut run = crate::geom::TypeRun {
+        origin: Pt::new(100., 130.),
+        content: "Nested text".into(),
+        px: 20.,
+        tracking: 1.5,
+        ..Default::default()
+    };
+    run.contours = crate::text::shape(&run);
+    s.doc.find_shape_mut(0, ids[2]).unwrap().geom = Geom::Text(run);
+    s.selection = vec![(0, ids[1])];
+    frame(&ctx, &mut s, vec![]);
+    let original = bytes(&s);
+    let n = s.history.len();
+    let before = s.doc.find_shape(0, ids[2]).unwrap().clone();
+    let frame_before = s.doc.find_shape(0, ids[1]).unwrap().geom.bbox();
+    let angle = selection_angle(&s);
+    let bounds = posed_bounds(&s).unwrap();
+    let to = (bounds.min + Pt::new(bounds.width() * 1.15, bounds.height() * 1.05)).rotate(angle);
+    drag(&ctx, &mut s, bounds.max.rotate(angle), to);
+    let after = s.doc.find_shape(0, ids[2]).unwrap();
+    assert_eq!(after.rotation, before.rotation);
+    assert_eq!(after.layout, before.layout);
+    assert_eq!(after.style, before.style);
+    let (Geom::Text(mut old), Geom::Text(new)) = (before.geom, after.geom.clone()) else {
+        panic!("editable type must survive frame resizing")
+    };
+    let frame_after = s.doc.find_shape(0, ids[1]).unwrap().geom.bbox();
+    old.origin += frame_after.min - frame_before.min;
+    assert_eq!(
+        serde_json::to_value(old).unwrap(),
+        serde_json::to_value(new).unwrap()
+    );
+    close(
+        map_point(
+            shape_transform(&s, 0, s.doc.find_shape(0, ids[1]).unwrap()),
+            frame_after.max,
+        ),
+        to,
+    );
+    assert_eq!(s.history.len(), n + 1);
+    let encoded = bytes(&s);
+    assert_eq!(crate::project::encode(&reopen(&s)).unwrap(), encoded);
+    s.undo();
+    assert_eq!(bytes(&s), original);
+    s.redo();
+    assert_eq!(bytes(&s), encoded);
+}

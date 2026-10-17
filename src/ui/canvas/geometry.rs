@@ -106,11 +106,25 @@ pub(super) fn nested_resize(
     angle: f32,
 ) {
     restore_geometry(doc, snaps);
+    let moving: std::collections::HashSet<_> =
+        snaps.iter().map(|snap| (snap.layer, snap.id)).collect();
     let mut work: Vec<_> = snaps
         .iter()
         .filter(|snap| snap.id != RASTER_ID)
         .filter_map(|snap| {
             let shape = doc.find_shape(snap.layer, snap.id)?;
+            let mut parent = shape.layout.parent;
+            for _ in 0..64 {
+                let Some(id) = parent else {
+                    break;
+                };
+                if moving.contains(&(snap.layer, id)) {
+                    return None;
+                }
+                parent = doc
+                    .find_shape(snap.layer, id)
+                    .and_then(|shape| shape.layout.parent);
+            }
             let parent = compositor::shape_parent_transform(doc, snap.layer, snap.id);
             let depth = ancestor_depth(doc, snap.layer, snap.id);
             Some((depth, snap, parent, shape.layout.frame))
