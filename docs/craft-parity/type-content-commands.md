@@ -1,0 +1,9 @@
+# Type content commands
+
+Type now offers all four reference case changes, smart punctuation and 28 special/whitespace/break character choices. Selected text ranges stay in their existing draft; object/group selections edit each selected story once. Document punctuation includes hidden text and deduplicates linked frames. Locked stories or ancestor layers refuse before mutation. A captured dialog also refuses changed documents, selections, carets, pending styles or revisions.
+
+Character rewrites build the replacement content once and map native character spans, paragraph offsets, untouched manual kerning and retained SVG text positions through the original character ranges. Case expansion inherits the source character's style. Quotes carry context across styled runs, while dash/ellipsis contractions preserve style and SVG-leaf boundaries. No-op commands preserve the draft, IME preedit and redo. Changed object/document commands use one ordinary typed batch; live selections retain the existing draft's history boundary.
+
+The punctuation dialog has independent quote, dash and ellipsis controls, all eight reference double/single quote pairs, and selected-text/document scope. Its last choices are temporary UI state. Document Setup quote/language persistence remains separate required work; this layer does not add document fields or claim full Type parity. Existing typed replacement handles all insertions, including both reference break choices (paragraph returns in the current model).
+
+Source only until its focused software and native desktop checks finish. Broader font/recent-font/style/size menus, Find Font/Find and Replace, placeholder, fit-headline, orientation, hidden-character markers and inline graphics remain on the full parity objective, along with the remaining outline adapters. No version, schema, dependency or release action.
