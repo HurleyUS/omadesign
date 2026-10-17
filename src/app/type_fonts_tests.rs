@@ -199,16 +199,18 @@ fn craft_find_font_core_noop_and_invalid_destination_preserve_redo_and_stale_own
     assert_eq!(wire(&s), before);
 }
 #[test]
-fn craft_find_font_core_only_matching_locked_stories_block_all_and_find_skips_hidden_or_locked() {
+fn craft_find_font_core_find_includes_locked_hidden_and_empty_results_without_granting_write_access()
+ {
     let (mut s, hit, other) = editor();
     let second = s.doc.layers[0].kind.shapes().unwrap()[1].id;
     s.doc.find_shape_mut(0, second).unwrap().locked = true;
     assert!(s.capture_font_change(TextScope::Document, &from()).is_err());
     let target = s.capture_font_find(&from()).unwrap();
     let before = wire(&s);
-    assert_eq!(s.select_font_usage(&target).unwrap(), 1);
-    assert_eq!(s.selection, vec![hit]);
+    assert_eq!(s.select_font_usage(&target).unwrap(), 2);
+    assert_eq!(s.selection, vec![hit, (0, second)]);
     assert_eq!(wire(&s), before);
+    assert!(s.replace_font_usage(&target, &other).is_err());
     if let Geom::Text(r) = &mut s.doc.find_shape_mut(0, second).unwrap().geom {
         r.font = other.clone();
     }
@@ -216,7 +218,18 @@ fn craft_find_font_core_only_matching_locked_stories_block_all_and_find_skips_hi
     let target = s.capture_font_change(TextScope::Document, &from()).unwrap();
     assert_eq!(s.replace_font_usage(&target, &other).unwrap(), 1);
     s.doc.find_shape_mut(hit.0, hit.1).unwrap().visible = false;
-    assert!(s.capture_font_find(&[Request::Stored(other)]).is_err());
+    let before = wire(&s);
+    let target = s.capture_font_find(&[Request::Stored(other)]).unwrap();
+    assert_eq!(s.select_font_usage(&target).unwrap(), 2);
+    assert_eq!(wire(&s), before);
+    let target = s
+        .capture_font_find(&[Request::Stored("/not-used-in-this-document.ttf".into())])
+        .unwrap();
+    let steps = s.history.len();
+    assert_eq!(s.select_font_usage(&target).unwrap(), 0);
+    assert!(s.selection.is_empty());
+    assert_eq!(s.history.len(), steps);
+    assert_eq!(wire(&s), before);
 }
 #[test]
 fn craft_find_font_core_live_story_replacement_retains_existing_draft_caret_and_history_boundary() {

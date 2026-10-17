@@ -392,7 +392,12 @@ impl Studio {
         if hits.is_empty() {
             return Err("Select editable text".into());
         }
-        Ok(TypeCommandTarget {
+        Ok(self.type_command_snapshot(scope,hits))
+    }
+    /// Capture the common document, selection and live-draft owner of a Type action.
+    /// Args: scope and actual story identities. Returns their immutable owner snapshot.
+    fn type_command_snapshot(&self, scope: TextScope, hits: Vec<(usize,u64)>) -> TypeCommandTarget {
+        TypeCommandTarget {
             document: self.swap_id.clone(),
             generation: self.canvas_gen,
             selection: self.selection.clone(),
@@ -400,21 +405,23 @@ impl Studio {
             scope,
             edit: self.type_edit.as_ref().map(EditOwner::new),
             hits,
-        })
+        }
     }
     /// Check the document, selection, draft and writable story identities captured by a Type action.
     /// Args: target. Returns false after any stale document/edit owner or lock change.
     pub(crate) fn type_command_current(&self, target: &TypeCommandTarget) -> bool {
+        self.type_command_owner_current(target)
+            && target.hits.iter().all(|&hit| self.type_command_writable(hit, target.scope == TextScope::Document))
+    }
+    /// Read the captured owner without granting permission to mutate its stories.
+    /// Args: target snapshot. Returns whether the same document, selection and live draft still own it.
+    fn type_command_owner_current(&self, target: &TypeCommandTarget) -> bool {
         self.type_commands_available()
             && target.document == self.swap_id
             && target.generation == self.canvas_gen
             && target.selection == self.selection
             && target.layer == self.selected_layer
             && target.edit == self.type_edit.as_ref().map(EditOwner::new)
-            && target
-                .hits
-                .iter()
-                .all(|&hit| self.type_command_writable(hit, target.scope == TextScope::Document))
     }
     /// Apply a Type content command through the current draft or one ordinary document batch.
     /// Args: captured owner and command. Returns changed story count; refusals and no-ops keep draft and redo intact.

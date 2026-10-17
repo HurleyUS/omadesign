@@ -110,12 +110,37 @@ impl Studio {
             find: false,
         })
     }
-    /// Capture visible writable stories for the explicit Find selection action.
-    /// Args: row requests. Returns a read-only navigation owner, with locked/hidden stories excluded.
+    fn font_find_hits(&self, from: &[Request]) -> Result<Vec<(usize, u64)>, String> {
+        let mut hits = Vec::new();
+        let mut seen = BTreeSet::new();
+        for (layer, l) in self.doc.layers.iter().enumerate() {
+            for shape in l.kind.shapes().unwrap_or(&[]) {
+                if !matches!(shape.geom, Geom::Text(_)) {
+                    continue;
+                }
+                let hit = self.story_head((layer, shape.id));
+                if !seen.insert(hit) {
+                    continue;
+                }
+                if let Some(Geom::Text(run)) = self.doc.find_shape(hit.0, hit.1).map(|s| &s.geom)
+                    && matching(run, from)?
+                {
+                    hits.push(hit);
+                }
+            }
+        }
+        Ok(hits)
+    }
+    /// Capture all matching stories for the reference Find selection action.
+    /// Args: row requests. Returns a read-only owner, including locked and hidden matches without edit permission.
     pub(crate) fn capture_font_find(&self, from: &[Request]) -> Result<Target, String> {
-        let owner = self.capture_type_target_filtered(TextScope::Document, false, true, |run| {
-            matching(run, from)
-        })?;
+        if !self.type_commands_available() {
+            return Err("Finish the current operation before finding text".into());
+        }
+        if from.is_empty() {
+            return Err("Choose a font to find".into());
+        }
+        let owner = self.type_command_snapshot(TextScope::Document, self.font_find_hits(from)?);
         Ok(Target {
             owner,
             from: from.to_vec(),
@@ -125,13 +150,14 @@ impl Studio {
     /// Check a font command's captured artwork, selection, live draft and story permissions.
     /// Args: captured target. Returns false after a stale owner or eligibility change.
     pub(crate) fn font_target_current(&self, target: &Target) -> bool {
-        self.type_command_current(&target.owner)
-            && (!target.find
-                || target
-                    .owner
-                    .hits
-                    .iter()
-                    .all(|&hit| self.type_command_writable(hit, false)))
+        if target.find {
+            self.type_command_owner_current(&target.owner)
+                && self
+                    .font_find_hits(&target.from)
+                    .is_ok_and(|hits| hits == target.owner.hits)
+        } else {
+            self.type_command_current(&target.owner)
+        }
     }
     /// Replace a reported font through the same Type command used for ordinary text/history edits.
     /// Args: captured replacement owner and an available native font reference. Returns changed story count.
@@ -151,7 +177,7 @@ impl Studio {
             }),
         )
     }
-    /// Select actual visible editable text stories using a font, without a search history command.
+    /// Select actual matching text stories using a font, without a search history command.
     /// Args: captured Find owner. Returns selected story count; explicit navigation finishes an existing Type draft.
     pub(crate) fn select_font_usage(&mut self, target: &Target) -> Result<usize, String> {
         if !target.find || !self.font_target_current(target) {
@@ -163,7 +189,14 @@ impl Studio {
         }
         self.selection = hits;
         self.selected_layer = None;
-        self.active_layer = self.selection.first().map(|hit| hit.0);
+        if let Some(&(layer, _)) = self
+            .selection
+            .iter()
+            .rev()
+            .find(|&&(layer, _)| self.layer_unlocked(layer) && self.doc.layer_visible(layer))
+        {
+            self.active_layer = Some(layer);
+        }
         self.individual_object = (self.selection.len() == 1).then(|| self.selection[0]);
         self.node_sel.clear();
         self.tool = Tool::Select;
