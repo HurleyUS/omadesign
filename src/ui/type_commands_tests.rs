@@ -190,6 +190,13 @@ fn craft_type_content_native_case_and_insert_menus_keep_one_undo_and_reopen() {
 #[test]
 fn craft_type_content_native_punctuation_dialog_blocks_background_undo_and_applies_real_options() {
     let mut s = editor();
+    let hit = s.selection[0];
+    s.commit(crate::document::Cmd::SetOpacity {
+        layer: hit.0,
+        id: hit.1,
+        before: 1.,
+        after: 0.85,
+    });
     let mut seat = Seat::new();
     let before = wire(&s);
     seat.click(&mut s, "Type");
@@ -208,14 +215,14 @@ fn craft_type_content_native_punctuation_dialog_blocks_background_undo_and_appli
         ),
     );
     assert_eq!(wire(&s), before);
-    assert_eq!(s.history.len(), 0);
+    assert_eq!(s.history.len(), 1);
     seat.invoke(&mut s, "Double quotation marks");
     seat.invoke(&mut s, "« … »");
     seat.invoke(&mut s, "Apply smart punctuation");
     assert!(!is_open(&seat.ctx));
     assert_eq!(content(&s), "«hello wORLD» – …");
     canvas_focus(&seat);
-    assert_eq!(s.history.len(), 1);
+    assert_eq!(s.history.len(), 2);
     let after = wire(&s);
     emit("native-punctuation.oma", &s);
     let doc = crate::project::decode(&after).unwrap();
