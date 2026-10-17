@@ -8,6 +8,7 @@ use std::sync::Arc;
 #[derive(Default)]
 pub(super) struct Fonts {
     entries: HashMap<u128, Embedded>,
+    instances: HashMap<(u128,Vec<([u8;4],u32)>),(u128,Arc<Vec<u8>>)>,
 }
 struct Embedded {
     bytes: Arc<Vec<u8>>,
@@ -94,11 +95,13 @@ pub(super) fn write(
         }
     }
     let mut resolved = HashMap::new();
-    let mut faces: HashMap<String, (u128, u16)> = HashMap::new();
+    let mut faces = HashMap::new();
     for glyph in lines.iter().flat_map(|line| &line.glyphs) {
         let style = run.character_style(glyph.cluster);
         let font = style.font.unwrap_or_else(|| run.font.clone());
-        let (key, glyph_count) = if let Some(face) = faces.get(&font) {
+        let point = crate::text::variations::at(run, glyph.cluster);
+        let request = (font.clone(), point.key());
+        let (key, glyph_count) = if let Some(face) = faces.get(&request) {
             *face
         } else {
             let mut effective = run.clone();
@@ -109,22 +112,28 @@ pub(super) fn write(
             if !editable_font(&face) {
                 return Err("the resolved face does not permit editable outline embedding".into());
             }
-            if face.tables().glyf.is_none()
-                || face.is_variable()
-                || bytes.starts_with(b"ttcf")
-                || bytes.len() > 16 * 1024 * 1024
-            {
-                return Err("this font container or variable/CFF face requires outlines".into());
-            }
-            let key = crate::typography::fingerprint(&bytes);
-            if !writer.fonts.entries.contains_key(&key) {
-                writer
-                    .fonts
-                    .entries
-                    .insert(key, Embedded::new(&mut writer.pdf, bytes.clone(), &face)?);
-            }
-            let entry = (key, face.number_of_glyphs());
-            faces.insert(font, entry);
+            let glyph_count=face.number_of_glyphs();
+            let source_key=(crate::typography::fingerprint(&bytes),point.key());
+            let key=if let Some((key,original))=writer.fonts.instances.get(&source_key) {
+                if original.as_slice()!=bytes.as_slice() {return Err("PDF source font fingerprint collision".into());}
+                *key
+            } else {
+                let program=crate::text::font_export::instance(&bytes,&point)?;
+                let face=Face::parse(&program,0).map_err(|_|"the font instance cannot be parsed")?;
+                if face.tables().glyf.is_none() || face.is_variable() || program.starts_with(b"ttcf") || program.len()>16*1024*1024 {
+                    return Err("this font container or CFF face requires outlines".into());
+                }
+                let key=crate::typography::fingerprint(&program);
+                if let Some(entry)=writer.fonts.entries.get(&key) {
+                    if entry.bytes.as_slice()!=program.as_slice() {return Err("PDF embedded font fingerprint collision".into());}
+                } else {
+                    writer.fonts.entries.insert(key,Embedded::new(&mut writer.pdf,program.clone(),&face)?);
+                }
+                writer.fonts.instances.insert(source_key,(key,bytes));
+                key
+            };
+            let entry=(key,glyph_count);
+            faces.insert(request,entry);
             entry
         };
         if glyph.id >= glyph_count {

@@ -19,6 +19,9 @@ pub use export::write;
 #[cfg(test)]
 mod exchange_tests;
 #[cfg(test)]
+#[path = "pdf/variable_tests.rs"]
+mod variable_tests;
+#[cfg(test)]
 mod tests;
 
 const STREAM_LIMIT: usize = 128 * 1024 * 1024;

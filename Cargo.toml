@@ -46,6 +46,7 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 rayon = "1.10"
 rustybuzz = "0.20"
+subsetter = { version = "=0.2.6", default-features = false, features = ["variable-fonts"] }
 unicode-linebreak = "0.1"
 hyphenation = { version = "0.8.4", features = ["embed_en-us"] }
 unicode-segmentation = "1.13"

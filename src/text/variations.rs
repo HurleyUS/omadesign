@@ -394,11 +394,7 @@ mod tests {
                 .unwrap_err()
                 .contains("VariableFontUnsupported")
         );
-        assert!(
-            crate::formats::pdf::write(&doc)
-                .unwrap_err()
-                .contains("VariableFontUnsupported")
-        );
+        assert!(crate::formats::pdf::write(&doc).unwrap().0.starts_with(b"%PDF"));
         assert_eq!(crate::project::encode(&doc).unwrap(), before);
         json["version"] = 34.into();
         json["doc"]["layers"][0]["kind"]["Vector"]["shapes"][0]["geom"]["Text"]["font_variations"] =

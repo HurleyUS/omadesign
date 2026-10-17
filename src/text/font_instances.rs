@@ -48,7 +48,7 @@ fn parse(face: &Face<'_>, data: &[u8]) -> Option<(Vec<String>, Vec<Instance>)> {
     if offset < 16
         || axis_count == 0
         || axis_count > 64
-        || axis_size < 20
+        || axis_size != 20
         || count > 512
         || ![4 + axis_count * 4, 6 + axis_count * 4].contains(&size)
     {
@@ -177,7 +177,8 @@ mod tests {
         for end in [0, 4, 15, 16, data.len() - 1] {
             assert!(parse(&face, &data[..end]).is_none());
         }
-        for (at, value) in [(8, 65u16), (10, 19), (12, 513), (14, 1), (4, 15)] {
+        for (at, value) in [(8, 65u16), (10, 19),
+            (10, 21), (12, 513), (14, 1), (4, 15)] {
             let mut bad = data.to_vec();
             bad[at..at + 2].copy_from_slice(&value.to_be_bytes());
             assert!(parse(&face, &bad).is_none());

@@ -202,40 +202,46 @@ fn face_bytes(data: &[u8], index: u32) -> Result<Vec<u8>, String> {
     let tables = u16::from_be_bytes(header[4..6].try_into().unwrap()) as usize;
     let directory_end = offset.checked_add(12 + tables * 16).ok_or_else(invalid)?;
     let directory = data.get(offset + 12..directory_end).ok_or_else(invalid)?;
-    let mut result = header.to_vec();
-    result.extend_from_slice(directory);
-    let mut head = None;
-    for (i, table) in directory.chunks_exact(16).enumerate() {
-        let start = u32::from_be_bytes(table[8..12].try_into().unwrap()) as usize;
-        let len = u32::from_be_bytes(table[12..16].try_into().unwrap()) as usize;
-        let bytes = data
-            .get(start..start.checked_add(len).ok_or_else(invalid)?)
-            .ok_or_else(invalid)?;
-        if result
-            .len()
-            .checked_add(len + 3)
-            .is_none_or(|n| n > 16 * 1024 * 1024)
-        {
-            return Err("This face exceeds the portable project font limit of 16 MiB".into());
-        }
-        let at = result.len();
-        result.extend_from_slice(bytes);
-        result.resize((result.len() + 3) & !3, 0);
-        let row = 12 + i * 16;
-        result[row + 8..row + 12].copy_from_slice(&(at as u32).to_be_bytes());
-        if &table[..4] == b"head" {
-            if len < 12 {
-                return Err(invalid());
-            }
-            result[at + 8..at + 12].fill(0);
-            head = Some(at);
-            let sum = checksum(&result[at..at + len]);
-            result[row + 4..row + 8].copy_from_slice(&sum.to_be_bytes());
-        }
+    let mut tables = std::collections::BTreeMap::new();
+    for table in directory.chunks_exact(16) {
+        let tag=table[..4].try_into().unwrap();
+        let start=u32::from_be_bytes(table[8..12].try_into().unwrap()) as usize;
+        let len=u32::from_be_bytes(table[12..16].try_into().unwrap()) as usize;
+        let bytes=data.get(start..start.checked_add(len).ok_or_else(invalid)?).ok_or_else(invalid)?;
+        if tables.insert(tag,bytes.to_vec()).is_some() {return Err(invalid());}
     }
-    let head = head.ok_or_else(invalid)?;
-    let adjustment = 0xb1b0afbau32.wrapping_sub(checksum(&result));
-    result[head + 8..head + 12].copy_from_slice(&adjustment.to_be_bytes());
+    encode_tables(header[..4].try_into().unwrap(),tables)
+
+}
+
+/// Assemble an independent OpenType file with checked offsets and standard table/global checksums.
+/// Args: original flavor and unique native table bytes. Returns a font within the existing 16 MiB limit.
+pub(super) fn encode_tables(flavor:[u8;4], mut tables:std::collections::BTreeMap<[u8;4],Vec<u8>>) -> Result<Vec<u8>,String> {
+    let fail=|| "Font tables exceed the portable font limits".to_owned();
+    let head=tables.get_mut(b"head").filter(|h|h.len()>=12).ok_or_else(fail)?;
+    head[8..12].fill(0);
+    let count=u16::try_from(tables.len()).map_err(|_|fail())?;
+    let selector=u16::try_from(count.ilog2()).map_err(|_|fail())?;
+    let search=(1u16.checked_shl(u32::from(selector))).and_then(|n|n.checked_mul(16)).ok_or_else(fail)?;
+    let total=count.checked_mul(16).ok_or_else(fail)?;
+    let mut result=Vec::with_capacity(12+usize::from(total));
+    result.extend_from_slice(&flavor);
+    for value in [count,search,selector,total-search] {result.extend_from_slice(&value.to_be_bytes());}
+    result.resize(12+usize::from(total),0);
+    let mut head_offset=None;
+    for (n,(tag,bytes)) in tables.into_iter().enumerate() {
+        if result.len().checked_add(bytes.len()+3).is_none_or(|len|len>16*1024*1024) {return Err(fail());}
+        let start=result.len();let row=12+n*16;
+        result[row..row+4].copy_from_slice(&tag);
+        result[row+4..row+8].copy_from_slice(&checksum(&bytes).to_be_bytes());
+        result[row+8..row+12].copy_from_slice(&(start as u32).to_be_bytes());
+        result[row+12..row+16].copy_from_slice(&(bytes.len() as u32).to_be_bytes());
+        result.extend_from_slice(&bytes);result.resize((result.len()+3)&!3,0);
+        if tag==*b"head" {head_offset=Some(start);}
+    }
+    let head=head_offset.ok_or_else(fail)?;
+    let adjustment=0xb1b0afbau32.wrapping_sub(checksum(&result));
+    result[head+8..head+12].copy_from_slice(&adjustment.to_be_bytes());
     Ok(result)
 }
 
