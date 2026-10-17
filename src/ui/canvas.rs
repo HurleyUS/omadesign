@@ -239,11 +239,12 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
             .screen_tex
             .as_ref()
             .is_some_and(|t| t.size() == [w as usize, h as usize]);
+    let solo_channel=studio.channel_paint_target().is_some() && !studio.quick_mask_painting();
     let changing = interaction_objects(studio);
     if changing.is_none() {
         studio.interaction_render.clear();
     }
-    if !reuse && studio.channel_paint_target().is_none() {
+    if !reuse && !solo_channel {
         let draft = match &studio.op {
             Some(Op::Brush { layer, buf, preview, .. }) => Draft {
                 preview: None,
@@ -300,7 +301,7 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
             studio.canvas_key = Some(key);
         }
     }
-    if studio.channel_paint_target().is_some() {
+    if solo_channel {
         studio.screen_tex = None;
         studio.canvas_key = None;
         ui.painter().rect_filled(rect, 0., super::theme::bg_canvas());
@@ -5078,18 +5079,25 @@ mod tests {
     fn craft_quick_mask_actual_canvas_q_pointer_escape_undo_and_selection_return() {
         use eframe::egui::{Event,Key,Modifiers};
         let (ctx,mut s)=pen_input_studio();s.persona=crate::tools::Persona::Pixel;s.tool=Tool::Brush;s.view.offset=Pt::ZERO;s.brushes.selected=None;s.brush.size=12.;s.brush.opacity=0.8;
+        s.doc.layers[0].kind.shapes_mut().unwrap().push(crate::document::Shape::new(Geom::Rect {origin:Pt::new(40.,40.),size:Pt::new(160.,80.),radius:0.},crate::document::Style::default()));
         let frame=|s:&mut Studio,events| {
             let mut output=ctx.run_ui(eframe::egui::RawInput {screen_rect:Some(Rect::from_min_size(Pos2::ZERO,vec2(400.,300.))),events,..Default::default()},|ui|{s.handle_shortcuts(ui.ctx());show(ui,s);});
+            fn drawn(shape:&eframe::egui::Shape,id:eframe::egui::TextureId)->bool {match shape {eframe::egui::Shape::Mesh(mesh)=>mesh.texture_id==id,eframe::egui::Shape::Vec(shapes)=>shapes.iter().any(|s|drawn(s,id)),_=>false}}
+            let texture=s.screen_tex.as_ref().map(|t|t.id());
+            let visible=texture.is_some_and(|id|output.shapes.iter().any(|s|drawn(&s.shape,id)));
+            let pixels=texture.and_then(|id|output.textures_delta.set.iter().find(|(key,_)|*key==id)).map(|(_,delta)| {let eframe::egui::ImageData::Color(image)=&delta.image;image.pixels.clone()});
             output.textures_delta.clear();
+            (pixels,visible)
         };
-        frame(&mut s,vec![]);frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::F8,Modifiers::NONE));frame(&mut s,vec![]);
+        let original_image=frame(&mut s,vec![]).0.unwrap();frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::F8,Modifiers::NONE));frame(&mut s,vec![]);
         assert!(ctx.read_response(eframe::egui::Id::new("studio-canvas")).unwrap().has_focus());
         let before=crate::project::encode(&s.doc).unwrap();let history=s.history.len();
-        frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::Q,Modifiers::NONE));assert!(s.doc.quick_mask.is_some());
+        let (image,visible)=frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::Q,Modifiers::NONE));assert!(s.doc.quick_mask.is_some());
+        assert!(visible,"Quick Mask must actually draw the original artwork texture");assert_eq!(image.unwrap(),original_image,"An empty mask must keep the rendered artwork unchanged");
         let entered=crate::project::encode(&s.doc).unwrap();let pos=Pos2::new(80.,80.);let end=Pos2::new(140.,100.);
         frame(&mut s,vec![Event::PointerMoved(pos),pen_pointer_button(pos,true,Modifiers::NONE)]);assert!(matches!(s.op,Some(Op::ChannelStroke(_))));
         frame(&mut s,vec![Event::PointerMoved(end),pen_pointer_button(end,false,Modifiers::NONE)]);assert!(s.op.is_none());assert_eq!(s.history.len(),history+2);
-        let painted=crate::project::encode(&s.doc).unwrap();assert_ne!(entered,painted);assert!(s.doc.layers[0].kind.shapes().unwrap().is_empty());assert!(s.doc.quick_mask.as_ref().unwrap().channel.plane.samples.iter().any(|v|*v<1.));
+        let painted=crate::project::encode(&s.doc).unwrap();assert_ne!(entered,painted);assert_eq!(s.doc.layers[0].kind.shapes().unwrap().len(),1);assert!(s.doc.quick_mask.as_ref().unwrap().channel.plane.samples.iter().any(|v|*v<1.));
         s.undo();assert_eq!(crate::project::encode(&s.doc).unwrap(),entered);s.redo();assert_eq!(crate::project::encode(&s.doc).unwrap(),painted);
         frame(&mut s,vec![Event::PointerMoved(pos),pen_pointer_button(pos,true,Modifiers::NONE)]);frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::Escape,Modifiers::NONE));assert!(s.op.is_none());assert_eq!(crate::project::encode(&s.doc).unwrap(),painted);
         frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::Q,Modifiers::NONE));assert!(s.doc.quick_mask.is_none());assert!(s.pixel_sel.is_some());assert_eq!(crate::project::encode(&s.doc).unwrap(),before);
