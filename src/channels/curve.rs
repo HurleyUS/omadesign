@@ -83,6 +83,9 @@ impl Curve {
     /// Args: none. Returns float output entries without changing source pixels.
     pub(crate) fn drawn(&self) -> Result<Self, String> {
         let evaluator = self.prepare()?;
+        if matches!(self, Self::Drawn(_)) {
+            return Ok(self.clone());
+        }
         Ok(Self::Drawn(Box::new(std::array::from_fn(|i| {
             evaluator.sample(i as f32 / 255.)
         }))))
