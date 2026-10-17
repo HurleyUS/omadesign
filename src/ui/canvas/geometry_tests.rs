@@ -449,3 +449,55 @@ fn craft_nested_selection_animated_text_native_caret_matches_the_painted_story()
     assert_eq!(bytes(&s), original);
     assert_eq!(s.history.len(), 0);
 }
+
+#[test]
+fn craft_nested_selection_motion_frame_handles_key_the_parent_once_and_keep_children_relative() {
+    for rotate in [false, true] {
+        let (ctx, mut s, ids) = fixture();
+        s.persona = Persona::Motion;
+        s.playhead = 1.;
+        s.doc.motion.set_key(
+            ids[0],
+            crate::motion::Prop::Rotation,
+            1.,
+            0.2,
+            crate::motion::Ease::Linear,
+        );
+        s.doc.motion.set_key(
+            ids[0],
+            crate::motion::Prop::Scale,
+            1.,
+            0.85,
+            crate::motion::Ease::Linear,
+        );
+        s.selection = vec![(0, ids[1])];
+        frame(&ctx, &mut s, vec![]);
+        let original = bytes(&s);
+        let n = s.history.len();
+        let point = Pt::new(175., 155.);
+        let before = expected(&s, ids, point);
+        let bounds = posed_bounds(&s).unwrap();
+        if rotate {
+            let center = bounds.center();
+            let from = bounds.rotate_handle();
+            let to = center + (from - center).rotate(0.25);
+            drag(&ctx, &mut s, from, to);
+            close(expected(&s, ids, point), before.rotate_about(center, 0.25));
+        } else {
+            let to = bounds.min + (bounds.max - bounds.min) * 1.2;
+            drag(&ctx, &mut s, bounds.max, to);
+            close(
+                expected(&s, ids, point),
+                bounds.min + (before - bounds.min) * 1.2,
+            );
+        }
+        assert_eq!(s.doc.motion.pose(ids[2], 1.), Pose::identity());
+        assert_eq!(s.history.len(), n + 1);
+        let after = bytes(&s);
+        assert_eq!(crate::project::encode(&reopen(&s)).unwrap(), after);
+        s.undo();
+        assert_eq!(bytes(&s), original);
+        s.redo();
+        assert_eq!(bytes(&s), after);
+    }
+}

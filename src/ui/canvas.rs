@@ -2229,11 +2229,18 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                 let sy = dst.height() / start_box.height().max(1.0);
                 let f = if shift { sx.max(sy) } else { (sx + sy) * 0.5 };
                 for snap in orig.iter() {
+                    let Some(parent) = motion_frames.get(&(snap.layer,snap.id)).copied() else { continue; };
+                    let Some(inverse) = parent.invert() else { continue; };
                     let Some(target) = crate::motion::target(&studio.doc, snap.layer, snap.id)
                     else {
                         continue;
                     };
                     let mut pose = studio.doc.motion.pose(target.id, studio.playhead);
+                    let local_center = target.bounds.center() + Pt::new(pose.dx,pose.dy);
+                    let world_center = map_point(parent,local_center);
+                    let new_center = start_box.min + (world_center-start_box.min)*f;
+                    let delta = map_point(inverse,new_center)-local_center;
+                    pose.dx += delta.x;pose.dy += delta.y;
                     pose.scale = (pose.scale * f).clamp(0.05, 32.0);
                     studio.pose_drag.insert(target.id, pose);
                 }
@@ -2310,12 +2317,22 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
             if studio.persona == Persona::Motion {
                 studio.playing = false;
                 for snap in orig.iter() {
+                    let Some(parent) = motion_frames.get(&(snap.layer,snap.id)).copied() else { continue; };
+                    let Some(inverse) = parent.invert() else { continue; };
                     let Some(target) = crate::motion::target(&studio.doc, snap.layer, snap.id)
                     else {
                         continue;
                     };
                     let mut pose = studio.doc.motion.pose(target.id, studio.playhead);
-                    pose.rotation += ang;
+                    let local_center = map_point(inverse,*center);
+                    let ray = Pt::new(start_angle.cos(),start_angle.sin());
+                    let start = map_point(inverse,*center+ray)-local_center;
+                    let end = map_point(inverse,*center+ray.rotate(ang))-local_center;
+                    let local_angle = end.y.atan2(end.x)-start.y.atan2(start.x);
+                    let before = target.bounds.center()+Pt::new(pose.dx,pose.dy);
+                    let delta = before.rotate_about(local_center,local_angle)-before;
+                    pose.dx += delta.x;pose.dy += delta.y;
+                    pose.rotation += local_angle;
                     studio.pose_drag.insert(target.id, pose);
                 }
             } else {
