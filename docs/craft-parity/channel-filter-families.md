@@ -6,4 +6,6 @@ Scalar and RGBA evaluation share the spatial kernels. Scalar processing carries 
 
 The same worker owns preview and full Apply. Cancellation is checked inside parallel processing and between blur batches; a cancelled result cannot publish. Target, allocation, selection and document guards remain. Apply uses the existing scalar command; Cancel and Original view do not change the document. The archive remains the existing full-depth scalar representation.
 
+Remove Background remains a layer operation. Selecting saved alpha or Quick Mask disables it and invalidates a captured RGB removal result, preventing a scalar edit from falling through to underlying artwork.
+
 This source is unqualified pending the current affected group, genuine desktop workflow and independent sample inspection. The checks cover all choices, explicit spatial/tonal equations, strength and selection, working-buffer release, native fields, one Undo and reopen. The larger Craft filter catalog, advanced filter options, calculations, color/spot channels, interchange and full parity remain open. No app-version, schema or dependency change is involved. Michael's current QA window stays open and untouched.
