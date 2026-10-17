@@ -3334,8 +3334,8 @@ fn draw_overlays(
         } else {
             studio
                 .primary()
-                .and_then(|(li, id)| studio.doc.find_shape(li, id))
-                .and_then(|s| {
+                .and_then(|(li, id)| studio.doc.find_shape(li, id).map(|s| (li, s)))
+                .and_then(|(li, s)| {
                     let gradient = if studio.fill_active {
                         s.style.fill.gradient()
                     } else {
