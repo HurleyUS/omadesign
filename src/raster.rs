@@ -223,78 +223,128 @@ impl Kind {
     /// Args: filter kind. Returns its immutable settings catalog.
     pub fn parameters(self) -> &'static [Parameter] {
         match self {
-            Self::ChromaKey => &[
-                Parameter::new(0, "Similarity", 0.0, 0.8, 0.01),
-                Parameter::new(1, "Falloff", 0.0, 0.8, 0.01),
-                Parameter::new(2, "Hardness", 0.0, 1.0, 0.01),
-                Parameter::new(3, "Spill cleanup", 0.0, 1.0, 0.01),
-            ],
-            Self::BrightnessContrast => &[
-                Parameter::new(0, "Brightness", -1.0, 1.0, 0.01),
-                Parameter::new(1, "Contrast", -1.0, 1.0, 0.01),
-            ],
-            Self::Exposure => &[
-                Parameter::new(0, "Exposure (EV)", -5.0, 5.0, 0.1),
-                Parameter::new(1, "Gamma", 0.1, 4.0, 0.01),
-            ],
-            Self::Levels => &[
-                Parameter::new(0, "Black point", 0.0, 0.99, 0.01),
-                Parameter::new(1, "White point", 0.01, 1.0, 0.01),
-                Parameter::new(2, "Gamma", 0.1, 4.0, 0.01),
-            ],
-            Self::HueSaturation => &[
-                Parameter::new(0, "Hue (°)", -180.0, 180.0, 1.0),
-                Parameter::new(1, "Saturation", -1.0, 1.0, 0.01),
-                Parameter::new(2, "Lightness", -1.0, 1.0, 0.01),
-            ],
-            Self::Vibrance => &[Parameter::new(0, "Vibrance", -1.0, 2.0, 0.01)],
-            Self::ColorBalance => &[
-                Parameter::new(0, "Cyan / red", -1.0, 1.0, 0.01),
-                Parameter::new(1, "Magenta / green", -1.0, 1.0, 0.01),
-                Parameter::new(2, "Yellow / blue", -1.0, 1.0, 0.01),
-            ],
-            Self::Temperature => &[
-                Parameter::new(0, "Cool / warm", -1.0, 1.0, 0.01),
-                Parameter::new(1, "Green / magenta", -1.0, 1.0, 0.01),
-            ],
-            Self::Threshold | Self::AlphaThreshold | Self::Solarize => {
-                &[Parameter::new(0, "Threshold", 0.0, 1.0, 0.01)]
+            Self::ChromaKey => {
+                const {
+                    &[
+                        Parameter::new(0, "Similarity", 0.0, 0.8, 0.01),
+                        Parameter::new(1, "Falloff", 0.0, 0.8, 0.01),
+                        Parameter::new(2, "Hardness", 0.0, 1.0, 0.01),
+                        Parameter::new(3, "Spill cleanup", 0.0, 1.0, 0.01),
+                    ]
+                }
             }
-            Self::Posterize => &[Parameter::new(0, "Levels", 2.0, 32.0, 1.0)],
+            Self::BrightnessContrast => {
+                const {
+                    &[
+                        Parameter::new(0, "Brightness", -1.0, 1.0, 0.01),
+                        Parameter::new(1, "Contrast", -1.0, 1.0, 0.01),
+                    ]
+                }
+            }
+            Self::Exposure => {
+                const {
+                    &[
+                        Parameter::new(0, "Exposure (EV)", -5.0, 5.0, 0.1),
+                        Parameter::new(1, "Gamma", 0.1, 4.0, 0.01),
+                    ]
+                }
+            }
+            Self::Levels => {
+                const {
+                    &[
+                        Parameter::new(0, "Black point", 0.0, 0.99, 0.01),
+                        Parameter::new(1, "White point", 0.01, 1.0, 0.01),
+                        Parameter::new(2, "Gamma", 0.1, 4.0, 0.01),
+                    ]
+                }
+            }
+            Self::HueSaturation => {
+                const {
+                    &[
+                        Parameter::new(0, "Hue (°)", -180.0, 180.0, 1.0),
+                        Parameter::new(1, "Saturation", -1.0, 1.0, 0.01),
+                        Parameter::new(2, "Lightness", -1.0, 1.0, 0.01),
+                    ]
+                }
+            }
+            Self::Vibrance => const { &[Parameter::new(0, "Vibrance", -1.0, 2.0, 0.01)] },
+            Self::ColorBalance => {
+                const {
+                    &[
+                        Parameter::new(0, "Cyan / red", -1.0, 1.0, 0.01),
+                        Parameter::new(1, "Magenta / green", -1.0, 1.0, 0.01),
+                        Parameter::new(2, "Yellow / blue", -1.0, 1.0, 0.01),
+                    ]
+                }
+            }
+            Self::Temperature => {
+                const {
+                    &[
+                        Parameter::new(0, "Cool / warm", -1.0, 1.0, 0.01),
+                        Parameter::new(1, "Green / magenta", -1.0, 1.0, 0.01),
+                    ]
+                }
+            }
+            Self::Threshold | Self::AlphaThreshold | Self::Solarize => {
+                const { &[Parameter::new(0, "Threshold", 0.0, 1.0, 0.01)] }
+            }
+            Self::Posterize => const { &[Parameter::new(0, "Levels", 2.0, 32.0, 1.0)] },
             Self::GaussianBlur | Self::FeatherAlpha => {
-                &[Parameter::new(0, "Radius (px)", 0.0, 100.0, 0.1)]
+                const { &[Parameter::new(0, "Radius (px)", 0.0, 100.0, 0.1)] }
             }
             Self::GrowAlpha | Self::ShrinkAlpha => {
-                &[Parameter::new(0, "Radius (px)", 1.0, 20.0, 1.0)]
+                const { &[Parameter::new(0, "Radius (px)", 1.0, 20.0, 1.0)] }
             }
-            Self::MotionBlur => &[
-                Parameter::new(0, "Distance (px)", 1.0, 100.0, 0.1),
-                Parameter::new(1, "Angle (°)", -180.0, 180.0, 1.0),
-            ],
-            Self::Sharpen => &[Parameter::new(0, "Amount", 0.0, 2.0, 0.01)],
-            Self::UnsharpMask => &[
-                Parameter::new(0, "Radius (px)", 0.1, 50.0, 0.1),
-                Parameter::new(1, "Amount", 0.0, 5.0, 0.01),
-                Parameter::new(2, "Threshold", 0.0, 0.3, 0.01),
-            ],
-            Self::EdgeDetect | Self::Emboss => &[Parameter::new(0, "Amount", 0.1, 5.0, 0.01)],
+            Self::MotionBlur => {
+                const {
+                    &[
+                        Parameter::new(0, "Distance (px)", 1.0, 100.0, 0.1),
+                        Parameter::new(1, "Angle (°)", -180.0, 180.0, 1.0),
+                    ]
+                }
+            }
+            Self::Sharpen => const { &[Parameter::new(0, "Amount", 0.0, 2.0, 0.01)] },
+            Self::UnsharpMask => {
+                const {
+                    &[
+                        Parameter::new(0, "Radius (px)", 0.1, 50.0, 0.1),
+                        Parameter::new(1, "Amount", 0.0, 5.0, 0.01),
+                        Parameter::new(2, "Threshold", 0.0, 0.3, 0.01),
+                    ]
+                }
+            }
+            Self::EdgeDetect | Self::Emboss => {
+                const { &[Parameter::new(0, "Amount", 0.1, 5.0, 0.01)] }
+            }
             Self::Pixelate | Self::Halftone => {
-                &[Parameter::new(0, "Cell size (px)", 2.0, 100.0, 1.0)]
+                const { &[Parameter::new(0, "Cell size (px)", 2.0, 100.0, 1.0)] }
             }
-            Self::Noise => &[Parameter::new(0, "Grain amount", 0.0, 1.0, 0.01)],
-            Self::Vignette => &[
-                Parameter::new(0, "Darkness", 0.0, 1.0, 0.01),
-                Parameter::new(1, "Inner radius", 0.0, 1.2, 0.01),
-            ],
-            Self::Swirl => &[
-                Parameter::new(0, "Twist (°)", -720.0, 720.0, 1.0),
-                Parameter::new(1, "Radius", 0.05, 1.5, 0.01),
-            ],
-            Self::Ripple => &[
-                Parameter::new(0, "Amplitude (px)", 0.0, 50.0, 0.1),
-                Parameter::new(1, "Wavelength (px)", 4.0, 200.0, 0.1),
-            ],
-            Self::Grayscale | Self::Sepia | Self::Invert => &[],
+            Self::Noise => const { &[Parameter::new(0, "Grain amount", 0.0, 1.0, 0.01)] },
+            Self::Vignette => {
+                const {
+                    &[
+                        Parameter::new(0, "Darkness", 0.0, 1.0, 0.01),
+                        Parameter::new(1, "Inner radius", 0.0, 1.2, 0.01),
+                    ]
+                }
+            }
+            Self::Swirl => {
+                const {
+                    &[
+                        Parameter::new(0, "Twist (°)", -720.0, 720.0, 1.0),
+                        Parameter::new(1, "Radius", 0.05, 1.5, 0.01),
+                    ]
+                }
+            }
+            Self::Ripple => {
+                const {
+                    &[
+                        Parameter::new(0, "Amplitude (px)", 0.0, 50.0, 0.1),
+                        Parameter::new(1, "Wavelength (px)", 4.0, 200.0, 0.1),
+                    ]
+                }
+            }
+            Self::Grayscale | Self::Sepia | Self::Invert => const { &[] },
         }
     }
 }
