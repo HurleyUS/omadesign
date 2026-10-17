@@ -94,11 +94,11 @@ impl Seat {
         self.frame(studio, vec![]);
         if kind.category() == "Color & tone" {
             self.click(studio, "Image");
-            self.click(studio, "Adjustments");
+            self.click(studio, "Adjustments ⏵");
         } else {
             self.click(studio, "Filter");
         }
-        self.click(studio, kind.category());
+        self.click(studio, &format!("{} ⏵", kind.category()));
         let ctx = self.ctx.clone();
         keys::tab_to(&ctx, kind.name(), |events| self.frame(studio, events));
         self.frame(studio, keys::key(Key::Enter, Modifiers::NONE));
@@ -300,8 +300,8 @@ fn craft_pixel_command_menus_invalid_targets_disable_commands_without_opening_or
         let mut seat = Seat::new();
         seat.frame(&mut studio, vec![]);
         seat.click(&mut studio, "Image");
-        seat.click(&mut studio, "Adjustments");
-        assert!(keys::named(&seat.output, "Color & tone").1.is_disabled());
+        seat.click(&mut studio, "Adjustments ⏵");
+        assert!(keys::named(&seat.output, "Color & tone ⏵").1.is_disabled());
         assert!(keys::named(&seat.output, "Curves…").1.is_disabled());
         assert!(!channel_adjustment::is_open(&seat.ctx) && !raster::is_open(&seat.ctx));
         assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
