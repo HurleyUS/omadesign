@@ -98,7 +98,11 @@ fn launch(ctx: &egui::Context, session: &mut Session, apply: bool) {
 /// Collect the real worker before drawing the canvas and retire stale sources.
 /// Args: context and editor. Returns nothing; a late or cancelled result cannot mutate a new owner.
 pub(super) fn tick(ctx: &egui::Context, studio: &mut Studio) {
-    let Some(mut session) = ctx.data_mut(|d| d.remove_temp::<Session>(id())) else {
+    let Some(mut session) = ctx.data_mut(|d| {
+        let session = d.get_temp::<Session>(id());
+        d.remove::<Session>(id());
+        session
+    }) else {
         return;
     };
     if !session.source.current(studio) {
@@ -561,7 +565,7 @@ fn controls(ui: &mut Ui, session: &mut Session) -> bool {
             }
         });
         if let Err(error) = session.curve.prepare() {
-            welcome::control_error(ui, &[&fields.0.0.response, &fields.1.0.response], error);
+            welcome::control_error(ui, &[&fields.0.0.response, &fields.1.0.response], &error);
         }
         if let Some(error) = session
             .error
@@ -578,7 +582,11 @@ fn controls(ui: &mut Ui, session: &mut Session) -> bool {
 /// Draw native Curves controls and commit only a completed full-resolution Apply.
 /// Args: context and current editor. Returns nothing; cancel and preview never add history.
 pub(super) fn show(ctx: &egui::Context, studio: &mut Studio) {
-    let Some(mut session) = ctx.data_mut(|d| d.remove_temp::<Session>(id())) else {
+    let Some(mut session) = ctx.data_mut(|d| {
+        let session = d.get_temp::<Session>(id());
+        d.remove::<Session>(id());
+        session
+    }) else {
         return;
     };
     if !session.source.current(studio) {
