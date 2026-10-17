@@ -28,6 +28,39 @@ fn matching(run: &TypeRun, from: &[Request]) -> Result<bool, String> {
         .any(|u| from.contains(&u.request)))
 }
 impl Studio {
+    /// Capture a read-only dialog owner without requiring a selected font or writable story.
+    /// Args: none. Returns the current document, selection and draft owner, or a busy error.
+    pub(crate) fn capture_font_dialog(&self) -> Result<Target, String> {
+        if !self.type_commands_available() {
+            return Err("Finish the current operation before finding fonts".into());
+        }
+        Ok(Target {
+            owner: self.type_command_snapshot(TextScope::Document, vec![]),
+            from: vec![],
+            find: true,
+        })
+    }
+    /// Collect installed and document font bytes for the native family/style picker.
+    /// Args: none. Returns a read-only catalog without changing artwork or history.
+    pub(crate) fn font_catalog(&self) -> crate::text::font_catalog::Catalog {
+        let references = self
+            .doc
+            .layers
+            .iter()
+            .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+            .filter_map(|s| {
+                if let Geom::Text(run) = &s.geom {
+                    Some(
+                        std::iter::once(run.font.clone())
+                            .chain(run.spans.iter().filter_map(|s| s.font.clone())),
+                    )
+                } else {
+                    None
+                }
+            })
+            .flatten();
+        crate::text::font_catalog::Catalog::new(references)
+    }
     /// List authored font usage, including hidden and locked stories, without editing or substituting names.
     /// Args: none. Returns rows grouped by available family/style/version or exact unavailable request.
     pub(crate) fn font_usage(&self) -> Result<Vec<Usage>, String> {
@@ -57,10 +90,11 @@ impl Studio {
                 }
             }
         }
+        let catalog = self.font_catalog();
         let mut rows: BTreeMap<String, Usage> = BTreeMap::new();
         let mut characters: BTreeMap<String, (String, BTreeSet<char>)> = BTreeMap::new();
         for (request, (fallback, runs, stories, chars)) in found {
-            let info = font_inventory::describe(&request, &fallback, &chars);
+            let info = font_inventory::describe_with(&catalog, &request, &fallback, &chars);
             let key = if info.status == Status::Exact {
                 info.identity.clone().unwrap()
             } else {
@@ -91,9 +125,18 @@ impl Studio {
         for row in rows.values_mut() {
             let (fallback, chars) = characters.get(&row.key).unwrap();
             row.info.missing_glyphs =
-                font_inventory::describe(&row.from[0], fallback, chars).missing_glyphs;
+                font_inventory::describe_with(&catalog, &row.from[0], fallback, chars)
+                    .missing_glyphs;
         }
-        Ok(rows.into_values().collect())
+        let mut rows: Vec<_> = rows.into_values().collect();
+        rows.sort_by_cached_key(|r| {
+            (
+                r.info.family.to_lowercase(),
+                r.info.style.to_lowercase(),
+                r.info.version.clone(),
+            )
+        });
+        Ok(rows)
     }
     /// Capture only stories using the chosen source font; unrelated locked text is not a destination.
     /// Args: selection/document scope and the row's actual authored requests. Returns an ordinary stale-checked Type target.
@@ -152,9 +195,10 @@ impl Studio {
     pub(crate) fn font_target_current(&self, target: &Target) -> bool {
         if target.find {
             self.type_command_owner_current(&target.owner)
-                && self
-                    .font_find_hits(&target.from)
-                    .is_ok_and(|hits| hits == target.owner.hits)
+                && (target.from.is_empty()
+                    || self
+                        .font_find_hits(&target.from)
+                        .is_ok_and(|hits| hits == target.owner.hits))
         } else {
             self.type_command_current(&target.owner)
         }

@@ -33,7 +33,7 @@ pub(crate) struct Info {
     pub missing_glyphs: usize,
 }
 
-fn name(face: &rustybuzz::ttf_parser::Face<'_>, ids: &[u16]) -> Option<String> {
+pub(super) fn name(face: &rustybuzz::ttf_parser::Face<'_>, ids: &[u16]) -> Option<String> {
     ids.iter().find_map(|id| {
         face.names()
             .into_iter()
@@ -43,7 +43,7 @@ fn name(face: &rustybuzz::ttf_parser::Face<'_>, ids: &[u16]) -> Option<String> {
             .find(|n| !n.is_empty())
     })
 }
-fn metadata(
+pub(super) fn metadata(
     data: &[u8],
     index: u32,
     chars: &BTreeSet<char>,
@@ -89,6 +89,15 @@ fn family_query(family: &str) -> usvg::fontdb::Family<'_> {
 /// Args: authored request, the run's existing fallback reference and unique text characters.
 /// Returns real font names, version, substitution status and missing-glyph count.
 pub(crate) fn describe(request: &Request, fallback: &str, chars: &BTreeSet<char>) -> Info {
+    let catalog = super::font_catalog::Catalog::new([fallback.to_owned()]);
+    describe_with(&catalog, request, fallback, chars)
+}
+pub(crate) fn describe_with(
+    catalog: &super::font_catalog::Catalog,
+    request: &Request,
+    fallback: &str,
+    chars: &BTreeSet<char>,
+) -> Info {
     let absent = |family: String, style: String| {
         let resolved = stored(fallback, chars);
         Info {
@@ -98,7 +107,15 @@ pub(crate) fn describe(request: &Request, fallback: &str, chars: &BTreeSet<char>
             version: None,
             status: Status::Missing,
             resolved: resolved.as_ref().map(|(f, s, _, _)| format!("{f} {s}")),
-            missing_glyphs: resolved.map_or(chars.len(), |(_, _, _, n)| n),
+            missing_glyphs: resolved.map_or_else(
+                || {
+                    chars
+                        .iter()
+                        .filter(|c| !c.is_control() && !c.is_whitespace())
+                        .count()
+                },
+                |(_, _, _, n)| n,
+            ),
         }
     };
     match request {
@@ -137,20 +154,19 @@ pub(crate) fn describe(request: &Request, fallback: &str, chars: &BTreeSet<char>
             weight,
             slant,
         } => {
-            let options = svg_type::options();
+            let db = &catalog.db;
             let style = match slant {
                 1 => usvg::fontdb::Style::Italic,
                 2 => usvg::fontdb::Style::Oblique,
                 _ => usvg::fontdb::Style::Normal,
             };
-            if let Some(id) = options.fontdb.query(&usvg::fontdb::Query {
+            if let Some(id) = db.query(&usvg::fontdb::Query {
                 families: &[family_query(family)],
                 weight: usvg::fontdb::Weight(*weight),
                 style,
                 ..Default::default()
-            }) && let Some(info) = options.fontdb.face(id)
-                && let Some((resolved_family, resolved_style, version, missing_glyphs)) = options
-                    .fontdb
+            }) && let Some(info) = db.face(id)
+                && let Some((resolved_family, resolved_style, version, missing_glyphs)) = db
                     .with_face_data(id, |data, index| {
                         metadata(data, index, chars).map(|m| {
                             (

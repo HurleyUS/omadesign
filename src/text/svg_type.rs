@@ -760,12 +760,16 @@ fn write_nodes(
 /// Share SVG font selection and external resource restrictions.
 /// Args: none. Returns options using one installed-font database and cached native font bytes.
 pub(crate) fn options() -> usvg::Options<'static> {
-    static DB: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
+    static DB: OnceLock<std::sync::Mutex<Option<(u64, Arc<usvg::fontdb::Database>)>>> = OnceLock::new();
     let mut options = usvg::Options::default();
-    options.fontdb = DB
-        .get_or_init(|| {
+    let revision = super::INSTALLED_REVISION.load(std::sync::atomic::Ordering::Relaxed);
+    let mut cached = DB.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
+    if cached.as_ref().is_none_or(|(r, _)| *r != revision) {
             let mut db = usvg::fontdb::Database::new();
             db.load_system_fonts();
+            if let Some(fonts) = super::DYNAMIC_FONTS.get() && let Ok(fonts) = fonts.lock() {
+                for font in fonts.iter() { let _ = db.load_font_file(&font.path); }
+            }
             for generic in ["serif", "sans-serif", "monospace", "cursive", "fantasy"] {
                 if let Ok(output) = std::process::Command::new("fc-match")
                     .args(["-f", "%{family[0]}", generic])
@@ -788,9 +792,10 @@ pub(crate) fn options() -> usvg::Options<'static> {
                     }
                 }
             }
-            Arc::new(db)
-        })
-        .clone();
+            *cached = Some((revision, Arc::new(db)));
+    }
+    options.fontdb = cached.as_ref().unwrap().1.clone();
+    drop(cached);
     let selector = usvg::FontResolver::default_font_selector();
     options.font_resolver.select_font = Box::new(move |font, db| {
         let requested = font.families().iter().any(|family| match family {
