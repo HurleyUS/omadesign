@@ -541,7 +541,7 @@ mod tests {
         }
         for y in 40..50 {
             for x in 20..30 {
-                mask[y * 100 + x] = 0;
+                mask[y * 100 + x] = 0.;
             }
         }
         let mut lines = outlines(&ctx, &mask, 100, 100, 1, false, "test");

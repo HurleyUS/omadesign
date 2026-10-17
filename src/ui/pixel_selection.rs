@@ -540,7 +540,7 @@ mod keyboard_tests {
         let coverage = studio.pixel_sel.as_ref().unwrap();
         assert!(
             coverage.iter().filter(|value| **value > 0.).count()
-                > before.iter().filter(|value| **value > 0).count()
+                > before.iter().filter(|value| **value > 0.).count()
         );
         assert_eq!(studio.doc.layers[layer].kind.pixels().unwrap().data, pixels);
     }
