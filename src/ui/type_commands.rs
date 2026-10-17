@@ -37,6 +37,38 @@ pub(super) fn is_open(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<Draft>(Id::new(ID)).is_some())
 }
 
+/// Return a closed punctuation dialog to its actual enabled canvas response.
+/// Args: current canvas UI, editor and native response. Returns no value; other modal/document owners retire the request.
+pub(super) fn restore_canvas_focus(ui: &Ui, studio: &Studio, canvas: &Response) {
+    let key = Id::new((ID, "return-focus"));
+    let Some(owner) = ui.ctx().data(|d| d.get_temp::<String>(key)) else {
+        return;
+    };
+    let retire = || ui.ctx().data_mut(|d| d.remove::<String>(key));
+    if owner != studio.swap_id
+        || studio.show_welcome
+        || studio.file_dialog_pending()
+        || studio.updates.freezing
+    {
+        retire();
+        return;
+    }
+    if let Some(modal) = ui.ctx().memory(|m| m.top_modal_layer()) {
+        if modal == egui::Modal::default_area(Id::new(ID)).layer() {
+            ui.ctx()
+                .request_discard("Finish closing punctuation before restoring canvas focus");
+            ui.ctx().request_repaint();
+        } else {
+            retire();
+        }
+        return;
+    }
+    if canvas.enabled() && ui.ctx().memory(|m| m.allows_interaction(canvas.layer_id)) {
+        canvas.request_focus();
+    }
+    retire();
+}
+
 /// Open the punctuation dialog without committing a live text draft.
 /// Args: actual UI context and editor. Returns no value; Cancel leaves content/history unchanged.
 fn open(ctx: &egui::Context, studio: &Studio) {
@@ -260,14 +292,8 @@ pub(super) fn show(ctx: &egui::Context, studio: &mut Studio) {
     }
     if cancel {
         ctx.data_mut(|d| d.remove::<Draft>(Id::new(ID)));
-        if draft.owner == studio.swap_id
-            && !studio.show_welcome
-            && !studio.file_dialog_pending()
-            && !studio.updates.freezing
-            && let Some(canvas) = ctx.read_response(Id::new("studio-canvas"))
-        {
-            canvas.request_focus();
-        }
+        ctx.data_mut(|d| d.insert_temp(Id::new((ID, "return-focus")), draft.owner));
+        ctx.request_discard("Finish the punctuation modal before the next canvas input");
         ctx.request_repaint();
     } else {
         ctx.data_mut(|d| d.insert_temp(Id::new(ID), draft));
