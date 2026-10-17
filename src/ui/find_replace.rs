@@ -323,7 +323,10 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
                             ),
                         ] {
                             if control(ui, owner.with(key), name, |ui| {
-                                ui.add_enabled(enabled, egui::Button::new(name))
+                                ui.add_enabled(
+                                    enabled,
+                                    egui::Button::new(name).wrap_mode(egui::TextWrapMode::Extend),
+                                )
                             })
                             .clicked()
                             {
@@ -331,7 +334,7 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
                             }
                         }
                         if control(ui, owner.with("close"), "Close Find and Replace", |ui| {
-                            ui.button("Close")
+                            ui.add(egui::Button::new("Close").wrap_mode(egui::TextWrapMode::Extend))
                         })
                         .clicked()
                         {

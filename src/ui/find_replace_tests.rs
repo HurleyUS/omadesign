@@ -68,6 +68,7 @@ struct Seat {
     ctx: egui::Context,
     time: f64,
     out: egui::FullOutput,
+    size: egui::Vec2,
 }
 impl Seat {
     fn new() -> Self {
@@ -79,6 +80,7 @@ impl Seat {
             ctx,
             time: 0.,
             out: Default::default(),
+            size: egui::vec2(1600., 1000.),
         }
     }
     fn frame(&mut self, s: &mut Studio, mut events: Vec<Event>) -> egui::FullOutput {
@@ -96,10 +98,7 @@ impl Seat {
         events.insert(0, Event::ModifiersChanged(modifiers));
         let mut out = self.ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    Pos2::ZERO,
-                    egui::vec2(1600., 1000.),
-                )),
+                screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, self.size)),
                 time: Some(self.time),
                 events,
                 ..Default::default()
@@ -296,4 +295,41 @@ fn craft_find_replace_native_shortcut_next_story_and_stale_owner_refusal() {
     seat.click(&mut s, "Close Find and Replace");
     assert!(!is_open(&seat.ctx));
     assert_eq!(wire(&s), before);
+}
+
+#[test]
+fn craft_find_replace_native_footer_keeps_single_line_buttons_when_the_window_narrows() {
+    let mut s = editor();
+    let mut seat = Seat::new();
+    let before = wire(&s);
+    seat.open(&mut s);
+    for width in [1600., 800., 420.] {
+        seat.size = egui::vec2(width, 700.);
+        for _ in 0..3 {
+            seat.frame(&mut s, vec![]);
+        }
+        let height = seat.ctx.global_style().spacing.interact_size.y as f64 + 4.;
+        for name in [
+            "Find next",
+            "Replace",
+            "Replace all",
+            "Select match",
+            "Close Find and Replace",
+        ] {
+            let (_, node) = keys::named(&seat.out, name);
+            let b = node.bounds().unwrap();
+            assert!(
+                b.y1 - b.y0 <= height,
+                "{width}px {name} squeezed to multiple lines: {b:?}"
+            );
+            assert!(
+                b.x0 >= 0. && b.x1 <= width as f64,
+                "{width}px {name} outside actual viewport: {b:?}"
+            );
+        }
+        assert_eq!(wire(&s), before);
+        assert_eq!(s.history.len(), 0);
+    }
+    seat.invoke(&mut s, "Close Find and Replace");
+    assert!(!is_open(&seat.ctx));
 }
