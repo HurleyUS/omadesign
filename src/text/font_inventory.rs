@@ -5,6 +5,10 @@ use std::{collections::BTreeSet, ops::Range};
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Request {
     Stored(String),
+    Variable {
+        source: Box<Request>,
+        coordinates: Vec<([u8; 4], u32)>,
+    },
     Named {
         family: String,
         weight: u16,
@@ -123,6 +127,29 @@ pub(crate) fn describe_with(
         }
     };
     match request {
+        Request::Variable {
+            source,
+            coordinates,
+        } => {
+            let mut info = describe_with(catalog, source, fallback, chars);
+            let shown = coordinates
+                .iter()
+                .map(|(tag, value)| {
+                    format!(
+                        "{} {}",
+                        String::from_utf8_lossy(tag),
+                        f32::from_bits(*value)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            info.style = format!("{} ({shown})", info.style);
+            info.identity = info.identity.map(|id| format!("{id}:{coordinates:?}"));
+            if let Some(resolved) = &mut info.resolved {
+                *resolved = format!("{resolved} ({shown})");
+            }
+            info
+        }
         Request::Stored(id) => {
             if present(id)
                 && let Some((family, style, version, missing_glyphs)) = stored(id, chars)
@@ -231,6 +258,17 @@ fn requested_style(weight: u16, slant: u8) -> String {
         }
     )
 }
+fn native_request(font: &str, axes: &super::variations::FontVariations) -> Request {
+    let source = Request::Stored(font.into());
+    if axes.is_empty() {
+        source
+    } else {
+        Request::Variable {
+            source: Box::new(source),
+            coordinates: axes.key(),
+        }
+    }
+}
 fn first_family(value: &str) -> String {
     let mut quote = None;
     let mut escaped = false;
@@ -326,10 +364,11 @@ pub(crate) fn uses(run: &TypeRun) -> Result<Vec<Use>, String> {
         }
         last = span.end;
     }
-    let base = Request::Stored(run.font.clone());
+    let base = native_request(&run.font, &run.font_variations);
     let mut source = vec![];
     if let Some(svg) = &run.svg_text
         && run.font == svg.base_font
+        && run.font_variations.is_empty()
     {
         fn walk(
             node: &svg_type::TextNode,
@@ -380,7 +419,7 @@ pub(crate) fn uses(run: &TypeRun) -> Result<Vec<Use>, String> {
         let request = run
             .svg_text
             .as_ref()
-            .filter(|svg| run.font == svg.base_font)
+            .filter(|svg| run.font == svg.base_font && run.font_variations.is_empty())
             .and_then(|svg| match &svg.root {
                 svg_type::TextNode::Element { attributes, .. } => Some(named(attributes, &base)),
                 _ => None,
@@ -419,8 +458,13 @@ pub(crate) fn uses(run: &TypeRun) -> Result<Vec<Use>, String> {
                 .spans
                 .get(span_at)
                 .filter(|s| s.start <= range.start && range.start < s.end)
-                .and_then(|s| s.font.clone())
-                .map(Request::Stored)
+                .filter(|s| s.font.is_some() || s.font_variations.is_some())
+                .map(|s| {
+                    native_request(
+                        s.font.as_deref().unwrap_or(&run.font),
+                        &super::variations::at(run, range.start),
+                    )
+                })
                 .or_else(|| {
                     source
                         .get(source_at)
@@ -447,13 +491,29 @@ pub(crate) fn replace(run: &mut TypeRun, from: &[Request], to: &str) -> Result<b
         return Ok(false);
     }
     let before = run.clone();
+    fn has_axis_css(node: &svg_type::TextNode) -> bool {
+        match node {
+            svg_type::TextNode::Characters { .. } => false,
+            svg_type::TextNode::Element { attributes, children, .. } => {
+                attributes.get("font-variation-settings")
+                    .is_some_and(|value| !matches!(value.trim(), "" | "normal"))
+                    || children.iter().any(has_axis_css)
+            }
+        }
+    }
+    let reset_svg = run.svg_text.as_ref().is_some_and(|svg| {
+        !run.font_variations.is_empty() || has_axis_css(&svg.root)
+    });
     if run
         .svg_text
         .as_ref()
         .is_none_or(|svg| run.font != svg.base_font)
-        && from.contains(&Request::Stored(run.font.clone()))
+        && from.contains(&native_request(&run.font, &run.font_variations))
+        && !run.spans.iter().any(|s| s.font_variations.is_some())
+        && !reset_svg
     {
         run.font = to.into();
+        run.font_variations = Default::default();
         for span in &mut run.spans {
             if span
                 .font
@@ -461,12 +521,14 @@ pub(crate) fn replace(run: &mut TypeRun, from: &[Request], to: &str) -> Result<b
                 .is_some_and(|f| from.contains(&Request::Stored(f.clone())))
             {
                 span.font = Some(to.into());
+                span.font_variations = None;
             }
         }
     } else {
         let count = run.content.chars().count();
         if count == 0 {
             run.font = to.into();
+            run.font_variations = Default::default();
         } else {
             let original = run.character_style_runs(0, count);
             let mut span_at = 0;
@@ -480,6 +542,7 @@ pub(crate) fn replace(run: &mut TypeRun, from: &[Request], to: &str) -> Result<b
                 span.end = usage.range.end;
                 if from.contains(&usage.request) && usage.request != Request::Stored(to.into()) {
                     span.font = Some(to.into());
+                    span.font_variations = reset_svg.then(Default::default);
                 }
                 changed.push(span);
             }

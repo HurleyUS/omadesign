@@ -82,7 +82,7 @@ pub fn compose(run: &TypeRun) -> Arc<Vec<LayoutLine>> {
     let bytes = resolve_path(run).and_then(|p| font_bytes(&p));
     let face = bytes
         .as_ref()
-        .and_then(|b| rustybuzz::Face::from_slice(b, 0));
+        .and_then(|b| super::variations::shaping_face(b, &run.font_variations));
     let mut lines:Vec<LayoutLine> = Vec::new();
     let mut base = 0;
 
@@ -385,7 +385,7 @@ fn shape_line(
     let count = text.chars().count();
     let mut cuts = vec![0, count];
     for span in &run.spans {
-        if span.font.is_some() || span.px.is_some() {
+        if span.font.is_some() || span.px.is_some() || span.font_variations.is_some() {
             cuts.extend([
                 span.start.saturating_sub(start).min(count),
                 span.end.saturating_sub(start).min(count),
@@ -394,10 +394,11 @@ fn shape_line(
     }
     cuts.sort_unstable();
     cuts.dedup();
-    cuts.retain(|&at|at==0 || at==count || {let a=run.character_style(start+at-1);let b=run.character_style(start+at);(a.font.unwrap_or_else(||run.font.clone()),a.px.unwrap_or(run.px))!=(b.font.unwrap_or_else(||run.font.clone()),b.px.unwrap_or(run.px))});
+    cuts.retain(|&at|at==0 || at==count || {let a=run.character_style(start+at-1);let b=run.character_style(start+at);(a.font.unwrap_or_else(||run.font.clone()),a.px.unwrap_or(run.px),super::variations::at(run,start+at-1))!=(b.font.unwrap_or_else(||run.font.clone()),b.px.unwrap_or(run.px),super::variations::at(run,start+at))});
     if cuts.len() <= 2
         && run.character_style(start).font.is_none()
         && run.character_style(start).px.is_none()
+        && run.spans.iter().find(|s| s.start <= start && start < s.end).is_none_or(|s| s.font_variations.is_none())
     {
         return shape_line_uniform(run, face, text, start, hyphen);
     }
@@ -407,12 +408,13 @@ fn shape_line(
         let style = run.character_style(start + pair[0]);
         let mut part = run.clone();
         part.font = style.font.unwrap_or_else(|| run.font.clone());
+        part.font_variations = super::variations::at(run, start + pair[0]);
         part.px = style.px.unwrap_or(run.px);
         part.align=TextAlign::Start;part.paragraphs=vec![ParagraphStyle{start:paragraph_style(run,start).start,word_spacing:[100.;3],..Default::default()}];
         let bytes = resolve_path(&part).and_then(|path| font_bytes(&path));
         let face = bytes
             .as_ref()
-            .and_then(|bytes| rustybuzz::Face::from_slice(bytes, 0));
+            .and_then(|bytes| super::variations::shaping_face(bytes, &part.font_variations));
         let fragment = &text[char_to_byte(text, pair[0])..char_to_byte(text, pair[1])];
         let mut next = shape_line_uniform(
             &part,
@@ -590,7 +592,7 @@ pub(super) fn glyph_outline(run: &TypeRun, glyph: &LayoutGlyph) -> Option<(ab_gl
     let mut face_run = run.clone();
     face_run.font = style.font.unwrap_or_else(|| run.font.clone());
     let bytes = resolve_path(&face_run).and_then(|p| font_bytes(&p))?;
-    let font = ab_glyph::FontRef::try_from_slice(&bytes).ok()?;
+    let font = super::variations::outline_face(&bytes, &super::variations::at(run, glyph.cluster))?;
     let outline = font.outline(GlyphId(glyph.id))?;
     let scale = style.px.unwrap_or(run.px).max(1.) / font.units_per_em().unwrap_or(1000.);
     Some((outline, scale))

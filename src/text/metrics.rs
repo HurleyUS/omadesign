@@ -26,9 +26,9 @@ pub fn character_metrics(run: &TypeRun, index: usize) -> CharSpan {
 /// Side-bearing profiles in em units, sampled at common horizontal bands.
 /// Reused across font sizes and repeated pairs during interactive composition.
 fn profile(run: &TypeRun, id: u16) -> Arc<Vec<Option<(f32, f32)>>> {
-    type Cache = HashMap<(String, u16), Arc<Vec<Option<(f32, f32)>>>>;
+    type Cache = HashMap<(String, Vec<([u8;4],u32)>, u64, u16), Arc<Vec<Option<(f32, f32)>>>>;
     static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
-    let key = (run.font.clone(), id);
+    let key = (run.font.clone(), run.font_variations.key(), FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed), id);
     let cache = CACHE.get_or_init(Default::default);
     if let Some(value) = cache.lock().unwrap().get(&key).cloned() {
         return value;
@@ -36,7 +36,7 @@ fn profile(run: &TypeRun, id: u16) -> Arc<Vec<Option<(f32, f32)>>> {
     let contours = resolve_path(run)
         .and_then(|p| font_bytes(&p))
         .and_then(|bytes| {
-            let font = ab_glyph::FontRef::try_from_slice(&bytes).ok()?;
+            let font = super::variations::outline_face(&bytes, &run.font_variations)?;
             let outline = font.outline(GlyphId(id))?;
             let em_scale = 1. / font.units_per_em().unwrap_or(1000.);
             Some(flatten_outline(
@@ -80,11 +80,12 @@ pub(super) fn optical_adjustment(
     right: u16,
     right_scale: f32,
 ) -> f32 {
-    type PairKey = (String, u16, u16, u32, u32, u32);
+    type PairKey = (String, Vec<([u8;4],u32)>, u64, u16, u16, u32, u32, u32);
     static PAIRS: OnceLock<Mutex<HashMap<PairKey, f32>>> = OnceLock::new();
     let px = run.px.max(1.);
     let key = (
         run.font.clone(),
+        run.font_variations.key(), FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed),
         left.id,
         right,
         (left_untracked_advance / px).to_bits(),

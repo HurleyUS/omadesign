@@ -832,7 +832,8 @@ impl<'a> Html<'a> {
             );
         }
         if let Geom::Text(run) = &shape.geom {
-            if run.on_path.is_some()
+            if !run.font_variations.is_empty() || run.spans.iter().any(|s| s.font_variations.as_ref().is_some_and(|v| !v.is_empty()))
+                || run.on_path.is_some()
                 || run.frame.is_some()
                 || !run.manual_kern.is_empty()
                 || run.spans.iter().any(|s| {

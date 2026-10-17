@@ -2682,5 +2682,261 @@
       ]
     },
     "required": 3
+  },
+  {
+    "name": "native axes34 /@entities/600/geom/Text/font_variations",
+    "path": "/@entities/600/geom/Text/font_variations",
+    "cell": {
+      "Value": [
+        [
+          [
+            119,
+            103,
+            104,
+            116
+          ],
+          700
+        ]
+      ]
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 empty /@entities/600/geom/Text/font_variations",
+    "path": "/@entities/600/geom/Text/font_variations",
+    "cell": "List",
+    "error": true
+  },
+  {
+    "name": "native axes34 member /@entities/600/geom/Text/font_variations",
+    "path": "/@entities/600/geom/Text/font_variations/0/1",
+    "cell": {
+      "Value": 700
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 /@entities/600/geom/Text/spans/0/font_variations",
+    "path": "/@entities/600/geom/Text/spans/0/font_variations",
+    "cell": {
+      "Value": [
+        [
+          [
+            119,
+            103,
+            104,
+            116
+          ],
+          700
+        ]
+      ]
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 empty /@entities/600/geom/Text/spans/0/font_variations",
+    "path": "/@entities/600/geom/Text/spans/0/font_variations",
+    "cell": "List",
+    "error": true
+  },
+  {
+    "name": "native axes34 member /@entities/600/geom/Text/spans/0/font_variations",
+    "path": "/@entities/600/geom/Text/spans/0/font_variations/0/1",
+    "cell": {
+      "Value": 700
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 /layers/0/kind/Vector/shapes/0/geom/Text/font_variations",
+    "path": "/layers/0/kind/Vector/shapes/0/geom/Text/font_variations",
+    "cell": {
+      "Value": [
+        [
+          [
+            119,
+            103,
+            104,
+            116
+          ],
+          700
+        ]
+      ]
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 empty /layers/0/kind/Vector/shapes/0/geom/Text/font_variations",
+    "path": "/layers/0/kind/Vector/shapes/0/geom/Text/font_variations",
+    "cell": "List",
+    "error": true
+  },
+  {
+    "name": "native axes34 member /layers/0/kind/Vector/shapes/0/geom/Text/font_variations",
+    "path": "/layers/0/kind/Vector/shapes/0/geom/Text/font_variations/0/1",
+    "cell": {
+      "Value": 700
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 /layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations",
+    "path": "/layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations",
+    "cell": {
+      "Value": [
+        [
+          [
+            119,
+            103,
+            104,
+            116
+          ],
+          700
+        ]
+      ]
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 empty /layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations",
+    "path": "/layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations",
+    "cell": "List",
+    "error": true
+  },
+  {
+    "name": "native axes34 member /layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations",
+    "path": "/layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations/0/1",
+    "cell": {
+      "Value": 700
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 /@compositions/7/document/@entities/600/geom/Text/font_variations",
+    "path": "/@compositions/7/document/@entities/600/geom/Text/font_variations",
+    "cell": {
+      "Value": [
+        [
+          [
+            119,
+            103,
+            104,
+            116
+          ],
+          700
+        ]
+      ]
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 empty /@compositions/7/document/@entities/600/geom/Text/font_variations",
+    "path": "/@compositions/7/document/@entities/600/geom/Text/font_variations",
+    "cell": "List",
+    "error": true
+  },
+  {
+    "name": "native axes34 member /@compositions/7/document/@entities/600/geom/Text/font_variations",
+    "path": "/@compositions/7/document/@entities/600/geom/Text/font_variations/0/1",
+    "cell": {
+      "Value": 700
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 /@compositions/7/document/@entities/600/geom/Text/spans/0/font_variations",
+    "path": "/@compositions/7/document/@entities/600/geom/Text/spans/0/font_variations",
+    "cell": {
+      "Value": [
+        [
+          [
+            119,
+            103,
+            104,
+            116
+          ],
+          700
+        ]
+      ]
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 empty /@compositions/7/document/@entities/600/geom/Text/spans/0/font_variations",
+    "path": "/@compositions/7/document/@entities/600/geom/Text/spans/0/font_variations",
+    "cell": "List",
+    "error": true
+  },
+  {
+    "name": "native axes34 member /@compositions/7/document/@entities/600/geom/Text/spans/0/font_variations",
+    "path": "/@compositions/7/document/@entities/600/geom/Text/spans/0/font_variations/0/1",
+    "cell": {
+      "Value": 700
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 /motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/font_variations",
+    "path": "/motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/font_variations",
+    "cell": {
+      "Value": [
+        [
+          [
+            119,
+            103,
+            104,
+            116
+          ],
+          700
+        ]
+      ]
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 empty /motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/font_variations",
+    "path": "/motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/font_variations",
+    "cell": "List",
+    "error": true
+  },
+  {
+    "name": "native axes34 member /motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/font_variations",
+    "path": "/motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/font_variations/0/1",
+    "cell": {
+      "Value": 700
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 /motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations",
+    "path": "/motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations",
+    "cell": {
+      "Value": [
+        [
+          [
+            119,
+            103,
+            104,
+            116
+          ],
+          700
+        ]
+      ]
+    },
+    "error": true
+  },
+  {
+    "name": "native axes34 empty /motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations",
+    "path": "/motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations",
+    "cell": "List",
+    "error": true
+  },
+  {
+    "name": "native axes34 member /motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations",
+    "path": "/motion/compositions/0/document/layers/0/kind/Vector/shapes/0/geom/Text/spans/0/font_variations/0/1",
+    "cell": {
+      "Value": 700
+    },
+    "error": true
   }
 ]

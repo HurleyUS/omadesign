@@ -8,7 +8,7 @@ impl Studio {
     ) -> Result<(), String> {
         crate::text::register_memory_font(&font.id, &font.family, Arc::clone(&font.bytes))?;
         let id = font.id.clone();
-        self.patch_type(|run| run.font = id.clone());
+        self.patch_type(|run| {run.font = id.clone();run.font_variations = Default::default();});
         self.text_font = id;
         self.font_scroll_once = true;
         self.status = "Project font applied · stored with this brand".into();

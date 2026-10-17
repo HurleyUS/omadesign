@@ -1,5 +1,5 @@
 use super::{
-    ADVANCED_LAYOUT, QUICK_MASK, CHANNELS, COLOR, COMPOSITIONS, EXPORT_FOLDERS, EXPORT_RESOLUTION, EXPRESSIONS, NATIVE,
+    ADVANCED_LAYOUT, VARIABLE_FONTS, QUICK_MASK, CHANNELS, COLOR, COMPOSITIONS, EXPORT_FOLDERS, EXPORT_RESOLUTION, EXPRESSIONS, NATIVE,
     PSD_TYPE, SCENE3D, SCREEN_EXPORT, SMART, SOURCE,
 };
 use serde::Deserialize;
@@ -62,6 +62,7 @@ fn composition_bounds<E: serde::de::Error>(value: &Seen) -> Result<(usize, usize
 }
 
 fn field_version(key: &str, value: &Seen) -> u32 {
+    if key.split('/').any(|k| k == "font_variations") && (value.exists || key.rsplit('/').next() != Some("font_variations")) { return VARIABLE_FONTS; }
     if key.split('/').any(|field| field == "quick_mask") { return QUICK_MASK; }
     if key.split('/').any(|field| field == "saved_channels") { return CHANNELS; }
     if key
@@ -173,6 +174,8 @@ impl<'de> Deserialize<'de> for Seen {
                             Some("export_subfolders")
                         } else if s.split('/').any(|field| field == "export_resolution") {
                             Some("export_resolution")
+                        } else if s.split('/').any(|field| field == "font_variations") {
+                            Some("font_variations")
                         } else if s.split('/').any(|field| field == "screen_export") {
                             Some("screen_export")
                         } else {
@@ -233,6 +236,7 @@ impl<'de> Deserialize<'de> for Seen {
                 let mut written = None;
                 while let Some(key) = map.next_key::<String>()? {
                     let mut child = map.next_value::<Seen>()?;
+                    if key.rsplit('/').next() == Some("font_variations") && child.items > 64 { return Err(serde::de::Error::custom("Font axes exceed 64 coordinates")); }
                     if key.rsplit('/').next() == Some("compositions") {
                         (child.motion_count, child.motion_depth) =
                             composition_bounds::<A::Error>(&child)?;

@@ -149,6 +149,9 @@ pub fn snapshot(doc: &Document) -> Result<Snapshot, String> {
     if crate::motion::compositions::documents(doc)?.iter().any(|document| !document.channels.is_empty()) {
         return Err("SavedChannelsUnsupported: live protocol 3 cannot preserve saved channels".into());
     }
+    if crate::motion::compositions::documents(doc)?.iter().any(|document| crate::text::variations::document(document)) {
+        return Err("VariableFontUnsupported: live protocol 3 cannot preserve native font-axis coordinates".into());
+    }
     let mut used = color_bytes(doc)?;
     let mut packed = doc.clone();
     packed.collaboration = None;

@@ -26,6 +26,7 @@ pub(super) const EXPORT_RESOLUTION: u32 = 30;
 pub(super) const EXPORT_FOLDERS: u32 = 31;
 pub(super) const CHANNELS: u32 = 32;
 pub(super) const QUICK_MASK: u32 = 33;
+pub(super) const VARIABLE_FONTS: u32 = 34;
 
 /// Identify implemented project readers.
 /// Args: envelope version. Returns false for reserved formats whose models are absent.
@@ -49,6 +50,7 @@ pub(super) fn supports_version(version: u32) -> bool {
             | EXPORT_FOLDERS
             | CHANNELS
             | QUICK_MASK
+            | VARIABLE_FONTS
     )
 }
 
@@ -62,14 +64,15 @@ pub(super) fn required_version(doc: &Document) -> u32 {
                 .max()
                 .unwrap_or(5)
         })
-        .unwrap_or(QUICK_MASK + 1)
+        .unwrap_or(VARIABLE_FONTS + 1)
 }
 
 fn local_required_version(doc: &Document) -> u32 {
     let mut version = if doc.mask_sources().is_empty() { 5 } else { 13 };
     if let Some(replica) = &doc.collaboration {
-        version = version.max(retained::replica_version(replica).unwrap_or(QUICK_MASK + 1));
+        version = version.max(retained::replica_version(replica).unwrap_or(VARIABLE_FONTS + 1));
     }
+    if crate::text::variations::document(doc) { version = version.max(VARIABLE_FONTS); }
     if !doc.channels.is_empty() { version=version.max(CHANNELS); }
     if doc.quick_mask.is_some() { version=version.max(QUICK_MASK); }
     if !doc.screen_export.is_empty() {
@@ -179,6 +182,7 @@ fn local_required_version(doc: &Document) -> u32 {
             let Geom::Text(run) = &shape.geom else {
                 continue;
             };
+            if !run.font_variations.is_empty() || run.spans.iter().any(|s| s.font_variations.is_some()) { version = version.max(VARIABLE_FONTS); }
             if run
                 .paragraphs
                 .iter()
@@ -489,10 +493,10 @@ mod tests {
         let encoded = super::super::encode(&doc).unwrap();
         let mut envelope: serde_json::Value = serde_json::from_str(&encoded).unwrap();
         assert_eq!(envelope["version"], 5);
-        for version in 0..=34 {
+        for version in 0..=35 {
             let supported = matches!(
                 version,
-                1..=17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33
+                1..=17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33 | 34
             );
             assert_eq!(supports_version(version), supported, "reader {version}");
             envelope["version"] = version.into();
@@ -822,7 +826,7 @@ mod tests {
             neutral["version"] = implemented.into();
             super::super::decode(&neutral.to_string()).unwrap();
         }
-        for reserved in [QUICK_MASK + 1, u32::MAX] {
+        for reserved in [VARIABLE_FONTS + 1, u32::MAX] {
             neutral["version"] = reserved.into();
             assert!(
                 super::super::decode(&neutral.to_string())
@@ -830,5 +834,75 @@ mod tests {
                     .contains("Unsupported")
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod variable_font_tests {
+    use super::*;
+    use crate::{
+        document::{Layer, Shape, Style},
+        geom::{Geom, TypeRun},
+        text::variations::FontVariations,
+    };
+    fn sample() -> Document {
+        let mut doc = Document::new("Axes", 200., 100., 96.);
+        let mut layer = Layer::vector("Text");
+        let shape = Shape::new(
+            Geom::Text(TypeRun {
+                content: "AV".into(),
+                font_variations: FontVariations::new(vec![(*b"wght", 700.)]).unwrap(),
+                ..Default::default()
+            }),
+            Style::default(),
+        );
+        layer.kind.shapes_mut().unwrap().push(shape);
+        doc.layers = vec![layer];
+        doc
+    }
+    #[test]
+    fn craft_variable_font_schema_tracks_current_span_baseline_and_every_retained_write() {
+        let doc = sample();
+        assert_eq!(required_version(&doc), VARIABLE_FONTS);
+        let mut json = serde_json::to_value(&doc).unwrap();
+        assert_eq!(value_version(&json).unwrap(), VARIABLE_FONTS);
+        let text = &mut json["layers"][0]["kind"]["Vector"]["shapes"][0]["geom"]["Text"];
+        text.as_object_mut().unwrap().remove("font_variations");
+        text["spans"] =
+            serde_json::json!([{"start":0,"end":1,"font_variations":[[[119,103,104,116],700]]}]);
+        assert_eq!(value_version(&json).unwrap(), VARIABLE_FONTS);
+        for path in [
+            "/@entities/8/geom/Text/font_variations",
+            "/@compositions/7/document/@entities/8/geom/Text/spans/0/font_variations",
+        ] {
+            let base = serde_json::json!({"base":{path:{"Value":[[[119,103,104,116],700]]}}});
+            assert_eq!(value_version(&base).unwrap(), VARIABLE_FONTS);
+            let all = serde_json::json!({"changes":[{"edit":{"type":"write","writes":[{"path":path,"value":{"Value":[[[119,103,104,116],700]]}}]}},{"edit":{"type":"toggle","enabled":false}}]});
+            assert_eq!(value_version(&all).unwrap(), VARIABLE_FONTS);
+        }
+        let mut doc = Document::new("Baseline", 200., 100., 96.);
+        let baseline = sample().layers[0].kind.shapes().unwrap()[0].clone();
+        let mut instance = Shape::new(
+            Geom::Rect {
+                origin: crate::geom::Pt::ZERO,
+                size: crate::geom::Pt::new(10., 10.),
+                radius: 0.,
+            },
+            Style::default(),
+        );
+        instance.layout.component = Some(crate::layout_components::ComponentBinding::Instance {
+            main: 9876,
+            nodes: vec![crate::layout_components::InstanceNode {
+                source: 1,
+                instance: 2,
+                slot: 3,
+                nested_main: None,
+                baseline: Box::new(baseline),
+            }],
+        });
+        let mut layer = Layer::vector("Stored baseline");
+        layer.kind.shapes_mut().unwrap().push(instance);
+        doc.layers = vec![layer];
+        assert_eq!(required_version(&doc), VARIABLE_FONTS);
     }
 }

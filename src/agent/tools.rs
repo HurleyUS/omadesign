@@ -325,6 +325,7 @@ fn native_shape(
                 run.px = number(spec, "font_size", run.px)?.clamp(1.0, 2048.0);
                 run.content = text(spec, "text", &run.content)?;
                 if let Some(font) = spec.get("font") {
+                    run.font_variations = Default::default();
                     let name = font.as_str().ok_or("Font must be an installed font name")?;
                     run.font = if name.is_empty() {
                         String::new()

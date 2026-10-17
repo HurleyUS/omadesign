@@ -13,6 +13,7 @@ use std::{
 pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
     doc.validate_hierarchy()?;
     crate::motion::require_flat_artwork(doc, "IDML")?;
+    crate::text::variations::require_writer(doc, "IDML")?;
     if doc.artboards.len() > 1024 || doc.layers.len() > 16384 {
         return Err("IDML export exceeds page or item budget".into());
     }

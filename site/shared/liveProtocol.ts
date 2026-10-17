@@ -174,6 +174,9 @@ function commonProtocol(path: string, value: unknown): Protocol {
   const text = p.lastIndexOf("/geom/Text/");
   if (text >= 0) {
     const tail = p.slice(text + 11).split("/");
+    const axes = tail.indexOf("font_variations");
+    if (axes >= 0)
+      throw new LiveProtocolError("Unsupported variable-font coordinates in live documents.");
     if (tail[0] === "font" && typeof value === "string" && value.length > 0)
       return 3;
     if (["transform", "svg_text"].includes(tail[0]) && value != null) return 3;

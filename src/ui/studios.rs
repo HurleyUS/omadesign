@@ -1257,7 +1257,7 @@ fn character_studio_contents(ui: &mut Ui, studio: &mut Studio) {
     if chosen != font {
         let path = chosen.clone();
         studio.remember_font(&path);
-        if live.is_some(){studio.patch_character(|s|s.font=Some(path.clone()));}else{studio.patch_type(|t| t.font = path.clone());}
+        if live.is_some(){studio.patch_character(|s|{s.font=Some(path.clone());s.font_variations=None;});}else{studio.patch_type(|t| { t.font = path.clone(); t.font_variations = Default::default(); });}
         studio.text_font = path;
         studio.font_scroll_once = true;
     }
@@ -1316,7 +1316,7 @@ fn google_fonts_ui(ui: &mut Ui, studio: &mut Studio) {
             Ok(font) => {
                 if studio.swap_id == font.document && studio.selection == font.selection {
                     let chosen = font.path.to_string_lossy().into_owned();
-                    studio.patch_type(|text| text.font = chosen.clone());
+                    studio.patch_type(|text| { text.font = chosen.clone(); text.font_variations = Default::default(); });
                     studio.text_font = chosen;
                 }
                 studio.google_status = format!("Installed {}", font.family);
@@ -1406,7 +1406,7 @@ fn google_fonts_ui(ui: &mut Ui, studio: &mut Studio) {
         });
     if let Some((family, path)) = use_font {
         let chosen = path.to_string_lossy().into_owned();
-        studio.patch_type(|text| text.font = chosen.clone());
+        studio.patch_type(|text| { text.font = chosen.clone(); text.font_variations = Default::default(); });
         studio.text_font = chosen;
         studio.google_status = format!("Using {family}");
     }

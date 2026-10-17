@@ -611,7 +611,7 @@ fn quoted_family(name: &str) -> String {
 fn overrides_font(run: &TypeRun) -> bool {
     run.svg_text
         .as_ref()
-        .is_some_and(|svg| run.font != svg.base_font)
+        .is_some_and(|svg| run.font != svg.base_font || !run.font_variations.is_empty())
 }
 
 fn paint_id(fill: &crate::document::Fill) -> String {
@@ -643,6 +643,11 @@ fn write_nodes(
                 let text = &run.content[super::char_to_byte(&run.content, span.start)
                     ..super::char_to_byte(&run.content, span.end)];
                 let mut attrs = String::new();
+                let mut css = String::new();
+                if span.font_variations.is_some() {
+                    let axes = super::variations::at(run, span.start);
+                    css.push_str(&format!("font-variation-settings:{};", if axes.is_empty() { "normal".into() } else { super::variations::css(&axes) }));
+                }
                 if let Some(font) = &span.font {
                     attrs.push_str(&font_attributes(font));
                 }
@@ -672,8 +677,9 @@ fn write_nodes(
                     ));
                 }
                 if span.kerning == Some(crate::geom::KernMode::None) {
-                    attrs.push_str(" style=\"font-kerning:none\"");
+                    css.push_str("font-kerning:none;");
                 }
+                if !css.is_empty() { attrs.push_str(&format!(" style=\"{}\"", escape(&css))); }
                 if attrs.is_empty() {
                     out.push_str(&escape(text));
                 } else {
@@ -697,6 +703,7 @@ fn write_nodes(
                 if root
                     && overrides_font(run)
                     && matches!(key.as_str(), "font-family" | "font-weight" | "font-style")
+                    || root && !run.font_variations.is_empty() && key == "font-variation-settings"
                 {
                     continue;
                 }
@@ -745,6 +752,7 @@ fn write_nodes(
             }
             if root && overrides_font(run) {
                 out.push_str(&font_attributes(&run.font));
+                if !run.font_variations.is_empty() { css.push_str(&format!("font-variation-settings:{};", super::variations::css(&run.font_variations))); }
             }
             if !css.is_empty() {
                 out.push_str(&format!(" style=\"{}\"", escape(&css)));
@@ -1538,6 +1546,7 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
     for (key, value) in attributes {
         if overrides_font(run)
             && matches!(key.as_str(), "font-family" | "font-weight" | "font-style")
+            || !run.font_variations.is_empty() && key == "font-variation-settings"
         {
             continue;
         }
@@ -1564,6 +1573,7 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
     }
     if overrides_font(run) {
         out.push_str(&font_attributes(&run.font));
+        if !run.font_variations.is_empty() { css.push_str(&format!("font-variation-settings:{};", super::variations::css(&run.font_variations))); }
     }
     if !css.is_empty() {
         out.push_str(&format!(" style=\"{}\"", escape(&css)));

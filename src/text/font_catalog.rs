@@ -96,7 +96,16 @@ impl Catalog {
                     "This font style is no longer available. Refresh the font list".into()
                 });
         }
-        let (weight, slant) = match from {
+        let coordinates = match from {
+            font_inventory::Request::Variable { coordinates, .. } => coordinates.as_slice(),
+            _ => &[],
+        };
+        let from = match from {
+            font_inventory::Request::Variable { source, .. } => source.as_ref(),
+            _ => from,
+        };
+        let (mut weight, mut slant) = match from {
+            font_inventory::Request::Variable { .. } => unreachable!(),
             font_inventory::Request::Named { weight, slant, .. } => (*weight, *slant),
             font_inventory::Request::Stored(reference) => font_bytes_for(&TypeRun {
                 font: reference.clone(),
@@ -109,6 +118,16 @@ impl Catalog {
             })
             .unwrap_or((400, 0)),
         };
+        for (tag, value) in coordinates {
+            let value = f32::from_bits(*value);
+            if tag == b"wght" {
+                weight = value.clamp(1., 1000.).round() as u16;
+            } else if tag == b"ital" && value >= 0.5 {
+                slant = 1;
+            } else if tag == b"slnt" && value != 0. {
+                slant = 2;
+            }
+        }
         let id = self.db.query(&fontdb::Query {
             families: &[fontdb::Family::Name(family)],
             weight: fontdb::Weight(weight),

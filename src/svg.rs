@@ -487,7 +487,7 @@ fn write_shape(
     if let Geom::Text(run)=&shape.geom && run.svg_text.is_some() {
         let painted;let run=if shape.style.fill!=run.svg_text.as_ref().unwrap().base_fill{painted=crate::text::svg_type::object_paint(run,&shape.style.fill);&painted}else{run};
         body.push_str(&format!("<g opacity=\"{}\"{extra}>",shape.opacity));
-        if let Some(fragment)=crate::text::svg_type::export_fragment(run,shape.id,text_as_paths){body.push_str(&fragment);}
+        if let Some(fragment)=crate::text::svg_type::export_fragment(run,shape.id,text_as_paths || !run.font_variations.is_empty() || run.spans.iter().any(|s|s.font_variations.as_ref().is_some_and(|v|!v.is_empty()))){body.push_str(&fragment);}
         if shape.style.stroke.is_some(){let mut native=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());native.style.fill=Fill::None;write_shape(body,defs,grad_id,&native,"",true);}
         body.push_str("</g>");return;
     }
@@ -586,6 +586,7 @@ fn write_shape(
         && run.spans.is_empty()
         && run.features.is_empty()
         && run.manual_kern.is_empty()
+        && run.font_variations.is_empty()
     {
         let family = crate::text::label_for(&run.font);
         body.push_str(&format!("  <text id=\"oma-{}\" font-family=\"{}\" font-size=\"{:.2}\" {fill_attr}{stroke_attr} opacity=\"{:.3}\"{extra} xml:space=\"preserve\">",shape.id,xml_escape(&family),run.px,shape.opacity));

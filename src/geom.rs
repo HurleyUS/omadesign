@@ -676,6 +676,8 @@ pub struct TypeRun {
     /// Installed font path or portable `omatype:` content ID. Empty picks system sans.
     #[serde(default)]
     pub font: String,
+    #[serde(default, skip_serializing_if = "crate::text::variations::FontVariations::is_empty")]
+    pub font_variations: crate::text::variations::FontVariations,
     #[serde(default = "default_true")]
     pub kern: bool,
     #[serde(default = "default_true")]
@@ -713,6 +715,7 @@ impl Default for TypeRun {
             features: vec![],
             manual_kern: Default::default(),
             font: String::new(),
+            font_variations: Default::default(),
             kern: true,
             liga: true,
             tnum: false,
@@ -813,6 +816,8 @@ impl Default for ParagraphStyle { fn default() -> Self { Self { publishing_style
 #[serde(default)]
 pub struct CharSpan {
     pub publishing_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_variations: Option<crate::text::variations::FontVariations>,
     pub font: Option<String>, pub px: Option<f32>, pub fill: Option<crate::document::Fill>,
     pub start: usize, pub end: usize, pub no_break: bool, pub features: Vec<([u8;4],u32)>,
     pub tracking: Option<f32>, pub kerning: Option<KernMode>, pub leading: Option<Leading>,

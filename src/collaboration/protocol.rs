@@ -220,6 +220,9 @@ fn common(path: &str, value: &Value) -> Result<u32, String> {
     let text = p.rsplit_once("/geom/Text/").map(|(_, tail)| tail);
     if let Some(text) = text {
         let fields: Vec<_> = text.split('/').collect();
+        if fields.contains(&"font_variations") {
+            return Err("Unsupported variable-font coordinates in live documents".into());
+        }
         if fields[0] == "font" && value.as_str().is_some_and(|font| !font.is_empty()) {
             return Ok(3);
         }

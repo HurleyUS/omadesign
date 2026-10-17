@@ -279,7 +279,7 @@ impl Studio {
         // Fonts, sizes and paint belong to the whole run/shape. Range attributes
         // can preserve spacing and features, but cannot encode these differences.
         // Validate before ending an edit session or adding anything to history.
-        if !b.content.is_empty() && (head_run.font != b.font || head_run.px != b.px
+        if !b.content.is_empty() && (head_run.font != b.font || head_run.font_variations != b.font_variations || head_run.px != b.px
             || head.style != target.style || head.opacity != target.opacity
             || head.fill_opacity != target.fill_opacity || head.blend != target.blend
             || head.blend_interior != target.blend_interior || head.filters != target.filters)
@@ -710,10 +710,10 @@ mod readiness_tests {
     }
     #[test]
     fn populated_merge_rejects_unrepresentable_defaults_without_mutating_edit_or_history() {
-        for mismatch in 0..3 {
+        for mismatch in 0..4 {
             let (mut studio,head,target)=fixture(run("Source"),run("Target"));
             let shape=studio.doc.find_shape_mut(target.0,target.1).unwrap();
-            match mismatch {0=>if let Geom::Text(t)=&mut shape.geom {t.font="different-font.ttf".into();},1=>if let Geom::Text(t)=&mut shape.geom {t.px=31.;},_=>shape.style.fill=crate::document::Fill::Solid(crate::color::Rgba::from_hex(0xff0033))}
+            match mismatch {0=>if let Geom::Text(t)=&mut shape.geom {t.font="different-font.ttf".into();},1=>if let Geom::Text(t)=&mut shape.geom {t.px=31.;},2=>shape.style.fill=crate::document::Fill::Solid(crate::color::Rgba::from_hex(0xff0033)),_=>if let Geom::Text(t)=&mut shape.geom {t.font_variations=crate::text::variations::FontVariations::new(vec![(*b"wght",700.)]).unwrap();}}
             studio.begin_type_edit(head,Pt::new(50.,60.));studio.type_insert("Editing");
             let before=crate::project::encode(&studio.doc).unwrap();let history=studio.history.len();let caret=studio.type_edit.as_ref().unwrap().caret;
             let error=studio.thread_text_frames(head,target).unwrap_err();assert!(error.contains("empty frame"));

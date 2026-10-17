@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const MIME: &str = "application/x-omadesign-text+json";
 const MARKER: &str = "<!--omadesign-rich-text:";
+const AXES_MIME: &str = "application/x-omadesign-text-axes+json";
+const AXES_MARKER: &str = "<!--omadesign-rich-text-axes:";
 const COMMON: [[u8; 4]; 7] = [
     *b"kern", *b"liga", *b"clig", *b"tnum", *b"smcp", *b"c2sc", *b"calt",
 ];
@@ -55,6 +57,9 @@ impl RichText {
                 let mut features = defaults.clone();
                 features.extend(span.features.iter().copied());
                 let mut style = span.clone();
+                let axes = crate::text::variations::at(run, span.start);
+                style.font_variations = if axes.is_empty() && span.font_variations.is_none() {None} else {Some(axes)};
+                style.font = style.font.or_else(|| run.character_style(span.start).font).or_else(|| Some(run.font.clone()));
                 style.tracking = style.tracking.or(base.tracking);
                 style.kerning = style.kerning.or(base.kerning);
                 style.leading = style.leading.or(base.leading);
@@ -133,7 +138,10 @@ impl RichText {
         }
         Some(rich)
     }
+    fn has_axes(&self) -> bool { self.spans.iter().any(|s| s.font_variations.is_some()) }
+    fn mime(&self) -> &'static str { if self.has_axes() {AXES_MIME} else {MIME} }
     fn html(&self) -> Result<String, String> {
+        let marker = if self.has_axes() {AXES_MARKER} else {MARKER};
         let bytes = serde_json::to_vec(self).map_err(|e| e.to_string())?;
         let escaped = self
             .text
@@ -141,13 +149,13 @@ impl RichText {
             .replace('<', "&lt;")
             .replace('>', "&gt;");
         Ok(format!(
-            "{MARKER}{}--><pre>{escaped}</pre>",
+            "{marker}{}--><pre>{escaped}</pre>",
             STANDARD.encode(bytes)
         ))
     }
 }
 fn from_html(html: &str) -> Option<RichText> {
-    let payload = html.split_once(MARKER)?.1.split_once("-->")?.0;
+    let payload = html.split_once(AXES_MARKER).or_else(|| html.split_once(MARKER))?.1.split_once("-->")?.0;
     RichText::decode(&STANDARD.decode(payload).ok()?)
 }
 
@@ -166,7 +174,7 @@ pub fn write(rich: &RichText) -> Result<(), String> {
                 },
                 MimeSource {
                     source: Source::Bytes(json.into()),
-                    mime_type: MimeType::Specific(MIME.into()),
+                    mime_type: MimeType::Specific(rich.mime().into()),
                 },
                 MimeSource {
                     source: Source::Bytes(html.clone().into_bytes().into()),
@@ -277,6 +285,7 @@ fn read_rich() -> Result<Option<RichText>, String> {
                 Err(_) => None,
             };
             if let Some(types) = types {
+                if types.contains(AXES_MIME) { return Ok(RichText::decode(&super::read_wayland_mime(AXES_MIME)?)); }
                 if types.contains(MIME) {
                     return Ok(RichText::decode(&super::read_wayland_mime(MIME)?));
                 }
@@ -489,5 +498,52 @@ mod tests {
         let mut bad = rich;
         bad.spans[0].end = usize::MAX;
         assert!(RichText::decode(&serde_json::to_vec(&bad).unwrap()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod variable_font_tests {
+    use super::*;
+    #[test]
+    fn craft_variable_font_clipboard_keeps_face_and_point_without_advertising_legacy_rich_data() {
+        let source = TypeRun {
+            content: "AV".into(),
+            font: "source.ttf".into(),
+            font_variations: crate::text::variations::FontVariations::new(vec![(*b"wght", 700.)])
+                .unwrap(),
+            ..Default::default()
+        };
+        let copied = RichText::from_run(&source, 0, 2);
+        assert_eq!(copied.mime(), AXES_MIME);
+        let html = copied.html().unwrap();
+        assert!(html.contains(AXES_MARKER));
+        assert!(!html.contains(MARKER));
+        assert_eq!(from_html(&html), Some(copied.clone()));
+        let mut destination = TypeRun {
+            content: "AV".into(),
+            font: "different.ttf".into(),
+            ..Default::default()
+        };
+        copied.apply_styles(&mut destination, 0);
+        assert_eq!(
+            destination.character_style(0).font.as_deref(),
+            Some("source.ttf")
+        );
+        assert_eq!(
+            crate::text::variations::at(&destination, 0),
+            source.font_variations
+        );
+        let plain = RichText::from_run(
+            &TypeRun {
+                content: "AV".into(),
+                ..Default::default()
+            },
+            0,
+            2,
+        );
+        assert_eq!(plain.mime(), MIME);
+        assert!(plain.html().unwrap().contains(MARKER));
+        plain.apply_styles(&mut destination, 0);
+        assert!(crate::text::variations::at(&destination, 0).is_empty());
     }
 }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
 pub(crate) mod font_inventory;
+pub mod variations;
 pub(crate) mod font_catalog;
 pub(crate) mod font_recovery;
 
@@ -405,7 +406,7 @@ pub(crate) fn font_bytes_for(run: &TypeRun) -> Option<Arc<Vec<u8>>> {
 /// Args: authored text run. Returns real OpenType metrics, or None without a font.
 pub(crate) fn font_metrics_for(run: &TypeRun) -> Option<(f32, f32, f32)> {
     let bytes = font_bytes_for(run)?;
-    let face = rustybuzz::Face::from_slice(&bytes, 0)?;
+    let face = variations::shaping_face(&bytes, &run.font_variations)?;
     let scale = run.px * character_metrics(run, 0).vscale.unwrap_or(100.0) / 100.0 / face.units_per_em() as f32;
     Some((face.ascender() as f32 * scale, -(face.descender() as f32) * scale, face.line_gap() as f32 * scale))
 }
