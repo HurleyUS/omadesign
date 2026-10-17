@@ -94,7 +94,7 @@ pub(crate) fn apply(
     }
     let blurred = if let Filter::GaussianBlur { radius } = *filter {
         Some(crate::raster::blur_channels(
-            bytemuck::cast_slice::<f32, [f32; 1]>(&source.samples),
+            source.samples.as_slice().as_chunks::<1>().0,
             source.width,
             source.height,
             radius,
