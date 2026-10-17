@@ -266,10 +266,9 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
                     });
                     let current = target(&d).is_ok_and(|t| s.text_search_current(t));
                     if !current {
-                        let error = target(&d).err().map(String::as_str).unwrap_or(
-                            "The text destination changed. Close and reopen Find and Replace",
-                        );
-                        ui.colored_label(ui.visuals().error_fg_color, error);
+                        d.matches = Default::default();
+                        d.selected = None;
+                        d.cached = None;
                     }
                     if changed {
                         d.cached = None;
