@@ -929,12 +929,15 @@ impl Reader<'_> {
         }}}}
         let t=text.abs_transform();
         let mut run=TypeRun{content,font,px,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
+        if self.tree.fontdb().faces().any(|f| matches!(f.source,usvg::fontdb::Source::Binary(_))) {
         if let Some(layout) = crate::text::svg_type::layout_with_options(&run, self.options) {
             for (at, style) in layout.styles {
                 if let Some(font) = style.font.filter(|f| f.starts_with("omatype:")) {
                     run.set_character_style(at, at+1, |s| {s.font=Some(font.clone()); s.font_variations=style.font_variations.clone();});
                 }
             }
+        }
+        crate::text::webfonts::bind(run.svg_text.as_mut().unwrap(), self.tree.fontdb());
         }
         run.contours=crate::text::shape(&run);
         let fill=text.chunks().iter().flat_map(|c|c.spans()).next().and_then(|s|s.fill()).map(|f|paint(f.paint(),f.opacity().get(),text.abs_transform(),Geom::Text(run.clone()).bbox()).unwrap_or_else(||{warn(&mut self.warnings,"SVG type source paint retained; changing object paint replaces it.".into());Fill::Solid(Rgba::BLACK)})).unwrap_or(Fill::None);

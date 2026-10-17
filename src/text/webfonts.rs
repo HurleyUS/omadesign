@@ -114,6 +114,15 @@ pub(crate) fn reference(db: &usvg::fontdb::Database, id: usvg::fontdb::ID) -> Op
             if bytes.len() > MAX_FONT {
                 return None;
             }
+            for (alias, _) in &face.families {
+                if super::BYTES
+                    .get()
+                    .and_then(|cache| cache.lock().ok()?.get(Path::new(alias)).cloned())
+                    .is_some_and(|known| *known == bytes)
+                {
+                    return Some(alias.clone());
+                }
+            }
             let name = super::font_name(&bytes).unwrap_or_else(|| "Embedded SVG font".into());
             let reference = format!("omatype:{:032x}", crate::typography::fingerprint(&bytes));
             super::register_memory_font(&reference, &name, Arc::new(bytes)).ok()?;
@@ -210,4 +219,63 @@ fn faces(source: &str) -> Result<Vec<&str>, String> {
         return Err("Unbalanced SVG stylesheet".into());
     }
     Ok(blocks)
+}
+
+/// Bind embedded CSS family aliases to the actual portable faces selected for this source.
+/// Args: captured text metadata and its original font database. Returns no value; ordinary missing family requests stay unchanged.
+pub(crate) fn bind(svg: &mut super::svg_type::SvgText, db: &usvg::fontdb::Database) {
+    fn visit(
+        node: &mut super::svg_type::TextNode,
+        db: &usvg::fontdb::Database,
+        inherited: &std::collections::BTreeMap<String, String>,
+    ) {
+        let super::svg_type::TextNode::Element {
+            attributes,
+            children,
+            ..
+        } = node
+        else {
+            return;
+        };
+        let mut style = inherited.clone();
+        for key in ["font-family", "font-weight", "font-style"] {
+            if let Some(value) = attributes
+                .get(key)
+                .filter(|v| !matches!(v.as_str(), "inherit" | "unset"))
+            {
+                style.insert(key.into(), value.clone());
+            }
+        }
+        if let Some(family) = style.get("font-family") {
+            let family = super::font_inventory::first_family(family);
+            let weight = style.get("font-weight").map_or(400, |s| {
+                if s == "bold" {
+                    700
+                } else {
+                    s.parse().unwrap_or(400)
+                }
+            });
+            let slant = match style.get("font-style").map(String::as_str) {
+                Some("italic") => usvg::fontdb::Style::Italic,
+                Some("oblique") => usvg::fontdb::Style::Oblique,
+                _ => usvg::fontdb::Style::Normal,
+            };
+            if let Some(id) = db.query(&usvg::fontdb::Query {
+                families: &[usvg::fontdb::Family::Name(&family)],
+                weight: usvg::fontdb::Weight(weight),
+                style: slant,
+                ..Default::default()
+            }) && db
+                .face(id)
+                .is_some_and(|f| matches!(f.source, usvg::fontdb::Source::Binary(_)))
+                && let Some(reference) = reference(db, id)
+            {
+                attributes.insert("font-family".into(), format!("'{reference}'"));
+            }
+        }
+        for child in children {
+            visit(child, db, &style);
+        }
+    }
+    visit(&mut svg.root, db, &Default::default());
 }

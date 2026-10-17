@@ -278,7 +278,7 @@ fn native_request(font: &str, axes: &super::variations::FontVariations) -> Reque
         }
     }
 }
-fn first_family(value: &str) -> String {
+pub(super) fn first_family(value: &str) -> String {
     let mut quote = None;
     let mut escaped = false;
     let mut out = String::new();
