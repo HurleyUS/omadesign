@@ -240,7 +240,7 @@ pub(super) fn choice<T: Clone + PartialEq>(
             })
             .response
             .labelled_by(label_response.id);
-        if selected {
+        if selected || response.clicked() {
             response.request_focus();
         }
         if response.enabled() && response.has_focus() {

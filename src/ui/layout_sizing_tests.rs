@@ -8,7 +8,7 @@ use crate::{
         workspace::{Place, Workspace},
     },
 };
-use egui::{Event, Key, Modifiers, Pos2, Rect, vec2};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
 
 struct Seat {
     ctx: egui::Context,
@@ -259,4 +259,46 @@ fn craft_layout_sizing_native_choices_keep_focus_one_undo_and_reopen() {
     let locked = saved(&s);
     seat.frame(&mut s, keys::key(Key::Home, Modifiers::NONE));
     assert_eq!(saved(&s), locked);
+}
+
+#[test]
+fn craft_layout_sizing_pointer_opener_escape_keeps_actual_combo_focus_for_arrows() {
+    let (mut s, id) = editor();
+    let before = saved(&s);
+    let mut seat = Seat::new();
+    seat.settle(&mut s);
+    let at = seat.bounds("Width sizing").center();
+    seat.frame(&mut s, vec![Event::PointerMoved(at)]);
+    for pressed in [true, false] {
+        seat.frame(
+            &mut s,
+            vec![
+                Event::PointerMoved(at),
+                Event::PointerButton {
+                    pos: at,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(egui::Popup::is_any_open(&seat.ctx));
+    seat.frame(&mut s, keys::key(Key::Escape, Modifiers::NONE));
+    seat.frame(&mut s, vec![]);
+    assert!(!egui::Popup::is_any_open(&seat.ctx));
+    keys::focused(&seat.ctx, &seat.output, "Width sizing");
+    assert_eq!(saved(&s), before);
+    assert_eq!(s.history.len(), 0);
+    seat.frame(&mut s, keys::key(Key::ArrowDown, Modifiers::NONE));
+    seat.frame(&mut s, vec![]);
+    keys::focused(&seat.ctx, &seat.output, "Width sizing");
+    assert_eq!(s.doc.find_shape(0, id).unwrap().layout.width, Sizing::Hug);
+    assert_eq!(
+        s.doc.find_shape(0, id).unwrap().geom.bbox().min,
+        Pt::new(40., 40.)
+    );
+    assert_eq!(s.history.len(), 1);
+    s.undo();
+    assert_eq!(saved(&s), before);
 }
