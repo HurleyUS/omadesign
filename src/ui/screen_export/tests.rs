@@ -14,6 +14,7 @@ fn craft_export_presets_native_density_choice_folder_error_save_undo_reopen() {
     let target = studio.capture_export_assets().unwrap();
     studio.collect_export_assets(&target, true).unwrap();
     let before = crate::project::encode(&studio.doc).unwrap();
+    let owner = state_id(&studio);
     let mut frame = |events| {
         keys::render(&ctx, events, |ui| {
             ui.set_max_width(288.);
@@ -28,11 +29,42 @@ fn craft_export_presets_native_density_choice_folder_error_save_undo_reopen() {
     keys::tab_to(&ctx, "Density 0.75x–4x", &mut frame);
     frame(keys::key(Key::Space, Modifiers::NONE));
     frame(vec![]);
-    keys::tab_to(&ctx, "Export row subfolder", &mut frame);
+    let first = ctx
+        .data(|data| data.get_temp::<State>(owner))
+        .unwrap()
+        .draft
+        .rows[0]
+        .id;
+    let folder = owner.with((first, "folder")).accesskit_id();
+    for _ in 0..128 {
+        if ctx
+            .memory(|memory| memory.focused())
+            .map(|id| id.accesskit_id())
+            == Some(folder)
+        {
+            break;
+        }
+        keys::tab(false, &mut frame);
+    }
+    assert_eq!(
+        ctx.memory(|memory| memory.focused())
+            .map(|id| id.accesskit_id()),
+        Some(folder)
+    );
     keys::replace("../outside", &mut frame);
     let output = frame(vec![]);
     assert_eq!(
-        keys::named(&output, "Export row subfolder").1.invalid(),
+        output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == folder)
+            .unwrap()
+            .1
+            .invalid(),
         Some(egui::accesskit::Invalid::True)
     );
     assert!(keys::named(&output, "Save export settings").1.is_disabled());
