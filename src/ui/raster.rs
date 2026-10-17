@@ -250,7 +250,7 @@ fn thumbnail<T:Copy>(data: &[T], w: u32, h: u32, dw: u32, dh: u32, channels: usi
 fn render_job(
     ctx: &Context,
     source: Arc<Vec<u8>>,
-    selection: Option<Arc<Vec<u8>>>,
+    selection: Option<Arc<Vec<f32>>>,
     w: u32,
     h: u32,
     settings: Settings,

@@ -364,7 +364,7 @@ fn render(
         Geometry::Path { .. } => None,
         Geometry::Cage(cage) => {
             if let Some(path) = path {
-                return path_mask(&mapped_path(path, cage)?, space).map(|v|v.into_iter().map(|v|v as f32/255.).collect());
+                return path_mask(&mapped_path(path, cage)?, space).and_then(|v|crate::selection_coverage::from_bytes(&v,&crate::deep_color::storage::check).ok());
             }
             let mapper = cage.mapper()?;
             let points = mapper
@@ -524,13 +524,14 @@ mod tests {
                 (mapper.unmap(mapped, bounds).unwrap() - p).length() < 0.02,
                 "{mode:?}"
             );
+            let mask:Vec<f32>=mask.iter().map(|v|f32::from(*v)/255.).collect();
             let result = render(&mask, space(), &Geometry::Cage(cage), None).unwrap();
             assert_eq!(
                 result[mapped.y as usize * 64 + mapped.x as usize],
-                0,
+                0.,
                 "hole in {mode:?}"
             );
-            assert_ne!(result, mask, "{mode:?}");
+            assert_ne!(result.as_slice(), mask.as_slice(), "{mode:?}");
         }
     }
     #[test]

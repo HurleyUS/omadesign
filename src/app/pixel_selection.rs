@@ -118,7 +118,7 @@ fn coverage<T:Sample>(input: &[T], w: usize, h: usize, radius: usize, operation:
         return input.to_vec();
     }
     let mut horizontal = vec![T::default(); input.len()];
-    let mut result = vec![0; input.len()];
+    let mut result = vec![T::default(); input.len()];
     for y in 0..h {
         let row = line((0..w).map(|x| input[y * w + x]), radius, operation);
         horizontal[y * w..(y + 1) * w].copy_from_slice(&row);
@@ -191,7 +191,7 @@ pub fn edit_admitted(values:&[f32],space:SelectionSpace,operation:Edit)->Result<
     let mut horizontal=pool.allocate_now::<f32,_>(values.len(),&storage::check)?;
     let mut output=pool.allocate_now::<f32,_>(values.len(),&storage::check)?;
     let scratch=(space.w.max(space.h)as usize).checked_mul(8).and_then(|v|v.checked_add(65536)).ok_or("Selection scratch is too large")?;
-    let _scratch=pool.reserve_now(scratch,&storage::check)?;
+    let _scratch=pool.reserve_now(scratch as u64,&storage::check)?;
     let (w,h)=(space.w as usize,space.h as usize);
     for y in 0..h{storage::check.check()?;let row=line((0..w).map(|x|values[y*w+x]),radius,operation);horizontal.as_mut_slice()[y*w..(y+1)*w].copy_from_slice(&row);}
     for x in 0..w{storage::check.check()?;let column=line((0..h).map(|y|horizontal[y*w+x]),radius,operation);for(y,v)in column.into_iter().enumerate(){output.as_mut_slice()[y*w+x]=v;}}
@@ -232,7 +232,7 @@ mod tests {
         assert!(soft[5 * 24 + 5] > 0);
         assert_eq!(soft[0], 0);
         let (empty, _) = edit(&source, space, Edit::Shrink { radius: 1024 }).unwrap();
-        assert!(empty.iter().all(|v| *v == 0.));
+        assert!(empty.iter().all(|v| *v == 0));
         for operation in [
             Edit::Grow { radius: 0 },
             Edit::Shrink { radius: 0 },
@@ -267,7 +267,7 @@ mod tests {
             480
         );
         studio.invert_pixel_selection();
-        assert!(studio.pixel_sel.as_ref().unwrap().iter().all(|v| *v == 0));
+        assert!(studio.pixel_sel.as_ref().unwrap().iter().all(|v| *v == 0.));
         studio.invert_pixel_selection();
         assert!(studio.pixel_sel.as_ref().unwrap().iter().all(|v| *v == 1.));
         assert_eq!(

@@ -45,7 +45,7 @@ pub(super) fn ready(ctx: &Context) -> bool {
 pub(super) fn canvas_preview(
     ctx: &Context,
     studio: &Studio,
-) -> Option<(Arc<Vec<u8>>, SelectionSpace, u64)> {
+) -> Option<(Arc<crate::resources::Allocation<f32>>, SelectionSpace, u64)> {
     let session = ctx.data(|d| d.get_temp::<Session>(id()))?;
     if session.document != studio.swap_id || session.generation != studio.pixel_sel_gen {
         return None;
@@ -245,7 +245,7 @@ pub(super) fn show(ctx: &Context, studio: &mut Studio) {
                 && session
                     .preview
                     .as_ref()
-                    .is_some_and(|(v, _)| !v.iter().any(|v| *v > 0))
+                    .is_some_and(|(v, _)| !v.iter().any(|v| *v > 0.))
             {
                 ui.label("This will leave an empty selection.");
             }
@@ -434,7 +434,7 @@ mod tests {
         studio.swap_id = "another-document".into();
         frame(&ctx, &mut studio, vec![]);
         assert!(!is_open(&ctx));
-        assert!(studio.pixel_sel.as_ref().unwrap().iter().all(|v| *v == 255));
+        assert!(studio.pixel_sel.as_ref().unwrap().iter().all(|v| *v == 1.));
     }
 }
 
@@ -539,7 +539,7 @@ mod keyboard_tests {
         assert!(!is_open(&ctx));
         let coverage = studio.pixel_sel.as_ref().unwrap();
         assert!(
-            coverage.iter().filter(|value| **value > 0).count()
+            coverage.iter().filter(|value| **value > 0.).count()
                 > before.iter().filter(|value| **value > 0).count()
         );
         assert_eq!(studio.doc.layers[layer].kind.pixels().unwrap().data, pixels);

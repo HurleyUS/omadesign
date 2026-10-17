@@ -674,7 +674,7 @@ impl Studio {
         let Some(mask) = self.pixel_sel_mask(layer).map(|mask| mask.to_vec()) else {
             return false;
         };
-        if !mask.iter().any(|value| *value > 0) {
+        if !mask.iter().any(|value| *value > 0.) {
             return false;
         }
         let Some(pixels) = self
@@ -689,7 +689,7 @@ impl Studio {
             let before = pixels.clone();
             let samples = crate::deep_color::storage::collect(
                 (0..pixels.w as usize * pixels.h as usize).flat_map(|i| {
-                    if mask[i] > 0 {
+                    if mask[i] > 0. {
                         [0.; 4]
                     } else {
                         pixels.sample(i)
@@ -717,7 +717,7 @@ impl Studio {
             }
         };
         for (index, &selected) in mask.iter().enumerate() {
-            if selected != 0 {
+            if selected != 0. {
                 let offset = index * 4;
                 after.as_mut_slice()[offset..offset + 4].fill(0);
             }
@@ -1083,7 +1083,7 @@ mod tests {
         studio
     }
 
-    fn mapped(studio: &Studio) -> std::sync::Arc<crate::resources::Allocation<u8>> {
+    fn mapped(studio: &Studio) -> std::sync::Arc<crate::resources::Allocation<f32>> {
         let SelectionMask::Mapped(values) = studio.cached_pixel_sel_mask(0).unwrap() else {
             panic!("transformed mask");
         };

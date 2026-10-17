@@ -35,7 +35,7 @@ fn publish(
     let feathered = if !mask
         && selection
             .as_ref()
-            .is_some_and(|m| m.iter().any(|v| *v > 0 && *v < 255))
+            .is_some_and(|m| m.iter().any(|v| *v > 0. && *v < 1.))
     {
         let result = (|| {
             let original = crate::deep_color::surface::Surface::from_rgba(
@@ -869,7 +869,7 @@ pub(super) fn brush_drag(studio: &mut Studio, world: Pt) {
     if selection_changed {
         let soft = studio
             .cached_pixel_sel_mask(layer)
-            .is_some_and(|mask| mask.iter().any(|&v| v > 0 && v < 255));
+            .is_some_and(|mask| mask.iter().any(|&v| v > 0. && v < 1.));
         if soft {
             if preview.is_none() {
                 match crate::deep_color::surface::Surface::new(buf.width(), buf.height()) {
@@ -1191,7 +1191,7 @@ mod tests {
         assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
         assert_eq!(studio.history.len(), 0);
         let selection = studio.pixel_sel_mask(0).unwrap();
-        assert_eq!(&*selection, &[255; 32 * 24]);
+        assert_eq!(&*selection, &[1.; 32 * 24]);
     }
 
     #[test]
@@ -1758,8 +1758,8 @@ mod tests {
         let mask = studio.pixel_sel.as_ref().expect("rect selection");
         assert_eq!(mask.len(), 16 * 16);
         assert!(paint::selected_count(mask) >= 25);
-        assert_eq!(mask[(2 * 16 + 2) as usize], 255);
-        assert_eq!(mask[0], 0);
+        assert_eq!(mask[(2 * 16 + 2) as usize], 1.);
+        assert_eq!(mask[0], 0.);
 
         studio.tool = Tool::EllipseMarquee;
         commit_marquee(
@@ -1770,8 +1770,8 @@ mod tests {
             paint::PixelCombine::Replace,
         );
         let ellipse = studio.pixel_sel.as_ref().unwrap();
-        assert_eq!(ellipse[(8 * 16 + 8) as usize], 255);
-        assert_eq!(ellipse[0], 0);
+        assert_eq!(ellipse[(8 * 16 + 8) as usize], 1.);
+        assert_eq!(ellipse[0], 0.);
 
         studio.tool = Tool::Lasso;
         commit_lasso(
@@ -1810,8 +1810,8 @@ mod tests {
         );
         let mask = studio.pixel_sel.as_ref().unwrap();
         assert!(paint::selected_count(mask) < before);
-        assert_eq!(mask[(1 * 16 + 1) as usize], 255);
-        assert_eq!(mask[(4 * 16 + 4) as usize], 0);
+        assert_eq!(mask[(1 * 16 + 1) as usize], 1.);
+        assert_eq!(mask[(4 * 16 + 4) as usize], 0.);
         commit_marquee(
             &mut studio,
             Pt::new(12.0, 0.0),
@@ -1820,9 +1820,9 @@ mod tests {
             paint::PixelCombine::Add,
         );
         let mask = studio.pixel_sel.as_ref().unwrap();
-        assert_eq!(mask[(1 * 16 + 1) as usize], 255);
-        assert_eq!(mask[(4 * 16 + 4) as usize], 0);
-        assert_eq!(mask[(2 * 16 + 14) as usize], 255);
+        assert_eq!(mask[(1 * 16 + 1) as usize], 1.);
+        assert_eq!(mask[(4 * 16 + 4) as usize], 0.);
+        assert_eq!(mask[(2 * 16 + 14) as usize], 1.);
         commit_lasso(
             &mut studio,
             &[
@@ -1833,7 +1833,7 @@ mod tests {
             ],
             paint::PixelCombine::Subtract,
         );
-        assert_eq!(studio.pixel_sel.as_ref().unwrap()[(1 * 16 + 1) as usize], 0);
+        assert_eq!(studio.pixel_sel.as_ref().unwrap()[(1 * 16 + 1) as usize], 0.);
     }
 
     #[test]

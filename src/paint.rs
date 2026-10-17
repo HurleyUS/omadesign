@@ -1,5 +1,4 @@
 //! Pixel brushes: paint, erase, smudge, clone, heal, fill, wand.
-use crate::selection_coverage::Sample as _;
 
 use crate::color::Rgba;
 use crate::geom::Pt;
@@ -802,7 +801,7 @@ pub fn wand_mask(pm: &Pixmap, seed: Pt, tolerance: f32) -> Vec<u8> {
     wand_mask_clipped(pm, seed, tolerance, None)
 }
 
-pub fn wand_mask_clipped(pm: &Pixmap, seed: Pt, tolerance: f32, clip: Option<&[u8]>) -> Vec<u8> {
+pub fn wand_mask_clipped(pm: &Pixmap, seed: Pt, tolerance: f32, clip: Option<&[f32]>) -> Vec<u8> {
     let w = pm.width() as i32;
     let h = pm.height() as i32;
     let mut mask = vec![0u8; (w * h) as usize];
