@@ -188,3 +188,75 @@ fn craft_layout_sizing_controls_fit_actual_resized_docks_without_mutation() {
         assert_eq!(s.history.len(), 0);
     }
 }
+fn emit(name: &str, text: &str) {
+    if let Some(root) = std::env::var_os("OMADESIGN_LAYOUT_SIZING_QA") {
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(std::path::Path::new(&root).join(name), text).unwrap();
+    }
+}
+fn reopen(s: &Studio) {
+    let wire = saved(s);
+    let doc = crate::project::decode(&wire).unwrap();
+    assert_eq!(crate::project::encode(&doc).unwrap(), wire);
+    assert_eq!(
+        crate::compositor::export_png(&doc, 1).unwrap(),
+        crate::compositor::export_png(&s.doc, 1).unwrap()
+    );
+}
+#[test]
+fn craft_layout_sizing_native_choices_keep_focus_one_undo_and_reopen() {
+    let (mut s, id) = editor();
+    let before = saved(&s);
+    let unrelated = s.doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    let mut seat = Seat::new();
+    seat.settle(&mut s);
+    let ctx = seat.ctx.clone();
+    keys::tab_to(&ctx, "Width sizing", |events| seat.frame(&mut s, events));
+    keys::focused(&ctx, &seat.output, "Width sizing");
+    seat.frame(&mut s, keys::key(Key::ArrowDown, Modifiers::NONE));
+    seat.frame(&mut s, vec![]);
+    keys::focused(&ctx, &seat.output, "Width sizing");
+    assert_eq!(s.doc.find_shape(0, id).unwrap().layout.width, Sizing::Hug);
+    assert_eq!(
+        s.doc.find_shape(0, id).unwrap().layout.height,
+        Sizing::Fixed
+    );
+    assert_eq!(s.history.len(), 1);
+    let width = saved(&s);
+    reopen(&s);
+    keys::tab_to(&ctx, "Height sizing", |events| seat.frame(&mut s, events));
+    seat.frame(&mut s, keys::key(Key::End, Modifiers::NONE));
+    seat.frame(&mut s, vec![]);
+    keys::focused(&ctx, &seat.output, "Height sizing");
+    assert_eq!(s.doc.find_shape(0, id).unwrap().layout.width, Sizing::Hug);
+    assert_eq!(s.doc.find_shape(0, id).unwrap().layout.height, Sizing::Fill);
+    assert_eq!(s.history.len(), 2);
+    assert_eq!(s.doc.find_shape(0, unrelated.id), Some(&unrelated));
+    let after = saved(&s);
+    reopen(&s);
+    s.undo();
+    assert_eq!(saved(&s), width);
+    s.undo();
+    assert_eq!(saved(&s), before);
+    s.redo();
+    assert_eq!(saved(&s), width);
+    s.redo();
+    assert_eq!(saved(&s), after);
+    emit("before.oma", &before);
+    emit("width-hug.oma", &width);
+    emit("both.oma", &after);
+    s.doc.layers[0].locked = true;
+    seat.settle(&mut s);
+    for name in ["Width sizing", "Height sizing"] {
+        assert!(keys::named(&seat.output, name).1.is_disabled());
+    }
+    let locked = saved(&s);
+    seat.frame(&mut s, keys::key(Key::Home, Modifiers::NONE));
+    assert_eq!(saved(&s), locked);
+}

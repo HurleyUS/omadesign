@@ -785,10 +785,9 @@ pub fn inspector(ui: &mut Ui, studio: &mut Studio) {
                     }
                 }
             });
-        label(ui, "Sizing");
-        ui.horizontal(|ui| {
-            changed |= sizing(ui, "layout-width", &mut props.width);
-            changed |= sizing(ui, "layout-height", &mut props.height);
+        ui.columns(2, |columns| {
+            changed |= sizing(&mut columns[0], "layout-width", &mut props.width);
+            changed |= sizing(&mut columns[1], "layout-height", &mut props.height);
         });
         egui::CollapsingHeader::new("Min / max size").show(ui, |ui| {
             for (name, val) in [
