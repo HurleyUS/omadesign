@@ -172,6 +172,74 @@ pub(super) fn shortcuts(ctx: &egui::Context, s: &mut Studio) {
     }
 }
 
+/// Lay out real action buttons in rows sized from their current font.
+/// Args: UI, stable owner and current availability. Returns the clicked action without squeezing native labels.
+fn footer(ui: &mut Ui, owner: Id, has_matches: bool, selected: bool) -> Option<&'static str> {
+    let items = [
+        ("next", "Find next", has_matches),
+        ("one", "Replace", has_matches && selected),
+        ("all", "Replace all", has_matches),
+        ("select", "Select match", has_matches && selected),
+        ("close", "Close", true),
+    ];
+    let widths: Vec<_> = items
+        .iter()
+        .map(|(_, name, _)| {
+            let text = egui::WidgetText::from(*name).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Button,
+            );
+            (text.size().x + ui.spacing().button_padding.x * 2.)
+                .max(ui.spacing().interact_size.x)
+                .ceil()
+                + 1.
+        })
+        .collect();
+    let mut start = 0;
+    let mut action = None;
+    while start < items.len() {
+        let room = ui.available_width();
+        let mut end = start;
+        let mut used = 0.;
+        while end < items.len() {
+            let next = widths[end]
+                + if end > start {
+                    ui.spacing().item_spacing.x
+                } else {
+                    0.
+                };
+            if end > start && used + next > room {
+                break;
+            }
+            used += next;
+            end += 1;
+        }
+        ui.horizontal(|ui| {
+            for &(key, name, enabled) in &items[start..end] {
+                let label = if key == "close" {
+                    "Close Find and Replace"
+                } else {
+                    name
+                };
+                if control(ui, owner.with(key), label, |ui| {
+                    ui.add_enabled(
+                        enabled,
+                        egui::Button::new(name).wrap_mode(egui::TextWrapMode::Extend),
+                    )
+                })
+                .clicked()
+                {
+                    action = Some(key);
+                }
+            }
+        });
+        start = end;
+    }
+    action
+}
+
 /// Draw the actual search controls and apply only accepted captured actions.
 /// Args: context and editor. Returns no value; cancellation and stale results never edit a story.
 pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
@@ -310,37 +378,18 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
                     if let Some(notice) = &d.notice {
                         ui.label(notice);
                     }
-                    ui.horizontal_wrapped(|ui| {
-                        let has_matches = current && !d.matches.is_empty();
-                        for (key, name, enabled) in [
-                            ("next", "Find next", has_matches),
-                            ("one", "Replace", has_matches && d.selected.is_some()),
-                            ("all", "Replace all", has_matches),
-                            (
-                                "select",
-                                "Select match",
-                                has_matches && d.selected.is_some(),
-                            ),
-                        ] {
-                            if control(ui, owner.with(key), name, |ui| {
-                                ui.add_enabled(
-                                    enabled,
-                                    egui::Button::new(name).wrap_mode(egui::TextWrapMode::Extend),
-                                )
-                            })
-                            .clicked()
-                            {
-                                action = Some(key);
-                            }
-                        }
-                        if control(ui, owner.with("close"), "Close Find and Replace", |ui| {
-                            ui.add(egui::Button::new("Close").wrap_mode(egui::TextWrapMode::Extend))
-                        })
-                        .clicked()
-                        {
+                    if let Some(clicked) = footer(
+                        ui,
+                        owner,
+                        current && !d.matches.is_empty(),
+                        d.selected.is_some(),
+                    ) {
+                        if clicked == "close" {
                             close = true;
+                        } else {
+                            action = Some(clicked);
                         }
-                    });
+                    }
                 });
         });
     close |= modal.should_close();
@@ -378,10 +427,15 @@ pub(super) fn show(ctx: &egui::Context, s: &mut Studio) {
                         ctx.data_mut(|data| {
                             data.insert_temp(Id::new((ID, "replacement")), d.replacement.clone())
                         });
-                        d.notice = Some(if report.stories == 0 {
-                            format!("{} matches; no text changes", report.matches)
+                        let noun = if report.matches == 1 {
+                            "match"
                         } else {
-                            format!("Replaced {} matches", report.matches)
+                            "matches"
+                        };
+                        d.notice = Some(if report.stories == 0 {
+                            format!("{} {noun}; no text changes", report.matches)
+                        } else {
+                            format!("Replaced {} {noun}", report.matches)
                         });
                         if report.stories > 0 {
                             refresh(&mut d, s);
