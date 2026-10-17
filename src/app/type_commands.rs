@@ -521,7 +521,7 @@ impl Studio {
             }
             self.commit(Cmd::Batch(commands));
         }
-        self.status = format!("Updated {changed} text story/stories");
+        self.status = if changed == 1 { "Text updated".into() } else { format!("Updated {changed} text stories") };
         Ok(changed)
     }
     /// Invoke an immediate selection command using the same captured-target path as the dialog.

@@ -11,6 +11,7 @@ const ID: &str = "type-smart-punctuation";
 #[derive(Clone)]
 struct Draft {
     instance: Id,
+    owner: String,
     selection: Option<TypeCommandTarget>,
     document: Option<TypeCommandTarget>,
     selection_error: Option<String>,
@@ -51,6 +52,7 @@ fn open(ctx: &egui::Context, studio: &Studio) {
         .unwrap_or_default();
     let draft = Draft {
         instance: super::keyboard_controls::draft_id(ctx, ID),
+        owner: studio.swap_id.clone(),
         selection_error: selection.as_ref().err().cloned(),
         document_error: document.as_ref().err().cloned(),
         selection: selection.ok(),
@@ -114,19 +116,9 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
 /// Args: context/editor. Returns no value; Apply checks the owner again before the typed command.
 pub(super) fn show(ctx: &egui::Context, studio: &mut Studio) {
     let Some(mut draft) = ctx.data(|d| d.get_temp::<Draft>(Id::new(ID))) else {
-        if ctx
-            .data(|d| d.get_temp::<bool>(Id::new((ID, "canvas-focus"))))
-            .unwrap_or(false)
-            && let Some(response) = ctx.read_response(Id::new("studio-canvas"))
-            && response.enabled()
-            && ctx.memory(|m| m.allows_interaction(response.layer_id))
-        {
-            response.request_focus();
-            ctx.data_mut(|d| d.remove::<bool>(Id::new((ID, "canvas-focus"))));
-        }
         return;
     };
-    let owner = Id::new((ID, draft.instance));
+    let owner = Id::new((ID, &draft.owner, draft.instance));
     let mut apply = false;
     let mut cancel = false;
     let modal = egui::Modal::new(Id::new(ID)).show(ctx, |ui| {
@@ -267,10 +259,16 @@ pub(super) fn show(ctx: &egui::Context, studio: &mut Studio) {
         }
     }
     if cancel {
-        ctx.data_mut(|d| {
-            d.remove::<Draft>(Id::new(ID));
-            d.insert_temp(Id::new((ID, "canvas-focus")), true);
-        });
+        ctx.data_mut(|d| d.remove::<Draft>(Id::new(ID)));
+        if draft.owner == studio.swap_id
+            && !studio.show_welcome
+            && !studio.file_dialog_pending()
+            && !studio.updates.freezing
+            && let Some(canvas) = ctx.read_response(Id::new("studio-canvas"))
+        {
+            canvas.request_focus();
+        }
+        ctx.request_repaint();
     } else {
         ctx.data_mut(|d| d.insert_temp(Id::new(ID), draft));
     }

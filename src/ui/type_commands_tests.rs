@@ -51,6 +51,37 @@ fn emit(name: &str, s: &Studio) {
         std::fs::write(std::path::Path::new(&root).join(name), wire(s)).unwrap();
     }
 }
+fn canvas_focus(seat: &Seat) {
+    let response = seat.ctx.read_response(Id::new("studio-canvas")).unwrap();
+    let id = response.id.accesskit_id();
+    assert_eq!(seat.ctx.memory(|m| m.focused()), Some(response.id));
+    assert_eq!(
+        seat.output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .focus,
+        id
+    );
+    assert_eq!(keys::named(&seat.output, "Artwork canvas").0, id);
+    fn border(shape: &egui::Shape, rect: egui::Rect, stroke: egui::Stroke) -> bool {
+        match shape {
+            egui::Shape::Rect(r) => r.rect == rect && r.stroke == stroke,
+            egui::Shape::Vec(shapes) => shapes.iter().any(|s| border(s, rect, stroke)),
+            _ => false,
+        }
+    }
+    let rect = response.rect.shrink(2.);
+    let stroke = seat.ctx.style().visuals.selection.stroke;
+    assert!(
+        seat.output
+            .shapes
+            .iter()
+            .any(|s| border(&s.shape, rect, stroke)),
+        "actual canvas focus border is not painted"
+    );
+}
 struct Seat {
     ctx: egui::Context,
     time: f64,
@@ -183,7 +214,7 @@ fn craft_type_content_native_punctuation_dialog_blocks_background_undo_and_appli
     seat.invoke(&mut s, "Apply smart punctuation");
     assert!(!is_open(&seat.ctx));
     assert_eq!(content(&s), "«hello wORLD» – …");
-    keys::focused(&seat.ctx, &seat.output, "Artwork canvas");
+    canvas_focus(&seat);
     assert_eq!(s.history.len(), 1);
     let after = wire(&s);
     emit("native-punctuation.oma", &s);
@@ -209,7 +240,7 @@ fn craft_type_content_native_stale_dialog_and_live_cancel_leave_text_and_draft_i
     seat.frame(&mut s, keys::key(Key::Escape, Modifiers::NONE));
     seat.frame(&mut s, vec![]);
     assert!(!is_open(&seat.ctx));
-    keys::focused(&seat.ctx, &seat.output, "Artwork canvas");
+    canvas_focus(&seat);
     assert_eq!(wire(&s), before);
     assert_eq!(
         s.type_edit.as_ref().map(|e| (e.caret, e.anchor)),
