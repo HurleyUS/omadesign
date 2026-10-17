@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    color::{Blend, Rgba},
-    document::{Document, Layer},
+    color::Rgba,
+    document::{Document, Layer, Pixels},
     geom::TypeRun,
 };
 
