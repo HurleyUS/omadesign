@@ -147,6 +147,7 @@ impl Studio {
                 .ok_or("That saved channel no longer exists")?
                 .plane
                 .validate()?;
+            self.persona = crate::tools::Persona::Pixel;
             if !matches!(
                 self.tool,
                 Tool::Brush | Tool::Eraser | Tool::Hand | Tool::Zoom

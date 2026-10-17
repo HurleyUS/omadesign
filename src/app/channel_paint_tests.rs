@@ -28,6 +28,8 @@ fn studio() -> Studio {
         ..Default::default()
     };
     s.select_channel_target(Some(s.doc.channels[0].id)).unwrap();
+    assert_eq!(s.persona, crate::tools::Persona::Pixel);
+    assert!(Tool::Eraser.in_persona(s.persona));
     s
 }
 fn bytes(s: &Studio) -> String {
