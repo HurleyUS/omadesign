@@ -116,6 +116,23 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
     if !shape.text_wrap.is_none() || shape.layout.image.is_some() || shape.layout.frame {
         return Err("Text with contour wrapping, image fill or existing frame children needs an outline appearance adapter; it was not converted".into());
     }
+    if shape
+        .style
+        .fill
+        .gradient()
+        .is_some_and(|g| g.kind == GradientKind::Shape)
+        || shape
+            .style
+            .stroke
+            .as_ref()
+            .and_then(|s| s.gradient.as_ref())
+            .is_some_and(|g| g.kind == GradientKind::Shape)
+    {
+        return Err(
+            "Shape-distance text paint needs a shared outline paint space; it was not converted"
+                .into(),
+        );
+    }
     let geometry = crate::text::outline_path(run)
         .and_then(|path| crate::geom::path_geom(&path, false))
         .unwrap_or_else(|| Geom::Poly {
@@ -151,9 +168,6 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
         vec![(shape.style.fill.clone(), geometry.clone())]
     };
     for (index, (fill, geom)) in fills.into_iter().enumerate() {
-        if fill.is_none() {
-            continue;
-        }
         let fill = fill_in_bounds(&fill, bounds, geom.bbox())?;
         result.push(path_child(
             shape,
@@ -261,6 +275,8 @@ impl Studio {
                         | crate::motion::Prop::Y
                         | crate::motion::Prop::Rotation
                         | crate::motion::Prop::Scale
+                        | crate::motion::Prop::Width
+                        | crate::motion::Prop::Height
                         | crate::motion::Prop::Opacity
                 )
             };

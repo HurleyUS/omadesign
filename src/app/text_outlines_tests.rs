@@ -77,11 +77,15 @@ fn same_paint(before: &tiny_skia::Pixmap, after: &tiny_skia::Pixmap) {
     let mean = sum as f64 / count.max(1) as f64;
     if let Some(root) = std::env::var_os("OMADESIGN_OUTLINES_QA") {
         std::fs::create_dir_all(&root).unwrap();
+        let name = std::thread::current()
+            .name()
+            .unwrap_or("outline")
+            .replace("::", "-");
         before
-            .save_png(std::path::Path::new(&root).join("last-before.png"))
+            .save_png(std::path::Path::new(&root).join(format!("{name}-before.png")))
             .unwrap();
         after
-            .save_png(std::path::Path::new(&root).join("last-after.png"))
+            .save_png(std::path::Path::new(&root).join(format!("{name}-after.png")))
             .unwrap();
     }
     assert!(
@@ -329,7 +333,7 @@ fn craft_painted_outlines_split_linked_story_without_changing_other_frames() {
 
 #[test]
 fn craft_painted_outlines_reject_unsupported_or_locked_owners_before_draft_and_redo() {
-    for mode in 0..4 {
+    for mode in 0..5 {
         let (mut studio, hit) = fixture();
         studio.commit(Cmd::SetOpacity {
             layer: hit.0,
@@ -364,6 +368,14 @@ fn craft_painted_outlines_reject_unsupported_or_locked_owners_before_draft_and_r
         }
         if mode == 2 {
             studio.updates.freezing = true;
+        }
+        if mode == 4 {
+            let Geom::Text(run) = &mut shape.geom else {
+                unreachable!()
+            };
+            run.spans.clear();
+            shape.style.fill =
+                Fill::Gradient(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE));
         }
         if mode == 3 {
             studio
@@ -415,9 +427,12 @@ fn craft_painted_outlines_multi_object_keeps_non_text_and_all_exports_are_vector
     studio.selection = vec![hit, (0, other), (0, rect_id)];
     studio.mark();
     let before = wire(&studio);
+    let picture = image(&studio.doc);
+    emit("multi-before.oma", before.as_bytes());
     studio.create_text_outlines();
     assert_eq!(studio.history.len(), 1);
     assert_eq!(studio.doc.find_shape(0, rect_id), Some(&rect));
+    same_paint(&picture, &image(&studio.doc));
     let svg = crate::svg::export(&studio.doc).unwrap();
     assert!(!svg.contains("<text"));
     assert!(svg.contains("<path"));
@@ -435,9 +450,84 @@ fn craft_painted_outlines_multi_object_keeps_non_text_and_all_exports_are_vector
     emit("outlines.svg", svg.as_bytes());
     emit("outlines.pdf", &pdf);
     emit("outlines.idml", &idml);
+    emit("outlines.oma", wire(&studio).as_bytes());
     reopen(&studio);
     studio.undo();
     assert_eq!(wire(&studio), before);
+}
+
+#[test]
+fn craft_painted_outlines_keep_unpainted_glyphs_editable() {
+    let (mut studio, hit) = fixture();
+    let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+    let Geom::Text(run) = &mut shape.geom else {
+        unreachable!()
+    };
+    run.spans.clear();
+    run.set_character_style(0, 6, |s| s.fill = Some(Fill::None));
+    shape.style.fill = Fill::None;
+    crate::text::fill_contours(&mut shape.geom);
+    studio.mark();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1);
+    assert!(image(&studio.doc).pixels().iter().all(|p| p.alpha() == 0));
+    let paths: Vec<_> = studio.doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|s| s.layout.parent == Some(hit.1))
+        .collect();
+    assert!(!paths.is_empty());
+    assert!(paths.iter().all(|s| s.geom.anchors().next().is_some()));
+    let id = paths[0].id;
+    let saved = wire(&studio);
+    studio.doc.find_shape_mut(0, id).unwrap().style.fill = Fill::Solid(Rgba::BLACK);
+    assert!(image(&studio.doc).pixels().iter().any(|p| p.alpha() > 0));
+    studio.doc = crate::project::decode(&saved).unwrap();
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+}
+
+#[test]
+fn craft_painted_outlines_keep_transform_animation_and_original_owner() {
+    let (mut studio, hit) = fixture();
+    for (prop, first, last) in [
+        (crate::motion::Prop::X, 0., 12.),
+        (crate::motion::Prop::Y, 0., -8.),
+        (crate::motion::Prop::Rotation, 0., 0.15),
+        (crate::motion::Prop::Scale, 1., 0.95),
+        (crate::motion::Prop::Width, 1., 0.8),
+        (crate::motion::Prop::Height, 1., 1.2),
+        (crate::motion::Prop::Opacity, 1., 0.6),
+    ] {
+        for (time, value) in [(0., first), (1., last)] {
+            studio
+                .doc
+                .motion
+                .set_key(hit.1, prop, time, value, crate::motion::Ease::Linear);
+        }
+    }
+    studio.mark();
+    let before = studio.doc.clone();
+    let before_wire = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.doc.motion, before.motion);
+    assert!(studio.doc.find_shape(hit.0, hit.1).unwrap().layout.frame);
+    for time in [0., 0.5, 1.] {
+        same_paint(
+            &crate::compositor::render_export_at(&before, 1., time, true).unwrap(),
+            &crate::compositor::render_export_at(&studio.doc, 1., time, true).unwrap(),
+        );
+    }
+    let after = wire(&studio);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before_wire);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
 }
 
 #[test]
