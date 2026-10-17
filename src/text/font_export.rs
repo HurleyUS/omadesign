@@ -91,17 +91,7 @@ pub(crate) fn instance(
         .unwrap_or_else(|| format!("Instance {}", super::variations::css(&effective)));
     let family = font_inventory::name(&source, &[16, 1]).unwrap_or_else(|| "Omadesign font".into());
     let fingerprint = crate::typography::fingerprint(&derived);
-    let ps = format!(
-        "{}-{}-{fingerprint:032x}",
-        family
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric())
-            .collect::<String>(),
-        style
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric())
-            .collect::<String>()
-    );
+    let ps = postscript_name(&family, &style, fingerprint);
     tables.insert(*b"name", instance_names(&source, &family, &style, &ps)?);
     let mut bbox = None::<rustybuzz::ttf_parser::Rect>;
     for id in 0..face.number_of_glyphs() {
@@ -167,6 +157,31 @@ pub(crate) fn instance(
     let output = font_catalog::encode_tables(derived[..4].try_into().unwrap(), tables)?;
     Face::parse(&output, 0).map_err(|_| "Invalid complete font instance")?;
     Ok(Arc::new(output))
+}
+
+/// Keep a unique ASCII PostScript name inside the OpenType 63-byte bound.
+/// Args: full display family, instance style and program identity. Returns a safe name without truncating display names.
+fn postscript_name(family: &str, style: &str, fingerprint: u128) -> String {
+    let ascii = |s: &str| {
+        s.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect::<String>()
+    };
+    let family = ascii(family);
+    let style = ascii(style);
+    let prefix = format!(
+        "{}-{}",
+        if family.is_empty() {
+            "OmaFont"
+        } else {
+            &family
+        },
+        if style.is_empty() { "Instance" } else { &style }
+    );
+    format!(
+        "{}-{fingerprint:032x}",
+        prefix.chars().take(30).collect::<String>()
+    )
 }
 
 fn instance_names(
@@ -382,5 +397,55 @@ mod tests {
             FONT,
             include_bytes!("../../tests/assets/fonts/EBGaramond.ttf")
         );
+    }
+    #[test]
+    fn craft_font_export_long_and_unicode_family_names_remain_valid_and_readable() {
+        let fingerprint = 0x1234u128;
+        for (family, style) in [
+            (
+                "A very long international family with many width and optical labels",
+                "Extra Condensed Super Extra Bold",
+            ),
+            ("日本語書体", "太字"),
+        ] {
+            let ps = postscript_name(family, style, fingerprint);
+            assert!(ps.len() <= 63);
+            assert!(ps.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+            assert!(ps.ends_with("00000000000000000000000000001234"));
+        }
+        let bytes = Arc::new(FONT.to_vec());
+        let face = Face::parse(&bytes, 0).unwrap();
+        let family = "A very long font family 日本語 with a retained readable complete name";
+        let mut tables = BTreeMap::new();
+        for record in face.raw_face().table_records {
+            tables.insert(
+                record.tag.to_bytes(),
+                face.raw_face().table(record.tag).unwrap().to_vec(),
+            );
+        }
+        tables.insert(
+            *b"name",
+            instance_names(
+                &face,
+                family,
+                "Regular",
+                &postscript_name(family, "Regular", fingerprint),
+            )
+            .unwrap(),
+        );
+        let input = Arc::new(font_catalog::encode_tables([0, 1, 0, 0], tables).unwrap());
+        let program = instance(
+            &input,
+            &FontVariations::new(vec![(*b"wght", 800.)]).unwrap(),
+        )
+        .unwrap();
+        let face = Face::parse(&program, 0).unwrap();
+        assert_eq!(font_inventory::name(&face, &[16]).as_deref(), Some(family));
+        assert_eq!(
+            font_inventory::name(&face, &[17]).as_deref(),
+            Some("ExtraBold")
+        );
+        assert!(font_inventory::name(&face, &[6]).unwrap().len() <= 63);
+        assert_eq!(FONT, bytes.as_slice());
     }
 }
