@@ -1,12 +1,16 @@
 use super::*;
 use tiny_skia::Transform;
 
+/// Map a point through a painted placement.
+/// Args: matrix and point. Returns mapped document coordinates.
 pub(super) fn map_point(transform: Transform, point: Pt) -> Pt {
     let mut point = tiny_skia::Point::from_xy(point.x, point.y);
     transform.map_point(&mut point);
     Pt::new(point.x, point.y)
 }
 
+/// Resolve an object placement in the current editor.
+/// Args: editor, layer and shape. Returns placement through ancestor and own poses and rotations.
 pub(super) fn shape_transform(
     studio: &Studio,
     layer: usize,
@@ -15,6 +19,8 @@ pub(super) fn shape_transform(
     shape_transform_with(&studio.doc, layer, shape, |id| studio.live_pose(id))
 }
 
+/// Resolve an object placement from a document snapshot.
+/// Args: document, layer, shape and pose sampler. Returns the painter-compatible object transform.
 pub(super) fn shape_transform_with(
     doc: &crate::document::Document,
     layer: usize,
@@ -25,6 +31,8 @@ pub(super) fn shape_transform_with(
     compositor::frame_transform(shape, parent, pose(shape.id))
 }
 
+/// Place editable nodes and their relative handles.
+/// Args: anchors and affine placement. Returns mapped anchors without changing their source geometry.
 pub(super) fn transform_anchors(anchors: &[Anchor], transform: Transform) -> Vec<Anchor> {
     anchors
         .iter()
@@ -38,6 +46,8 @@ pub(super) fn transform_anchors(anchors: &[Anchor], transform: Transform) -> Vec
         .collect()
 }
 
+/// Locate editable nodes on the current painted object.
+/// Args: editor, layer and shape. Returns mapped path anchors, or none for other geometry.
 pub(super) fn posed_anchors(
     studio: &Studio,
     layer: usize,
@@ -53,6 +63,8 @@ pub(super) fn posed_anchors(
     ))
 }
 
+/// Recover editable coordinates from a document point.
+/// Args: editor, layer, shape and document point. Returns local coordinates, or none for a singular placement.
 pub(super) fn local_point(
     studio: &Studio,
     layer: usize,
@@ -65,6 +77,8 @@ pub(super) fn local_point(
     ))
 }
 
+/// Pick an actual painted node or handle.
+/// Args: editor, layer, shape, document point and hit distance. Returns an unclipped editable path target.
 pub(super) fn hit_shape_node(
     studio: &Studio,
     layer: usize,
@@ -93,11 +107,15 @@ pub(super) fn hit_shape_node(
     segment
 }
 
+/// Resolve the static outer-frame orientation.
+/// Args: editor, layer and shape. Returns the inherited angle in radians.
 pub(super) fn parent_angle(studio: &Studio, layer: usize, shape: &crate::document::Shape) -> f32 {
     let transform = compositor::shape_parent_transform(&studio.doc, layer, shape.id);
     transform.ky.atan2(transform.sx)
 }
 
+/// Resize selected roots in their inherited coordinates.
+/// Args: document, snapshots, source and destination bounds and grip angle. Returns updates root geometry while the existing solver owns descendants.
 pub(super) fn nested_resize(
     doc: &mut crate::document::Document,
     snaps: &[ObjSnap],
@@ -190,6 +208,8 @@ pub(super) fn nested_resize(
     }
 }
 
+/// Rotate captured geometry through its frame hierarchy.
+/// Args: document, snapshots, pivot and angle. Returns updates each object once in its new parent coordinates.
 pub(super) fn nested_rotate(
     doc: &mut crate::document::Document,
     snaps: &[ObjSnap],
@@ -248,6 +268,8 @@ fn restore_geometry(doc: &mut crate::document::Document, snaps: &[ObjSnap]) {
     }
 }
 
+/// Resolve outer placements for selected animation roots.
+/// Args: editor and captured objects. Returns parent transforms with selected descendants excluded.
 pub(super) fn motion_parents(
     studio: &Studio,
     snaps: &[ObjSnap],
