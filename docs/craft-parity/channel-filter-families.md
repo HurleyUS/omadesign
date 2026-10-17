@@ -1,0 +1,9 @@
+# Scalar filter families
+
+The Channels adjustment dialog exposes all 30 existing Omadesign raster filter/effect choices for saved alpha and Quick Mask. The existing raster filter entry follows the same target. Numeric labels and ranges come from one shared settings catalog. Filter strength and the captured soft selection blend the completed operation once.
+
+Scalar and RGBA evaluation share the spatial kernels. Scalar processing carries one float per pixel, without an RGBA proxy or byte-mask reconstruction. Neighborhood filters repeat grid edges. Alpha threshold, feather, growth and shrinkage edit coverage; tonal and color operations interpret it as a grayscale image. Color results use Omadesign's shared luminance coefficients, retaining equal RGB values directly. Chroma key converts keyed transparency to zero coverage. Grayscale and saturation-only operations preserve an already-gray channel's values. Existing RGB premultiplication and alpha blending remain on the RGBA path.
+
+The same worker owns preview and full Apply. Cancellation is checked inside parallel processing and between blur batches; a cancelled result cannot publish. Target, allocation, selection and document guards remain. Apply uses the existing scalar command; Cancel and Original view do not change the document. The archive remains the existing full-depth scalar representation.
+
+This source is unqualified pending the current affected group, genuine desktop workflow and independent sample inspection. The checks cover all choices, explicit spatial/tonal equations, strength and selection, working-buffer release, native fields, one Undo and reopen. The larger Craft filter catalog, advanced filter options, calculations, color/spot channels, interchange and full parity remain open. No app-version, schema or dependency change is involved. Michael's current QA window stays open and untouched.
