@@ -236,6 +236,7 @@ impl Studio {
                 run.wrap_width = None;
             }
             run.layout = None;
+            if !area { run.contours = crate::text::shape(run); }
         });
         self.mark();
     }

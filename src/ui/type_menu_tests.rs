@@ -108,6 +108,10 @@ fn craft_type_command_menus_linked_point_conversion_preserves_story_in_one_undo(
     assert!(run(&studio, ids[1]).frame.is_none());
     assert!(run(&studio, ids[1]).thread.is_none());
     assert_eq!(
+        run(&studio, ids[1]).contours,
+        crate::text::shape(run(&studio, ids[1]))
+    );
+    assert_eq!(
         ids.iter()
             .map(|&hit| run(&studio, hit).content.as_str())
             .collect::<String>(),
@@ -194,6 +198,7 @@ fn craft_type_command_menus_top_menu_converts_and_reopens_linked_text_without_ob
     assert_eq!(studio.history.len(), 1);
     let point = saved(&studio);
     emit("thread-point.oma", &studio);
+    reopen(&studio);
     seat.click(&mut studio, "Type");
     seat.invoke(&mut studio, "Convert to area text");
     assert!(run(&studio, ids[1]).frame.is_some());
