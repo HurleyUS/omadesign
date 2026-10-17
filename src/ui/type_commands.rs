@@ -153,7 +153,7 @@ pub(super) fn show(ctx: &egui::Context, studio: &mut Studio) {
     let owner = Id::new((ID, &draft.owner, draft.instance));
     let mut apply = false;
     let mut cancel = false;
-    let modal = egui::Modal::new(Id::new(ID)).show(ctx, |ui| {
+    let modal = egui::Modal::new(Id::new(ID)).backdrop_color(super::theme::bg_window().gamma_multiply(0.55)).show(ctx, |ui| {
         ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 350.));
         ui.heading("Smart punctuation");
         ui.horizontal_wrapped(|ui| {
