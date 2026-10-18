@@ -1338,9 +1338,46 @@ fn transformed_bounds(
     Some(bounds)
 }
 
+/// Keep one-to-one glyph coverage stable when the viewport moves by whole pixels.
+/// Args: destination, existing SVG text layout, world placement, authored rotation, opacity, blend and screen mask.
+/// Returns true after drawing the original tree in its stable local pixel grid; other transforms retain the general route.
+fn draw_svg_type_integer(
+    pm: &mut Pixmap, layout: &crate::text::svg_type::Layout, world: Transform,
+    rotation: Transform, opacity: f32, blend: tiny_skia::BlendMode, mask: Option<&tiny_skia::Mask>,
+) -> bool {
+    if world.sx != 1. || world.sy != 1. || world.kx != 0. || world.ky != 0.
+        || !world.tx.is_finite() || !world.ty.is_finite()
+        || world.tx.fract() != 0. || world.ty.fract() != 0.
+    { return false; }
+    let rect = layout.tree.root().abs_layer_bounding_box();
+    let Some(bounds) = transformed_bounds(crate::geom::Bounds::from_min_size(
+        Pt::new(rect.x(), rect.y()), Pt::new(rect.width(), rect.height())), rotation)
+    else { return false; };
+    let min = Pt::new(bounds.min.x.floor() - 2., bounds.min.y.floor() - 2.);
+    let max = Pt::new(bounds.max.x.ceil() + 2., bounds.max.y.ceil() + 2.);
+    let origin = min + Pt::new(world.tx, world.ty);
+    if ![min.x, min.y, max.x, max.y, origin.x, origin.y].into_iter().all(f32::is_finite)
+        || f64::from(origin.x).abs() >= f64::from(i32::MAX)
+        || f64::from(origin.y).abs() >= f64::from(i32::MAX)
+        || max.x - min.x <= 0. || max.y - min.y <= 0.
+        || f64::from(max.x - min.x) >= f64::from(u32::MAX)
+        || f64::from(max.y - min.y) >= f64::from(u32::MAX)
+    { return false; }
+    let (width, height) = ((max.x - min.x) as u32, (max.y - min.y) as u32);
+    let Ok(bytes) = crate::deep_color::storage::count(width, height, 4) else { return false; };
+    let Ok(_memory) = crate::resources::global().reserve_now(bytes as u64, &|| Ok(())) else { return false; };
+    let Some(mut pixels) = Pixmap::new(width, height) else { return false; };
+    let transform = Transform::from_translate(-min.x, -min.y).pre_concat(rotation);
+    resvg::render(&layout.tree, transform, &mut pixels.as_mut());
+    pm.draw_pixmap(origin.x as i32, origin.y as i32, pixels.as_ref(),
+        &PixmapPaint { opacity, blend_mode: blend, ..Default::default() }, Transform::identity(), mask);
+    true
+}
+
 fn draw_svg_type(pm:&mut Pixmap,shape:&Shape,run:&crate::geom::TypeRun,layout:&crate::text::svg_type::Layout,t:Transform,opacity:f32,blend:tiny_skia::BlendMode,pose:Pose,mask:Option<&tiny_skia::Mask>){
     let center=shape.geom.bbox().center();let world=t.pre_concat(pose.to_skia(shape.world_bbox().center()));let xf=world.pre_concat(Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y));
     let op=(opacity*pose.opacity.unwrap_or(shape.opacity)).clamp(0.,1.);let fill=pose.fill_reveal.unwrap_or(1.).clamp(0.,1.);let stroke=pose.stroke_reveal.unwrap_or(1.).clamp(0.,1.);
+    if fill>=1. && stroke>=1. && draw_svg_type_integer(pm,layout,world,Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y),op,blend,mask){return;}
     if fill>=1. && stroke>=1. && op>=1. && blend==tiny_skia::BlendMode::SourceOver && mask.is_none(){resvg::render(&layout.tree,xf,&mut pm.as_mut());return;}
     let Some(mut buffer)=Pixmap::new(pm.width(),pm.height())else{return;};
     if fill>=1. && stroke>=1. {resvg::render(&layout.tree,xf,&mut buffer.as_mut());}
@@ -1792,6 +1829,20 @@ fn draw_checker(pm: &mut Pixmap, origin: Pt, size: Pt) {
 mod tests {
     use super::*;
     use crate::document::{Cmd, Document, Shape, Style, apply};
+
+    #[test]
+    fn svg_type_integer_pan_is_exact_for_filled_and_stroked_glyphs() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="110" height="64"><text x="6" y="43" font-family="DejaVu Sans" font-size="18" fill="#246" stroke="#ddd" stroke-width="0.3">Native Ω</text></svg>"##;
+        let (doc, _) = crate::formats::svg::read(source, "Integer text pan").unwrap();
+        let mut initial = Pixmap::new(110, 64).unwrap();
+        let mut moved = Pixmap::new(150, 90).unwrap();
+        groups::draw(&mut initial, &doc, Transform::identity(), &Draft::none(), None, None);
+        groups::draw(&mut moved, &doc, Transform::from_translate(17., 11.), &Draft::none(), None, None);
+        let cropped: Vec<_> = moved.data().chunks_exact(150 * 4).skip(11).take(64)
+            .flat_map(|row| row[17 * 4..127 * 4].iter().copied()).collect();
+        assert!(initial.data().chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert_eq!(initial.data(), cropped);
+    }
 
     #[test]
     fn svg_type_native_character_patterns_share_object_placement_opacity_and_clips() {

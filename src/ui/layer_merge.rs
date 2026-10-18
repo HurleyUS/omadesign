@@ -70,7 +70,9 @@ pub(super) fn menu(ui: &mut Ui, studio: &Studio, owner: Option<u64>) -> Option<K
                 button = button.shortcut_text("Ctrl+E");
             }
         }
-        if ui.add_enabled(enabled, button).clicked() {
+        let response = ui.add_enabled(enabled, button);
+        let response = super::agent::named(ui, response, kind.name());
+        if response.clicked() {
             selected = Some(kind);
         }
     }
