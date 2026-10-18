@@ -107,6 +107,10 @@ impl Shaper<'_> {
 
                 let positions = output.glyph_positions();
                 let infos = output.glyph_infos();
+                let mut boundaries: Vec<_> = infos.iter().map(|info| info.cluster as usize).collect();
+                boundaries.push(sub_text.len());
+                boundaries.sort_unstable();
+                boundaries.dedup();
 
                 for i in 0..output.len() {
                     let pos = positions[i];
@@ -115,17 +119,22 @@ impl Shaper<'_> {
 
                     let start = info.cluster as usize;
 
-                    let end = if ltr {
+                    let repeated = if ltr {
                         i.checked_add(1)
                     } else {
                         i.checked_sub(1)
                     }
                     .and_then(|last| infos.get(last))
-                    .map_or(sub_text.len(), |info| info.cluster as usize);
+                    .is_some_and(|info| info.cluster as usize == start);
+                    let end = if repeated {
+                        start
+                    } else {
+                        boundaries[boundaries.binary_search(&start).unwrap() + 1]
+                    };
 
                     glyphs.push(Glyph {
                         byte_idx: ByteIndex::new(idx),
-                        cluster_len: end.checked_sub(start).unwrap_or(0), // TODO: can fail?
+                        cluster_len: end - start,
                         text: sub_text[start..end].to_string(),
                         id: GlyphId(info.glyph_id as u16),
                         dx: pos.x_offset,

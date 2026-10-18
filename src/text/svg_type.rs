@@ -1113,11 +1113,7 @@ pub fn source(run: &TypeRun) -> Option<String> {
         ],
         svg.viewport,
     );
-    if run.manual_kern.is_empty() {
-        Some(source)
-    } else {
-        positioning::pairs(run, source, 0, &run.content)
-    }
+    positioning::pairs(run, source, 0, &run.content)
 }
 
 /// Apply inherited object paint to a temporary SVG source view.
