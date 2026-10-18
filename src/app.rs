@@ -18,6 +18,7 @@ pub use hierarchy_edit::TreePlacement;
 mod key_hints;
 pub(crate) mod keyboard_authoring;
 mod layer_groups;
+mod layer_copy;
 mod layout;
 pub(crate) use layout::LayoutStackField;
 mod layout_components;
@@ -1911,11 +1912,17 @@ impl Studio {
     }
 
     fn duplicate_selection_command(&mut self, delta: Pt) {
+        if self.selection.is_empty()
+            && let Some(index) = self.selected_layer.and_then(|id| self.doc.layers.iter().position(|l| l.id == id))
+        {
+            self.duplicate_layer_tree_by(index, delta);
+            return;
+        }
         let mut selected = Vec::new();
         let mut commands = Vec::new();
         let mut new_layers = 0;
         let mut ids = self.selection.clone();
-        let mut groups: Vec<_> = self.selected_layer.filter(|_| self.selection.is_empty()).and_then(|id| self.doc.layers.iter().position(|l| l.id == id)).into_iter().collect();
+        let mut groups = Vec::new();
         for &hit in &self.selection {
             if self.individual_object == Some(hit) {
                 continue;
@@ -1933,75 +1940,23 @@ impl Studio {
         let mut copied_group = None;
         let mut duplicated_motion = self.doc.motion.clone();
         for group in groups {
-            let tree = self.layer_tree_indices(group);
-            let layer_ids: HashMap<_, _> = tree
-                .iter()
-                .map(|&i| (self.doc.layers[i].id, crate::document::next_id()))
-                .collect();
-            let shape_ids: HashMap<_, _> = tree
-                .iter()
-                .flat_map(|&i| {
-                    self.doc.layers[i]
-                        .kind
-                        .shapes()
-                        .unwrap_or(&[])
-                        .iter()
-                        .map(|s| (s.id, crate::document::next_id()))
-                })
-                .collect();
-            for track in &self.doc.motion.tracks {
-                if let Some(&id) = shape_ids
-                    .get(&track.shape)
-                    .or_else(|| layer_ids.get(&track.shape))
-                {
-                    let mut copied = track.clone();
-                    copied.shape = id;
-                    duplicated_motion.tracks.push(copied);
-                }
-            }
-            for &i in &tree {
-                let mut layer = self.doc.layers[i].clone();
+            let copied = match layer_copy::prepare(&self.doc, group, delta) {
+                Ok(copied) => copied,
+                Err(error) => { self.status = error; return; }
+            };
+            layer_copy::append_motion(&self.doc.motion, &mut duplicated_motion, &copied.shape_ids, &copied.layer_ids);
+            copied_group = Some(copied.layer_ids[&self.doc.layers[group].id]);
+            for (&i, layer) in copied.indices.iter().zip(&copied.layers) {
                 let index = self.doc.layers.len() + new_layers;
-                for mask in &mut layer.artwork_masks {mask.remap(&layer_ids,&shape_ids,tiny_skia::Transform::from_translate(delta.x,delta.y));}
-                layer.id = layer_ids[&layer.id];
-                if i != group {
-                    layer.parent = layer.parent.and_then(|p| layer_ids.get(&p).copied());
-                }
-                if i == group {
-                    layer.name = format!("{} copy", layer.name);
-                    copied_group = Some(layer.id);
-                }
-                if let Some(shapes) = layer.kind.shapes_mut() {
-                    for shape in shapes {
-                        let old = shape.id;
-                        for mask in &mut shape.artwork_masks {mask.remap(&layer_ids,&shape_ids,tiny_skia::Transform::from_translate(delta.x,delta.y));}
-                        shape.id = shape_ids[&old];
-                        crate::layout_components::remap_duplicate(shape, &shape_ids);
-                        crate::text_geometry::remap_copy_in_document(&self.doc, shape, &shape_ids);
-                        shape.layout.parent =
-                            shape.layout.parent.and_then(|p| shape_ids.get(&p).copied());
-                        shape.geom.translate(delta);
-                        if self.selection.contains(&(i, old)) {
-                            selected.push((index, shape.id));
-                        }
-                    }
-                } else if let Some((origin, size, rotation)) = layer.kind.raster_xform() {
-                    layer.kind.set_raster_xform(origin + delta, size, rotation);
-                    if self.selection.contains(&(i, RASTER_ID)) {
-                        selected.push((index, RASTER_ID));
+                for &(li, id) in &self.selection {
+                    if li == i {
+                        selected.push((index, copied.shape_ids.get(&id).copied().unwrap_or(id)));
                     }
                 }
-                if layer.kind.pixels().is_none() && layer.mask.is_some() {
-                    if layer.mask_size.x <= 0. || layer.mask_size.y <= 0. {
-                        let m = layer.mask.as_ref().unwrap();
-                        layer.mask_size = Pt::new(m.w as f32, m.h as f32);
-                    }
-                    layer.mask_origin += delta;
-                }
-                commands.push(Cmd::AddLayer { index, layer });
+                commands.push(Cmd::AddLayer { index, layer: layer.clone() });
                 new_layers += 1;
             }
-            ids.retain(|(li, _)| !tree.contains(li));
+            ids.retain(|(li, _)| !copied.indices.contains(li));
         }
         let standalone = ids.clone();
         for (li, id) in standalone.clone() {
@@ -2028,29 +1983,13 @@ impl Studio {
             .filter(|(_, id)| *id != RASTER_ID)
             .map(|(_, id)| (*id, crate::document::next_id()))
             .collect();
-        for track in &self.doc.motion.tracks {
-            if let Some(&id) = remap.get(&track.shape) {
-                let mut copied = track.clone();
-                copied.shape = id;
-                duplicated_motion.tracks.push(copied);
-            }
-        }
+        layer_copy::append_motion(&self.doc.motion, &mut duplicated_motion, &remap, &HashMap::new());
         for (li, id) in ids {
             if id == RASTER_ID {
                 if let Some(mut layer) = self.doc.layers.get(li).cloned() {
                     let previous_id = layer.id;
                     layer.id = crate::document::next_id();
-                    for track in self
-                        .doc
-                        .motion
-                        .tracks
-                        .iter()
-                        .filter(|track| track.shape == previous_id)
-                    {
-                        let mut copied = track.clone();
-                        copied.shape = layer.id;
-                        duplicated_motion.tracks.push(copied);
-                    }
+                    layer_copy::append_motion(&self.doc.motion, &mut duplicated_motion, &HashMap::new(), &HashMap::from([(previous_id, layer.id)]));
                     layer.parent = None;
                     layer.name = format!("{} copy", layer.name);
                     if let Some((origin, size, rotation)) = layer.kind.raster_xform() {
@@ -2083,7 +2022,12 @@ impl Studio {
                     after: duplicated_motion,
                 });
             }
-            self.commit(Cmd::Batch(commands));
+            let command = Cmd::Batch(commands);
+            if let Err(error) = layer_copy::validate(&self.doc, &command) {
+                self.status = error;
+                return;
+            }
+            self.commit(command);
             self.selected_layer = if standalone.is_empty() {
                 copied_group
             } else {

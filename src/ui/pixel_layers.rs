@@ -5,6 +5,7 @@ use eframe::egui::{self, Button, Ui};
 enum Action {
     Pixel,
     Group,
+    DuplicateLayer(usize),
     Duplicate,
     Delete(usize),
     Arrange(usize, bool, bool),
@@ -24,6 +25,15 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
             }
             if ui.button("New group").clicked() {
                 action = Some(Action::Group);
+            }
+            if ui
+                .add_enabled(
+                    active.is_some_and(|i| studio.can_duplicate_layer_tree(i)),
+                    Button::new("Duplicate layer"),
+                )
+                .clicked()
+            {
+                action = active.map(Action::DuplicateLayer);
             }
             let selection = !studio.selection.is_empty() || studio.selected_layer.is_some();
             if ui
@@ -78,6 +88,9 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
         match action {
             Action::Pixel => studio.add_layer(true),
             Action::Group => studio.add_layer_group(),
+            Action::DuplicateLayer(i) => {
+                studio.duplicate_layer_tree(i);
+            }
             Action::Duplicate => studio.duplicate_selection(),
             Action::Delete(i) => studio.delete_layer_tree(i),
             Action::Arrange(i, up, true) => studio.move_layer_tree_extreme(i, up),

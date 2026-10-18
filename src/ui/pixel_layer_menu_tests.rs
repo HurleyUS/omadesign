@@ -209,3 +209,32 @@ fn craft_pixel_layer_creation_deletion_and_invalid_owners_follow_real_menu_gates
         assert_eq!(studio.history.len(), 0);
     }
 }
+
+#[test]
+fn craft_pixel_duplicate_layer_native_menu_copies_the_active_layer_not_other_selected_objects() {
+    let mut studio = fixture();
+    let source = studio.doc.layers[0].id;
+    let original = serde_json::to_value(&studio.doc.layers[0].kind).unwrap();
+    studio
+        .doc
+        .layers
+        .push(Layer::raster("Other selected layer", 4, 1).unwrap());
+    let other = studio.doc.layers[1].id;
+    studio.selection = vec![(1, crate::document::RASTER_ID)];
+    studio.selected_layer = None;
+    let before = encoded(&studio);
+    let mut seat = Seat::new();
+    menu(&mut seat, &mut studio, None, "Duplicate layer");
+    assert_eq!(studio.doc.layers.len(), 3);
+    assert_eq!(studio.doc.layers[0].id, source);
+    assert_ne!(studio.doc.layers[1].id, source);
+    assert_eq!(studio.doc.layers[1].name, "Source copy");
+    assert_eq!(
+        serde_json::to_value(&studio.doc.layers[1].kind).unwrap(),
+        original
+    );
+    assert_eq!(studio.doc.layers[2].id, other);
+    assert_eq!(studio.active_layer, Some(1));
+    assert_eq!(studio.selected_layer, Some(studio.doc.layers[1].id));
+    undo_reopen(&mut studio, &before, 0);
+}
