@@ -968,7 +968,7 @@ fn process_chunk(
             None => continue,
         };
 
-        let tmp_glyphs = fallback::shape(&chunk.text, font, span, resolver, fontdb);
+        let tmp_glyphs = fallback::shape(&chunk.text, font, span, &chunk.spans, resolver, fontdb);
 
         // Do nothing with the first run.
         if glyphs.is_empty() {

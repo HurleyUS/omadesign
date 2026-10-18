@@ -65,6 +65,13 @@ pub(crate) fn check(studio: &Studio, name: &str) {
         std::fs::write(out.join("editable.svg"), exported).unwrap();
         std::fs::write(out.join("native.png"), png).unwrap();
         std::fs::write(out.join("source.oma"), saved).unwrap();
+        let positions: Vec<_> = (0..run(studio).content.chars().count())
+            .map(|i| {
+                let p = crate::text::caret_pt(run(studio), i);
+                [p.x, p.y]
+            })
+            .collect();
+        std::fs::write(out.join("positions.json"), serde_json::to_vec(&positions).unwrap()).unwrap();
     }
 }
 #[test]

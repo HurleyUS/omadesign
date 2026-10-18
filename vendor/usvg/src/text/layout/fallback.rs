@@ -8,6 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 struct Shaper<'a> {
     text: &'a str,
     span: &'a TextSpan,
+    spans: &'a [TextSpan],
 }
 
 impl Shaper<'_> {
@@ -21,10 +22,7 @@ impl Shaper<'_> {
         fontdb: &Database,
     ) -> Vec<Glyph> {
         let text = self.text;
-        let small_caps = self.span.small_caps;
-        let apply_kerning = self.span.apply_kerning;
         let variations = &self.span.font.variations;
-        let settings = &self.span.font.features;
         let font_size = self.span.font_size.get();
         let font_optical_sizing = self.span.font_optical_sizing;
         if range.is_empty() {
@@ -90,19 +88,27 @@ impl Shaper<'_> {
                 buffer.set_direction(hb_direction);
 
                 let mut features = Vec::new();
-                if small_caps {
-                    features.push(rustybuzz::Feature::new(Tag::from_bytes(b"smcp"), 1, ..));
+                for span in self.spans {
+                    let start = span.start.max(range.start);
+                    let end = span.end.min(range.end);
+                    if start >= end {
+                        continue;
+                    }
+                    for (tag, value) in [
+                        (*b"smcp", u32::from(span.small_caps)),
+                        (*b"kern", u32::from(span.apply_kerning)),
+                    ]
+                    .into_iter()
+                    .chain(span.font.features.iter().copied())
+                    {
+                        features.push(rustybuzz::Feature {
+                            tag: Tag::from_bytes(&tag),
+                            value,
+                            start: (start - range.start) as u32,
+                            end: (end - range.start) as u32,
+                        });
+                    }
                 }
-
-                if !apply_kerning {
-                    features.push(rustybuzz::Feature::new(Tag::from_bytes(b"kern"), 0, ..));
-                }
-
-                features.extend(
-                    settings.iter().map(|(tag, value)| {
-                        rustybuzz::Feature::new(Tag::from_bytes(tag), *value, ..)
-                    }),
-                );
                 let output = rustybuzz::shape(&rb_font, &features, buffer);
 
                 let positions = output.glyph_positions();
@@ -328,13 +334,14 @@ pub(super) fn shape(
     text: &str,
     primary: Arc<ResolvedFont>,
     span: &TextSpan,
+    spans: &[TextSpan],
     resolver: &FontResolver,
     db: &mut Arc<Database>,
 ) -> Vec<Glyph> {
     if text.is_empty() {
         return Vec::new();
     }
-    let shaper = Shaper { text, span };
+    let shaper = Shaper { text, span, spans };
     let bidi = unicode_bidi::BidiInfo::new(text, Some(unicode_bidi::Level::ltr()));
     let original = shaper.visual(
         &[Run {
