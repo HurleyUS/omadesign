@@ -528,7 +528,7 @@ fn svg_character_scale_guides_bake_spacing_without_stretching_synthetic_jumps() 
                 }
             }
         }
-        for g in layout(run(&s)).unwrap().glyphs {
+        for g in &layout(run(&s)).unwrap().glyphs {
             assert!((g.px - 32.).abs() < 0.001, "{name}: {}", g.px);
         }
     }
