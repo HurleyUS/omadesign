@@ -172,6 +172,13 @@ impl TypeRun {
         style.end = 0;
         style
     }
+    /// Inherit authored SVG styles without freezing a computed fallback onto newly typed text.
+    /// Args: logical character index. Returns the native override or ordinary native text style.
+    pub(crate) fn typing_style(&self,index:usize)->CharSpan {
+        if self.svg_text.is_none(){return self.character_style(index);}
+        let mut style=self.spans.iter().find(|s|s.start<=index && index<s.end).cloned().unwrap_or_default();
+        style.start=0;style.end=0;style
+    }
     /// Normalized, complete style intervals, including inherited gaps. The number
     /// of intervals follows style changes rather than the number of characters.
     pub fn character_style_runs(&self, start: usize, end: usize) -> Vec<CharSpan> {
@@ -313,7 +320,7 @@ impl TypeRun {
         };
         let inserted_paragraph = old_style(start);
         let paragraph_styles: Vec<_> = old_starts.iter().map(|&at| old_style(at)).collect();
-        let inherited = pending.unwrap_or_else(|| self.character_style(start.saturating_sub(1)));
+        let inherited = pending.unwrap_or_else(|| self.typing_style(start.saturating_sub(1)));
         let n = text.chars().count();
         if n > 0 {
             chars.push(CharSpan {

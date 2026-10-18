@@ -47,6 +47,7 @@ text = [
     "ttf-parser",
     "unicode-bidi",
     "unicode-script",
+    "unicode-segmentation",
     "unicode-vo",
 ]
 
@@ -125,6 +126,10 @@ optional = true
 
 [dependencies.unicode-script]
 version = "0.5"
+optional = true
+
+[dependencies.unicode-segmentation]
+version = "1.13.3"
 optional = true
 
 [dependencies.unicode-vo]

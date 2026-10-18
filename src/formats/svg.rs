@@ -608,7 +608,7 @@ impl Reader<'_> {
                 }
                 usvg::Node::Image(image) => self.image(node, image, parent)?,
                 usvg::Node::Text(text) => {
-                    let native=!self.rich_text.get(text.id()).is_some_and(|(svg,_,_)|svg.flow.is_some()) && text.chunks().iter().all(|c|c.text().is_ascii()) && self.text(text,parent)?;
+                    let native=!self.rich_text.get(text.id()).is_some_and(|(svg,_,_)|svg.flow.is_some()) && text.chunks().iter().all(|c|c.text().is_ascii() && c.spans().iter().all(|s|s.font().families().len()==1)) && self.text(text,parent)?;
                     if !native && !self.rich_type(text,parent)? {
                         warn(&mut self.warnings,"Complex SVG text retained as editable outlines; text content cannot be edited as type.".into());
                         self.children(text.flattened(), parent, depth + 1)?;
@@ -920,26 +920,29 @@ impl Reader<'_> {
     fn rich_type(&mut self,text:&usvg::Text,parent:Option<u64>)->Result<bool,String> {
         let Some((mut svg,content,manual_kern))=self.rich_text.get(text.id()).cloned() else {return Ok(false);};
         let glyph=text.layouted().iter().flat_map(|s|&s.positioned_glyphs).next();
-        let font=glyph.and_then(|g|crate::text::webfonts::reference(self.tree.fontdb(),g.font)).unwrap_or_default();
+        let font=glyph.and_then(|g|crate::text::webfonts::reference(self.tree.fontdb(),g.font)).ok_or("Cannot retain this SVG text face within the existing font archive limits")?;
         let px=text.chunks().iter().flat_map(|c|c.spans()).next().map_or(16.,|s|s.font_size().get());
         svg.base_font=font.clone();svg.base_px=px;
-        for chunk in text.chunks(){for span in chunk.spans(){for family in span.font().families(){if let usvg::FontFamily::Named(requested)=family && !self.tree.fontdb().faces().any(|face|face.families.iter().any(|(name,_)|name.eq_ignore_ascii_case(requested))){
-            let actual=glyph.and_then(|g|self.tree.fontdb().face(g.font)).and_then(|face|face.families.first()).map_or("system sans",|(name,_)|name.as_str());
-            warn(&mut self.warnings,format!("SVG font '{requested}' substituted with '{actual}'."));
-        }}}}
+        for chunk in text.chunks(){for span in chunk.spans(){
+            let available=span.font().families().iter().any(|f|match f {usvg::FontFamily::Named(name)=>self.tree.fontdb().faces().any(|f|f.families.iter().any(|(n,_)|n.eq_ignore_ascii_case(name))),_=>true});
+            if !available {
+                let requested=span.font().families().iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+                let actual=glyph.and_then(|g|self.tree.fontdb().face(g.font)).and_then(|face|face.families.first()).map_or("system sans",|(name,_)|name.as_str());
+                warn(&mut self.warnings,format!("SVG font '{requested}' substituted with '{actual}'."));
+            }
+        }}
+
         let t=text.abs_transform();
         let mut run=TypeRun{content,font,px,manual_kern,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
-        if self.tree.fontdb().faces().any(|f| matches!(f.source,usvg::fontdb::Source::Binary(_))) || text.chunks().iter().flat_map(|c|c.spans()).any(|s|!s.font().features().is_empty()) {
         if let Some(layout) = crate::text::svg_type::layout_with_options(&run, self.options) {
-            for (at, style) in layout.styles {
-                if !style.features.is_empty(){run.set_character_style(at,at+1,|s|s.features=style.features.clone());}
-                if let Some(font) = style.font {
-                    run.set_character_style(at, at+1, |s| {s.font=Some(font.clone()); s.font_variations=style.font_variations.clone();});
+            for (at, style) in &layout.styles {
+                if !style.features.is_empty(){run.set_character_style(*at,at+1,|s|s.features=style.features.clone());}
+                if let Some(axes) = &style.font_variations {
+                    run.set_character_style(*at, at+1, |s| {s.font_variations=Some(axes.clone());});
                 }
             }
-        }
-        crate::text::webfonts::bind(run.svg_text.as_mut().unwrap(), self.tree.fontdb());
-        }
+            crate::text::webfonts::bind(run.svg_text.as_mut().unwrap(), layout.tree.fontdb(),&layout.styles)?;
+        } else {return Err("Cannot resolve this SVG text's font families".into());}
         run.contours=crate::text::shape(&run);
         let fill=text.chunks().iter().flat_map(|c|c.spans()).next().and_then(|s|s.fill()).map(|f|self.paint(f.paint(),f.opacity().get(),text.abs_transform(),Geom::Text(run.clone()).bbox()).unwrap_or_else(||{warn(&mut self.warnings,"SVG type source paint retained; changing object paint replaces it.".into());Fill::Solid(Rgba::BLACK)})).unwrap_or(Fill::None);
         run.svg_text.as_mut().unwrap().base_fill=fill.clone();

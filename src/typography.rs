@@ -631,12 +631,18 @@ fn document_font_ids(doc: &crate::document::Document) -> Result<HashSet<String>,
     let mut ids = HashSet::new();
     for doc in crate::motion::compositions::documents(doc)? {
         for layer in &doc.layers {
-            for shape in layer.kind.shapes().unwrap_or_default() {
+            let current=layer.kind.shapes().unwrap_or_default();
+            let shapes=current.iter().chain(current.iter().flat_map(|shape|match &shape.layout.component {
+                Some(crate::layout_components::ComponentBinding::Instance{nodes,..})=>nodes.iter().map(|n|n.baseline.as_ref()).collect::<Vec<_>>(),
+                _=>Vec::new(),
+            }));
+            for shape in shapes {
                 if let crate::geom::Geom::Text(run) = &shape.geom {
                     ids.extend(
                         std::iter::once(run.font.clone())
                             .chain(run.spans.iter().filter_map(|span| span.font.clone())),
                     );
+                    if let Some(svg)=&run.svg_text {ids.extend(crate::text::svg_type::references(svg));}
                 }
             }
         }

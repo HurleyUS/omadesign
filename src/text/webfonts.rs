@@ -103,32 +103,24 @@ pub(crate) fn load(
 /// Args: font database and selected face. Returns its path or validated content-addressed bytes.
 pub(crate) fn reference(db: &usvg::fontdb::Database, id: usvg::fontdb::ID) -> Option<String> {
     let face = db.face(id)?;
-    match &face.source {
-        usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _) => {
-            Some(p.to_string_lossy().into_owned())
-        }
-        usvg::fontdb::Source::Binary(_) => {
-            let bytes = db
-                .with_face_data(id, super::font_catalog::face_bytes)?
-                .ok()?;
-            if bytes.len() > MAX_FONT {
-                return None;
-            }
-            for (alias, _) in &face.families {
-                if super::BYTES
-                    .get()
-                    .and_then(|cache| cache.lock().ok()?.get(Path::new(alias)).cloned())
-                    .is_some_and(|known| *known == bytes)
-                {
-                    return Some(alias.clone());
-                }
-            }
-            let name = super::font_name(&bytes).unwrap_or_else(|| "Embedded SVG font".into());
-            let reference = format!("omatype:{:032x}", crate::typography::fingerprint(&bytes));
-            super::register_memory_font(&reference, &name, Arc::new(bytes)).ok()?;
-            Some(reference)
+    let bytes = db.with_face_data(id, super::font_catalog::face_bytes)?.ok()?;
+    if let usvg::fontdb::Source::File(path) | usvg::fontdb::Source::SharedFile(path, _) = &face.source {
+        let editable=rustybuzz::ttf_parser::Face::parse(&bytes,0).ok().is_some_and(|f|matches!(f.permissions(),Some(rustybuzz::ttf_parser::Permissions::Installable|rustybuzz::ttf_parser::Permissions::Editable)) && f.is_outline_embedding_allowed());
+        if bytes.len()>MAX_FONT || !editable {
+            if face.index!=0 {return None;}
+            let reference=path.to_string_lossy().into_owned();
+            let _=super::font_bytes_for(&crate::geom::TypeRun{font:reference.clone(),..Default::default()});
+            return Some(reference);
         }
     }
+    if bytes.len()>MAX_FONT {return None;}
+    for (alias,_) in &face.families {
+        if alias.starts_with("omatype:") && super::BYTES.get().and_then(|cache|cache.lock().ok()?.get(Path::new(alias)).cloned()).is_some_and(|known|*known==bytes) {return Some(alias.clone());}
+    }
+    let name=super::font_name(&bytes).unwrap_or_else(||"Embedded SVG font".into());
+    let reference=format!("omatype:{:032x}",crate::typography::fingerprint(&bytes));
+    super::register_memory_font(&reference,&name,Arc::new(bytes)).ok()?;
+    Some(reference)
 }
 
 fn family(value: &str) -> Option<String> {
@@ -223,59 +215,26 @@ fn faces(source: &str) -> Result<Vec<&str>, String> {
 
 /// Bind embedded CSS family aliases to the actual portable faces selected for this source.
 /// Args: captured text metadata and its original font database. Returns no value; ordinary missing family requests stay unchanged.
-pub(crate) fn bind(svg: &mut super::svg_type::SvgText, db: &usvg::fontdb::Database) {
-    fn visit(
-        node: &mut super::svg_type::TextNode,
-        db: &usvg::fontdb::Database,
-        inherited: &std::collections::BTreeMap<String, String>,
-    ) {
-        let super::svg_type::TextNode::Element {
-            attributes,
-            children,
-            ..
-        } = node
-        else {
-            return;
-        };
-        let mut style = inherited.clone();
-        for key in ["font-family", "font-weight", "font-style"] {
-            if let Some(value) = attributes
-                .get(key)
-                .filter(|v| !matches!(v.as_str(), "inherit" | "unset"))
-            {
-                style.insert(key.into(), value.clone());
-            }
-        }
-        if let Some(family) = style.get("font-family") {
-            let family = super::font_inventory::first_family(family);
-            let weight = style.get("font-weight").map_or(400, |s| {
-                if s == "bold" {
-                    700
-                } else {
-                    s.parse().unwrap_or(400)
-                }
-            });
-            let slant = match style.get("font-style").map(String::as_str) {
-                Some("italic") => usvg::fontdb::Style::Italic,
-                Some("oblique") => usvg::fontdb::Style::Oblique,
-                _ => usvg::fontdb::Style::Normal,
-            };
-            if let Some(id) = db.query(&usvg::fontdb::Query {
-                families: &[usvg::fontdb::Family::Name(&family)],
-                weight: usvg::fontdb::Weight(weight),
-                style: slant,
-                ..Default::default()
-            }) && db
-                .face(id)
-                .is_some_and(|f| matches!(f.source, usvg::fontdb::Source::Binary(_)))
-                && let Some(reference) = reference(db, id)
-            {
-                attributes.insert("font-family".into(), format!("'{reference}'"));
-            }
-        }
-        for child in children {
-            visit(child, db, &style);
-        }
+pub(crate) fn bind(svg:&mut super::svg_type::SvgText, db:&usvg::fontdb::Database, used:&[(usize,crate::geom::CharSpan)])->Result<(),String> {
+    let mut references=HashMap::new();
+    if let super::svg_type::TextNode::Element{attributes,..}=&mut svg.root {
+        if attributes.get("font-family").is_some_and(|s|matches!(s.as_str(),"inherit"|"unset"|"initial")) {attributes.remove("font-family");}
+        attributes.entry("font-family".into()).or_insert_with(||format!("'{}'",svg.base_font));
     }
-    visit(&mut svg.root, db, &Default::default());
+    super::svg_type::map_families(&mut svg.root,|style,range| {
+        let mut families=Vec::new();
+        for (family,id) in super::svg_type::family_faces(style,db) {
+            let value=if let Some(id)=id {
+                if let Some(value)=references.get(&id) {format!("'{value}'")} else {
+                    let value=reference(db,id).ok_or("Cannot retain this SVG text face within the existing font archive limits")?;
+                    references.insert(id,value.clone());format!("'{value}'")
+                }
+            } else {super::svg_type::family_css(&family)};
+            if !families.contains(&value) {families.push(value);}
+        }
+        let mut actual:Vec<_>=used.iter().filter(|(at,_)|range.contains(at)).filter_map(|(at,style)|style.font.as_ref().map(|f|(*at,f))).collect();
+        actual.sort_by_key(|(at,_)|*at);
+        for (_,value) in actual {let value=format!("'{value}'");if !families.contains(&value) {families.push(value);}}
+        Ok(families.join(", "))
+    })
 }

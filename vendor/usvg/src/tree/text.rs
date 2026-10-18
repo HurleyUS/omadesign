@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use strict_num::NonZeroPositiveF32;
-pub use svgtypes::FontFamily;
+pub use svgtypes::{FontFamily, parse_font_families};
 
 #[cfg(feature = "text")]
 use crate::layout::Span;

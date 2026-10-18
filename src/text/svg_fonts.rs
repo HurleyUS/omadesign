@@ -122,72 +122,39 @@ impl Embedded {
         self.fonts.insert(key, bytes);
         Ok(family)
     }
-    fn rich(&mut self, source: &str, db: &usvg::fontdb::Database) -> Result<String, String> {
-        let xml = roxmltree::Document::parse(source).map_err(|e| e.to_string())?;
-        let mut edits = Vec::new();
-        for node in xml.descendants().filter(|n| {
-            n.is_element() && matches!(n.tag_name().name(), "text" | "tspan" | "textPath")
-        }) {
-            if !node
-                .children()
-                .any(|n| n.is_text() && n.text().is_some_and(|v| !v.is_empty()))
-                && node.attribute("font-family").is_none()
-            {
-                continue;
+    fn families(&mut self, style:&BTreeMap<String,String>, db:&usvg::fontdb::Database)->Result<String,String> {
+        let mut families=Vec::new();
+        for (family,id) in super::svg_type::family_faces(style,db) {
+            let value=if let Some(id)=id {
+                let bytes=db.with_face_data(id,super::font_catalog::face_bytes).ok_or("SVG font is unavailable")??;
+                format!("'{}'",self.add(Arc::new(bytes))?)
+            } else {super::svg_type::family_css(&family)};
+            if !families.contains(&value) {families.push(value);}
+        }
+        if families.is_empty(){return Err("Cannot resolve an SVG text font for embedding".into());}
+        Ok(families.join(", "))
+    }
+
+    fn rich(&mut self, source:&str, db:&usvg::fontdb::Database)->Result<String,String> {
+        let xml=roxmltree::Document::parse(source).map_err(|e|e.to_string())?;
+        let mut edits=Vec::new();
+        for node in xml.descendants().filter(|n|n.is_element() && matches!(n.tag_name().name(),"text"|"tspan"|"textPath")) {
+            if node.children().any(|n|n.is_text() && n.text().is_some_and(|v|!v.is_empty())) || node.attribute("font-family").is_some() {
+                let mut style=BTreeMap::new();
+                for key in ["font-family","font-weight","font-style","font-stretch"] {
+                    if let Some(value)=node.ancestors().find_map(|n|n.attribute(key).filter(|v|!matches!(*v,"inherit"|"unset"))) {style.insert(key.into(),value.into());}
+                }
+                let value=self.families(&style,db)?;
+                let value=super::svg_type::escape(&value);
+                if let Some(attr)=node.attributes().find(|a|a.name()=="font-family") {edits.push((attr.range_value(),value));}
+                else if let Some(end)=source[node.range()].find('>') {let at=node.range().start+end;edits.push((at..at,format!(" font-family=\"{value}\"")));}
             }
-            let value = node
-                .ancestors()
-                .find_map(|n| n.attribute("font-family"))
-                .unwrap_or("sans-serif");
-            let names: Vec<_> = value
-                .split(',')
-                .map(|s| s.trim().trim_matches(['\'', '"']))
-                .collect();
-            let families: Vec<_> = names
-                .iter()
-                .map(|s| match *s {
-                    "serif" => usvg::fontdb::Family::Serif,
-                    "sans-serif" => usvg::fontdb::Family::SansSerif,
-                    "monospace" => usvg::fontdb::Family::Monospace,
-                    _ => usvg::fontdb::Family::Name(s),
-                })
-                .collect();
-            let weight = node
-                .ancestors()
-                .find_map(|n| n.attribute("font-weight"))
-                .map_or(400, |v| match v {
-                    "bold" => 700,
-                    _ => v.parse().unwrap_or(400),
-                });
-            let style = match node.ancestors().find_map(|n| n.attribute("font-style")) {
-                Some("italic") => usvg::fontdb::Style::Italic,
-                Some("oblique") => usvg::fontdb::Style::Oblique,
-                _ => usvg::fontdb::Style::Normal,
-            };
-            let id = db
-                .query(&usvg::fontdb::Query {
-                    families: &families,
-                    weight: usvg::fontdb::Weight(weight),
-                    style,
-                    ..Default::default()
-                })
-                .ok_or("Cannot resolve an SVG text font for embedding")?;
-            let bytes = db
-                .with_face_data(id, super::font_catalog::face_bytes)
-                .ok_or("SVG font is unavailable")??;
-            let family = self.add(Arc::new(bytes))?;
-            if let Some(attr) = node.attributes().find(|a| a.name() == "font-family") {
-                edits.push((attr.range_value(), family));
-            } else if let Some(end) = source[node.range()].find('>') {
-                let at = node.range().start + end;
-                edits.push((at..at, format!(" font-family=\"{family}\"")));
+            if let Some(attr)=node.attributes().find(|a|a.name()=="data-oma-flow-source") {
+                let value=super::svg_type::map_flow_families(attr.value(),|style|self.families(style,db))?;
+                edits.push((attr.range_value(),super::svg_type::escape(&value)));
             }
         }
-        edits.sort_by_key(|(r, _)| std::cmp::Reverse(r.start));
-        let mut out = source.to_string();
-        for (r, v) in edits {
-            out.replace_range(r, &v);
-        }
-        Ok(out)
+        edits.sort_by_key(|(r,_)|std::cmp::Reverse(r.start));
+        let mut out=source.to_string();for(r,v) in edits {out.replace_range(r,&v);}Ok(out)
     }
 }

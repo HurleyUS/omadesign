@@ -564,3 +564,11 @@ fn withdrawn_pixels_remain_encoded_and_legacy_inline_recovery_still_opens() {
     assert_eq!(fs::read(&path).unwrap(), future_bytes);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn retained_svg_family_lists_archive_unused_faces_without_mining_opaque_sources() {
+    let mut replica=Replica::new("fallback-faces".into(),"a".repeat(64),snapshot(&neutral()).unwrap());
+    replica.base.insert("/@entities/42".into(),Cell::Value(json!({"geom":{"Text":{"svg_text":{"root":{"Element":{"attributes":{"font-family":"'omatype:primary', 'omatype:unused'"},"children":[{"Element":{"attributes":{"font-family":"'omatype:nested', serif"},"children":[]}}]}}}}}})));
+    replica.base.insert("/sources".into(),Cell::Value(json!({"geom":{"Text":{"svg_text":{"root":{"Element":{"attributes":{"font-family":"'omatype:opaque'"}}}}}}})));
+    assert_eq!(resources::fonts(&replica).unwrap(),BTreeSet::from(["omatype:primary".into(),"omatype:unused".into(),"omatype:nested".into()]));
+}

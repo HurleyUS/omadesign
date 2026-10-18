@@ -2531,7 +2531,7 @@ impl Studio {
         if let Some(edit)=self.type_edit.clone() {
             let (a,b)=(edit.caret.min(edit.anchor),edit.caret.max(edit.anchor));
             if a==b {
-                let mut style=edit.pending_style.unwrap_or_else(||self.selected_type().map_or_else(Default::default,|r|r.character_style(a.saturating_sub(1))));
+                let mut style=edit.pending_style.unwrap_or_else(||self.selected_type().map_or_else(Default::default,|r|r.typing_style(a.saturating_sub(1))));
                 f(&mut style);self.type_edit.as_mut().unwrap().pending_style=Some(style);return;
             }
             self.patch_type(|r|r.set_character_style(a,b,|s|f(s)));

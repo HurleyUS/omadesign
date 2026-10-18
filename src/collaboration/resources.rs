@@ -224,6 +224,10 @@ pub(crate) fn fonts(replica: &Replica) -> Result<BTreeSet<String>, String> {
                 {
                     fonts.insert(font.to_owned());
                 }
+                if path.contains("/geom/Text/svg_text/root/") && path.ends_with("/Element/attributes/font-family")
+                    && let Some(families)=value.as_str() {
+                    fonts.extend(crate::text::svg_type::project_families(families));
+                }
             })?;
         }
     }

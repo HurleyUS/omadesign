@@ -13,7 +13,12 @@ mod tests;
 pub(crate) mod metric_tests;
 #[cfg(test)]
 pub(crate) mod pair_tests;
+#[cfg(test)]
+mod fallback_tests;
 mod positioning;
+mod fonts;
+pub(super) use fonts::{family_css,family_faces,map_families,map_flow_families};
+pub(crate) use fonts::{references,project_families};
 pub(crate) use positioning::pair_kerning;
 pub(crate) use positioning::leading;
 
@@ -965,10 +970,10 @@ fn bind_fonts(run: &TypeRun, options: &mut usvg::Options<'_>) {
     fn retained(node: &TextNode, fonts: &mut std::collections::BTreeSet<String>) {
         if let TextNode::Element { attributes, children, .. } = node {
             if let Some(value) = attributes.get("font-family") {
-                let family = super::font_inventory::first_family(value);
-                let cached=super::BYTES.get().and_then(|c|c.lock().ok().map(|c|c.contains_key(std::path::Path::new(&family)))).unwrap_or(false);
-                if family.starts_with("omatype:") || cached {
-                    fonts.insert(family);
+                for family in usvg::parse_font_families(value).unwrap_or_default() {
+                    let usvg::FontFamily::Named(family)=family else {continue;};
+                    let cached=super::BYTES.get().and_then(|c|c.lock().ok().map(|c|c.contains_key(std::path::Path::new(&family)))).unwrap_or(false);
+                    if family.starts_with("omatype:") || cached {fonts.insert(family);}
                 }
             }
             for child in children {retained(child,fonts);}
@@ -1640,30 +1645,7 @@ fn flow_source_root(run: &TypeRun) -> TextNode {
     };
     let mut root = collect(xml.root_element(), &sheet(&xml), &mut String::new(), true)
         .unwrap_or_else(|| svg.root.clone());
-    let fonts: BTreeMap<_, _> = std::iter::once(&run.font)
-        .chain(run.spans.iter().filter_map(|s| s.font.as_ref()))
-        .filter_map(|font| {
-            installed_family(font).map(|family| (quoted_family(font), quoted_family(&family)))
-        })
-        .collect();
-    fn families(node: &mut TextNode, fonts: &BTreeMap<String, String>) {
-        if let TextNode::Element {
-            attributes,
-            children,
-            ..
-        } = node
-        {
-            if let Some(family) = attributes.get_mut("font-family")
-                && let Some(name) = fonts.get(family)
-            {
-                *family = name.clone();
-            }
-            for child in children {
-                families(child, fonts);
-            }
-        }
-    }
-    families(&mut root, &fonts);
+
     root
 }
 
