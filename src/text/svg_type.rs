@@ -779,6 +779,7 @@ fn write_nodes(
                 if run.manual_kern.values().any(|v|*v!=0.) {return None;}
                 let spans=run.character_style_runs(*cursor,*cursor+count);
                 if spans.len()!=1{return None;}let style=spans[0].clone();
+                if (style.hscale.is_some()||style.vscale.is_some()) && scaling::spans(style.clone(),metrics).len()!=1 {return None;}
                 if style.font.is_none() && style.font_variations.is_none() && style.features.is_empty() && style.hscale.is_none() && style.vscale.is_none() && style.kerning.is_none(){return None;}
                 let mut rest=style.clone();rest.start=0;rest.end=0;rest.font=None;rest.font_variations=None;rest.features.clear();rest.hscale=None;rest.vscale=None;rest.kerning=None;
                 (rest==crate::geom::CharSpan::default()).then_some(style)
