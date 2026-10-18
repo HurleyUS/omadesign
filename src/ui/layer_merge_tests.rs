@@ -49,9 +49,34 @@ impl Seat {
     }
     fn menu(&mut self, s: &mut Studio, name: &str) {
         self.click(s, "Layer");
+        self.invoke(s, name);
+    }
+    fn invoke(&mut self, s: &mut Studio, name: &str) {
         let ctx = self.ctx.clone();
         keys::tab_to(&ctx, name, |events| self.frame(s, events));
         self.frame(s, keys::key(Key::Space, Modifiers::NONE));
+        self.frame(s, vec![]);
+    }
+    fn context(&mut self, s: &mut Studio, name: &str) {
+        for _ in 0..3 {
+            self.frame(s, vec![]);
+        }
+        let b = keys::named(&self.output, name).1.bounds().unwrap();
+        let p = egui::pos2(((b.x0 + b.x1) / 2.) as f32, ((b.y0 + b.y1) / 2.) as f32);
+        for pressed in [true, false] {
+            self.frame(
+                s,
+                vec![
+                    Event::PointerMoved(p),
+                    Event::PointerButton {
+                        pos: p,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    },
+                ],
+            );
+        }
         self.frame(s, vec![]);
     }
     fn wait(&mut self, s: &mut Studio) {
@@ -177,10 +202,47 @@ fn craft_merge_canvas_shortcuts_keep_field_keys_and_dispatch_actual_pixel_merge(
 }
 
 #[test]
+fn craft_merge_row_context_uses_its_concrete_owner_and_rename_keeps_its_native_keys() {
+    let mut s = fixture();
+    s.activate_layer_tree(0);
+    let lower = s.doc.layers[0].id;
+    let before = state(&s);
+    let mut seat = Seat::new();
+    seat.context(&mut s, "Upper");
+    assert_eq!(s.active_layer, Some(0));
+    seat.invoke(&mut s, "Merge Down");
+    seat.wait(&mut s);
+    assert_eq!(s.doc.layers.len(), 1);
+    assert_eq!(s.doc.layers[0].id, lower);
+    check(&mut s, &before);
+    let mut s = fixture();
+    let before = state(&s);
+    let mut seat = Seat::new();
+    seat.context(&mut s, "Upper");
+    seat.invoke(&mut s, "Rename");
+    keys::focused_role(
+        &seat.ctx,
+        &seat.output,
+        "Rename layer",
+        egui::accesskit::Role::TextInput,
+    );
+    seat.frame(&mut s, keys::key(Key::E, Modifiers::COMMAND));
+    seat.frame(&mut s, vec![]);
+    assert!(!is_open(&seat.ctx));
+    assert_eq!(state(&s), before);
+    assert_eq!(s.history.len(), 0);
+    seat.frame(&mut s, keys::key(Key::Escape, Modifiers::NONE));
+    seat.frame(&mut s, vec![]);
+    assert_eq!(state(&s), before);
+}
+
+#[test]
 fn craft_merge_actual_cancel_and_stale_document_retire_worker_before_commit() {
     for stale in [false, true] {
         let mut s = fixture();
         let before = state(&s);
+        let selected = s.selected_layer;
+        let active = s.active_layer;
         let mut seat = Seat::new();
         let id = s.doc.layers[1].id;
         start(&seat.ctx, &mut s, Kind::Down(id));
@@ -195,6 +257,8 @@ fn craft_merge_actual_cancel_and_stale_document_retire_worker_before_commit() {
         assert!(!super::super::jobs::is_running::<Prepared>(&seat.ctx, ID));
         assert_eq!(state(&s), before);
         assert_eq!(s.history.len(), 0);
+        assert_eq!(s.selected_layer, selected);
+        assert_eq!(s.active_layer, active);
         for _ in 0..5 {
             seat.frame(&mut s, vec![]);
         }
