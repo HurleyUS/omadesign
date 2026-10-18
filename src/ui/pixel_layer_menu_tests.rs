@@ -206,6 +206,6 @@ fn craft_pixel_layer_creation_deletion_and_invalid_owners_follow_real_menu_gates
             assert!(keys::named(&seat.output, "Delete layer").1.is_disabled());
         }
         assert_eq!(encoded(&studio), before);
-        assert!(studio.history.is_empty());
+        assert_eq!(studio.history.len(), 0);
     }
 }
