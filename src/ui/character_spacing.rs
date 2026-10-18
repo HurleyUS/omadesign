@@ -967,7 +967,7 @@ mod tests {
         frame(&ctx,&mut studio,vec![]);let output=tab_to(&ctx,&mut studio,"Baseline shift");assert_focused(&ctx,&output,"Baseline shift");
         replace(&ctx,&mut studio,"12");frame(&ctx,&mut studio,key(Key::Enter,Modifiers::NONE));
         assert_eq!(studio.selected_character_metrics()[0].baseline_shift,Some(12.));
-        bidi_tests::baseline(&original,studio.selected_type().unwrap());studio.commit_type_edit();
+        bidi_tests::baseline(&original,&studio.selected_type().unwrap());studio.commit_type_edit();
         scale_tests::check(&studio,"bidi-native-baseline");let after=crate::project::encode(&studio.doc).unwrap();assert_eq!(studio.history.len(),1);
         studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
     }
