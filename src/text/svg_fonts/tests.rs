@@ -306,7 +306,8 @@ fn craft_svg_fonts_imported_native_typing_keeps_face_axes_one_undo_and_reopen() 
     };
     assert_eq!(run.content, "Variable AV fi12 QZ");
     assert_eq!(run.font, font);
-    assert!(run.character_style(old_length + 1).font.is_none());
+    assert!(run.spans.iter().filter(|s|s.end>old_length).all(|s|s.font.is_none()));
+    assert_eq!(run.character_style(old_length + 1).font.as_deref(),Some(font.as_str()));
     let resolved=super::super::svg_type::layout(run).unwrap();
     assert!(resolved.styles.iter().filter(|(at,_)|*at>=old_length).all(|(_,style)|style.font.as_deref()==Some(font.as_str())));
     assert!(

@@ -613,17 +613,21 @@ fn font_attributes(path: &str) -> String {
 }
 
 fn installed_family(path: &str) -> Option<String> {
-    options()
-        .fontdb
-        .faces()
-        .find_map(|face| match &face.source {
-            usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _)
-                if p.to_string_lossy() == path =>
-            {
-                face.families.first().map(|(name, _)| name.clone())
-            }
-            _ => None,
-        })
+    static CACHE: OnceLock<Mutex<HashMap<(u64,u64,String),Option<String>>>>=OnceLock::new();
+    let key=(super::INSTALLED_REVISION.load(std::sync::atomic::Ordering::Relaxed),super::FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed),path.to_owned());
+    let cache=CACHE.get_or_init(Default::default);
+    if let Some(value)=cache.lock().unwrap().get(&key){return value.clone();}
+    let options=options();
+    let bytes=super::project_font_bytes(path);
+    let names:Vec<_>=bytes.as_ref().and_then(|b|rustybuzz::ttf_parser::Face::parse(b,0).ok()).map(|face|face.names().into_iter().filter(|n|matches!(n.name_id,1|16)).filter_map(|n|n.to_string()).collect()).unwrap_or_default();
+    let family=options.fontdb.faces().find_map(|face| {
+        let (usvg::fontdb::Source::File(file) | usvg::fontdb::Source::SharedFile(file,_)) = &face.source else {return None;};
+        let exact=file.to_string_lossy()==path || bytes.as_ref().is_some_and(|bytes| {
+            face.families.iter().any(|(name,_)|names.iter().any(|n|n.eq_ignore_ascii_case(name))) && options.fontdb.with_face_data(face.id,super::font_catalog::face_bytes).is_some_and(|result|result.is_ok_and(|candidate|candidate.as_slice()==bytes.as_slice()))
+        });
+        exact.then(||face.families.first().map(|(name,_)|name.clone())).flatten()
+    });
+    let mut cache=cache.lock().unwrap();if cache.len()>=256{cache.clear();}cache.insert(key,family.clone());family
 }
 
 fn quoted_family(name: &str) -> String {
@@ -1130,14 +1134,13 @@ pub(crate) fn export_fragment_embedded(run: &TypeRun, id: u64) -> Option<String>
 
 fn export_fragment_inner(run: &TypeRun, id: u64, outlines: bool, embedded: bool) -> Option<String> {
     let original = source(run)?;
-    let fonts: std::collections::BTreeMap<_, _> = std::iter::once(&run.font)
-        .chain(run.spans.iter().filter_map(|s| s.font.as_ref()))
-        .map(|font| (font, installed_family(font)))
-        .collect();
-    let portable = fonts.iter().any(|(font, family)| {
-        font.starts_with("omatype:")
-            || family.is_none() && **font != run.svg_text.as_ref().unwrap().base_font
-    });
+    let identities:std::collections::BTreeSet<_>=std::iter::once(run.font.clone()).chain(run.spans.iter().filter_map(|s|s.font.clone())).chain(references(run.svg_text.as_ref().unwrap())).collect();
+    let fonts:std::collections::BTreeMap<_,_>=identities.into_iter().map(|font|{let family=installed_family(&font);(font,family)}).collect();
+    let portable=fonts.iter().any(|(font,family)|family.is_none()&&(font.starts_with("omatype:") || font!=&run.svg_text.as_ref().unwrap().base_font));
+    let family_list=|value:&str|usvg::parse_font_families(value).map(|list|list.into_iter().map(|family| match family {
+        usvg::FontFamily::Named(name)=>quoted_family(fonts.get(&name).and_then(Option::as_deref).unwrap_or(&name)),
+        other=>other.to_string(),
+    }).collect::<Vec<_>>().join(", ")).unwrap_or_else(|_|value.to_owned());
     let source = if outlines || portable && !embedded {
         layout(run)?.tree.to_string(&usvg::WriteOptions::default())
     } else {
@@ -1153,17 +1156,8 @@ fn export_fragment_inner(run: &TypeRun, id: u64, outlines: bool, embedded: bool)
     for node in xml.descendants().filter(|n| n.is_element()) {
         for attr in node.attributes() {
             let mut value = attr.value().to_owned();
-            if attr.name() == "font-family" && !embedded {
-                for (font, family) in &fonts {
-                    if let Some(family) = family {
-                        let alias = quoted_family(font);
-                        if value == alias {
-                            value = quoted_family(family);
-                            break;
-                        }
-                    }
-                }
-            }
+            if attr.name()=="font-family" && !embedded {value=family_list(&value);}
+            if attr.name()=="data-oma-flow-source" && !embedded {value=map_flow_families(&value,|style|Ok(family_list(style.get("font-family").map_or("serif",String::as_str)))).ok()?;}
             if attr.name() == "id" {
                 value = format!("{prefix}{value}");
             } else {

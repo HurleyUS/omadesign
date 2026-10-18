@@ -1625,10 +1625,6 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool, embed_fonts:
 
 fn export_inner_report(doc: &Document, animate: bool, text_as_paths: bool, embed_fonts: bool) -> Result<SvgExport, String> {
     doc.validate_hierarchy()?;
-    let embed_fonts=embed_fonts || !text_as_paths && doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().any(|shape| match &shape.geom {
-        Geom::Text(run)=>run.svg_text.as_ref().is_some_and(|svg|!crate::text::svg_type::references(svg).is_empty()),
-        _=>false,
-    });
     let mut prepared;
     let doc=if embed_fonts {prepared=doc.clone();crate::text_geometry::reflow(&mut prepared);&prepared} else {doc};
     let embedded = embed_fonts.then(|| crate::text::svg_fonts::Embedded::new(doc)).transpose()?;

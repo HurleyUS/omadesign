@@ -209,6 +209,11 @@ fn svg_unused_fallback_faces_and_missing_instance_baselines_use_the_same_native_
     let expected:HashSet<_>=[p.as_slice(),f.as_slice()].into_iter().map(|b|format!("omatype:{:032x}",fingerprint(b))).collect();assert_eq!(document_font_ids(&doc).unwrap(),expected);
     let temp=Temp::new();let path=temp.0.join("unused.oma");crate::project::save_to(&doc,&path).unwrap();
     for id in &expected {let name=id.trim_start_matches("omatype:");assert!(fs::read_dir(temp.0.join(".omabrand/fonts")).unwrap().any(|f|f.unwrap().file_name().to_string_lossy().starts_with(name)));}
+    let library=Temp::new();assert_eq!(copy_document_fonts(&path,&library.0).unwrap().len(),2);
+    let mut empty=Document::new("Retained fallback",160.,80.,72.);empty.layers.clear();
+    let mut replica=crate::collaboration::Replica::new("retained-fallback".into(),"b".repeat(64),crate::collaboration::snapshot(&empty).unwrap());replica.record(&doc).unwrap();assert!(replica.undo());empty.collaboration=Some(replica);
+    let retained=temp.0.join("retained.oma");crate::project::save_to(&empty,&retained).unwrap();
+    let copied=Temp::new();assert_eq!(copy_document_fonts(&retained,&copied.0).unwrap().len(),2);
     let li=doc.layers.iter().position(|l|l.kind.shapes().is_some_and(|s|s.iter().any(|s|matches!(s.geom,Geom::Text(_))))).unwrap();
     let baseline=doc.layers[li].kind.shapes().unwrap().iter().find(|s|matches!(s.geom,Geom::Text(_))).unwrap().clone();
     doc.layers[li].kind.shapes_mut().unwrap().clear();
