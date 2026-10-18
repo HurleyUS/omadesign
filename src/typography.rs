@@ -330,7 +330,7 @@ pub(crate) fn register_archive(root: &Path) -> Result<(), String> {
 /// and newly created, so the caller can roll back a larger asset import safely.
 pub fn copy_document_fonts(source: &Path, destination: &Path) -> Result<Vec<PathBuf>, String> {
     let bytes = read(source, 64 * 1024 * 1024)?;
-    let value = serde_json::from_slice(&bytes).map_err(|e| format!("Invalid artwork JSON: {e}"))?;
+    let value:serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| format!("Invalid artwork JSON: {e}"))?;
     let ids=crate::collaboration::resources::font_references(value.get("doc").unwrap_or(&value))?;
     if ids.is_empty() {
         return Ok(vec![]);
