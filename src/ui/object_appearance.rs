@@ -262,7 +262,7 @@ mod tests {
             |ui| {
                 studio.handle_shortcuts(ui.ctx());
                 if layer_controls {
-                    layers_studio(ui, studio)
+                    layers_content(ui, studio)
                 } else {
                     show(ui, studio)
                 }
