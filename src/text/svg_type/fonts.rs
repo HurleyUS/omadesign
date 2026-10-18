@@ -1,6 +1,6 @@
 use super::*;
 
-pub(in crate::text) fn family_css(family: &usvg::FontFamily) -> String {
+pub(crate) fn family_css(family: &usvg::FontFamily) -> String {
     match family {
         usvg::FontFamily::Named(name) => quoted_family(name),
         other => other.to_string(),
