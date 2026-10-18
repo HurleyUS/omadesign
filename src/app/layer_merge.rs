@@ -138,7 +138,7 @@ fn roots(doc: &Document, kind: Kind) -> Result<(Vec<usize>, usize), String> {
             let first = *roots.first().ok_or("No layers to flatten")?;
             Ok((roots, first))
         }
-        _ => Err("Choose at least two sibling layers to merge".into()),
+        _ => Err("Choose at least two layers to merge".into()),
     }
 }
 
@@ -211,7 +211,11 @@ impl Request {
             && matches!(
                 self.kind.source(),
                 Kind::Down(_) | Kind::Group(_) | Kind::Selected
-            );
+            )
+            && self
+                .roots
+                .iter()
+                .all(|&i| self.source.layers[i].parent == original.parent);
         if matches!(self.kind.source(), Kind::Down(_)) {
             layer.blend = original.blend;
         }
@@ -402,11 +406,19 @@ impl Studio {
 
     fn merge_row_roots(&self) -> Vec<usize> {
         let rows = self.selected_layer_rows();
-        rows.iter()
+        let mut roots: Vec<_> = rows
+            .iter()
             .copied()
             .filter(|&i| i < self.doc.layers.len())
             .filter(|&i| !self.doc.layer_ancestors(i).iter().any(|p| rows.contains(p)))
-            .collect()
+            .collect();
+        roots.sort_by_cached_key(|&i| {
+            let mut path = self.doc.layer_ancestors(i);
+            path.reverse();
+            path.push(i);
+            path
+        });
+        roots
     }
 
     fn selected_merge_roots(&self) -> Result<Vec<usize>, String> {
@@ -419,13 +431,9 @@ impl Studio {
         }
         let roots = self.merge_row_roots();
         if roots.len() < 2 {
-            return Err("Choose at least two sibling layers to merge".into());
+            return Err("Choose at least two layers to merge".into());
         }
-        let parent = self.doc.layers[roots[0]].parent;
-        if roots.iter().any(|&i| self.doc.layers[i].parent != parent) {
-            return Err("Merge Layers currently needs selected siblings in the same group".into());
-        }
-        if !roots.iter().any(|&i| self.doc.layer_visible(i)) {
+        if !roots.iter().any(|&i| self.doc.layers[i].visible) {
             return Err("The selected layers are all hidden".into());
         }
         Ok(roots)

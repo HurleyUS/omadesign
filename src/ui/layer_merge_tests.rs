@@ -412,3 +412,114 @@ fn craft_content_bounds_actual_merge_menu_canvas_pick_and_native_history_use_pai
         crate::geom::Pt::new(2., 2.)
     );
 }
+
+fn cross_group_ui_fixture() -> Studio {
+    let mut s = fixture();
+    s.doc = Document::new("Cross-group UI", 6., 1., 96.);
+    s.doc.transparent = true;
+    s.doc.workspace = Some(Persona::Pixel);
+    let mut left = Layer::group("Left group");
+    left.pass_through = false;
+    let mut right = Layer::group("Right group");
+    right.pass_through = false;
+    let mut a = Layer::placed_raster(
+        "Left pixel",
+        crate::document::Pixels::from_rgba(1, 1, vec![255, 0, 0, 255]).unwrap(),
+        crate::geom::Pt::ZERO,
+        crate::geom::Pt::splat(1.),
+    );
+    a.parent = Some(left.id);
+    let mut b = Layer::placed_raster(
+        "Right pixel",
+        crate::document::Pixels::from_rgba(1, 1, vec![0, 255, 0, 255]).unwrap(),
+        crate::geom::Pt::ZERO,
+        crate::geom::Pt::splat(1.),
+    );
+    b.parent = Some(right.id);
+    s.layer_expanded.extend([left.id, right.id]);
+    s.doc.layers = vec![a, left, b, right];
+    s.activate_layer_tree(2);
+    s.history.clear();
+    s
+}
+
+#[test]
+fn craft_cross_group_native_rows_menu_and_document_undo_redo_follow_actual_parent() {
+    let mut s = cross_group_ui_fixture();
+    let parent = s.doc.layers[3].id;
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Left pixel");
+    seat.click_mods(&mut s, "Right pixel", Modifiers::COMMAND);
+    assert_eq!(s.selected_layer_rows(), [0, 2]);
+    let before = state(&s);
+    seat.menu(&mut s, "Merge Layers");
+    seat.wait(&mut s);
+    assert_eq!(s.doc.layers.len(), 3);
+    assert_eq!(s.doc.layers[1].name, "Right pixel");
+    assert_eq!(s.doc.layers[1].parent, Some(parent));
+    assert_eq!(
+        s.doc.layers[1].kind.pixels().unwrap().data.as_slice(),
+        [0, 255, 0, 255]
+    );
+    assert_eq!(s.history.len(), 1);
+    let after = state(&s);
+    seat.frame(&mut s, keys::key(Key::F8, Modifiers::NONE));
+    seat.frame(&mut s, vec![]);
+    seat.frame(&mut s, keys::key(Key::Z, Modifiers::COMMAND));
+    seat.frame(&mut s, vec![]);
+    assert_eq!(state(&s), before);
+    seat.frame(&mut s, keys::key(Key::Y, Modifiers::COMMAND));
+    seat.frame(&mut s, vec![]);
+    assert_eq!(state(&s), after);
+    assert_eq!(
+        crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(),
+        after
+    );
+}
+
+#[test]
+fn craft_cross_group_native_alt_menu_and_canvas_shortcut_keep_all_source_layers() {
+    for shortcut in [false, true] {
+        let mut s = cross_group_ui_fixture();
+        let original = serde_json::to_value(&s.doc.layers).unwrap();
+        let parent = s.doc.layers[3].id;
+        let mut seat = Seat::new();
+        seat.click(&mut s, "Left pixel");
+        seat.click_mods(&mut s, "Right pixel", Modifiers::COMMAND);
+        let before = state(&s);
+        if shortcut {
+            seat.frame(&mut s, keys::key(Key::F8, Modifiers::NONE));
+            seat.frame(&mut s, vec![]);
+            seat.frame(
+                &mut s,
+                keys::key(
+                    Key::E,
+                    Modifiers {
+                        alt: true,
+                        ..Modifiers::COMMAND
+                    },
+                ),
+            );
+        } else {
+            seat.click(&mut s, "Layer");
+            seat.click_mods(&mut s, "Merge Layers", Modifiers::ALT);
+        }
+        seat.wait(&mut s);
+        assert_eq!(s.doc.layers.len(), 5);
+        assert_eq!(s.doc.layers[3].parent, Some(parent));
+        assert_eq!(s.doc.layers[3].name, "Right pixel (merged)");
+        assert_eq!(
+            s.doc.layers[3].kind.pixels().unwrap().data.as_slice(),
+            [0, 255, 0, 255]
+        );
+        let remaining: Vec<_> = s
+            .doc
+            .layers
+            .iter()
+            .enumerate()
+            .filter_map(|(i, l)| (i != 3).then_some(l))
+            .collect();
+        assert_eq!(serde_json::to_value(remaining).unwrap(), original);
+        check(&mut s, &before);
+    }
+}

@@ -91,6 +91,16 @@ fn undo_reopen(s: &mut Studio, before: &str) {
                 .to_lowercase(),
             );
         }
+        if name.starts_with("craft_cross_group_") {
+            name.push_str(
+                &format!(
+                    "-{:?}-{:?}-{}-{}",
+                    s.doc.color.model, s.doc.color.depth, s.doc.name, s.status
+                )
+                .replace(' ', "-")
+                .to_lowercase(),
+            );
+        }
         let folder = std::path::PathBuf::from(root).join(name);
         std::fs::create_dir_all(&folder).unwrap();
         let original = crate::project::decode(before).unwrap();
@@ -686,7 +696,7 @@ fn craft_stamp_and_selected_merge_refuse_stale_locked_and_cancelled_results_atom
     assert!(
         s.apply_layer_merge(prepared)
             .unwrap_err()
-            .contains("two sibling")
+            .contains("two layers")
     );
     assert_eq!(state(&s), before);
     assert_eq!(s.history.len(), 0);
@@ -1014,4 +1024,298 @@ fn craft_content_bounds_empty_merge_uses_one_pixel_and_flatten_keeps_opaque_canv
         assert!(layer.locked);
         undo_reopen(&mut s, &before);
     }
+}
+
+fn cross_group_fixture(depth: Depth, cmyk: bool) -> Studio {
+    let mut s = fixture();
+    s.doc = Document::new("Cross groups", 6., 1., 96.);
+    s.doc.transparent = true;
+    s.doc.color.depth = depth;
+    s.doc.color.intent = 0;
+    s.doc.color.model = if cmyk {
+        crate::deep_color::cms::Model::Cmyk
+    } else {
+        crate::deep_color::cms::Model::Rgb
+    };
+    let mut left = Layer::group("Left group");
+    left.pass_through = false;
+    let mut right = Layer::group("Right group");
+    right.pass_through = false;
+    let profile = if depth == Depth::F32 && !cmyk {
+        include_bytes!("../formats/psd/fixtures/srgb-cc0.icc").to_vec()
+    } else {
+        vec![]
+    };
+    s.doc.color.icc_profile = profile.clone();
+    let pixel = |rgba: [f32; 4], inks: [f32; 5]| {
+        if cmyk {
+            Pixels::from_cmyk(1, 1, depth, inks.to_vec(), vec![], 0).unwrap()
+        } else if depth == Depth::U8 {
+            Pixels::from_rgba(
+                1,
+                1,
+                rgba.into_iter().map(crate::deep_color::byte).collect(),
+            )
+            .unwrap()
+        } else {
+            let rgba = if depth == Depth::F32 {
+                [rgba[0] * 1.25, rgba[1] - 0.125, rgba[2] + 0.5, rgba[3]]
+            } else {
+                rgba
+            };
+            let mut pixels = Pixels::from_samples(1, 1, depth, rgba.to_vec()).unwrap();
+            if !profile.is_empty() {
+                pixels.assign_rgb_profile(profile.clone(), 0).unwrap();
+            }
+            pixels
+        }
+    };
+    let mut a = Layer::placed_raster(
+        "Left pixel",
+        pixel([1., 0., 0., 1.], [0.75, 0.25, 0.125, 0.5, 1.]),
+        Pt::ZERO,
+        Pt::splat(1.),
+    );
+    a.parent = Some(left.id);
+    let mut b = Layer::placed_raster(
+        "Right pixel",
+        pixel([0., 1., 0., 1.], [0.125, 0.5, 0.75, 0.25, 1.]),
+        Pt::ZERO,
+        Pt::splat(1.),
+    );
+    b.parent = Some(right.id);
+    let mut untouched_a = Layer::placed_raster(
+        "Left untouched",
+        pixel([0., 0., 1., 1.], [0.5, 0.25, 0., 0., 1.]),
+        Pt::new(4., 0.),
+        Pt::splat(1.),
+    );
+    untouched_a.parent = Some(left.id);
+    let mut untouched_b = Layer::placed_raster(
+        "Right untouched",
+        pixel([1., 1., 1., 1.], [0., 0., 0., 0., 1.]),
+        Pt::new(5., 0.),
+        Pt::splat(1.),
+    );
+    untouched_b.parent = Some(right.id);
+    s.layer_expanded.extend([left.id, right.id]);
+    s.doc.layers = vec![a, untouched_a, left, b, untouched_b, right];
+    s.select_layer_rows(0, false, false);
+    s.select_layer_rows(3, false, true);
+    s.history.clear();
+    s
+}
+
+#[test]
+fn craft_cross_group_selected_merge_and_stamp_keep_parent_and_native_data_in_all_depths() {
+    for depth in [Depth::U8, Depth::U16, Depth::F32] {
+        for cmyk in [false, true] {
+            for stamp in [false, true] {
+                let mut s = cross_group_fixture(depth, cmyk);
+                let before = state(&s);
+                let original = s.doc.layers.clone();
+                let expected = content_picture(&s.doc);
+                let kind = if stamp {
+                    Kind::StampSelected
+                } else {
+                    Kind::Selected
+                };
+                assert!(s.can_layer_merge(kind));
+                run(&mut s, kind);
+                let target = if stamp { 4 } else { 2 };
+                let layer = &s.doc.layers[target];
+                assert_eq!(layer.parent, Some(original[5].id));
+                assert_eq!(layer.kind.raster_xform().unwrap().0, Pt::ZERO);
+                assert_eq!(layer.kind.raster_xform().unwrap().1, Pt::splat(1.));
+                if stamp {
+                    let remaining: Vec<_> = s
+                        .doc
+                        .layers
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, l)| (i != target).then_some(l))
+                        .collect();
+                    assert_eq!(
+                        serde_json::to_value(remaining).unwrap(),
+                        serde_json::to_value(&original).unwrap()
+                    );
+                    assert!(!original.iter().any(|l| l.id == layer.id));
+                } else {
+                    assert_eq!(layer.id, original[3].id);
+                    assert!(s.doc.layers.iter().all(|l| l.id != original[0].id));
+                    for i in [1, 2, 4, 5] {
+                        assert_eq!(
+                            serde_json::to_value(
+                                s.doc
+                                    .layers
+                                    .iter()
+                                    .find(|l| l.id == original[i].id)
+                                    .unwrap()
+                            )
+                            .unwrap(),
+                            serde_json::to_value(&original[i]).unwrap()
+                        );
+                    }
+                }
+                assert_eq!(
+                    content_picture(&s.doc),
+                    expected,
+                    "{depth:?}/{cmyk}/{stamp}"
+                );
+                s.doc.validate_hierarchy().unwrap();
+                undo_reopen(&mut s, &before);
+            }
+        }
+    }
+}
+
+#[test]
+fn craft_cross_group_styles_apply_once_from_destination_parent_and_originals_stay_owned() {
+    for stamp in [false, true] {
+        let mut s = cross_group_fixture(Depth::U8, false);
+        s.doc.name = format!("Styles {stamp}");
+        s.doc.layers[2].opacity = 0.25;
+        s.doc.layers[5].opacity = 0.5;
+        s.doc.layers[3]
+            .kind
+            .pixels_mut()
+            .unwrap()
+            .replace_bytes(vec![0, 255, 0, 128])
+            .unwrap();
+        let before = state(&s);
+        let original = s.doc.layers.clone();
+        let old = picture(&s.doc);
+        run(
+            &mut s,
+            if stamp {
+                Kind::StampSelected
+            } else {
+                Kind::Selected
+            },
+        );
+        let target = if stamp { 4 } else { 2 };
+        let merged = &s.doc.layers[target];
+        assert_eq!(merged.parent, Some(original[5].id));
+        assert_eq!(merged.opacity, 1.);
+        let after = picture(&s.doc);
+        assert_eq!(
+            &after[..4],
+            if stamp {
+                &[96, 64, 0, 160]
+            } else {
+                &[64, 64, 0, 128]
+            }
+        );
+        assert_ne!(&after[..4], &old[..4]);
+        assert_eq!(&after[16..24], &old[16..24]);
+        for i in [2, 5] {
+            assert_eq!(
+                serde_json::to_value(
+                    s.doc
+                        .layers
+                        .iter()
+                        .find(|l| l.id == original[i].id)
+                        .unwrap()
+                )
+                .unwrap(),
+                serde_json::to_value(&original[i]).unwrap()
+            );
+        }
+        undo_reopen(&mut s, &before);
+    }
+}
+
+#[test]
+fn craft_cross_group_painter_order_uses_group_tree_instead_of_flat_storage_indices() {
+    for depth in [Depth::U8, Depth::F32] {
+        for cmyk in [false, true] {
+            let mut s = cross_group_fixture(depth, cmyk);
+            s.doc.name = "Noncontiguous storage".into();
+            let original = s.doc.layers.clone();
+            s.doc.layers = vec![
+                original[0].clone(),
+                original[3].clone(),
+                original[5].clone(),
+                original[2].clone(),
+            ];
+            s.select_layer_rows(0, false, false);
+            s.select_layer_rows(1, false, true);
+            s.doc.validate_hierarchy().unwrap();
+            let expected = content_picture(&s.doc);
+            let before = state(&s);
+            let top = s.doc.layers[0].id;
+            let parent = s.doc.layers[3].id;
+            run(&mut s, Kind::Selected);
+            assert_eq!(s.doc.layers[0].id, top);
+            assert_eq!(s.doc.layers[0].parent, Some(parent));
+            assert_eq!(s.doc.layers[0].name, "Left pixel");
+            assert_eq!(content_picture(&s.doc), expected);
+            undo_reopen(&mut s, &before);
+        }
+    }
+}
+
+#[test]
+fn craft_cross_group_group_and_selected_descendants_merge_once_without_dangling_parents() {
+    let mut s = cross_group_fixture(Depth::U8, false);
+    s.doc.name = "Group and child selection".into();
+    s.doc.layers[2].opacity = 0.5;
+    s.doc.layers[0]
+        .kind
+        .pixels_mut()
+        .unwrap()
+        .replace_bytes(vec![255, 0, 0, 128])
+        .unwrap();
+    s.doc.layers[3]
+        .kind
+        .pixels_mut()
+        .unwrap()
+        .replace_bytes(vec![0, 255, 0, 128])
+        .unwrap();
+    s.select_layer_rows(2, false, false);
+    s.select_layer_rows(0, false, true);
+    s.select_layer_rows(3, false, true);
+    let before = state(&s);
+    let expected = picture(&s.doc);
+    assert_eq!(&expected[..4], &[32, 128, 0, 160]);
+    let right = s.doc.layers[5].id;
+    run(&mut s, Kind::Selected);
+    assert_eq!(s.doc.layers.len(), 3);
+    assert_eq!(s.doc.layers[0].parent, Some(right));
+    assert_eq!(picture(&s.doc), expected);
+    s.doc.validate_hierarchy().unwrap();
+    undo_reopen(&mut s, &before);
+}
+
+#[test]
+fn craft_cross_group_local_visibility_clipping_and_locks_are_validated_before_mutation() {
+    let mut s = cross_group_fixture(Depth::U8, false);
+    s.doc.name = "Hidden parents".into();
+    s.doc.layers[2].visible = false;
+    s.doc.layers[5].visible = false;
+    let before = state(&s);
+    assert!(s.can_layer_merge(Kind::Selected));
+    run(&mut s, Kind::Selected);
+    assert!(!s.doc.layer_visible(2));
+    assert_eq!(
+        s.doc.layers[2].kind.pixels().unwrap().data.as_slice(),
+        [0, 255, 0, 255]
+    );
+    undo_reopen(&mut s, &before);
+    let mut s = cross_group_fixture(Depth::U8, false);
+    s.doc.name = "Mixed clipping parents".into();
+    s.doc.layers[0].clipped = true;
+    let before = state(&s);
+    run(&mut s, Kind::Selected);
+    assert!(!s.doc.layers[2].clipped);
+    undo_reopen(&mut s, &before);
+    let mut s = cross_group_fixture(Depth::U8, false);
+    s.doc.layers[2].locked = true;
+    let before = state(&s);
+    assert!(s.capture_layer_merge(Kind::Selected).is_err());
+    assert_eq!(state(&s), before);
+    assert!(s.capture_layer_merge(Kind::StampSelected).is_ok());
+    s.doc.layers[5].locked = true;
+    assert!(s.capture_layer_merge(Kind::StampSelected).is_err());
+    assert_eq!(s.history.len(), 0);
 }

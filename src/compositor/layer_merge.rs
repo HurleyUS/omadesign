@@ -46,6 +46,33 @@ fn scope(doc: &Document, roots: &[usize]) -> Result<Document, String> {
     {
         layer.clipped = false;
     }
+    let ranks: HashMap<_, _> = roots
+        .iter()
+        .enumerate()
+        .map(|(rank, &i)| (doc.layers[i].id, rank))
+        .collect();
+    let parents: HashMap<_, _> = doc.layers.iter().map(|l| (l.id, l.parent)).collect();
+    let positions: HashMap<_, _> = doc
+        .layers
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (l.id, i))
+        .collect();
+    output.layers.sort_by_cached_key(|layer| {
+        let mut owner = Some(layer.id);
+        let mut rank = roots.len();
+        for _ in 0..=64 {
+            let Some(id) = owner else {
+                break;
+            };
+            if let Some(&found) = ranks.get(&id) {
+                rank = found;
+                break;
+            }
+            owner = parents.get(&id).copied().flatten();
+        }
+        (rank, positions[&layer.id])
+    });
     output.transparent = true;
     output.motion.compositions.clear();
     output.motion.scene3d = None;
