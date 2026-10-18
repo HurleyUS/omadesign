@@ -331,7 +331,7 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
                     ui,
                     "Pair kerning",
                     Some(if run.svg_text.is_some() {
-                        crate::text::svg_type::pair_kerning(run, edit.caret)
+                        crate::text::svg_type::pair_kerning(&run, edit.caret)
                     } else {
                         *run.manual_kern.get(&edit.caret).unwrap_or(&0.)
                     }),
