@@ -137,6 +137,9 @@ fn craft_duplicate_dialog_native_new_document_choice_name_and_source_retention()
     assert_eq!((s.doc.width, s.doc.height, s.doc.dpi), (40., 30., 144.));
     assert!(s.doc.transparent);
     let copy = state(&s);
+    assert_eq!(s.history.len(), 0);
+    s.undo();
+    assert_eq!(state(&s), copy);
     assert_eq!(
         crate::project::encode(&crate::project::decode(&copy).unwrap()).unwrap(),
         copy

@@ -373,7 +373,7 @@ impl Studio {
                 }
                 LayerCopyDestination::New { name: title } => {
                     let mut doc = Document::new(
-                        &name(title, &self.doc.name)?,
+                        &name(title, &format!("{} copy", self.doc.name))?,
                         self.doc.width,
                         self.doc.height,
                         self.doc.dpi,
@@ -405,6 +405,9 @@ impl Studio {
                 self.switch_tab(destination_index.unwrap());
             }
             self.commit(command);
+            if destination_index.is_none() {
+                self.history.clear();
+            }
             self.activate_layer_tree(root_index);
             self.selected_layer = Some(root_id);
         }

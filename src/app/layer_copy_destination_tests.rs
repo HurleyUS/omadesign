@@ -107,12 +107,13 @@ fn craft_layer_destination_new_keeps_canvas_pixels_motion_and_transparent_empty_
     assert_eq!(s.doc.motion.expressions[0].shape, s.doc.layers[0].id);
     assert_eq!(s.doc.motion.expressions[0].source, "time * 2");
     let new = encoded(&s);
+    assert_eq!(s.history.len(), 0);
     assert_eq!(
         crate::project::encode(&crate::project::decode(&new).unwrap()).unwrap(),
         new
     );
     s.undo();
-    assert!(s.doc.layers.is_empty());
+    assert_eq!(encoded(&s), new);
     s.redo();
     assert_eq!(encoded(&s), new);
     s.switch_tab(0);
@@ -226,6 +227,7 @@ fn craft_layer_destination_retains_external_live_masks_component_family_tokens_a
     )
     .unwrap();
     s.doc.layers[0].source_attachment = Some(s.doc.retain_source(original.clone()));
+    crate::layout_tokens::apply_tokens(&mut s.doc);
     let before = encoded(&s);
     let expected = crate::compositor::render_export_at(&s.doc, 1., 0., true).unwrap();
     assert!(expected.data().chunks_exact(4).any(|p| p[3] > 0));
