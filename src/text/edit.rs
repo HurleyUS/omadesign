@@ -159,6 +159,11 @@ impl TypeRun {
             if style.font.is_none(){style.font=source.font.clone();}
             if style.px.is_none(){style.px=source.px;}
             if style.fill.is_none(){style.fill=source.fill.clone();}
+            if style.tracking.is_none(){style.tracking=source.tracking;}
+            if style.kerning.is_none(){style.kerning=source.kerning;}
+            if style.baseline_shift.is_none(){style.baseline_shift=source.baseline_shift;}
+            if style.hscale.is_none(){style.hscale=source.hscale;}
+            if style.vscale.is_none(){style.vscale=source.vscale;}
         }
         style.start = 0;
         style.end = 0;

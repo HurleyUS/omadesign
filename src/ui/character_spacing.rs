@@ -868,4 +868,25 @@ mod tests {
             assert_eq!(studio.selected_character_metrics()[0].vscale, Some(100.));
         }
     }
+    #[test]
+    fn character_spacing_imported_svg_native_tracking_and_baseline_change_pixels_and_undo() {
+        use crate::text::svg_type::metric_tests;
+        let ctx=egui::Context::default();ctx.enable_accesskit();crate::ui::theme::apply(&ctx);
+        let mut studio=metric_tests::studio();let before=crate::project::encode(&studio.doc).unwrap();
+        frame(&ctx,&mut studio,vec![]);
+        let output=tab_to(&ctx,&mut studio,"Tracking");assert_focused(&ctx,&output,"Tracking");
+        replace(&ctx,&mut studio,"200");frame(&ctx,&mut studio,key(Key::Enter,Modifiers::NONE));
+        assert!(studio.selected_character_metrics().iter().all(|s|s.tracking==Some(200.)));
+        assert_eq!(studio.history.len(),1);let tracked=crate::project::encode(&studio.doc).unwrap();
+        let output=tab_to(&ctx,&mut studio,"Baseline shift");assert_focused(&ctx,&output,"Baseline shift");
+        replace(&ctx,&mut studio,"6");frame(&ctx,&mut studio,key(Key::Enter,Modifiers::NONE));
+        assert!(studio.selected_character_metrics().iter().all(|s|s.baseline_shift==Some(6.)));
+        assert_eq!(studio.history.len(),2);
+        let expected=metric_tests::source().replace("x=\"25\"","letter-spacing=\"4\" x=\"25\"").replace("letter-spacing=\"4\" baseline-shift","letter-spacing=\"8\" baseline-shift").replace("y=\"80\"","y=\"74\"").replace("baseline-shift=\"2\"","baseline-shift=\"-10\"");
+        metric_tests::compare(&studio,&expected,"native-input");
+        let after=crate::project::encode(&studio.doc).unwrap();studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),tracked);
+        studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);
+        studio.redo();studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
+    }
+
 }

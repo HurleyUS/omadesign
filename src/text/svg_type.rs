@@ -9,6 +9,8 @@ use tiny_skia::Transform;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) mod metric_tests;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TextNode {
@@ -629,6 +631,7 @@ fn write_nodes(
     out: &mut String,
     root: bool,
     font_bound: bool,
+    metrics: Option<&Layout>,
 ) {
     match node {
         TextNode::Characters { count } => {
@@ -642,11 +645,18 @@ fn write_nodes(
             }
             if font_bound {out.push_str(&escape(&run.content[super::char_to_byte(&run.content,a)..super::char_to_byte(&run.content,b)]));return;}
             for span in run.character_style_runs(a, b) {
+                let inherited = metrics.and_then(|layout|layout.styles.iter().find(|(at,_)|*at==span.start)).map(|(_,style)|style);
                 let text = &run.content[super::char_to_byte(&run.content, span.start)
                     ..super::char_to_byte(&run.content, span.end)];
                 let mut attrs = String::new();
                 let mut css = String::new();
-                if !span.features.is_empty(){css.push_str(&format!("font-feature-settings:{};",super::feature_css(&span.features)));}
+                let mut features = if span.kerning.is_some(){inherited.map(|s|s.features.iter().copied().collect::<BTreeMap<_,_>>()).unwrap_or_default()}else{BTreeMap::new()};
+                features.extend(span.features.iter().copied());
+                if let Some(mode @ (crate::geom::KernMode::Metrics | crate::geom::KernMode::None)) = span.kerning {
+                    features.insert(*b"kern",u32::from(mode==crate::geom::KernMode::Metrics));
+                    css.push_str(if mode==crate::geom::KernMode::Metrics {"font-kerning:normal;"} else {"font-kerning:none;"});
+                }
+                if !features.is_empty(){css.push_str(&format!("font-feature-settings:{};",super::feature_css(&features.into_iter().collect::<Vec<_>>())));}
                 if span.font_variations.is_some() {
                     let axes = super::variations::at(run, span.start);
                     css.push_str(&format!("font-variation-settings:{};", if axes.is_empty() { "normal".into() } else { super::variations::css(&axes) }));
@@ -671,16 +681,14 @@ fn write_nodes(
                     }
                 }
                 if let Some(shift) = span.baseline_shift {
+                    let shift=shift-inherited.and_then(|s|s.baseline_shift).unwrap_or(0.);
                     attrs.push_str(&format!(" baseline-shift=\"{shift}\""));
                 }
                 if let Some(tracking) = span.tracking {
                     attrs.push_str(&format!(
                         " letter-spacing=\"{}\"",
-                        tracking * span.px.unwrap_or(run.px) / 1000.
+                        tracking * span.px.or_else(||inherited.and_then(|s|s.px)).unwrap_or(run.px) / 1000.
                     ));
-                }
-                if span.kerning == Some(crate::geom::KernMode::None) {
-                    css.push_str("font-kerning:none;");
                 }
                 if !css.is_empty() { attrs.push_str(&format!(" style=\"{}\"", escape(&css))); }
                 if attrs.is_empty() {
@@ -778,7 +786,7 @@ fn write_nodes(
             }
             out.push('>');
             for child in children {
-                write_nodes(child, run, cursor, range.clone(), out, false, font_override.is_some());
+                write_nodes(child, run, cursor, range.clone(), out, false, font_override.is_some(), metrics);
             }
             out.push_str(&format!("</{name}>"));
         }
@@ -940,6 +948,11 @@ fn options_for(run: &TypeRun) -> usvg::Options<'static> {
 }
 
 fn plain_fragment(run: &TypeRun, range: std::ops::Range<usize>) -> String {
+    let metrics=run.spans.iter().any(|s|s.tracking.is_some()||s.baseline_shift.is_some()||s.kerning.is_some()).then(||{
+        let mut original=run.clone();
+        for style in &mut original.spans {style.tracking=None;style.baseline_shift=None;style.kerning=None;}
+        layout(&original)
+    }).flatten();
     let mut out = String::new();
     write_nodes(
         &run.svg_text.as_ref().unwrap().root,
@@ -949,6 +962,7 @@ fn plain_fragment(run: &TypeRun, range: std::ops::Range<usize>) -> String {
         &mut out,
         true,
         false,
+        metrics.as_deref(),
     );
     out
 }
@@ -1448,6 +1462,14 @@ fn layout_tree(run: &TypeRun, tree: usvg::Tree, embedded: bool) -> Layout {
                         None
                     }
                 });
+                let units = tree
+                    .fontdb()
+                    .with_face_data(glyph.font, |bytes, index| {
+                        rustybuzz::ttf_parser::Face::parse(bytes, index)
+                            .map_or(1000., |f| f.units_per_em() as f32)
+                    })
+                    .unwrap_or(1000.);
+                let scale=glyph.transform().get_scale();
                 for i in 0..chars.len() {
                     styles.push((
                         at + i,
@@ -1456,6 +1478,11 @@ fn layout_tree(run: &TypeRun, tree: usvg::Tree, embedded: bool) -> Layout {
                             features: span.features.clone(),
                             font_variations: (!axes.is_empty() && font.as_ref().is_some_and(|f|f.starts_with("omatype:"))).then(|| super::variations::FontVariations::new(span.variations.iter().filter(|v|axes.contains(&v.tag)).map(|v|(v.tag,v.value)).collect()).ok()).flatten(),
                             px: Some(glyph.font_size()),
+                            tracking: Some(span.letter_spacing / glyph.font_size() * 1000.),
+                            baseline_shift: Some(span.baseline_shift),
+                            kerning: Some(if span.features.iter().rev().find(|(tag,_)|*tag==*b"kern").map_or(span.apply_kerning,|(_,value)|*value!=0) {crate::geom::KernMode::Metrics} else {crate::geom::KernMode::None}),
+                            hscale: Some(scale.0 / (glyph.font_size()/units) * 100.),
+                            vscale: Some(scale.1 / (glyph.font_size()/units) * 100.),
                             fill: fill.clone(),
                             ..Default::default()
                         },
@@ -1463,13 +1490,6 @@ fn layout_tree(run: &TypeRun, tree: usvg::Tree, embedded: bool) -> Layout {
                 }
                 let point = Pt::new(transform.tx, transform.ty);
                 let tangent = Pt::new(transform.sx, transform.ky).normalized();
-                let units = tree
-                    .fontdb()
-                    .with_face_data(glyph.font, |bytes, index| {
-                        rustybuzz::ttf_parser::Face::parse(bytes, index)
-                            .map_or(1000., |f| f.units_per_em() as f32)
-                    })
-                    .unwrap_or(1000.);
                 let advance = tree
                     .fontdb()
                     .with_face_data(glyph.font, |bytes, index| {

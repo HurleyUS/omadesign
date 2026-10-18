@@ -156,6 +156,12 @@ pub struct Span {
     pub variations: Vec<crate::FontVariation>,
     /// Explicit inherited OpenType feature settings used for these glyphs.
     pub features: Vec<([u8; 4], u32)>,
+    /// Letter spacing in the local text coordinate system.
+    pub letter_spacing: f32,
+    /// Resolved cumulative baseline shift in the local text coordinate system.
+    pub baseline_shift: f32,
+    /// Whether font-provided kerning applies to this span.
+    pub apply_kerning: bool,
     /// Font optical sizing mode.
     pub font_optical_sizing: crate::FontOpticalSizing,
     /// The visibility of the span.
@@ -356,6 +362,13 @@ pub(crate) fn layout_text(
                     font_size: span.font_size,
                     variations: span.font.variations.clone(),
                     features: span.font.features.clone(),
+                    letter_spacing: span.letter_spacing,
+                    baseline_shift: resolve_baseline_shift(
+                        &span.baseline_shift,
+                        font,
+                        span.font_size.get(),
+                    ),
+                    apply_kerning: span.apply_kerning,
                     font_optical_sizing: span.font_optical_sizing,
                     visible: span.visible,
                     positioned_glyphs,
