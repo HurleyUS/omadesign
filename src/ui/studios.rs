@@ -11,6 +11,9 @@ use crate::app::input_history;
 #[cfg(test)]
 #[path = "field_input_tests.rs"]
 mod field_input_tests;
+#[cfg(test)]
+#[path = "layer_copy_panel_tests.rs"]
+mod layer_copy_panel_tests;
 
 use crate::app::Studio;
 use crate::color::Blend;
@@ -276,7 +279,11 @@ pub(super) fn layers_content(ui: &mut Ui, studio: &mut Studio) {
         ui.add_enabled_ui(studio.active_layer.is_some(),|ui| {
             if icons::tiny_icon(ui,ph::SELECTION,"Add layer mask",false){if let Some(layer)=studio.active_layer {studio.add_layer_mask(layer,true);}}
             if icons::tiny_icon(ui,ph::MAGIC_WAND,"Layer effects",false){super::panel_workspace::open(ui.ctx(),studio,"effects");}
-            if icons::tiny_icon(ui,ph::COPY,"Duplicate selection",false){studio.duplicate_selection();}
+            if let Some(layer)=studio.selected_layer.and_then(|id|studio.doc.layers.iter().position(|l|l.id==id)) {
+                ui.add_enabled_ui(studio.can_duplicate_layer_tree(layer),|ui| {
+                    if icons::tiny_icon(ui,ph::COPY,"Duplicate layer",false){studio.duplicate_layer_tree(layer);}
+                });
+            } else if icons::tiny_icon(ui,ph::COPY,"Duplicate selection",false){studio.duplicate_selection();}
             if icons::tiny_icon(ui,ph::TRASH,"Delete selection or layer",false){if studio.selection.is_empty(){studio.delete_layer();}else{studio.delete_selection();}}
         });
     });
@@ -2580,6 +2587,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
         }
     }
     let mut delete_item = None;
+    let mut duplicate_layer = None;
     let mut artwork_action = None;
     let mut mask_item = None;
     let mut selection_mask_item = None;
@@ -2702,6 +2710,9 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                                     }
                                 ))
                                 .context_menu(|ui| {
+                                    if ui.add_enabled(studio.can_duplicate_layer_tree(i), eframe::egui::Button::new("Duplicate layer")).clicked() {
+                                        duplicate_layer=Some(layer.id); ui.close();
+                                    }
                                     if ui.add_enabled(studio.layer_unlocked(i), eframe::egui::Button::new("Delete layer")).clicked() {
                                         delete_item=Some((i,None)); ui.close();
                                     }
@@ -3037,6 +3048,9 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                 studio.selected_layer = None;
             }
         }
+    }
+    if let Some(index)=duplicate_layer.and_then(|id|studio.doc.layers.iter().position(|l|l.id==id)) {
+        studio.duplicate_layer_tree(index);
     }
     if let Some(index)=start_rename.filter(|index|*index!=usize::MAX) {
         if let Some(layer)=studio.doc.layers.get(index) {

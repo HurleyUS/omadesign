@@ -86,17 +86,36 @@ pub(super) fn prepare(doc: &Document, root: usize, delta: Pt) -> Result<Copied, 
                 }
                 shape.id = shape_ids[&shape.id];
                 crate::layout_components::remap_duplicate(shape, &shape_ids);
+                if let Some(crate::layout_components::ComponentBinding::Instance {
+                    nodes, ..
+                }) = &mut shape.layout.component
+                {
+                    for node in nodes {
+                        for mask in &mut node.baseline.artwork_masks {
+                            mask.remap(&layer_ids, &shape_ids, placement);
+                        }
+                        crate::text_geometry::remap_copy_in_document(
+                            doc,
+                            &mut node.baseline,
+                            &shape_ids,
+                        );
+                    }
+                }
                 crate::text_geometry::remap_copy_in_document(doc, shape, &shape_ids);
                 shape.layout.parent = shape
                     .layout
                     .parent
                     .and_then(|id| shape_ids.get(&id).copied());
-                shape.geom.translate(delta);
+                if delta != Pt::ZERO {
+                    shape.geom.translate(delta);
+                }
             }
-        } else if let Some((origin, size, rotation)) = layer.kind.raster_xform() {
+        } else if delta != Pt::ZERO
+            && let Some((origin, size, rotation)) = layer.kind.raster_xform()
+        {
             layer.kind.set_raster_xform(origin + delta, size, rotation);
         }
-        if layer.kind.pixels().is_none() && layer.mask.is_some() {
+        if delta != Pt::ZERO && layer.kind.pixels().is_none() && layer.mask.is_some() {
             if layer.mask_size.x <= 0. || layer.mask_size.y <= 0. {
                 let mask = layer.mask.as_ref().unwrap();
                 layer.mask_size = Pt::new(mask.w as f32, mask.h as f32);

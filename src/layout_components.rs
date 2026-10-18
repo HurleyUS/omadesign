@@ -534,6 +534,8 @@ fn inherit(base: &Shape, local: &Shape, inherited: &Shape, reset: bool) -> Shape
     out.name = preserve(&base.name, &local.name, &inherited.name, reset);
     out.style = merge_serialized(&base.style, &local.style, &inherited.style, reset);
     out.opacity = preserve(&base.opacity, &local.opacity, &inherited.opacity, reset);
+    out.fill_opacity = preserve(&base.fill_opacity, &local.fill_opacity, &inherited.fill_opacity, reset);
+    out.blend_interior = preserve(&base.blend_interior, &local.blend_interior, &inherited.blend_interior, reset);
     out.blend = preserve(&base.blend, &local.blend, &inherited.blend, reset);
     out.rotation = preserve(&base.rotation, &local.rotation, &inherited.rotation, reset);
     out.corners = preserve(&base.corners, &local.corners, &inherited.corners, reset);
@@ -541,6 +543,9 @@ fn inherit(base: &Shape, local: &Shape, inherited: &Shape, reset: bool) -> Shape
     out.visible = preserve(&base.visible, &local.visible, &inherited.visible, reset);
     out.locked = preserve(&base.locked, &local.locked, &inherited.locked, reset);
     out.guide = preserve(&base.guide, &local.guide, &inherited.guide, reset);
+    out.mask = preserve(&base.mask, &local.mask, &inherited.mask, reset);
+    out.artwork_masks = preserve(&base.artwork_masks, &local.artwork_masks, &inherited.artwork_masks, reset);
+    out.text_wrap = preserve(&base.text_wrap, &local.text_wrap, &inherited.text_wrap, reset);
     let (mut base_layout, mut local_layout, mut inherited_layout) = (
         base.layout.clone(),
         local.layout.clone(),
@@ -768,6 +773,15 @@ fn sync_to(
             inherited.layout.parent.and_then(|p| ids.get(&p).copied())
         };
         remap_interactions(&mut inherited, &ids);
+        if !inherited.artwork_masks.is_empty() {
+            let layers = HashMap::from([(doc.layers[source_layer].id, doc.layers[layer].id)]);
+            let placement = tiny_skia::Transform::from_translate(origin.x-source_origin.x, origin.y-source_origin.y);
+            for mask in &mut inherited.artwork_masks {
+                if mask.source.shape.is_some() {
+                    mask.remap(&layers, &ids, placement);
+                }
+            }
+        }
         let locally_deleted = !reset
             && source_id != main
             && previous

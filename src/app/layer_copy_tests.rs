@@ -228,6 +228,17 @@ fn craft_layer_copy_vector_frames_masks_components_and_prototype_targets_are_int
     let instance =
         components::insert_instance(&mut s.doc, main, 0, Pt::new(110., 15.), None).unwrap();
     s.doc.find_shape_mut(0, instance).unwrap().opacity = 0.375;
+    s.doc.find_shape_mut(0, instance).unwrap().fill_opacity = 0.4;
+    s.doc.find_shape_mut(0, instance).unwrap().blend_interior = true;
+    s.doc.find_shape_mut(0, instance).unwrap().mask = Some(
+        Pixels::from_samples(
+            1,
+            1,
+            crate::deep_color::Depth::F32,
+            vec![0.1234567, 0.1234567, 0.1234567, 1.],
+        )
+        .unwrap(),
+    );
     s.doc
         .find_shape_mut(0, instance)
         .unwrap()
@@ -297,6 +308,13 @@ fn craft_layer_copy_vector_frames_masks_components_and_prototype_targets_are_int
     let mask = &s.doc.find_shape(1, new_instance).unwrap().artwork_masks[0];
     assert_eq!(mask.source.layer, s.doc.layers[1].id);
     assert!(!source_ids.contains(&mask.source.shape.unwrap()));
+    let copy = s.doc.find_shape(1, new_instance).unwrap();
+    assert_eq!(copy.fill_opacity, 0.4);
+    assert!(copy.blend_interior);
+    assert_eq!(
+        serde_json::to_value(&copy.mask).unwrap(),
+        serde_json::to_value(&s.doc.find_shape(0, instance).unwrap().mask).unwrap()
+    );
     let bound = components::property_object(&s.doc, 1, new_main, property).unwrap();
     assert!(!source_ids.contains(&bound));
     history(&mut s, &before, 0);
@@ -304,6 +322,78 @@ fn craft_layer_copy_vector_frames_masks_components_and_prototype_targets_are_int
     components::synchronize_all(&mut s.doc).unwrap();
     assert_eq!(s.doc.find_shape(0, child).unwrap().opacity, 1.);
     assert_eq!(s.doc.find_shape(1, bound).unwrap().opacity, 0.2);
+    let instance_child = components::property_object(&s.doc, 1, new_instance, property).unwrap();
+    assert_eq!(s.doc.find_shape(1, instance_child).unwrap().opacity, 0.2);
+    components::sync_instance(&mut s.doc, 1, new_instance, true).unwrap();
+    let reset = s.doc.find_shape(1, new_instance).unwrap();
+    assert!(reset.mask.is_none());
+    assert!(reset.artwork_masks.is_empty());
+    assert_eq!(reset.fill_opacity, 1.);
+    assert!(!reset.blend_interior);
+    assert!(s.doc.find_shape(0, instance).unwrap().mask.is_some());
+}
+
+#[test]
+fn craft_layer_copy_component_same_cache_native_mask_overrides_survive_sync_and_reset() {
+    use crate::layout_components as components;
+    let mut s = crate::app::symbols::tests::fixture();
+    s.create_vector_symbol("Masked component");
+    let main = s.primary().unwrap().1;
+    let mask = |value| {
+        Pixels::from_samples(
+            1,
+            1,
+            crate::deep_color::Depth::F32,
+            vec![value, value, value, 1.],
+        )
+        .unwrap()
+    };
+    s.doc.find_shape_mut(0, main).unwrap().mask = Some(mask(0.1234567));
+    let instance =
+        components::insert_instance(&mut s.doc, main, 0, Pt::new(100., 80.), None).unwrap();
+    let local = mask(0.1234568);
+    assert_eq!(
+        local.data.as_slice(),
+        s.doc
+            .find_shape(0, main)
+            .unwrap()
+            .mask
+            .as_ref()
+            .unwrap()
+            .data
+            .as_slice()
+    );
+    s.doc.find_shape_mut(0, instance).unwrap().mask = Some(local);
+    s.doc.find_shape_mut(0, main).unwrap().mask = Some(mask(0.1234569));
+    assert!(components::sync_instance(&mut s.doc, 0, instance, false).unwrap());
+    assert_eq!(
+        s.doc
+            .find_shape(0, instance)
+            .unwrap()
+            .mask
+            .as_ref()
+            .unwrap()
+            .sample(0)[0]
+            .to_bits(),
+        0.1234568f32.to_bits()
+    );
+    components::sync_instance(&mut s.doc, 0, instance, true).unwrap();
+    assert_eq!(
+        s.doc
+            .find_shape(0, instance)
+            .unwrap()
+            .mask
+            .as_ref()
+            .unwrap()
+            .sample(0)[0]
+            .to_bits(),
+        0.1234569f32.to_bits()
+    );
+    let original = state(&s);
+    assert_eq!(
+        crate::project::encode(&crate::project::decode(&original).unwrap()).unwrap(),
+        original
+    );
 }
 
 #[test]

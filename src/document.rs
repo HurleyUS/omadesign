@@ -287,8 +287,7 @@ impl PartialEq for Shape {
             && self.guide == other.guide
             && self.filters == other.filters
             && self.corners == other.corners
-            && self.mask.as_ref().map(|p| (p.w, p.h, &p.data))
-                == other.mask.as_ref().map(|p| (p.w, p.h, &p.data))
+            && self.mask == other.mask
             && self.artwork_masks == other.artwork_masks
             && self.layout == other.layout
             && self.text_wrap == other.text_wrap
@@ -513,6 +512,34 @@ pub struct Pixels {
     pub(crate) cached_pm: RefCell<Option<(u64, crate::deep_color::surface::Surface)>>,
     #[serde(skip)]
     pub(crate) cached_uniform: RefCell<Option<(u64, Option<Rgba>)>>,
+}
+
+impl PartialEq for Pixels {
+    fn eq(&self, other: &Self) -> bool {
+        if (self.w, self.h) != (other.w, other.h) {
+            return false;
+        }
+        let samples = |a: &[f32], b: &[f32]| {
+            a.len() == b.len()
+                && (a.as_ptr() == b.as_ptr()
+                    || a.iter().zip(b).all(|(a,b)| a.to_bits() == b.to_bits()))
+        };
+        match (&self.native, &other.native) {
+            (None, None) => self.data.as_slice() == other.data.as_slice(),
+            (Some(a), Some(b)) => {
+                a.depth == b.depth
+                    && a.intent == b.intent
+                    && a.icc_profile.as_slice() == b.icc_profile.as_slice()
+                    && samples(&a.samples, &b.samples)
+                    && match (&a.cmyk, &b.cmyk) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => samples(a,b),
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+    }
 }
 
 impl Clone for Pixels {
