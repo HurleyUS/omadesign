@@ -47,6 +47,20 @@ pub struct PositionedGlyph {
     /// The ID of the font the glyph should be taken from. Can be used with the
     /// [font database of the tree](crate::Tree::fontdb) this glyph is part of.
     pub font: ID,
+    /// Original Unicode scalar index within the text element, before visual bidi ordering.
+    pub text_index: usize,
+    /// Final inline cluster advance in local text units, including authored spacing.
+    pub cluster_advance: f32,
+    /// Shaped cluster advance after textLength scaling and before authored spacing.
+    pub cluster_width: f32,
+    /// Applied textLength glyph scale.
+    pub length_scale: f32,
+    /// Whether this script permits extra inter-character spacing.
+    pub spacing_allowed: bool,
+    /// Inline baseline direction before per-character rotations.
+    pub inline_direction: [f32;2],
+    /// Cluster origin in local text coordinates, before glyph offsets.
+    pub baseline: [f32;2],
 }
 
 impl PositionedGlyph {
@@ -194,6 +208,7 @@ struct GlyphCluster {
     glyphs: Vec<PositionedGlyph>,
     transform: Transform,
     path_transform: Transform,
+    inline_angle: f32,
     visible: bool,
 }
 
@@ -350,7 +365,15 @@ pub(crate) fn layout_text(
                     .into_iter()
                     .flat_map(|mut gc| {
                         let cluster_ts = gc.transform();
+                        let axis=span_ts.pre_rotate(gc.inline_angle);
+                        let length=axis.sx.hypot(axis.ky);
+                        let origin=span_ts.pre_concat(cluster_ts);
                         gc.glyphs.iter_mut().for_each(|pg| {
+                            pg.text_index=char_offset+gc.byte_idx.code_point_at(&chunk.text);
+                            pg.cluster_advance=gc.advance;pg.cluster_width=gc.width;pg.length_scale=gc.length_scale;
+                            pg.spacing_allowed=script_supports_letter_spacing(gc.codepoint.script());
+                            pg.inline_direction=if length>0. {[axis.sx/length,axis.ky/length]}else{[1.,0.]};
+                            pg.baseline=[origin.tx,origin.ty];
                             pg.cluster_ts = cluster_ts;
                             pg.span_ts = span_ts;
                         });
@@ -707,6 +730,7 @@ fn resolve_clusters_positions_path(
         cluster.transform = Transform::default();
         cluster.transform = cluster.transform.pre_translate(x - half_width, y);
         cluster.transform = cluster.transform.pre_rotate_at(angle, half_width, 0.0);
+        cluster.inline_angle=angle;
 
         let cp = char_offset + cluster.byte_idx.code_point_at(&chunk.text);
         dy += text.dy.get(cp).cloned().unwrap_or(0.0);
@@ -1216,6 +1240,7 @@ fn form_glyph_clusters(glyphs: &[Glyph], text: &str, font_size: f32) -> GlyphClu
             font: glyph.font.id,
             text: glyph.text.clone(),
             id: glyph.id,
+            text_index:0,cluster_advance:0.,cluster_width:0.,length_scale:1.,spacing_allowed:true,inline_direction:[1.,0.],baseline:[0.,0.],
         });
 
         x += glyph.width as f32;
@@ -1239,6 +1264,7 @@ fn form_glyph_clusters(glyphs: &[Glyph], text: &str, font_size: f32) -> GlyphClu
         has_relative_shift: false,
         transform: Transform::default(),
         path_transform: Transform::default(),
+        inline_angle:0.,
         glyphs: positioned_glyphs,
         visible: true,
     }

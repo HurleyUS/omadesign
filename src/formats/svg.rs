@@ -941,6 +941,7 @@ impl Reader<'_> {
 
         let t=text.abs_transform();
         let mut run=TypeRun{content,font,px,manual_kern,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
+        crate::text::svg_type::restore_offsets(&mut run)?;
         if let Some(layout) = crate::text::svg_type::layout_with_options(&run, self.options) {
             for (at, style) in &layout.styles {
                 if !style.features.is_empty(){run.set_character_style(*at,at+1,|s|s.features=style.features.clone());}
@@ -948,7 +949,8 @@ impl Reader<'_> {
                     run.set_character_style(*at, at+1, |s| {s.font_variations=Some(axes.clone());});
                 }
             }
-            crate::text::webfonts::bind(run.svg_text.as_mut().unwrap(), layout.tree.fontdb(),&layout.styles)?;
+            let mut used=layout.styles.clone();used.extend(layout.font_choices().map(|(at,font)|(at,crate::geom::CharSpan{font:Some(font.into()),..Default::default()})));
+            crate::text::webfonts::bind(run.svg_text.as_mut().unwrap(), layout.tree.fontdb(),&used)?;
         } else {return Err("Cannot resolve this SVG text's font families".into());}
         run.contours=crate::text::shape(&run);
         let fill=text.chunks().iter().flat_map(|c|c.spans()).next().and_then(|s|s.fill()).map(|f|self.paint(f.paint(),f.opacity().get(),text.abs_transform(),Geom::Text(run.clone()).bbox()).unwrap_or_else(||{warn(&mut self.warnings,"SVG type source paint retained; changing object paint replaces it.".into());Fill::Solid(Rgba::BLACK)})).unwrap_or(Fill::None);

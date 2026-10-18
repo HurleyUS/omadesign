@@ -9,7 +9,7 @@ pub(super) fn spans(
     original: Option<&Layout>,
 ) -> Vec<(crate::geom::CharSpan, bool)> {
     let count = run.content.chars().count();
-    let pairs: Vec<_> = run
+    let mut pairs: Vec<_> = run
         .manual_kern
         .iter()
         .filter_map(|(&at, &value)| {
@@ -20,6 +20,10 @@ pub(super) fn spans(
             .then_some(at)
         })
         .collect();
+    for at in run.spans.iter().flat_map(|s|[s.start,s.end]).filter(|&at|at>0&&at<count) {
+        let mode=|index|run.spans.iter().find(|s|s.start<=index&&index<s.end).and_then(|s|s.kerning);
+        if mode(at-1)!=mode(at) && [mode(at-1),mode(at)].contains(&Some(crate::geom::KernMode::Optical)) && original.is_some_and(|l|l.clusters.iter().any(|r|r.start<at&&at<r.end)) {pairs.push(at);}
+    }
     let mut result = Vec::new();
     for span in run.character_style_runs(start, end) {
         let mut ends = vec![span.start, span.end];
@@ -119,18 +123,19 @@ pub(crate) fn pair_kerning(run: &TypeRun, at: usize) -> f32 {
         .unwrap_or(0.)
 }
 
-/// Apply accepted native pair edits to the source's resolved character positions.
+/// Apply accepted native pair and optical spacing to resolved source character positions.
 /// Args: native run, unmodified SVG, source range start and visible Unicode. Returns editable SVG.
 pub(super) fn pairs(run: &TypeRun, source: String, from: usize, content: &str) -> Option<String> {
     if run
         .manual_kern
         .range(from..from + content.chars().count())
         .next()
-        .is_none()
+        .is_none() && !run.spans.iter().any(|s|s.start<from+content.chars().count()&&from<s.end&&s.kerning==Some(crate::geom::KernMode::Optical))
     {
         return Some(source);
     }
     let layout = layout_source(run, source.clone(), content)?;
+    let optical=super::optical::adjustments(run,&layout,from);
     let count = layout.characters.len();
     let mut dx = vec![0.; count];
     let mut dy = vec![0.; count];
@@ -145,7 +150,12 @@ pub(super) fn pairs(run: &TypeRun, source: String, from: usize, content: &str) -
             let target = if c.vertical { &mut dy } else { &mut dx };
             target[c.ordinal] = value * c.px / 1000.;
         }
+
     }
+    let base_dx=dx.clone();let base_dy=dy.clone();
+    for c in &layout.characters {if let Some(amount)=optical.get(&c.ordinal){let target=if c.vertical{&mut dy}else{&mut dx};target[c.ordinal]+=amount;}}
+    let ranges:Vec<_>=run.spans.iter().filter(|s|s.kerning==Some(crate::geom::KernMode::Optical)).filter_map(|s|{let a=s.start.max(from);let b=s.end.min(from+content.chars().count());(a<b).then_some([a-from,b-from])}).collect();
+    let metadata=(!ranges.is_empty()).then(||serde_json::to_string(&Offsets{version:1,length:content.chars().count(),dx:base_dx,dy:base_dy,optical:ranges}).ok()).flatten();
     let xml = roxmltree::Document::parse(&source).ok()?;
     let nodes: Vec<_> = xml
         .descendants()
@@ -174,7 +184,7 @@ pub(super) fn pairs(run: &TypeRun, source: String, from: usize, content: &str) -
     let at = root.range().start + source[root.range()].find('>')?;
     edits.push((
         at..at,
-        format!(" dx=\"{}\" dy=\"{}\"", values(dx), values(dy)),
+        format!(" dx=\"{}\" dy=\"{}\"{}", values(dx), values(dy),metadata.map_or(String::new(),|value|format!(" {META}=\"{}\"",escape(&value)))),
     ));
     edits.sort_by_key(|(r, _)| std::cmp::Reverse(r.start));
     let mut result = source;
@@ -182,4 +192,28 @@ pub(super) fn pairs(run: &TypeRun, source: String, from: usize, content: &str) -
         result.replace_range(range, &value);
     }
     Some(result)
+}
+
+pub(super) const META:&str="data-oma-character-offsets";
+#[derive(Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Offsets {version:u8,length:usize,dx:Vec<f32>,dy:Vec<f32>,optical:Vec<[usize;2]>}
+
+/// Restore accepted optical intent from bounded metadata while keeping standard SVG placement visible.
+/// Args: captured native text. Returns an error before changing malformed source metadata.
+pub(crate) fn restore_offsets(run:&mut TypeRun)->Result<(),String> {
+    let Some(svg)=&run.svg_text else{return Ok(());};
+    let TextNode::Element{attributes,..}=&svg.root else{return Ok(());};
+    let Some(value)=attributes.get(META) else{return Ok(());};
+    let count=run.content.chars().count();
+    let bound=count.checked_mul(200).and_then(|n|n.checked_add(1024)).unwrap_or(usize::MAX).min(256*1024*1024);
+    if value.len()>bound{return Err("SVG optical positioning metadata exceeds source bounds".into());}
+    let offsets:Offsets=serde_json::from_str(value).map_err(|e|format!("Invalid SVG optical positioning: {e}"))?;
+    if offsets.version!=1 || offsets.length!=count || offsets.dx.len()!=offsets.dy.len() || offsets.dx.len()>count || svg.flow.is_none()&&offsets.dx.len()!=count || offsets.dx.iter().chain(&offsets.dy).any(|v|!v.is_finite()) || offsets.optical.len()>count || offsets.optical.iter().any(|[a,b]|a>=b||*b>count) || offsets.optical.windows(2).any(|p|p[0][1]>p[1][0]) {return Err("Invalid SVG optical positioning bounds".into());}
+    fn clear(node:&mut TextNode){if let TextNode::Element{attributes,children,..}=node {attributes.remove("dx");attributes.remove("dy");for child in children{clear(child);}}}
+    let svg=run.svg_text.as_mut().unwrap();
+    if svg.flow.is_none(){clear(&mut svg.root);}
+    if let TextNode::Element{attributes,..}=&mut svg.root {attributes.remove(META);if svg.flow.is_none(){for(key,values)in[("dx",offsets.dx),("dy",offsets.dy)]{attributes.insert(key.into(),values.into_iter().map(|v|v.to_string()).collect::<Vec<_>>().join(" "));}}}
+    for[a,b]in offsets.optical {run.set_character_style(a,b,|style|style.kerning=Some(crate::geom::KernMode::Optical));}
+    Ok(())
 }

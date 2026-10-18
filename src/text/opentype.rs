@@ -121,10 +121,10 @@ pub(super) fn ranged_features(
             .find(|(_, ch, _)| *ch >= span.end)
             .map_or(visible_len, |(byte, _, _)| *byte);
         if from < to {
-            if let Some(mode)=span.kerning {features.push(byte_feature(b"kern",u32::from(mode==crate::geom::KernMode::Metrics),from,to));}
             features.extend(span.features.iter().map(|(tag, value)| {
                 byte_feature(tag, *value, from, to)
             }));
+            if let Some(mode)=span.kerning {features.push(byte_feature(b"kern",u32::from(mode==crate::geom::KernMode::Metrics),from,to));}
         }
     }
     // A glyph cannot carry different metrics for two characters. Preserve

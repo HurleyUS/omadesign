@@ -15,12 +15,15 @@ pub(crate) mod metric_tests;
 pub(crate) mod pair_tests;
 #[cfg(test)]
 mod fallback_tests;
+#[cfg(test)]
+pub(crate) mod optical_tests;
 mod positioning;
+mod optical;
 mod fonts;
 pub(crate) use fonts::family_css;
 pub(super) use fonts::{family_faces,map_families,map_flow_families};
 pub(crate) use fonts::{references,project_families};
-pub(crate) use positioning::pair_kerning;
+pub(crate) use positioning::{pair_kerning,restore_offsets};
 pub(crate) use positioning::leading;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -121,6 +124,11 @@ struct FlowSource {
     manual_kern: BTreeMap<usize, f32>,
 }
 
+struct GlyphMetric {
+    index:usize,node:usize,chunk:usize,font:String,id:u16,px:f32,point:super::variations::FontVariations,
+    transform:Transform,advance:f32,width:f32,allowed:bool,inline:Pt,baseline:Pt,
+}
+
 pub(crate) struct Layout {
     pub tree: usvg::Tree,
     pub contours: Vec<Vec<Pt>>,
@@ -129,7 +137,14 @@ pub(crate) struct Layout {
     pub bounds: crate::geom::Bounds,
     pub stroke_width: f32,
     characters: Vec<VisualCharacter>,
+    glyphs:Vec<GlyphMetric>,
     clusters: Vec<std::ops::Range<usize>>,
+}
+
+impl Layout {
+    /// Read actual font choices, including glyphs without their own Unicode cluster label.
+    /// Args: none. Returns logical character indices and resolved native references.
+    pub(crate) fn font_choices(&self)->impl Iterator<Item=(usize,&str)> {self.glyphs.iter().map(|g|(g.index,g.font.as_str()))}
 }
 
 pub(crate) fn paint_tree(run: &TypeRun, fill: bool) -> Option<Arc<usvg::Tree>> {
@@ -485,6 +500,7 @@ pub(crate) fn capture(
         .and_then(|value| serde_json::from_str::<FlowSource>(value).ok())
     {
         root = saved.root;
+        if let TextNode::Element{attributes,..}=&mut root {if let Some(value)=node.attribute(positioning::META){attributes.insert(positioning::META.into(),value.into());}}
         content = saved.content;
         let count = content.chars().count();
         manual_kern = saved.manual_kern.into_iter().filter(|(at,value)| *at > 0 && *at < count && value.is_finite()).collect();
@@ -687,7 +703,7 @@ fn write_nodes(
                 let mut features = if span.kerning.is_some() || split_pair {inherited.map(|s|s.features.iter().copied().collect::<BTreeMap<_,_>>()).unwrap_or_default()}else{BTreeMap::new()};
                 features.extend(span.features.iter().copied());
                 if split_pair {for tag in [*b"liga",*b"clig",*b"dlig",*b"hlig"] {features.insert(tag,0);}}
-                if let Some(mode @ (crate::geom::KernMode::Metrics | crate::geom::KernMode::None)) = span.kerning {
+                if let Some(mode) = span.kerning {
                     features.insert(*b"kern",u32::from(mode==crate::geom::KernMode::Metrics));
                     css.push_str(if mode==crate::geom::KernMode::Metrics {"font-kerning:normal;"} else {"font-kerning:none;"});
                 }
@@ -1238,6 +1254,7 @@ fn texts(group: &usvg::Group, out: &mut Vec<usvg::Text>) {
 }
 
 struct VisualCharacter {
+    node:usize,chunk:usize,text_index:usize,
     index: usize,
     ordinal: usize,
     dx: f32,
@@ -1266,9 +1283,9 @@ fn visual_characters(nodes: &[usvg::Text], content: &str) -> Vec<VisualCharacter
     let mut result = Vec::new();
     let mut cursor = 0;
     let mut ordinal = 0;
-    for node in nodes {
+    for (node_index,node) in nodes.iter().enumerate() {
         let mut offset = 0;
-        for chunk in node.chunks() {
+        for (chunk_index,chunk) in node.chunks().iter().enumerate() {
             let text = chunk.text();
             if text.is_empty() {
                 continue;
@@ -1299,6 +1316,7 @@ fn visual_characters(nodes: &[usvg::Text], content: &str) -> Vec<VisualCharacter
                             .iter()
                             .find(|s| s.start() <= byte && byte < s.end());
                         result.push(VisualCharacter {
+                            node:node_index,chunk:chunk_index,text_index:offset+text[..byte].chars().count(),
                             index: base
                                 + text[..byte].chars().filter(|c| !bidi_control(*c)).count(),
                             ordinal: ordinal + text[..byte].chars().filter(|c| !bidi_control(*c)).count(),
@@ -1476,6 +1494,7 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
     let order = visual_characters(&text_nodes, content);
     let all: Vec<_> = content.chars().collect();
     let mut contours = Vec::new();
+    let mut glyph_metrics=Vec::new();
     let mut carets = Vec::new();
     let mut starts = std::collections::HashSet::new();
     let mut styles = Vec::new();
@@ -1499,7 +1518,7 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
             }
         }
     }
-    for text in &text_nodes {
+    for (node_index,text) in text_nodes.iter().enumerate() {
         let b = text.abs_stroke_bounding_box();
         let b = crate::geom::Bounds::from_min_size(
             Pt::new(b.x(), b.y()),
@@ -1513,6 +1532,23 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
                 stroke_width = stroke_width.max(stroke.width().get() * scale.0.max(scale.1));
             }
             for glyph in &span.positioned_glyphs {
+                let (font, axes) = resolved_fonts.entry(glyph.font).or_insert_with(|| {
+                    let portable=embedded || tree.fontdb().face(glyph.font).is_some_and(|face|face.families.iter().any(|(name,_)|name.starts_with("omatype:")));
+                    let font = if portable { super::webfonts::reference(tree.fontdb(), glyph.font) } else { tree.fontdb().face(glyph.font).and_then(|f|match &f.source {usvg::fontdb::Source::File(p)|usvg::fontdb::Source::SharedFile(p,_)=>Some(p.to_string_lossy().into_owned()),_=>None}) };
+                    let axes = if portable {tree.fontdb().with_face_data(glyph.font, |bytes,index| rustybuzz::ttf_parser::Face::parse(bytes,index).ok().map(|face|face.variation_axes().into_iter().map(|a|a.tag.to_bytes()).collect::<Vec<_>>())).flatten().unwrap_or_default()} else {Vec::new()};
+                    (font, axes)
+                });
+                if let Some(character)=order.iter().find(|c|c.node==node_index&&c.text_index==glyph.text_index) {
+                    if let Some(font)=font {
+                        let (units,point)=tree.fontdb().with_face_data(glyph.font,|bytes,index| {
+                            let face=rustybuzz::ttf_parser::Face::parse(bytes,index).ok()?;
+                            let mut values:Vec<_>=span.variations.iter().map(|v|(v.tag,v.value)).collect();
+                            if span.font_optical_sizing==usvg::FontOpticalSizing::Auto && !values.iter().any(|(tag,_)|*tag==*b"opsz") && let Some(axis)=face.variation_axes().into_iter().find(|a|a.tag.to_bytes()==*b"opsz") {values.push((*b"opsz",glyph.font_size().clamp(axis.min_value,axis.max_value)));}
+                            Some((face.units_per_em() as f32,super::variations::FontVariations::new(values).ok()?))
+                        }).flatten().unwrap_or((1000.,Default::default()));
+                        glyph_metrics.push(GlyphMetric{index:character.index,node:node_index,chunk:character.chunk,font:font.clone(),id:glyph.id.0,px:glyph.font_size(),point,transform:glyph.transform().pre_scale(units,units),advance:glyph.cluster_advance,width:glyph.cluster_width,allowed:glyph.spacing_allowed,inline:Pt::new(glyph.inline_direction[0],glyph.inline_direction[1]),baseline:Pt::new(glyph.baseline[0],glyph.baseline[1])});
+                    }
+                }
                 let chars: Vec<_> = glyph.text.chars().filter(|c| !bidi_control(*c)).collect();
                 if chars.is_empty() {
                     continue;
@@ -1537,12 +1573,6 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
                     *value = true;
                 }
                 let transform = text.abs_transform().pre_concat(glyph.transform());
-                let (font, axes) = resolved_fonts.entry(glyph.font).or_insert_with(|| {
-                    let portable=embedded || tree.fontdb().face(glyph.font).is_some_and(|face|face.families.iter().any(|(name,_)|name.starts_with("omatype:")));
-                    let font = if portable { super::webfonts::reference(tree.fontdb(), glyph.font) } else { tree.fontdb().face(glyph.font).and_then(|f|match &f.source {usvg::fontdb::Source::File(p)|usvg::fontdb::Source::SharedFile(p,_)=>Some(p.to_string_lossy().into_owned()),_=>None}) };
-                    let axes = if portable {tree.fontdb().with_face_data(glyph.font, |bytes,index| rustybuzz::ttf_parser::Face::parse(bytes,index).ok().map(|face|face.variation_axes().into_iter().map(|a|a.tag.to_bytes()).collect::<Vec<_>>())).flatten().unwrap_or_default()} else {Vec::new()};
-                    (font, axes)
-                });
                 let fill = span.fill.as_ref().and_then(|fill| {
                     if let usvg::Paint::Color(c) = fill.paint() {
                         Some(crate::document::Fill::Solid(crate::color::Rgba::new(
@@ -1637,6 +1667,7 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
         bounds: bounds.unwrap_or_else(|| crate::geom::Bounds::from_pt(run.map_point(run.origin))),
         stroke_width,
         characters: order,
+        glyphs:glyph_metrics,
         clusters,
     }
 }

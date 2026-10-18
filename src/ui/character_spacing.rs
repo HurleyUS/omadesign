@@ -930,4 +930,17 @@ mod tests {
         studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
     }
 
+    #[test]
+    fn character_spacing_imported_svg_optical_native_choice_moves_glyphs_and_undo(){
+        use crate::text::svg_type::{metric_tests,pair_tests,optical_tests};
+        let ctx=egui::Context::default();ctx.enable_accesskit();crate::ui::theme::apply(&ctx);
+        let source=pair_tests::source(r#"<text x="25" y="80" font-family="MetricFace" font-size="40">AVWaTo</text>"#);
+        let mut studio=metric_tests::studio_for(&source);let before=crate::project::encode(&studio.doc).unwrap();let image=crate::compositor::export_png(&studio.doc,1).unwrap();
+        frame(&ctx,&mut studio,vec![]);let output=tab_to(&ctx,&mut studio,"Kerning mode");assert_focused(&ctx,&output,"Kerning mode");
+        frame(&ctx,&mut studio,key(Key::Space,Modifiers::NONE));let output=tab_to(&ctx,&mut studio,"Optical");assert_eq!(named(&output,"Optical").1.label(),Some("Optical"));
+        frame(&ctx,&mut studio,key(Key::Enter,Modifiers::NONE));let output=frame(&ctx,&mut studio,vec![]);assert_focused(&ctx,&output,"Kerning mode");
+        assert!(studio.selected_character_metrics().iter().all(|s|s.kerning==Some(KernMode::Optical)));assert_eq!(studio.history.len(),1);assert_ne!(crate::compositor::export_png(&studio.doc,1).unwrap(),image);
+        optical_tests::check(&studio,"optical-native-input");let after=crate::project::encode(&studio.doc).unwrap();studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
+    }
+
 }

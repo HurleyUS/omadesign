@@ -23,16 +23,13 @@ pub fn character_metrics(run: &TypeRun, index: usize) -> CharSpan {
     style
 }
 
-/// Side-bearing profiles in em units, sampled at common horizontal bands.
-/// Reused across font sizes and repeated pairs during interactive composition.
-fn profile(run: &TypeRun, id: u16) -> Arc<Vec<Option<(f32, f32)>>> {
-    type Cache = HashMap<(String, Vec<([u8;4],u32)>, u64, u16), Arc<Vec<Option<(f32, f32)>>>>;
-    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
-    let key = (run.font.clone(), run.font_variations.key(), FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed), id);
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some(value) = cache.lock().unwrap().get(&key).cloned() {
-        return value;
-    }
+/// Cache real glyph contours in em coordinates through the shared native font path.
+/// Args: selected font/coordinates and glyph ID. Returns original normalized outlines.
+pub(super) fn glyph_contours(run:&TypeRun,id:u16)->Arc<Vec<Vec<Pt>>> {
+    type Key=(String,Vec<([u8;4],u32)>,u64,u16);
+    static CACHE:OnceLock<Mutex<HashMap<Key,Arc<Vec<Vec<Pt>>>>>>=OnceLock::new();
+    let key=(run.font.clone(),run.font_variations.key(),FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed),id);
+    let cache=CACHE.get_or_init(Default::default);if let Some(value)=cache.lock().unwrap().get(&key).cloned(){return value;}
     let contours = resolve_path(run)
         .and_then(|p| font_bytes(&p))
         .and_then(|bytes| {
@@ -45,11 +42,26 @@ fn profile(run: &TypeRun, id: u16) -> Arc<Vec<Option<(f32, f32)>>> {
             ))
         })
         .unwrap_or_default();
+
+    let value=Arc::new(contours);let mut cache=cache.lock().unwrap();if cache.len()>=4096{cache.clear();}cache.insert(key,value.clone());value
+}
+
+/// Side-bearing profiles in em units, sampled at common horizontal bands.
+/// Reused across font sizes and repeated pairs during interactive composition.
+fn profile(run: &TypeRun, id: u16) -> Arc<Vec<Option<(f32, f32)>>> {
+    type Cache = HashMap<(String, Vec<([u8;4],u32)>, u64, u16), Arc<Vec<Option<(f32, f32)>>>>;
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    let key = (run.font.clone(), run.font_variations.key(), FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed), id);
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(value) = cache.lock().unwrap().get(&key).cloned() {
+        return value;
+    }
+    let contours = glyph_contours(run,id);
     let bands: Vec<Option<(f32, f32)>> = (0..16)
         .map(|band| {
             let y = -0.95 + band as f32 * 0.075;
             let mut xs = Vec::new();
-            for contour in &contours {
+            for contour in contours.iter() {
                 for (a, b) in contour
                     .iter()
                     .zip(contour.iter().cycle().skip(1))
@@ -607,6 +619,15 @@ mod svg_type_native_acceptance {
         use crate::text_geometry::{TextFrame,Overflow};
         let mut run=sample("MMMMM");run.frame=Some(TextFrame{size:Pt::new(20.,100.),overflow:Overflow::Visible,..Default::default()});run.set_character_style(0,1,|s|s.fill=Some(Fill::Solid(Rgba::rgb(220,20,40))));let doc=document(run);let image=crate::compositor::render_export(&doc,1).unwrap();assert!(image.pixels().iter().enumerate().any(|(i,p)|i%320>60&&p.alpha()>0));assert!(compare(&crate::svg::export(&doc).unwrap(),&doc)<0.1);
         let mut run=sample("Auto height words wrap over multiple lines");run.frame=Some(TextFrame{size:Pt::new(120.,100.),auto_height:true,..Default::default()});let mut plain=document(run.clone());run.transform=Some([1.,0.,0.,1.,0.,100.]);let mut shifted=document(run);crate::text_geometry::reflow_areas(&mut plain);crate::text_geometry::reflow_areas(&mut shifted);let height=|d:&Document|{let Geom::Text(t)=&d.layers[0].kind.shapes().unwrap()[0].geom else{unreachable!()};t.frame.as_ref().unwrap().size.y};assert!((height(&plain)-height(&shifted)).abs()<0.01);
+    }
+
+    #[test]
+    fn native_kerning_mode_overrides_a_conflicting_feature_without_dropping_other_tags(){
+        for mode in [KernMode::None,KernMode::Optical] {
+            let mut ordinary=run("AVWaTo");ordinary.set_character_style(0,6,|s|{s.kerning=Some(mode);s.features=vec![(*b"tnum",1)];});
+            let expected=compose(&ordinary);let mut conflict=ordinary.clone();conflict.set_character_style(0,6,|s|s.features.insert(0,(*b"kern",1)));
+            assert_eq!(*compose(&conflict),*expected);assert_eq!(conflict.spans[0].features,vec![(*b"kern",1),(*b"tnum",1)]);
+        }
     }
 
 }
