@@ -12,6 +12,7 @@ mod groups;
 mod svg_effects;
 mod mask_cache;
 mod motion_scene;
+pub(crate) mod layer_merge;
 thread_local! {static MOTION_ERROR:std::cell::RefCell<Option<String>>=const {std::cell::RefCell::new(None)};}
 
 /// Read the last live scene error. Returns a named error for the motion controls.

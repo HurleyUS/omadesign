@@ -280,7 +280,9 @@ fn file_menu(ui: &mut Ui, studio: &mut Studio) {
         }
         ui.separator();
         ui.label(RichText::new("Export").small().color(fg_weak()));
-        if ui.add(Button::new("Export…").shortcut_text("Ctrl+E")).clicked() {
+        let export_button=Button::new("Export…");
+        let export_button=if studio.persona==Persona::Pixel {export_button} else {export_button.shortcut_text("Ctrl+E")};
+        if ui.add(export_button).clicked() {
             super::export_dialog::open(ui.ctx(), studio, crate::export::Format::Png, false);
             ui.close();
         }

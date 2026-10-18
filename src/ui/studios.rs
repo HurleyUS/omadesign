@@ -2588,6 +2588,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
     }
     let mut delete_item = None;
     let mut duplicate_layer = None;
+    let mut merge_layer = None;
     let mut artwork_action = None;
     let mut mask_item = None;
     let mut selection_mask_item = None;
@@ -2716,6 +2717,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                                     if ui.add_enabled(studio.layer_unlocked(i), eframe::egui::Button::new("Delete layer")).clicked() {
                                         delete_item=Some((i,None)); ui.close();
                                     }
+                                    if let Some(kind)=super::layer_merge::menu(ui,studio,Some(layer.id)) {merge_layer=Some(kind);}
                                     if let Some(action) = super::masking::artwork_menu(ui,studio,i,None) { artwork_action=Some((i,None,action)); }
                                     if ui.button("Use as mask…").clicked() { mask_item=Some((i,None)); ui.close(); }
                                     ui.separator();
@@ -3052,6 +3054,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
     if let Some(index)=duplicate_layer.and_then(|id|studio.doc.layers.iter().position(|l|l.id==id)) {
         super::layer_duplicate::open(ui.ctx(), studio, index);
     }
+    if let Some(kind)=merge_layer {super::layer_merge::start(ui.ctx(),studio,kind);}
     if let Some(index)=start_rename.filter(|index|*index!=usize::MAX) {
         if let Some(layer)=studio.doc.layers.get(index) {
             studio.layer_rename=Some((index,layer.name.clone()));

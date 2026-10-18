@@ -14,6 +14,18 @@ pub(super) fn render(
     motion: Option<f32>,
     overrides: Option<&HashMap<u64, Pose>>,
 ) -> Result<Pixmap, String> {
+    let tree = scene(doc, index, motion, overrides)?;
+    let mut surface = Pixmap::new(width, height).ok_or("Could not allocate SVG effect viewport")?;
+    resvg::render(&tree, transform, &mut surface.as_mut());
+    Ok(surface)
+}
+
+pub(super) fn scene(
+    doc: &Document,
+    index: usize,
+    motion: Option<f32>,
+    overrides: Option<&HashMap<u64, Pose>>,
+) -> Result<std::sync::Arc<usvg::Tree>, String> {
     let group = doc.layers.get(index).ok_or("Missing SVG effect group")?;
     let mut ids = HashSet::from([group.id]);
     for _ in 0..64 {
@@ -86,10 +98,7 @@ pub(super) fn render(
         }
     }
     let source = effect_source(&isolated, &poses)?;
-    let tree = crate::svg_source::scene(&source)?;
-    let mut surface = Pixmap::new(width, height).ok_or("Could not allocate SVG effect viewport")?;
-    resvg::render(&tree, transform, &mut surface.as_mut());
-    Ok(surface)
+    crate::svg_source::scene(&source)
 }
 
 /// Omit redundant native isolation containers inside an already isolated filter.

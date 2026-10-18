@@ -1,5 +1,5 @@
 //! Read-only descriptions of the same contexts and chords used by dispatch.
-use super::shortcuts::{Shortcut, ShortcutFocus, held_modifiers, key_shortcut};
+use super::shortcuts::{Shortcut, ShortcutFocus, held_modifiers, key_shortcut_for_persona};
 use super::*;
 use egui::{Key, Modifiers};
 
@@ -27,6 +27,8 @@ impl Shortcut {
             Place => ("Ctrl+Shift+P", "Place artwork"),
             New => ("Ctrl+N", "New document"),
             Export => ("Ctrl+E", "Export PNG"),
+            MergeActive => ("Ctrl+E","Merge Down"),
+            MergeVisible => ("Ctrl+Shift+E","Merge Visible"),
             Undo => ("Ctrl+Z", "Undo"),
             Redo if shift => ("Ctrl+Shift+Z", "Redo"),
             Redo => ("Ctrl+Y", "Redo"),
@@ -150,7 +152,7 @@ impl Studio {
             if matches!(key, Key::Paste | Key::Insert) {
                 continue;
             }
-            let Some(shortcut) = key_shortcut(key, mods) else {
+            let Some(shortcut) = key_shortcut_for_persona(key, mods,self.persona) else {
                 continue;
             };
             if !shortcut.available(self.persona)
@@ -162,6 +164,9 @@ impl Studio {
             }
             seen.push(shortcut);
             let (mut keys, mut label) = shortcut.hint(mods.shift);
+            if shortcut==Shortcut::MergeActive {
+                if let Some(kind)=self.pixel_merge_shortcut(false) {label=kind.name();}
+            }
             if shortcut == Shortcut::Duplicate
                 && self.persona == Persona::Pixel
                 && self.pixel_sel.is_some()
@@ -735,6 +740,20 @@ mod tests {
                 .iter()
                 .any(|hint| hint.keys == "Esc" && hint.label == "Cancel crop")
         );
+    }
+
+    #[test]
+    fn pixel_merge_hints_follow_the_mode_aware_dispatch_and_active_layer_kind() {
+        let mut studio=Studio::new();studio.show_welcome=false;studio.persona=Persona::Pixel;
+        studio.doc.layers=vec![Layer::vector("Lower"),Layer::vector("Upper")];studio.active_layer=Some(1);
+        let current=hints(&studio,Modifiers::CTRL);
+        assert!(current.keys.iter().any(|h|h.keys=="Ctrl+E"&&h.label=="Merge Down"));
+        assert!(!current.keys.iter().any(|h|h.label=="Export PNG"));
+        studio.doc.layers.push(Layer::group("Group"));studio.active_layer=Some(2);
+        assert!(hints(&studio,Modifiers::CTRL).keys.iter().any(|h|h.keys=="Ctrl+E"&&h.label=="Merge Group"));
+        assert!(hints(&studio,Modifiers::CTRL|Modifiers::SHIFT).keys.iter().any(|h|h.keys=="Ctrl+Shift+E"&&h.label=="Merge Visible"));
+        studio.persona=Persona::Design;
+        assert!(hints(&studio,Modifiers::CTRL).keys.iter().any(|h|h.keys=="Ctrl+E"&&h.label=="Export PNG"));
     }
 
     #[test]

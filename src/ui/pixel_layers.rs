@@ -82,6 +82,10 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
                     }
                 });
             });
+            ui.separator();
+            if let Some(kind)=crate::ui::layer_merge::menu(ui, studio, owner) {
+                crate::ui::layer_merge::start(ui.ctx(),studio,kind);
+            }
         });
     });
     if let Some(action) = action {

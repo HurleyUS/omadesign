@@ -47,10 +47,13 @@ pub(super) enum Shortcut {
     ToolPoints,
     NewPixelLayer,
     ToggleQuickMask,
+    MergeActive,
+    MergeVisible,
 }
 
 impl Shortcut {
     pub(super) fn available(self, persona: Persona) -> bool {
+        if matches!(self,Self::MergeActive|Self::MergeVisible) {return persona==Persona::Pixel;}
         if self == Self::ToggleQuickMask {return persona == Persona::Pixel;}
         if self == Self::ToolPoints { return true; }
         if self == Self::NewPixelLayer { return persona == Persona::Pixel; }
@@ -100,6 +103,13 @@ impl Shortcut {
 
 fn plain_paste_key(key: Key, mods: Modifiers) -> bool {
     key == Key::Paste || (key == Key::Insert && mods.shift)
+}
+
+pub(super) fn key_shortcut_for_persona(key:Key,mods:Modifiers,persona:Persona)->Option<Shortcut> {
+    if persona==Persona::Pixel && key==Key::E && !mods.alt && (mods.ctrl||mods.command||mods.mac_cmd) {
+        return Some(if mods.shift {Shortcut::MergeVisible} else {Shortcut::MergeActive});
+    }
+    key_shortcut(key,mods)
 }
 
 pub(super) fn key_shortcut(key: Key, mods: Modifiers) -> Option<Shortcut> {
@@ -286,7 +296,7 @@ impl Studio {
                     } else {
                         *key
                     };
-                    key_shortcut(key, *pressed_modifiers)
+                    key_shortcut_for_persona(key, *pressed_modifiers,self.persona)
                 }
                 Event::Copy => Some(if modifiers.alt {
                     Shortcut::CopyStyle
@@ -429,6 +439,11 @@ impl Studio {
                 self.begin_place();
             }
             Shortcut::New => self.new_tab(),
+            Shortcut::MergeActive|Shortcut::MergeVisible => {
+                if let Some(kind)=self.pixel_merge_shortcut(shortcut==Shortcut::MergeVisible) {
+                    crate::ui::layer_merge::start(ctx,self,kind);
+                }
+            }
             Shortcut::Export => {
                 self.commit_type_edit();
                 if self.persona == Persona::Photo {
