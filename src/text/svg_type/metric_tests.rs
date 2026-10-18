@@ -75,10 +75,58 @@ pub(crate) fn compare(studio: &Studio, expected: &str, name: &str) {
     let exported = crate::svg::export_embedded(&studio.doc).unwrap();
     let (again, notes) = crate::formats::svg::read(&exported, "Exported metrics").unwrap();
     assert!(notes.is_empty());
-    assert_eq!(
-        image.encode_png().unwrap(),
-        crate::compositor::export_png(&again, 1).unwrap()
-    );
+    let again_png = crate::compositor::export_png(&again, 1).unwrap();
+    if image.encode_png().unwrap() != again_png {
+        if let Some(root) = std::env::var_os("OMADESIGN_SVG_METRIC_QA") {
+            let out = std::path::Path::new(&root).join(format!("failure-{name}"));
+            std::fs::create_dir_all(&out).unwrap();
+            std::fs::write(out.join("editable.svg"), &exported).unwrap();
+            std::fs::write(out.join("original.oma"), &saved).unwrap();
+            std::fs::write(
+                out.join("again.oma"),
+                crate::project::encode(&again).unwrap(),
+            )
+            .unwrap();
+            std::fs::write(out.join("original.png"), image.encode_png().unwrap()).unwrap();
+            std::fs::write(out.join("again.png"), &again_png).unwrap();
+            std::fs::write(
+                out.join("original-runtime.svg"),
+                super::source(run(studio)).unwrap(),
+            )
+            .unwrap();
+            let after = again
+                .layers
+                .iter()
+                .filter_map(|l| l.kind.shapes())
+                .flatten()
+                .find_map(|s| {
+                    if let Geom::Text(r) = &s.geom {
+                        Some(r)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            std::fs::write(out.join("again-runtime.svg"), super::source(after).unwrap()).unwrap();
+            let points = |r: &TypeRun| {
+                (0..r.content.chars().count())
+                    .map(|i| {
+                        let p = crate::text::caret_pt(r, i);
+                        [p.x, p.y]
+                    })
+                    .collect::<Vec<_>>()
+            };
+            std::fs::write(
+                out.join("positions.json"),
+                serde_json::to_vec(
+                    &serde_json::json!({"before":points(run(studio)),"after":points(after)}),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        }
+    }
+    assert_eq!(image.encode_png().unwrap(), again_png);
     if let Some(root) = std::env::var_os("OMADESIGN_SVG_METRIC_QA") {
         let out = std::path::Path::new(&root).join(name);
         std::fs::create_dir_all(&out).unwrap();
