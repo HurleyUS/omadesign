@@ -324,6 +324,43 @@ fn craft_layer_destination_svg_text_pattern_filter_sources_and_font_render_survi
 }
 
 #[test]
+fn craft_layer_destination_conflicting_unicode_token_names_remain_bounded_and_independent() {
+    use crate::layout_tokens::DesignToken;
+    let mut s = fixture();
+    let token = DesignToken::color("É".repeat(64), Rgba::rgb(210, 30, 50));
+    let mut layer = Layer::vector("Bound color");
+    let mut shape = crate::layout::make_frame(Pt::ZERO, Pt::new(10., 10.));
+    shape.layout.tokens.fill = Some(token.id);
+    layer.kind.shapes_mut().unwrap().push(shape);
+    s.doc.layers = vec![layer];
+    s.doc.layout_tokens = vec![token];
+    crate::layout_tokens::apply_tokens(&mut s.doc);
+    let source = encoded(&s);
+    let mut doc = Document::new("Destination", 40., 30., 96.);
+    let existing = DesignToken::color("é".repeat(64), Rgba::rgb(10, 40, 220));
+    doc.layout_tokens = vec![existing.clone()];
+    let before = crate::project::encode(&doc).unwrap();
+    s.push_tab(TabState::new(doc, None));
+    s.switch_tab(0);
+    let target = s.capture_layer_copy(0).unwrap();
+    let to = destination(&s, 1);
+    s.duplicate_layer_to(&target, "Independent", &to).unwrap();
+    crate::layout_tokens::validate_tokens(&s.doc).unwrap();
+    assert_eq!(s.doc.layout_tokens[0], existing);
+    assert_eq!(s.doc.layout_tokens[1].name.len(), 128);
+    assert!(s.doc.layout_tokens[1].name.ends_with(" 2"));
+    assert_eq!(
+        s.doc.layers.last().unwrap().kind.shapes().unwrap()[0]
+            .style
+            .fill,
+        Fill::Solid(Rgba::rgb(210, 30, 50))
+    );
+    reopen_undo(&mut s, &before);
+    s.switch_tab(0);
+    assert_eq!(encoded(&s), source);
+}
+
+#[test]
 fn craft_layer_destination_stale_source_destination_invalid_name_and_channel_refs_do_not_mutate() {
     let mut s = fixture();
     let target = s.capture_layer_copy(0).unwrap();

@@ -197,21 +197,31 @@ fn transfer(
             }
         }
     });
-    for (&old, &id) in &token_ids {
-        let mut token = source
-            .layout_tokens
-            .iter()
-            .find(|t| t.id == old)
-            .ok_or("A copied object references a missing design token")?
-            .clone();
-        token.id = id;
+    if token_ids
+        .keys()
+        .any(|id| !source.layout_tokens.iter().any(|t| t.id == *id))
+    {
+        return Err("A copied object references a missing design token".into());
+    }
+    for original in source
+        .layout_tokens
+        .iter()
+        .filter(|t| token_ids.contains_key(&t.id))
+    {
+        let mut token = original.clone();
+        token.id = token_ids[&original.id];
         let base = token.name.clone();
         let mut suffix = 2;
         while tokens
             .iter()
-            .any(|t| t.name.eq_ignore_ascii_case(&token.name))
+            .any(|t| t.name.to_lowercase() == token.name.to_lowercase())
         {
-            token.name = format!("{base} {suffix}");
+            let ending = format!(" {suffix}");
+            let mut prefix = base.clone();
+            while prefix.len() + ending.len() > 128 {
+                prefix.pop();
+            }
+            token.name = format!("{}{ending}", prefix.trim_end());
             suffix += 1;
         }
         tokens.push(token);
@@ -244,6 +254,8 @@ fn transfer(
     let mut scratch = Document::new("Layer copy", source.width, source.height, source.dpi);
     scratch.color = source.color.clone();
     scratch.layers = layers;
+    scratch.layout_tokens = tokens.clone();
+    crate::layout_tokens::validate_tokens(&scratch)?;
     if source.color != destination.color {
         let conversion = scratch.color_conversion(destination.color.clone())?;
         apply_cmd(&mut scratch, &conversion);
