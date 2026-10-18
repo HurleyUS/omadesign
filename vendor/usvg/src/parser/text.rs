@@ -314,7 +314,7 @@ fn collect_text_chunks_impl(
             word_spacing: parent.resolve_length(AId::WordSpacing, state, 0.0),
             text_length: lengths.first().map(|(_, width, _)| *width),
             text_length_owner: lengths.first().map(|(owner, _, _)| *owner),
-            text_length_ancestors: lengths.iter().map(|(owner, _, _)| *owner).collect(),
+            text_length_scopes: lengths.clone(),
             length_adjust: lengths.first().map_or_else(
                 || parent.find_attribute(AId::LengthAdjust).unwrap_or_default(),
                 |(_, _, adjust)| *adjust,

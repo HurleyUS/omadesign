@@ -999,14 +999,9 @@ fn process_chunk(
 fn apply_length_adjust(chunk: &TextChunk, clusters: &mut [GlyphCluster]) {
     let mut owners = Vec::new();
     for span in &chunk.spans {
-        if let (Some(owner), Some(target)) = (span.text_length_owner, span.text_length) {
+        for (at, &(owner, target, adjust)) in span.text_length_scopes.iter().enumerate() {
             if !owners.iter().any(|(id, _, _, _)| *id == owner) {
-                owners.push((
-                    owner,
-                    target,
-                    span.length_adjust,
-                    span.text_length_ancestors.len(),
-                ));
+                owners.push((owner, target, adjust, span.text_length_scopes.len() - at));
             }
         }
     }
@@ -1027,9 +1022,9 @@ fn apply_length_adjust(chunk: &TextChunk, clusters: &mut [GlyphCluster]) {
                 {
                     if let Some(child) = parent
                         .checked_sub(1)
-                        .and_then(|at| span.text_length_ancestors.get(at))
+                        .and_then(|at| span.text_length_scopes.get(at))
                     {
-                        children.entry(*child).or_default().push(i);
+                        children.entry(child.0).or_default().push(i);
                         width += cluster.advance;
                     }
                 }
