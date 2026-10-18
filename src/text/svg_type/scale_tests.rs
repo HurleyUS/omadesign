@@ -186,6 +186,9 @@ fn other(body: &str) -> String {
 
 fn scale_cases() -> Vec<(&'static str, String)> {
     vec![
+        ("scale-rotation-paragraph",r#"<text x="25" y="80" rotate="0 20 -15 10 30 -25" font-family="MetricFace" font-size="32" style="font-feature-settings:'liga' 0">AVWaTo</text>"#.to_string()),
+        ("scale-rotation-offsets",r#"<text x="25" y="80" rotate="0 20 -15 10 30 -25" dx="0 -18 4 -16 2 -8" letter-spacing="-2" font-family="MetricFace" font-size="32" style="font-feature-settings:'liga' 0">AVWaTo</text>"#.to_string()),
+        ("scale-rotation-rtl",other(r#"<text x="350" y="80" rotate="0 20 -15 10 30 -25" font-family="Other" font-size="32" direction="rtl" letter-spacing="2">אבג דה</text>"#)),
         ("scale-mixed",r#"<text x="25" y="80" font-family="MetricFace" font-size="40"><tspan>AV</tspan><tspan font-size="20">WaTo</tspan></text>"#.to_string()),
         ("scale-length",r#"<text x="25" y="80" font-family="MetricFace" font-size="40" textLength="220" lengthAdjust="spacingAndGlyphs"><tspan>AV</tspan><tspan font-size="20" textLength="50" lengthAdjust="spacingAndGlyphs">WaTo</tspan> AV</text>"#.to_string()),
         ("scale-anchors",r#"<text x="25 70 110 155" y="50 80 60 90" rotate="0 20 -15 10" font-family="MetricFace" font-size="32">AVWA</text>"#.to_string()),
@@ -416,5 +419,84 @@ fn svg_character_scale_keeps_loaded_values_and_uses_the_existing_native_paint_li
             .unwrap();
         assert_eq!(r.character_style(0).hscale, Some(h));
         assert_eq!(png(&s), crate::compositor::export_png(&doc, 1).unwrap());
+    }
+}
+
+#[test]
+fn svg_character_scale_rotated_paragraph_keeps_shaping_context_and_local_axes() {
+    geometry_case("scale-rotation-paragraph");
+}
+#[test]
+fn svg_character_scale_rotated_negative_offsets_keep_shaping_and_local_axes() {
+    geometry_case("scale-rotation-offsets");
+}
+#[test]
+fn svg_character_scale_rotated_rtl_keeps_shaping_and_local_axes() {
+    geometry_case("scale-rotation-rtl");
+}
+#[test]
+fn svg_character_scale_guides_do_not_expose_intrinsic_distances_as_pair_edits() {
+    let body = scale_cases()
+        .into_iter()
+        .find(|(name, _)| *name == "scale-rotation-offsets")
+        .unwrap()
+        .1;
+    let mut s = studio(&body);
+    let original: (Vec<_>, Vec<_>) = (
+        (0..6)
+            .map(|i| positioning::pair_kerning(run(&s), i))
+            .collect(),
+        (0..6)
+            .map(|i| run(&s).character_style(i).tracking)
+            .collect(),
+    );
+    scaled(&mut s, 125., 80.);
+    for i in 0..6 {
+        assert!(
+            (positioning::pair_kerning(run(&s), i) - original.0[i]).abs() < 0.001,
+            "pair{i}"
+        );
+        assert_eq!(run(&s).character_style(i).tracking, original.1[i]);
+    }
+}
+#[test]
+fn svg_character_scale_guides_refuse_stale_unicode_and_bad_source_metadata() {
+    let body = scale_cases()
+        .into_iter()
+        .find(|(name, _)| *name == "scale-rotation-paragraph")
+        .unwrap()
+        .1;
+    let mut s = studio(&body);
+    scaled(&mut s, 125., 80.);
+    let source = crate::svg::export_embedded(&s.doc).unwrap();
+    let xml = roxmltree::Document::parse(&source).unwrap();
+    let attr = xml
+        .descendants()
+        .flat_map(|n| n.attributes())
+        .find(|a| a.name() == guides::META)
+        .unwrap();
+    let meta: serde_json::Value = serde_json::from_str(attr.value()).unwrap();
+    let before = crate::project::encode(&s.doc).unwrap();
+    for bad in [
+        {
+            let mut v = meta.clone();
+            v["version"] = serde_json::json!(2);
+            v
+        },
+        {
+            let mut v = meta.clone();
+            v["content"] = serde_json::json!("stale!");
+            v
+        },
+        {
+            let mut v = meta.clone();
+            v["positions"][0]["index"] = serde_json::json!(99999);
+            v
+        },
+    ] {
+        let mut changed = source.clone();
+        changed.replace_range(attr.range_value(), &escape(&bad.to_string()));
+        assert!(crate::formats::svg::read(&changed, "Invalid guide snapshot").is_err());
+        assert_eq!(crate::project::encode(&s.doc).unwrap(), before);
     }
 }

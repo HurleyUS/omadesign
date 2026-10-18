@@ -161,6 +161,10 @@ impl Embedded {
                 let value=super::svg_type::map_flow_families(attr.value(),|style|self.families(style,db))?;
                 edits.push((attr.range_value(),super::svg_type::escape(&value)));
             }
+            if let Some(attr)=node.attributes().find(|a|a.name()==super::svg_type::GUIDE_METADATA) {
+                let value=super::svg_type::map_guide_families(attr.value(),|style|self.families(style,db))?;
+                edits.push((attr.range_value(),super::svg_type::escape(&value)));
+            }
         }
         edits.sort_by_key(|(r,_)|std::cmp::Reverse(r.start));
         let mut out=source.to_string();for(r,v) in edits {out.replace_range(r,&v);}Ok(out)

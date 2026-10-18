@@ -372,7 +372,7 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
     let tree = usvg::Tree::from_str(&normalized, &options)
         .map_err(|e| format!("Could not parse SVG: {e}"))?;
     let type_xml=roxmltree::Document::parse_with_options(&normalized,roxmltree::ParsingOptions{allow_dtd:true,nodes_limit:400000,entity_resolver:None}).map_err(|e|e.to_string())?;
-    let rich_text=type_xml.descendants().filter(|n|n.has_tag_name("text")).filter_map(|node|node.attribute("id").map(|id|(id.to_owned(),crate::text::svg_type::capture(&type_xml,node,String::new(),16.)))).collect();
+    let rich_text=type_xml.descendants().filter(|n|n.has_tag_name("text")).filter_map(|node|node.attribute("id").map(|id|crate::text::svg_type::capture(&type_xml,node,String::new(),16.).map(|value|(id.to_owned(),value)))).collect::<Result<_,String>>()?;
     let (w, h) = (tree.size().width(), tree.size().height());
     let mut doc = Document::new(name, 1., 1., 96.);
     doc.width = w;

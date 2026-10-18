@@ -22,9 +22,12 @@ pub(crate) mod scale_tests;
 mod positioning;
 mod optical;
 mod scaling;
+mod guides;
 mod fonts;
 pub(crate) use fonts::family_css;
 pub(super) use fonts::{family_faces,map_families,map_flow_families};
+pub(in crate::text) use guides::map_families as map_guide_families;
+pub(in crate::text) use guides::META as GUIDE_METADATA;
 pub(crate) use fonts::{references,project_families};
 pub(crate) use positioning::{pair_kerning,restore_offsets};
 pub(crate) use scaling::restore as restore_scales;
@@ -133,6 +136,7 @@ struct GlyphMetric {
     transform:Transform,advance:f32,width:f32,allowed:bool,inline:Pt,baseline:Pt,
     length_scale:f32,unadjusted_advance:f32,upright:bool,letter_spacing:f32,word_spacing:f32,
     variations:Vec<([u8;4],f32)>,auto_opsz:bool,
+    origin:Pt,pre_position:Pt,rotation:f32,linear:bool,native_factor:Option<f32>,
 }
 
 pub(crate) struct Layout {
@@ -465,7 +469,7 @@ pub(crate) fn capture(
     node: roxmltree::Node<'_, '_>,
     font: String,
     px: f32,
-) -> (SvgText, String, BTreeMap<usize, f32>) {
+) -> Result<(SvgText, String, BTreeMap<usize, f32>),String> {
     let sheet = sheet(xml);
     let mut content = String::new();
     let mut manual_kern = BTreeMap::new();
@@ -501,6 +505,7 @@ pub(crate) fn capture(
     if content.ends_with(' ') && trim_last(&mut root, preserve) == Some(true) {
         content.pop();
     }
+    if let Some(saved)=guides::restore(node,&content)? {root=saved.0;content=saved.1;}
     if let Some(saved) = node
         .attribute("data-oma-flow-source")
         .and_then(|value| serde_json::from_str::<FlowSource>(value).ok())
@@ -558,7 +563,7 @@ pub(crate) fn capture(
     let flow = node
         .attribute("data-oma-flow")
         .and_then(|v| serde_json::from_str(v).ok());
-    (
+    Ok((
         SvgText {
             root,
             definitions,
@@ -570,7 +575,7 @@ pub(crate) fn capture(
         },
         content,
         manual_kern,
-    )
+    ))
 }
 
 impl SvgText {
@@ -1128,7 +1133,8 @@ pub fn source(run: &TypeRun) -> Option<String> {
         svg.viewport,
     );
     let source=scaling::apply(run,source,0,&run.content)?;
-    positioning::pairs(run, source, 0, &run.content)
+    let source=positioning::pairs(run, source, 0, &run.content)?;
+    guides::compile(run,source,&run.content)
 }
 
 /// Apply inherited object paint to a temporary SVG source view.
@@ -1195,6 +1201,10 @@ fn export_fragment_inner(run: &TypeRun, id: u64, outlines: bool, embedded: bool)
             let mut value = attr.value().to_owned();
             if attr.name()=="font-family" && !embedded {value=family_list(&value);}
             if attr.name()=="data-oma-flow-source" && !embedded {value=map_flow_families(&value,|style|Ok(family_list(style.get("font-family").map_or("serif",String::as_str)))).ok()?;}
+            if attr.name()==guides::META {
+                if !embedded {value=guides::map_families(&value,|style|Ok(family_list(style.get("font-family").map_or("serif",String::as_str)))).ok()?;}
+                value=guides::map_ids(&value,&ids,&prefix).ok()?;
+            }
             if attr.name() == "id" {
                 value = format!("{prefix}{value}");
             } else {
@@ -1483,7 +1493,8 @@ fn layout_source(run: &TypeRun, source: String, content: &str) -> Option<Arc<Lay
     }
     let tree = usvg::Tree::from_str(&renderer_source(&source), &options_for(run)).ok()?;
     let scales=scaling::resolved(&source);
-    let result = Arc::new(layout_tree(run, content, tree, false,&scales));
+    let positions=guides::positions(&source);
+    let result = Arc::new(layout_tree(run, content, tree, false,&scales,&positions));
     let mut cache = cache.lock().unwrap();
     if cache.len() >= 64 { cache.clear(); }
     cache.insert(key, result.clone());
@@ -1498,14 +1509,16 @@ pub(crate) fn layout_with_options(run: &TypeRun, options: &usvg::Options<'_>) ->
     bind_fonts(run,&mut resolved);
     let source = source(run)?;
     let scales=scaling::resolved(&source);
+    let positions=guides::positions(&source);
     let source=renderer_source(&source);
-    Some(layout_tree(run, &run.content, usvg::Tree::from_str(&source, &resolved).ok()?, true,&scales))
+    Some(layout_tree(run, &run.content, usvg::Tree::from_str(&source, &resolved).ok()?, true,&scales,&positions))
 }
 
-fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, scales:&[scaling::Scale]) -> Layout {
+fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, scales:&[scaling::Scale],positions:&[guides::Position]) -> Layout {
     let mut text_nodes = Vec::new();
     texts(tree.root(), &mut text_nodes);
-    let order = visual_characters(&text_nodes, content);
+    let mut order = visual_characters(&text_nodes, content);
+    for c in &mut order {if let Some(scale)=scales.iter().find(|s|s.contains(c.index)){c.px/=scale.font_factor;}if let Some(p)=positions.iter().find(|p|p.index==c.index){c.dx=p.dx;c.dy=p.dy;c.vertical=p.vertical;c.line_start=p.line_start;}}
     let all: Vec<_> = content.chars().collect();
     let mut contours = Vec::new();
     let mut glyph_metrics=Vec::new();
@@ -1562,7 +1575,7 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, s
                         }).flatten().unwrap_or((1000.,Default::default()));
                         let compensation=scales.iter().find(|s|s.contains(character.index));
                         let font_factor=compensation.map_or(1.,|s|s.font_factor);
-                        glyph_metrics.push(GlyphMetric{index:character.index,node:node_index,chunk:character.chunk,font:font.clone(),id:glyph.id.0,px:glyph.font_size()/font_factor,point,transform:glyph.transform().pre_scale(units,units),advance:glyph.cluster_advance,width:glyph.cluster_width,allowed:glyph.spacing_allowed,inline:Pt::new(glyph.inline_direction[0],glyph.inline_direction[1]),baseline:Pt::new(glyph.baseline[0],glyph.baseline[1]),length_scale:glyph.length_scale,unadjusted_advance:glyph.unadjusted_advance,upright:glyph.vertical_upright,letter_spacing:span.letter_spacing,word_spacing:span.word_spacing,variations:span.variations.iter().map(|v|(v.tag,v.value)).collect(),auto_opsz:span.font_optical_sizing==usvg::FontOpticalSizing::Auto});
+                        glyph_metrics.push(GlyphMetric{index:character.index,node:node_index,chunk:character.chunk,font:font.clone(),id:glyph.id.0,px:glyph.font_size()/font_factor,point,transform:glyph.transform().pre_scale(units,units),advance:glyph.cluster_advance,width:glyph.cluster_width,allowed:glyph.spacing_allowed,inline:Pt::new(glyph.inline_direction[0],glyph.inline_direction[1]),baseline:Pt::new(glyph.baseline[0],glyph.baseline[1]),length_scale:glyph.length_scale,unadjusted_advance:glyph.unadjusted_advance,upright:glyph.vertical_upright,letter_spacing:span.letter_spacing,word_spacing:span.word_spacing,variations:span.variations.iter().map(|v|(v.tag,v.value)).collect(),auto_opsz:span.font_optical_sizing==usvg::FontOpticalSizing::Auto,origin:Pt::new(glyph.cluster_origin[0],glyph.cluster_origin[1]),pre_position:Pt::new(glyph.pre_position_offset[0],glyph.pre_position_offset[1]),rotation:text.rotate().get(glyph.text_index).copied().unwrap_or(0.),linear:matches!(text.chunks()[character.chunk].text_flow(),usvg::TextFlow::Linear),native_factor:compensation.map(|s|s.inline_factor)});
                     }
                 }
                 let chars: Vec<_> = glyph.text.chars().filter(|c| !bidi_control(*c)).collect();
@@ -1792,6 +1805,7 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
             let content=&run.content[super::char_to_byte(&run.content,start)..super::char_to_byte(&run.content,end)];
             let source=scaling::apply(run,source,start,content)?;
             let source=positioning::pairs(run,source,start,content)?;
+            let source=guides::compile(run,source,content)?;
             layout_source(run,source,content)
         };
         let width = |end| {
@@ -1867,7 +1881,7 @@ pub(crate) fn prepare_flow(source: &str) -> Result<Option<String>, String> {
         .filter(|n| n.has_tag_name("flowRoot") || n.has_tag_name("text"))
     {
         let outer = attributes(node, &sheet);
-        let (mut svg, content, _) = capture(&xml, node, String::new(), 16.);
+        let (mut svg, content, _) = capture(&xml, node, String::new(), 16.)?;
         let attrs = if let TextNode::Element { attributes, .. } = &svg.root {
             attributes.clone()
         } else {

@@ -27,8 +27,8 @@ fn band(glyphs: &[&GlyphMetric], axis: Pt, normal: Pt, height: f32) -> Option<(f
                 .zip(contour.iter().cycle().skip(1))
                 .take(contour.len())
             {
-                let a = point(glyph.transform, *a);
-                let b = point(glyph.transform, *b);
+                let a = point(super::guides::desired(glyph), *a);
+                let b = point(super::guides::desired(glyph), *b);
                 let ay = dot(a, normal);
                 let by = dot(b, normal);
                 if ay <= height && by > height || by <= height && ay > height {
