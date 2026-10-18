@@ -33,6 +33,29 @@ fn edit_pair(source: &str, at: usize, value: f32, expected: &str, name: &str) ->
     );
     assert_eq!(pair_kerning(run(&studio), at), value);
     super::metric_tests::compare(&studio, expected, name);
+    let exported = crate::svg::export_embedded(&studio.doc).unwrap();
+    let actual = layout(run(&studio)).unwrap();
+    let mut nodes = Vec::new();
+    texts(actual.tree.root(), &mut nodes);
+    let used: std::collections::HashSet<_> = nodes
+        .iter()
+        .flat_map(|t| t.layouted())
+        .flat_map(|s| &s.positioned_glyphs)
+        .map(|g| g.font)
+        .collect();
+    use base64::Engine;
+    for font in used {
+        let bytes = actual
+            .tree
+            .fontdb()
+            .with_face_data(font, crate::text::font_catalog::face_bytes)
+            .unwrap()
+            .unwrap();
+        assert!(
+            exported.contains(&base64::engine::general_purpose::STANDARD.encode(bytes)),
+            "{name}: the actual shaped fallback face must be embedded"
+        );
+    }
     let after = crate::project::encode(&studio.doc).unwrap();
     assert_eq!(studio.history.len(), 1);
     studio.undo();
@@ -40,6 +63,11 @@ fn edit_pair(source: &str, at: usize, value: f32, expected: &str, name: &str) ->
     studio.redo();
     assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
     studio
+}
+
+pub(crate) fn ligature_expected(source: &str) -> String {
+    source.replace("font-size=\"40\"","font-size=\"40\" dx=\"0 6\"")
+        .replace(">fi office AV<","><tspan style=\"font-feature-settings:'liga' 0,'clig' 0,'dlig' 0,'hlig' 0\">fi</tspan> office AV<")
 }
 
 #[test]
@@ -62,7 +90,7 @@ fn svg_pair_inside_ligature_splits_only_affected_characters_and_retains_unicode(
     let source = source(
         r#"<text x="25" y="80" font-family="MetricFace" font-size="40">fi office AV</text>"#,
     );
-    let expected = source.replace("font-size=\"40\"", "font-size=\"40\" dx=\"0 6\"");
+    let expected = ligature_expected(&source);
     let studio = edit_pair(&source, 1, 150., &expected, "pair-ligature");
     let layout = layout(run(&studio)).unwrap();
     let mut nodes = Vec::new();

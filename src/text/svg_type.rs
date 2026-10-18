@@ -665,14 +665,15 @@ fn write_nodes(
                 return;
             }
             if font_bound {out.push_str(&escape(&run.content[super::char_to_byte(&run.content,a)..super::char_to_byte(&run.content,b)]));return;}
-            for span in run.character_style_runs(a, b) {
+            for (span, split_pair) in positioning::spans(run, a, b) {
                 let inherited = metrics.and_then(|layout|layout.styles.iter().find(|(at,_)|*at==span.start)).map(|(_,style)|style);
                 let text = &run.content[super::char_to_byte(&run.content, span.start)
                     ..super::char_to_byte(&run.content, span.end)];
                 let mut attrs = String::new();
                 let mut css = String::new();
-                let mut features = if span.kerning.is_some(){inherited.map(|s|s.features.iter().copied().collect::<BTreeMap<_,_>>()).unwrap_or_default()}else{BTreeMap::new()};
+                let mut features = if span.kerning.is_some() || split_pair {inherited.map(|s|s.features.iter().copied().collect::<BTreeMap<_,_>>()).unwrap_or_default()}else{BTreeMap::new()};
                 features.extend(span.features.iter().copied());
+                if split_pair {for tag in [*b"liga",*b"clig",*b"dlig",*b"hlig"] {features.insert(tag,0);}}
                 if let Some(mode @ (crate::geom::KernMode::Metrics | crate::geom::KernMode::None)) = span.kerning {
                     features.insert(*b"kern",u32::from(mode==crate::geom::KernMode::Metrics));
                     css.push_str(if mode==crate::geom::KernMode::Metrics {"font-kerning:normal;"} else {"font-kerning:none;"});
@@ -737,6 +738,7 @@ fn write_nodes(
             };
             let count=children.iter().map(|n|if let TextNode::Characters{count}=n {Some(*count)} else {None}).collect::<Option<Vec<_>>>().and_then(|counts|counts.into_iter().try_fold(0usize,usize::checked_add));
             let font_override=count.filter(|count|*count>0 && *cursor>=range.start && cursor.checked_add(*count).is_some_and(|end|end<=range.end)).and_then(|count|{
+                if run.manual_kern.values().any(|v|*v!=0.) {return None;}
                 let spans=run.character_style_runs(*cursor,*cursor+count);
                 if spans.len()!=1{return None;}let style=spans[0].clone();
                 if style.font.is_none() && style.font_variations.is_none() && style.features.is_empty(){return None;}
@@ -989,8 +991,9 @@ fn options_for(run: &TypeRun) -> usvg::Options<'static> {
 }
 
 fn plain_fragment(run: &TypeRun, range: std::ops::Range<usize>) -> String {
-    let metrics=run.spans.iter().any(|s|s.tracking.is_some()||s.baseline_shift.is_some()||s.kerning.is_some()).then(||{
+    let metrics=(run.manual_kern.values().any(|v|*v!=0.) || run.spans.iter().any(|s|s.tracking.is_some()||s.baseline_shift.is_some()||s.kerning.is_some())).then(||{
         let mut original=run.clone();
+        original.manual_kern.clear();
         for style in &mut original.spans {style.tracking=None;style.baseline_shift=None;style.kerning=None;}
         layout(&original)
     }).flatten();
@@ -1615,7 +1618,8 @@ fn flow_source_root(run: &TypeRun) -> TextNode {
     if run.spans.is_empty() && !overrides_font(run) {
         return svg.root.clone();
     }
-    let fragment = plain_fragment(run, 0..run.content.chars().count());
+    let mut original=run.clone();original.manual_kern.clear();
+    let fragment = plain_fragment(&original, 0..run.content.chars().count());
     let Ok(xml) = roxmltree::Document::parse(&fragment) else {
         return svg.root.clone();
     };

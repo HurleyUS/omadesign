@@ -1,5 +1,37 @@
 use super::*;
 
+pub(super) fn spans(run: &TypeRun, start: usize, end: usize) -> Vec<(crate::geom::CharSpan, bool)> {
+    let count = run.content.chars().count();
+    let pairs: Vec<_> = run
+        .manual_kern
+        .iter()
+        .filter_map(|(&at, &value)| (at > 0 && at < count && value != 0.).then_some(at))
+        .collect();
+    let mut result = Vec::new();
+    for span in run.character_style_runs(start, end) {
+        let mut ends = vec![span.start, span.end];
+        for &at in &pairs {
+            for boundary in [at - 1, at + 1] {
+                if span.start < boundary && boundary < span.end {
+                    ends.push(boundary);
+                }
+            }
+        }
+        ends.sort_unstable();
+        ends.dedup();
+        for range in ends.windows(2) {
+            let mut style = span.clone();
+            style.start = range[0];
+            style.end = range[1];
+            let split = pairs
+                .iter()
+                .any(|&at| style.start < at + 1 && at - 1 < style.end);
+            result.push((style, split));
+        }
+    }
+    result
+}
+
 /// Resolve the selected flow character's source or accepted native line spacing.
 /// Args: text run and logical character index. Returns its existing line-spacing mode.
 pub(crate) fn leading(run: &TypeRun, at: usize) -> Option<crate::geom::Leading> {

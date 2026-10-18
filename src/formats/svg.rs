@@ -933,7 +933,7 @@ impl Reader<'_> {
         if let Some(layout) = crate::text::svg_type::layout_with_options(&run, self.options) {
             for (at, style) in layout.styles {
                 if !style.features.is_empty(){run.set_character_style(at,at+1,|s|s.features=style.features.clone());}
-                if let Some(font) = style.font.filter(|f| f.starts_with("omatype:")) {
+                if let Some(font) = style.font {
                     run.set_character_style(at, at+1, |s| {s.font=Some(font.clone()); s.font_variations=style.font_variations.clone();});
                 }
             }

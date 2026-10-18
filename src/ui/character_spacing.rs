@@ -908,7 +908,7 @@ mod tests {
         replace(&ctx,&mut studio,"150");frame(&ctx,&mut studio,key(Key::Enter,Modifiers::NONE));
         assert_eq!(studio.selected_type().unwrap().manual_kern.get(&1),Some(&150.));
         studio.commit_type_edit();
-        metric_tests::compare(&studio,&source.replace("font-size=\"40\"","font-size=\"40\" dx=\"0 6\""),"pair-native-input");
+        metric_tests::compare(&studio,&pair_tests::ligature_expected(&source),"pair-native-input");
         let after=crate::project::encode(&studio.doc).unwrap();assert_eq!(studio.history.len(),1);
         studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);
         studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);

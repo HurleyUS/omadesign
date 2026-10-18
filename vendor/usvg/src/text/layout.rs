@@ -235,13 +235,7 @@ pub(crate) fn layout_text(
             TextFlow::Path(_) => (0.0, 0.0),
         };
 
-        let boundaries: Vec<_> = chunk.text.char_indices().enumerate().filter_map(|(i, (byte, _))| {
-            let at = char_offset + i;
-            (i > 0 && (text_node.dx.get(at).is_some_and(|v| *v != 0.)
-                || text_node.dy.get(at).is_some_and(|v| *v != 0.)
-                || text_node.rotate.get(at).is_some_and(|v| *v != 0.))).then_some(byte)
-        }).collect();
-        let mut clusters = process_chunk(chunk, &boundaries, &fonts_cache, resolver, fontdb);
+        let mut clusters = process_chunk(chunk, &fonts_cache, resolver, fontdb);
         if clusters.is_empty() {
             char_offset += chunk.text.chars().count();
             continue;
@@ -881,7 +875,6 @@ fn collect_normals(
 /// but not the text layouting. So all clusters are in the 0x0 position.
 fn process_chunk(
     chunk: &TextChunk,
-    boundaries: &[usize],
     fonts_cache: &FontsCache,
     resolver: &FontResolver,
     fontdb: &mut Arc<fontdb::Database>,
@@ -936,7 +929,6 @@ fn process_chunk(
             span.apply_kerning,
             &span.font.variations,
             &span.font.features,
-            boundaries,
             span.font_size.get(),
             span.font_optical_sizing,
             resolver,
@@ -1107,7 +1099,11 @@ fn apply_writing_mode(writing_mode: WritingMode, clusters: &mut [GlyphCluster]) 
             // in the top-to-bottom mode.
             cluster.transform = cluster
                 .transform
-                .pre_translate(0.0, (cluster.ascent + cluster.descent) / 2.0);
+                .pre_translate(0.0, if cluster.ascent >= 3. && cluster.height() >= 2. {
+                    (cluster.ascent.round() + cluster.descent.round()) / 2.
+                } else {
+                    (cluster.ascent + cluster.descent) / 2.
+                });
         }
     }
 }
@@ -1336,7 +1332,6 @@ pub(crate) fn shape_text(
     apply_kerning: bool,
     variations: &[crate::FontVariation],
     settings: &[([u8; 4], u32)],
-    boundaries: &[usize],
     font_size: f32,
     font_optical_sizing: crate::FontOpticalSizing,
     resolver: &FontResolver,
@@ -1349,7 +1344,6 @@ pub(crate) fn shape_text(
         apply_kerning,
         variations,
         settings,
-        boundaries,
         font_size,
         font_optical_sizing,
         fontdb,
@@ -1385,7 +1379,6 @@ pub(crate) fn shape_text(
                 apply_kerning,
                 variations,
                 settings,
-                boundaries,
                 font_size,
                 font_optical_sizing,
                 fontdb,
@@ -1447,7 +1440,6 @@ fn shape_text_with_font(
     apply_kerning: bool,
     variations: &[crate::FontVariation],
     settings: &[([u8; 4], u32)],
-    boundaries: &[usize],
     font_size: f32,
     font_optical_sizing: crate::FontOpticalSizing,
     fontdb: &fontdb::Database,
@@ -1529,17 +1521,6 @@ fn shape_text_with_font(
                     .iter()
                     .map(|(tag, value)| rustybuzz::Feature::new(Tag::from_bytes(tag), *value, ..)),
             );
-            for &at in boundaries.iter().filter(|&&at| run.start < at && at < run.end) {
-                let start = text[..at].char_indices().next_back().map_or(at, |(i, _)| i).max(run.start);
-                let end = at + text[at..].chars().next().map_or(0, char::len_utf8);
-                for tag in [b"liga", b"clig", b"dlig", b"hlig"] {
-                    features.push(rustybuzz::Feature {
-                        tag: Tag::from_bytes(tag), value: 0,
-                        start: (start - run.start) as u32,
-                        end: (end.min(run.end) - run.start) as u32,
-                    });
-                }
-            }
             let output = rustybuzz::shape(&rb_font, &features, buffer);
 
             let positions = output.glyph_positions();
