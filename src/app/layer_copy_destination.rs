@@ -154,6 +154,18 @@ fn transfer(
 ) -> Result<(Cmd, u64, usize), String> {
     source.validate_hierarchy()?;
     crate::layout_components::validate_properties(source)?;
+    let selected: Vec<_> = (0..=root)
+        .filter(|&i| i == root || source.layer_ancestors(i).contains(&root))
+        .flat_map(|i| source.layers[i].kind.shapes().unwrap_or(&[]))
+        .collect();
+    let selected_ids: HashSet<_> = selected.iter().map(|s| s.id).collect();
+    for shape in selected {
+        if shape.layout.interactions.iter().any(|interaction| {
+            matches!(interaction.action, PrototypeAction::Navigate {target} | PrototypeAction::OpenOverlay {target} if !selected_ids.contains(&target))
+        }) {
+            return Err("This layer navigates to a frame outside the copy. Copy their containing layer or duplicate in this document".into());
+        }
+    }
     let mut copied = layer_copy::prepare_indices(source, root, indices(source, root)?, Pt::ZERO)?;
     let root_id = copied.layer_ids[&source.layers[root].id];
     let members: HashSet<_> = (0..=root)

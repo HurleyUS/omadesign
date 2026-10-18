@@ -361,6 +361,64 @@ fn craft_layer_destination_conflicting_unicode_token_names_remain_bounded_and_in
 }
 
 #[test]
+fn craft_layer_destination_external_navigation_refuses_and_contained_frames_keep_their_links() {
+    use crate::layout_prototype::{Interaction, PrototypeAction, Transition, Trigger};
+    let mut s = fixture();
+    let mut first = crate::layout::make_frame(Pt::ZERO, Pt::new(10., 10.));
+    let second = crate::layout::make_frame(Pt::new(20., 0.), Pt::new(10., 10.));
+    first.name = "Start".into();
+    let second_id = second.id;
+    first.layout.interactions.push(Interaction {
+        trigger: Trigger::Click,
+        action: PrototypeAction::Navigate { target: second_id },
+        transition: Transition::Instant,
+        duration_ms: 200,
+    });
+    let mut a = Layer::vector("First");
+    a.kind.shapes_mut().unwrap().push(first);
+    let mut b = Layer::vector("Second");
+    b.kind.shapes_mut().unwrap().push(second.clone());
+    s.doc.layers = vec![a, b];
+    let before = encoded(&s);
+    let target = s.capture_layer_copy(0).unwrap();
+    let new = LayerCopyDestination::New {
+        name: "Navigation copy".into(),
+    };
+    assert!(
+        s.duplicate_layer_to(&target, "Copy", &new)
+            .unwrap_err()
+            .contains("outside the copy")
+    );
+    assert_eq!(encoded(&s), before);
+    assert_eq!(s.tab_count(), 1);
+    assert_eq!(s.history.len(), 0);
+    s.doc.layers.pop();
+    s.doc.layers[0].kind.shapes_mut().unwrap().push(second);
+    let before = encoded(&s);
+    let target = s.capture_layer_copy(0).unwrap();
+    s.duplicate_layer_to(&target, "Copy", &new).unwrap();
+    let shapes = s.doc.layers[0].kind.shapes().unwrap();
+    let start = shapes.iter().find(|s| s.name == "Start").unwrap();
+    let PrototypeAction::Navigate { target } = start.layout.interactions[0].action else {
+        panic!("missing navigation")
+    };
+    assert_ne!(target, second_id);
+    assert!(shapes.iter().any(|s| s.id == target));
+    crate::layout_prototype::validate_interaction(
+        &s.doc,
+        0,
+        start.id,
+        &start.layout.interactions[0],
+    )
+    .unwrap();
+    let output = encoded(&s);
+    let reopened = crate::project::decode(&output).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), output);
+    s.switch_tab(0);
+    assert_eq!(encoded(&s), before);
+}
+
+#[test]
 fn craft_layer_destination_stale_source_destination_invalid_name_and_channel_refs_do_not_mutate() {
     let mut s = fixture();
     let target = s.capture_layer_copy(0).unwrap();
