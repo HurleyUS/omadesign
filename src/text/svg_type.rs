@@ -950,9 +950,22 @@ fn substituted_font(font: &usvg::Font) -> Option<std::path::PathBuf> {
 
 fn options_for(run: &TypeRun) -> usvg::Options<'static> {
     let mut options = options();
-    let fonts: std::collections::BTreeSet<_> = std::iter::once(&run.font)
+    let mut fonts: std::collections::BTreeSet<String> = std::iter::once(&run.font)
         .chain(run.spans.iter().filter_map(|s| s.font.as_ref()))
+        .cloned()
         .collect();
+    fn retained(node: &TextNode, fonts: &mut std::collections::BTreeSet<String>) {
+        if let TextNode::Element { attributes, children, .. } = node {
+            if let Some(value) = attributes.get("font-family") {
+                let family = super::font_inventory::first_family(value);
+                if family.starts_with("omatype:") || std::path::Path::new(&family).is_absolute() {
+                    fonts.insert(family);
+                }
+            }
+            for child in children {retained(child,fonts);}
+        }
+    }
+    if let Some(svg) = &run.svg_text {retained(&svg.root,&mut fonts);}
     for font in fonts {
         let probe = TypeRun {
             font: font.clone(),

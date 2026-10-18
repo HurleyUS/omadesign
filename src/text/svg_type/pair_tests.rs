@@ -143,7 +143,7 @@ fn svg_flow_leading_uses_accepted_fixed_auto_and_range_values_with_exact_reopen(
         assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
     }
     let source = source(
-        "<text xml:space=\"preserve\" x=\"25\" y=\"35\" font-family=\"MetricFace\" font-size=\"24\" style=\"inline-size:350px;line-height:28px\">First row\nSecond row\nThird row</text>",
+        "<flowRoot font-family=\"MetricFace\" font-size=\"24\" style=\"line-height:28px\"><flowRegion><rect x=\"25\" y=\"11\" width=\"350\" height=\"170\"/></flowRegion><flowPara>First row</flowPara><flowPara>Second row</flowPara><flowPara>Third row</flowPara></flowRoot>",
     );
     let mut studio = super::metric_tests::studio_for(&source);
     studio.patch_type(|r| {
