@@ -10,6 +10,7 @@ enum Action {
     Delete(usize),
     Arrange(usize, bool, bool),
     Mask(usize, masking::Action),
+    Merge(crate::app::layer_merge::Kind),
 }
 
 /// Run the native Pixel Layer menu.
@@ -83,8 +84,8 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
                 });
             });
             ui.separator();
-            if let Some(kind)=crate::ui::layer_merge::menu(ui, studio, owner) {
-                crate::ui::layer_merge::start(ui.ctx(),studio,kind);
+            if let Some(kind) = crate::ui::layer_merge::menu(ui, studio, owner) {
+                action = Some(Action::Merge(kind));
             }
         });
     });
@@ -100,6 +101,7 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
             Action::Arrange(i, up, true) => studio.move_layer_tree_extreme(i, up),
             Action::Arrange(i, up, false) => studio.move_layer_tree(i, up),
             Action::Mask(i, chosen) => chosen.run(studio, i),
+            Action::Merge(kind) => crate::ui::layer_merge::start(ui.ctx(), studio, kind),
         }
         ui.close_kind(egui::UiKind::Menu);
     }
