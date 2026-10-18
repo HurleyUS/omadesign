@@ -11,3 +11,5 @@ Tests use the original OFL EBGaramond fixture and installed Liberation/Noto prog
 Native files and portable SVG must reopen with identical pixels. Independent Chromium comparisons use both original source and emitted SVG with the unchanged pixel threshold. Frozen failed receipts and browser outputs remain in the source handoff; they are not promoted.
 
 This cut does not complete character scale, optical kerning, cross-chunk textLength or the remaining non-flow leading work in #391. It does not claim human or physical-device acceptance.
+
+Plain installed-font delivery records the current resolved face in an export-only clone so a fallback Medium face is not accidentally reopened as the same family's Regular face. This preserves the existing installed-face delivery policy; it does not freeze the native author source. Native and embedded-font delivery keep full author family lists. Library copy and save/recovery now share the same bounded logical-cell font visitor, so withdrawn property-path writes are not missed by a second key-name scanner.

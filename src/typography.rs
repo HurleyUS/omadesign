@@ -329,43 +329,9 @@ pub(crate) fn register_archive(root: &Path) -> Result<(), String> {
 /// Copy only the native artwork's font dependencies. Returned paths are absolute
 /// and newly created, so the caller can roll back a larger asset import safely.
 pub fn copy_document_fonts(source: &Path, destination: &Path) -> Result<Vec<PathBuf>, String> {
-    fn source_families(value:&serde_json::Value,out:&mut HashSet<String>) {
-        match value {
-            serde_json::Value::Object(map)=>for(key,value)in map {
-                if key=="font-family" {
-                    if let Some(list)=value.as_str().or_else(||value.get("Value").and_then(serde_json::Value::as_str)) {out.extend(crate::text::svg_type::project_families(list));}
-                } else {source_families(value,out);}
-            },
-            serde_json::Value::Array(values)=>for value in values {source_families(value,out);},
-            _=>{},
-        }
-    }
-    fn references(value: &serde_json::Value, out: &mut HashSet<String>) {
-        match value {
-            serde_json::Value::Object(map) => {
-                for (key, value) in map {
-                    if key=="svg_text" {source_families(value,out);}
-                    if key == "font"
-                        && let Some(id) = value.as_str().filter(|id| id.starts_with("omatype:"))
-                    {
-                        out.insert(id.into());
-                    } else {
-                        references(value, out);
-                    }
-                }
-            }
-            serde_json::Value::Array(values) => {
-                for value in values {
-                    references(value, out);
-                }
-            }
-            _ => {}
-        }
-    }
     let bytes = read(source, 64 * 1024 * 1024)?;
     let value = serde_json::from_slice(&bytes).map_err(|e| format!("Invalid artwork JSON: {e}"))?;
-    let mut ids = HashSet::new();
-    references(&value, &mut ids);
+    let ids=crate::collaboration::resources::font_references(value.get("doc").unwrap_or(&value))?;
     if ids.is_empty() {
         return Ok(vec![]);
     }

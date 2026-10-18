@@ -1133,6 +1133,12 @@ pub(crate) fn export_fragment_embedded(run: &TypeRun, id: u64) -> Option<String>
 }
 
 fn export_fragment_inner(run: &TypeRun, id: u64, outlines: bool, embedded: bool) -> Option<String> {
+    let mut delivery;
+    let run=if !embedded && !outlines {
+        delivery=run.clone();
+        for(at,style)in &layout(run)?.styles {if let Some(font)=&style.font {delivery.set_character_style(*at,at+1,|span|span.font=Some(font.clone()));}}
+        &delivery
+    } else {run};
     let original = source(run)?;
     let identities:std::collections::BTreeSet<_>=std::iter::once(run.font.clone()).chain(run.spans.iter().filter_map(|s|s.font.clone())).chain(references(run.svg_text.as_ref().unwrap())).collect();
     let fonts:std::collections::BTreeMap<_,_>=identities.into_iter().map(|font|{let family=installed_family(&font);(font,family)}).collect();

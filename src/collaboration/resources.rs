@@ -212,25 +212,22 @@ fn values_mut(
     walk(path, value, 0, &mut 0, visit)
 }
 
+fn collect_font(path:&str,value:&Value,fonts:&mut BTreeSet<String>) {
+    if font_slot(path) && let Some(font)=value.as_str(){fonts.insert(font.to_owned());}
+    if path.contains("/geom/Text/svg_text/root/") && path.ends_with("/Element/attributes/font-family") && let Some(families)=value.as_str(){fonts.extend(crate::text::svg_type::project_families(families));}
+}
+
+/// Collect font dependencies from native JSON and logical retained cells without materializing artwork.
+/// Args: the native document value. Returns bounded unique font references or traversal errors.
+pub(crate) fn font_references(value:&Value)->Result<BTreeSet<String>,String> {
+    let mut fonts=BTreeSet::new();values("",value,&mut |path,value|collect_font(path,value,&mut fonts))?;Ok(fonts)
+}
+
 /// Collect portable font references from base and every write, including span-only faces.
 /// Args: retained replica. Returns unique font IDs without loading or shaping text.
 pub(crate) fn fonts(replica: &Replica) -> Result<BTreeSet<String>, String> {
-    let mut fonts = BTreeSet::new();
-    for (path, cell) in replica.retained_cells() {
-        if let Cell::Value(value) = cell {
-            values(path, value, &mut |path, value| {
-                if font_slot(path)
-                    && let Some(font) = value.as_str()
-                {
-                    fonts.insert(font.to_owned());
-                }
-                if path.contains("/geom/Text/svg_text/root/") && path.ends_with("/Element/attributes/font-family")
-                    && let Some(families)=value.as_str() {
-                    fonts.extend(crate::text::svg_type::project_families(families));
-                }
-            })?;
-        }
-    }
+    let mut fonts=BTreeSet::new();
+    for(path,cell)in replica.retained_cells(){if let Cell::Value(value)=cell{values(path,value,&mut |path,value|collect_font(path,value,&mut fonts))?;}}
     Ok(fonts)
 }
 
