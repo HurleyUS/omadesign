@@ -11,6 +11,8 @@ pub(super) struct Position {
     pub dy: f32,
     pub vertical: bool,
     pub line_start: bool,
+    #[serde(default)]
+    pub px: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -53,10 +55,12 @@ fn decode(value: &str) -> Result<Guides, String> {
     if saved.version != 1
         || characters(&saved.root, &mut 0) != Some(count)
         || saved.positions.len() > native_count
-        || saved
-            .positions
-            .iter()
-            .any(|p| p.index >= native_count || !p.dx.is_finite() || !p.dy.is_finite())
+        || saved.positions.iter().any(|p| {
+            p.index >= native_count
+                || !p.dx.is_finite()
+                || !p.dy.is_finite()
+                || p.px.is_some_and(|px| !px.is_finite() || px <= 0.)
+        })
         || saved.positions.windows(2).any(|p| p[0].index >= p[1].index)
     {
         return Err("Invalid SVG glyph guide ownership".into());
@@ -126,13 +130,50 @@ pub(super) fn desired(glyph: &GlyphMetric) -> Transform {
         .pre_concat(glyph.transform)
 }
 
-fn normalize(node: &mut TextNode) {
+fn horizontal_width(g: &GlyphMetric) -> f32 {
+    let t = desired(g);
+    g.width / g.length_scale * t.sx.hypot(t.ky) / g.font_px
+}
+
+fn normalize(node: &mut TextNode, glyphs: &[GlyphMetric], cursor: &mut usize) {
+    if let TextNode::Characters { count } = node {
+        *cursor += *count;
+        return;
+    }
     if let TextNode::Element {
         name,
         attributes,
         children,
     } = node
     {
+        let start = *cursor;
+        for child in children.iter_mut() {
+            normalize(child, glyphs, cursor);
+        }
+        let mut selected = glyphs
+            .iter()
+            .filter(|g| start <= g.index && g.index < *cursor);
+        if let Some(first) = selected.next() {
+            let t = desired(first);
+            let px = t.kx.hypot(t.sy);
+            let mut seen = std::collections::HashSet::new();
+            let width: f32 = std::iter::once(first)
+                .chain(selected)
+                .filter(|g| seen.insert(g.index))
+                .map(horizontal_width)
+                .sum();
+            attributes.insert("font-size".into(), px.to_string());
+            attributes.insert("letter-spacing".into(), "0".into());
+            attributes.insert("word-spacing".into(), "0".into());
+            attributes.insert("textLength".into(), width.to_string());
+            attributes.insert("lengthAdjust".into(), "spacingAndGlyphs".into());
+            attributes
+                .entry("style".into())
+                .or_default()
+                .push_str(&format!(
+                    ";font-size:{px}px;letter-spacing:0;word-spacing:0;writing-mode:horizontal-tb;"
+                ));
+        }
         if name == "text" || name == "textPath" {
             *name = "tspan".into();
         }
@@ -151,6 +192,7 @@ fn normalize(node: &mut TextNode) {
             "baseline-shift",
             "dominant-baseline",
             "alignment-baseline",
+            "writing-mode",
             scaling::META,
             scaling::MARKER,
             positioning::META,
@@ -159,9 +201,6 @@ fn normalize(node: &mut TextNode) {
             META,
         ] {
             attributes.remove(key);
-        }
-        for child in children {
-            normalize(child);
         }
     }
 }
@@ -265,7 +304,12 @@ pub(super) fn compile(run: &TypeRun, source: String, content: &str) -> Option<St
     }
     let layout = layout_source(run, source.clone(), content)?;
     if !layout.glyphs.iter().any(|g| {
-        g.linear && g.rotation != 0. && g.native_factor.is_some_and(|s| (s - 1.).abs() > 1e-6)
+        g.linear
+            && (g.rotation != 0.
+                || g.upright
+                || g.inline.y.abs() > 0.001
+                || g.letter_spacing != 0.
+                || g.word_spacing != 0.)
     }) {
         return Some(source);
     }
@@ -298,7 +342,7 @@ pub(super) fn compile(run: &TypeRun, source: String, content: &str) -> Option<St
         .map(|(_, c)| c.iter().map(|c| c.ordinal).min().unwrap_or(0))
         .collect();
     let mut root = original.clone();
-    normalize(&mut root);
+    normalize(&mut root, &layout.glyphs, &mut 0);
     if let TextNode::Element { attributes, .. } = &mut root {
         attributes.remove("opacity");
     }
@@ -321,9 +365,7 @@ pub(super) fn compile(run: &TypeRun, source: String, content: &str) -> Option<St
             return None;
         }
         let mut path = String::new();
-        let mut dx = vec![0.; b - a];
         let mut cursor = 0.;
-        let mut advance = 0.;
         let mut seen = std::collections::HashSet::new();
         for c in chars {
             let Some(g) = layout
@@ -336,17 +378,20 @@ pub(super) fn compile(run: &TypeRun, source: String, content: &str) -> Option<St
             if !seen.insert(g.index) {
                 continue;
             }
-            let angle = g.inline.y.atan2(g.inline.x) + g.rotation.to_radians();
+            let target = desired(g);
+            let angle = target.ky.atan2(target.sx);
             let axis = Pt::new(angle.cos(), angle.sin());
-            let normal = Pt::new(-axis.y, axis.x);
-            let origin = g.origin - axis * g.pre_position.x - normal * g.pre_position.y;
-            let len = g.width.abs().max(g.advance.abs()).max(1.) + 1.;
-            let middle = cursor + len * 0.5;
-            dx[c.ordinal.checked_sub(a)?] = middle - advance - g.width * 0.5;
-            advance = middle - g.width * 0.5 + g.advance;
-            let start = origin + axis * (g.width * 0.5 - len * 0.5);
+            let correction = target.pre_concat(g.transform.invert()?);
+            let start = Pt::new(
+                correction.sx * g.baseline.x + correction.kx * g.baseline.y + correction.tx,
+                correction.ky * g.baseline.x + correction.sy * g.baseline.y + correction.ty,
+            );
+            let len = horizontal_width(g);
+            if len <= 0. {
+                return None;
+            }
             let end = start + axis * len;
-            if [start.x, start.y, end.x, end.y, middle, advance]
+            if [start.x, start.y, end.x, end.y, len]
                 .iter()
                 .any(|v| !v.is_finite())
             {
@@ -383,22 +428,8 @@ pub(super) fn compile(run: &TypeRun, source: String, content: &str) -> Option<St
             definitions.push_str(&format!("<path id=\"{id}\" d=\"{path}\"/>"));
             id
         };
-        let total = layout
-            .glyphs
-            .iter()
-            .filter(|g| g.node == *node && g.chunk == *chunk)
-            .fold(
-                (0., std::collections::HashSet::new()),
-                |(mut sum, mut seen), g| {
-                    if seen.insert(g.index) {
-                        sum += g.advance;
-                    }
-                    (sum, seen)
-                },
-            )
-            .0;
         let inner = piece(run, &indexed, &visible, a..b, &bytes)?;
-        body.push_str(&format!("<textPath href=\"#{}\" startOffset=\"{}\" text-anchor=\"middle\" dominant-baseline=\"alphabetic\" alignment-baseline=\"alphabetic\" baseline-shift=\"0\"><tspan x=\"0\" y=\"0\" rotate=\"0\" dx=\"{}\" dy=\"0\">{inner}</tspan></textPath>",escape(&id),total*0.5,dx.iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")));
+        body.push_str(&format!("<textPath href=\"#{}\" startOffset=\"{}\" text-anchor=\"middle\" dominant-baseline=\"alphabetic\" alignment-baseline=\"alphabetic\" baseline-shift=\"0\"><tspan x=\"0\" y=\"0\" rotate=\"0\" dx=\"0\" dy=\"0\">{inner}</tspan></textPath>",escape(&id),cursor*0.5));
     }
     let mut positions: Vec<_> = layout
         .characters
@@ -409,6 +440,7 @@ pub(super) fn compile(run: &TypeRun, source: String, content: &str) -> Option<St
             dy: c.dy,
             vertical: c.vertical,
             line_start: c.line_start,
+            px: Some(c.px),
         })
         .collect();
     positions.sort_by_key(|p| p.index);
@@ -433,6 +465,9 @@ pub(super) fn compile(run: &TypeRun, source: String, content: &str) -> Option<St
         "baseline-shift",
         "dominant-baseline",
         "alignment-baseline",
+        "textLength",
+        "lengthAdjust",
+        "writing-mode",
         scaling::MARKER,
     ] {
         outer.remove(key);
@@ -441,6 +476,10 @@ pub(super) fn compile(run: &TypeRun, source: String, content: &str) -> Option<St
     outer.insert("baseline-shift".into(), "0".into());
     outer.insert("dominant-baseline".into(), "alphabetic".into());
     outer.insert("alignment-baseline".into(), "alphabetic".into());
+    outer
+        .entry("style".into())
+        .or_default()
+        .push_str(";writing-mode:horizontal-tb;");
     outer.insert(META.into(), meta);
     let mut fragment = "<text".to_owned();
     for (key, value) in outer {

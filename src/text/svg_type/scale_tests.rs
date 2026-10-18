@@ -500,3 +500,36 @@ fn svg_character_scale_guides_refuse_stale_unicode_and_bad_source_metadata() {
         assert_eq!(crate::project::encode(&s.doc).unwrap(), before);
     }
 }
+
+#[test]
+fn svg_character_scale_guides_bake_spacing_without_stretching_synthetic_jumps() {
+    for name in [
+        "scale-rotation-offsets",
+        "scale-rotation-rtl",
+        "scale-upright",
+    ] {
+        let body = scale_cases()
+            .into_iter()
+            .find(|(n, _)| *n == name)
+            .unwrap()
+            .1;
+        let mut s = studio(&body);
+        scaled(&mut s, 125., 80.);
+        let rendered = source(run(&s)).unwrap();
+        let xml = roxmltree::Document::parse(&rendered).unwrap();
+        assert!(
+            xml.descendants().any(|n| n.has_tag_name("textPath")),
+            "{name}"
+        );
+        for node in xml.descendants().filter(|n| n.is_element()) {
+            for property in ["dx", "dy", "letter-spacing", "word-spacing"] {
+                if let Some(value) = node.attribute(property) {
+                    assert_eq!(value, "0", "{name}: {property}");
+                }
+            }
+        }
+        for g in layout(run(&s)).unwrap().glyphs {
+            assert!((g.px - 32.).abs() < 0.001, "{name}: {}", g.px);
+        }
+    }
+}

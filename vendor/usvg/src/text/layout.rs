@@ -67,8 +67,6 @@ pub struct PositionedGlyph {
     pub baseline: [f32;2],
     /// Cluster origin before vertical glyph orientation and glyph offsets.
     pub cluster_origin: [f32;2],
-    /// Translation present before absolute positioning and character rotation.
-    pub pre_position_offset: [f32;2],
 }
 
 impl PositionedGlyph {
@@ -220,7 +218,6 @@ struct GlyphCluster {
     transform: Transform,
     path_transform: Transform,
     inline_angle: f32,
-    pre_position_offset: [f32;2],
     visible: bool,
 }
 
@@ -278,7 +275,6 @@ pub(crate) fn layout_text(
         }
 
         apply_length_adjust(chunk, &mut clusters);
-        for cluster in &mut clusters {cluster.pre_position_offset=[cluster.transform.tx,cluster.transform.ty];}
         let mut curr_pos = resolve_clusters_positions(
             text_node,
             chunk,
@@ -394,7 +390,6 @@ pub(crate) fn layout_text(
                             pg.inline_direction=if length>0. {[axis.sx/length,axis.ky/length]}else{[1.,0.]};
                             pg.baseline=[origin.tx,origin.ty];
                             pg.cluster_origin=[cluster_origin.tx,cluster_origin.ty];
-                            pg.pre_position_offset=gc.pre_position_offset;
                             pg.cluster_ts = cluster_ts;
                             pg.span_ts = span_ts;
                         });
@@ -1178,7 +1173,7 @@ fn apply_letter_spacing(chunk: &TextChunk, clusters: &mut [GlyphCluster]) {
         return;
     }
 
-    let num_clusters = clusters.len();
+    let last = clusters.iter().rposition(|cluster| !matches!(cluster.codepoint,'\u{202a}'..='\u{202e}'|'\u{2066}'..='\u{2069}'));
     for (i, cluster) in clusters.iter_mut().enumerate() {
         // Spacing must be applied only to characters that belongs to the script
         // that supports spacing.
@@ -1189,7 +1184,7 @@ fn apply_letter_spacing(chunk: &TextChunk, clusters: &mut [GlyphCluster]) {
             if let Some(span) = chunk_span_at(chunk, cluster.byte_idx) {
                 // A space after the last cluster should be ignored,
                 // since it affects the bbox and text alignment.
-                if i != num_clusters - 1 {
+                if Some(i) != last {
                     cluster.advance += span.letter_spacing;
                 }
 
@@ -1262,7 +1257,7 @@ fn form_glyph_clusters(glyphs: &[Glyph], text: &str, font_size: f32) -> GlyphClu
             font: glyph.font.id,
             text: glyph.text.clone(),
             id: glyph.id,
-            text_index:0,cluster_advance:0.,cluster_width:0.,unadjusted_advance:0.,vertical_upright:false,length_scale:1.,spacing_allowed:true,inline_direction:[1.,0.],baseline:[0.,0.],cluster_origin:[0.,0.],pre_position_offset:[0.,0.],
+            text_index:0,cluster_advance:0.,cluster_width:0.,unadjusted_advance:0.,vertical_upright:false,length_scale:1.,spacing_allowed:true,inline_direction:[1.,0.],baseline:[0.,0.],cluster_origin:[0.,0.],
         });
 
         x += glyph.width as f32;
@@ -1288,7 +1283,6 @@ fn form_glyph_clusters(glyphs: &[Glyph], text: &str, font_size: f32) -> GlyphClu
         transform: Transform::default(),
         path_transform: Transform::default(),
         inline_angle:0.,
-        pre_position_offset:[0.,0.],
         glyphs: positioned_glyphs,
         visible: true,
     }
