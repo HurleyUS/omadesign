@@ -236,6 +236,12 @@ impl PartialEq for SvgNode<'_, '_> {
 }
 
 impl<'a, 'input: 'a> SvgNode<'a, 'input> {
+    /// Identify an element within this parsed document.
+    /// Args: this node. Returns its stable document-local index.
+    pub(crate) fn index(&self) -> u32 {
+        self.id.get()
+    }
+
     #[inline]
     fn id(&self) -> NodeId {
         self.id

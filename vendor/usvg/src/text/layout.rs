@@ -185,6 +185,7 @@ struct GlyphCluster {
     codepoint: char,
     width: f32,
     advance: f32,
+    length_scale: f32,
     ascent: f32,
     descent: f32,
     has_relative_shift: bool,
@@ -581,7 +582,7 @@ fn resolve_clusters_positions_horizontal(
             cluster.has_relative_shift = !dx.approx_zero_ulps(4) || !dy.approx_zero_ulps(4);
         }
 
-        cluster.transform = cluster.transform.pre_translate(x, y);
+        cluster.transform = cluster.transform.pre_translate(x / cluster.length_scale, y);
 
         if let Some(angle) = text.rotate.get(cp).cloned() {
             if !angle.approx_zero_ulps(4) {
@@ -996,60 +997,63 @@ fn process_chunk(
 }
 
 fn apply_length_adjust(chunk: &TextChunk, clusters: &mut [GlyphCluster]) {
-    let is_horizontal = matches!(chunk.text_flow, TextFlow::Linear);
-
+    let mut owners = Vec::new();
     for span in &chunk.spans {
-        let target_width = match span.text_length {
-            Some(v) => v,
-            None => continue,
-        };
-
-        let mut width = 0.0;
-        let mut cluster_indexes = Vec::new();
-        for i in span.start..span.end {
-            if let Some(index) = clusters.iter().position(|c| c.byte_idx.value() == i) {
-                cluster_indexes.push(index);
+        if let (Some(owner), Some(target)) = (span.text_length_owner, span.text_length) {
+            if !owners.iter().any(|(id, _, _, _)| *id == owner) {
+                owners.push((
+                    owner,
+                    target,
+                    span.length_adjust,
+                    span.text_length_ancestors.len(),
+                ));
             }
         }
-        // Complex scripts can have multi-codepoint clusters therefore we have to remove duplicates.
-        cluster_indexes.sort();
-        cluster_indexes.dedup();
-
-        for i in &cluster_indexes {
-            // Use the original cluster `width` and not `advance`.
-            // This method essentially discards any `word-spacing` and `letter-spacing`.
-            width += clusters[*i].width;
+    }
+    owners.sort_by_key(|(_, _, _, depth)| std::cmp::Reverse(*depth));
+    for (owner, target, adjust, _) in owners {
+        let mut indices = Vec::new();
+        let mut fixed = 0.;
+        for (i, cluster) in clusters.iter().enumerate() {
+            if let Some(span) = chunk_span_at(chunk, cluster.byte_idx) {
+                if span.text_length_owner == Some(owner) {
+                    indices.push(i);
+                } else if span.text_length_ancestors.contains(&owner) {
+                    fixed += cluster.advance;
+                }
+            }
         }
-
-        if cluster_indexes.is_empty() {
+        let Some(&last) = indices.last() else {
+            continue;
+        };
+        let trailing = clusters[last].advance - clusters[last].width;
+        let width = indices.iter().map(|i| clusters[*i].advance).sum::<f32>() - trailing;
+        let wanted = target - fixed;
+        if width <= 0. || wanted < 0. {
             continue;
         }
-
-        if span.length_adjust == LengthAdjust::Spacing {
-            let factor = if cluster_indexes.len() > 1 {
-                (target_width - width) / (cluster_indexes.len() - 1) as f32
-            } else {
-                0.0
-            };
-
-            for i in cluster_indexes {
-                clusters[i].advance = clusters[i].width + factor;
+        if adjust == LengthAdjust::Spacing {
+            if indices.len() > 1 {
+                let delta = (wanted - width) / (indices.len() - 1) as f32;
+                for &i in &indices[..indices.len() - 1] {
+                    clusters[i].advance += delta;
+                }
             }
         } else {
-            let factor = target_width / width;
-            // Prevent multiplying by zero.
-            if factor < 0.001 {
+            let factor = wanted / width;
+            if factor < 0.001 || !factor.is_finite() {
                 continue;
             }
-
-            for i in cluster_indexes {
-                clusters[i].transform = clusters[i].transform.pre_scale(factor, 1.0);
-
-                // Technically just a hack to support the current text-on-path algorithm.
-                if !is_horizontal {
-                    clusters[i].advance *= factor;
-                    clusters[i].width *= factor;
-                }
+            for i in indices {
+                let cluster = &mut clusters[i];
+                cluster.transform = cluster.transform.pre_scale(factor, 1.);
+                cluster.width *= factor;
+                cluster.advance = if i == last {
+                    cluster.width + trailing
+                } else {
+                    cluster.advance * factor
+                };
+                cluster.length_scale *= factor;
             }
         }
     }
@@ -1205,6 +1209,7 @@ fn form_glyph_clusters(glyphs: &[Glyph], text: &str, font_size: f32) -> GlyphClu
         codepoint: byte_idx.char_from(text),
         width,
         advance: width,
+        length_scale: 1.,
         ascent: font.ascent(font_size),
         descent: font.descent(font_size),
         has_relative_shift: false,

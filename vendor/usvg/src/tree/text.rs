@@ -354,6 +354,8 @@ pub struct TextSpan {
     pub(crate) letter_spacing: f32,
     pub(crate) word_spacing: f32,
     pub(crate) text_length: Option<f32>,
+    pub(crate) text_length_owner: Option<u32>,
+    pub(crate) text_length_ancestors: Vec<u32>,
     pub(crate) length_adjust: LengthAdjust,
 }
 

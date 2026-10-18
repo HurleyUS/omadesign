@@ -268,12 +268,25 @@ fn collect_text_chunks_impl(
             _ => crate::FontOpticalSizing::Auto, // "auto" or missing (browser default)
         };
 
-        let mut text_length =
-            parent.try_convert_length(AId::TextLength, Units::UserSpaceOnUse, state);
-        // Negative values should be ignored.
-        if let Some(n) = text_length {
-            if n < 0.0 {
-                text_length = None;
+        let mut lengths = Vec::new();
+        for node in parent.ancestors() {
+            if matches!(
+                node.tag_name(),
+                Some(EId::Text | EId::Tspan | EId::TextPath)
+            ) {
+                if let Some(width) = node
+                    .try_convert_length(AId::TextLength, Units::UserSpaceOnUse, state)
+                    .filter(|n| n.is_finite() && *n >= 0.)
+                {
+                    lengths.push((
+                        node.index(),
+                        width,
+                        node.find_attribute(AId::LengthAdjust).unwrap_or_default(),
+                    ));
+                }
+                if node.tag_name() == Some(EId::Text) {
+                    break;
+                }
             }
         }
 
@@ -299,8 +312,13 @@ fn collect_text_chunks_impl(
             baseline_shift: convert_baseline_shift(parent, state),
             letter_spacing: parent.resolve_length(AId::LetterSpacing, state, 0.0),
             word_spacing: parent.resolve_length(AId::WordSpacing, state, 0.0),
-            text_length,
-            length_adjust: parent.find_attribute(AId::LengthAdjust).unwrap_or_default(),
+            text_length: lengths.first().map(|(_, width, _)| *width),
+            text_length_owner: lengths.first().map(|(owner, _, _)| *owner),
+            text_length_ancestors: lengths.iter().map(|(owner, _, _)| *owner).collect(),
+            length_adjust: lengths.first().map_or_else(
+                || parent.find_attribute(AId::LengthAdjust).unwrap_or_default(),
+                |(_, _, adjust)| *adjust,
+            ),
         };
 
         let mut is_new_span = true;

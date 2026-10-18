@@ -198,3 +198,19 @@ fn svg_character_metrics_kerning_overrides_an_imported_low_level_tag_and_preserv
     assert_eq!(crate::text::feature_value(run(&s), 0, *b"tnum"), 1);
     history(&mut s, &before);
 }
+
+#[test]
+fn svg_character_nested_length_groups_keep_parent_budget_and_explicit_child_widths() {
+    for (name,content,adjust,width) in [
+        ("length-parent","AV".to_owned(),"spacingAndGlyphs",160),
+        ("length-mixed","AV<tspan font-size=\"20\" fill=\"#248\"> To</tspan>X".to_owned(),"spacingAndGlyphs",160),
+        ("length-child","AV<tspan font-size=\"20\" textLength=\"60\" lengthAdjust=\"spacingAndGlyphs\" fill=\"#248\"> To</tspan>X".to_owned(),"spacingAndGlyphs",200),
+        ("length-spacing","AV<tspan font-size=\"20\" fill=\"#248\"> To</tspan>X".to_owned(),"spacing",160),
+    ] {
+        let source=source().replace("letter-spacing=\"4\"",&format!("letter-spacing=\"4\" textLength=\"{width}\" lengthAdjust=\"{adjust}\""))
+            .replace(">AV</tspan>",&format!(">{content}</tspan>"));
+        let mut s=studio();s.doc=crate::formats::svg::read(&source,name).unwrap().0;
+        let (li,id)=s.doc.layers.iter().enumerate().find_map(|(li,l)|l.kind.shapes().into_iter().flatten().find(|s|matches!(s.geom,Geom::Text(_))).map(|s|(li,s.id))).unwrap();s.selection=vec![(li,id)];
+        compare(&s,&source,name);
+    }
+}
