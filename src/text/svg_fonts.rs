@@ -124,13 +124,21 @@ impl Embedded {
     }
     fn families(&mut self, style:&BTreeMap<String,String>, db:&usvg::fontdb::Database)->Result<String,String> {
         let mut families=Vec::new();
+        let mut installed=Vec::new();
         for (family,id) in super::svg_type::family_faces(style,db) {
             let value=if let Some(id)=id {
                 let bytes=db.with_face_data(id,super::font_catalog::face_bytes).ok_or("SVG font is unavailable")??;
+                if let Ok(face)=rustybuzz::ttf_parser::Face::parse(&bytes,0) {
+                    if let Some(name)=[16,1].into_iter().find_map(|id|face.names().into_iter().filter(|n|n.name_id==id).find_map(|n|n.to_string().filter(|s|!s.trim().is_empty()))) {
+                        let value=super::svg_type::family_css(&usvg::FontFamily::Named(name));
+                        if !installed.contains(&value){installed.push(value);}
+                    }
+                }
                 format!("'{}'",self.add(Arc::new(bytes))?)
             } else {super::svg_type::family_css(&family)};
             if !families.contains(&value) {families.push(value);}
         }
+        families.extend(installed);
         if families.is_empty(){return Err("Cannot resolve an SVG text font for embedding".into());}
         Ok(families.join(", "))
     }

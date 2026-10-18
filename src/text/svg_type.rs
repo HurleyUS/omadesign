@@ -905,10 +905,12 @@ pub(crate) fn options() -> usvg::Options<'static> {
 }
 
 fn substituted_font(font: &usvg::Font) -> Option<std::path::PathBuf> {
+    substituted_path(font.families(),font.weight(),font.style())
+}
+
+fn substituted_path(families:&[usvg::FontFamily],weight:u16,style:usvg::FontStyle)->Option<std::path::PathBuf> {
     static MATCHES: OnceLock<Mutex<HashMap<String, Option<std::path::PathBuf>>>> = OnceLock::new();
-    let family = font
-        .families()
-        .iter()
+    let family = families.iter()
         .map(|family| match family {
             usvg::FontFamily::Named(name) => name
                 .replace('\\', "\\\\")
@@ -920,7 +922,7 @@ fn substituted_font(font: &usvg::Font) -> Option<std::path::PathBuf> {
         })
         .collect::<Vec<_>>()
         .join(",");
-    let weight = match font.weight() {
+    let weight = match weight {
         0..150 => "thin",
         150..250 => "extralight",
         250..350 => "light",
@@ -931,7 +933,7 @@ fn substituted_font(font: &usvg::Font) -> Option<std::path::PathBuf> {
         750..850 => "extrabold",
         _ => "black",
     };
-    let slant = match font.style() {
+    let slant = match style {
         usvg::FontStyle::Normal => "roman",
         usvg::FontStyle::Italic => "italic",
         usvg::FontStyle::Oblique => "oblique",
@@ -1532,8 +1534,9 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
                 }
                 let transform = text.abs_transform().pre_concat(glyph.transform());
                 let (font, axes) = resolved_fonts.entry(glyph.font).or_insert_with(|| {
-                    let font = if embedded { super::webfonts::reference(tree.fontdb(), glyph.font) } else { tree.fontdb().face(glyph.font).and_then(|f|match &f.source {usvg::fontdb::Source::File(p)|usvg::fontdb::Source::SharedFile(p,_)=>Some(p.to_string_lossy().into_owned()),_=>None}) };
-                    let axes = if embedded {tree.fontdb().with_face_data(glyph.font, |bytes,index| rustybuzz::ttf_parser::Face::parse(bytes,index).ok().map(|face|face.variation_axes().into_iter().map(|a|a.tag.to_bytes()).collect::<Vec<_>>())).flatten().unwrap_or_default()} else {Vec::new()};
+                    let portable=embedded || tree.fontdb().face(glyph.font).is_some_and(|face|face.families.iter().any(|(name,_)|name.starts_with("omatype:")));
+                    let font = if portable { super::webfonts::reference(tree.fontdb(), glyph.font) } else { tree.fontdb().face(glyph.font).and_then(|f|match &f.source {usvg::fontdb::Source::File(p)|usvg::fontdb::Source::SharedFile(p,_)=>Some(p.to_string_lossy().into_owned()),_=>None}) };
+                    let axes = if portable {tree.fontdb().with_face_data(glyph.font, |bytes,index| rustybuzz::ttf_parser::Face::parse(bytes,index).ok().map(|face|face.variation_axes().into_iter().map(|a|a.tag.to_bytes()).collect::<Vec<_>>())).flatten().unwrap_or_default()} else {Vec::new()};
                     (font, axes)
                 });
                 let fill = span.fill.as_ref().and_then(|fill| {

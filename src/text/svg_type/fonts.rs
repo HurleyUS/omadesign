@@ -33,7 +33,7 @@ pub(in crate::text) fn family_faces(
         Some("ultra-expanded") => usvg::fontdb::Stretch::UltraExpanded,
         _ => usvg::fontdb::Stretch::Normal,
     };
-    usvg::parse_font_families(
+    let mut faces: Vec<_> = usvg::parse_font_families(
         attributes
             .get("font-family")
             .map_or("serif", String::as_str),
@@ -57,7 +57,28 @@ pub(in crate::text) fn family_faces(
         });
         (family, id)
     })
-    .collect()
+    .collect();
+    if faces.iter().all(|(_, id)| id.is_none()) {
+        let families: Vec<_> = faces.iter().map(|(f, _)| f.clone()).collect();
+        let svg_style = match style {
+            usvg::fontdb::Style::Italic => usvg::FontStyle::Italic,
+            usvg::fontdb::Style::Oblique => usvg::FontStyle::Oblique,
+            _ => usvg::FontStyle::Normal,
+        };
+        if let Some(path) = super::substituted_path(&families, weight, svg_style) {
+            if let Some(face) = db.faces().find(|face| match &face.source {
+                usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _) => {
+                    *p == path
+                }
+                _ => false,
+            }) {
+                if let Some((_, id)) = faces.first_mut() {
+                    *id = Some(face.id);
+                }
+            }
+        }
+    }
+    faces
 }
 
 /// Rebind complete family lists while preserving inherited font selection properties.
