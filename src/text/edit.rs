@@ -164,7 +164,7 @@ impl TypeRun {
             if style.baseline_shift.is_none(){style.baseline_shift=source.baseline_shift;}
             if style.hscale.is_none(){style.hscale=source.hscale;}
             if style.vscale.is_none(){style.vscale=source.vscale;}
-            if style.leading.is_none(){style.leading=source.leading;}
+            if style.leading.is_none() && self.leading<=0.5 {style.leading=source.leading;}
         }
         style.start = 0;
         if style.leading.is_none() {

@@ -189,9 +189,7 @@ fn svg_positioned_leading_and_authored_bidi_controls_keep_character_slots_and_ac
     check(&source, &expected, Leading::Fixed(50.), "leading-bidi");
 }
 
-#[test]
-fn svg_positioned_leading_scale_optical_and_editable_cycles_do_not_accumulate_offsets() {
-    let source = simple_source();
+fn cycles(source: String, name: &str) {
     let mut studio = metric_tests::studio_for(&source);
     studio.patch_character(|s| {
         s.leading = Some(Leading::Fixed(42.));
@@ -216,7 +214,7 @@ fn svg_positioned_leading_scale_optical_and_editable_cycles_do_not_accumulate_of
             crate::compositor::export_png(&studio.doc, 1).unwrap()
         );
     }
-    scale_tests::check(&studio, "leading-scaled-cycles");
+    scale_tests::check(&studio, name);
 }
 
 #[test]
@@ -272,4 +270,118 @@ fn svg_positioned_leading_range_inside_a_ligature_changes_its_actual_line() {
 #[test]
 fn svg_positioned_leading_range_inside_a_combining_cluster_changes_its_actual_line() {
     cluster_range("A\u{301}", "leading-combining-range");
+}
+
+#[test]
+fn svg_positioned_leading_scale_optical_and_editable_cycles_do_not_accumulate_offsets() {
+    cycles(simple_source(), "leading-scaled-cycles");
+}
+#[test]
+fn svg_positioned_leading_rotated_guides_preserve_baselines_through_editable_cycles() {
+    cycles(
+        simple_source().replace("font-size=\"24\"", "font-size=\"24\" rotate=\"15\""),
+        "leading-rotated-cycles",
+    );
+}
+
+#[test]
+fn svg_positioned_leading_legacy_whole_run_and_range_fields_share_real_geometry() {
+    let source = simple_source();
+    let mut studio = metric_tests::studio_for(&source);
+    let before = crate::project::encode(&studio.doc).unwrap();
+    studio.patch_type(|r| r.leading = 50.);
+    let expected = source
+        .replace("y=\"65\"", "y=\"85\"")
+        .replace("y=\"95\"", "y=\"135\"");
+    compare(&studio, &expected, "leading-legacy-run");
+    let whole = crate::project::encode(&studio.doc).unwrap();
+    studio.patch_type(|r| r.set_character_style(2, 4, |s| s.leading = Some(Leading::Fixed(25.))));
+    compare(
+        &studio,
+        &expected.replace("y=\"135\"", "y=\"110\""),
+        "leading-legacy-range",
+    );
+    assert_eq!(
+        pair_tests::run(&studio).character_style(4).leading,
+        Some(Leading::Fixed(50.))
+    );
+    let exported = crate::svg::export_embedded(&studio.doc).unwrap();
+    let again = metric_tests::studio_for(&exported);
+    assert_eq!(
+        pair_tests::run(&again).character_style(0).leading,
+        Some(Leading::Fixed(50.))
+    );
+    assert_eq!(
+        pair_tests::run(&again).character_style(2).leading,
+        Some(Leading::Fixed(25.))
+    );
+    assert_eq!(
+        pair_tests::run(&again).character_style(4).leading,
+        Some(Leading::Fixed(50.))
+    );
+    let after = crate::project::encode(&studio.doc).unwrap();
+    studio.undo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), whole);
+    studio.undo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
+    studio.redo();
+    studio.redo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
+}
+
+#[test]
+fn svg_positioned_leading_legacy_run_also_preserves_flow_spacing_through_editable_reopen() {
+    let source = pair_tests::flow_source();
+    let mut studio = metric_tests::studio_for(&source);
+    let before = crate::project::encode(&studio.doc).unwrap();
+    studio.patch_type(|r| r.leading = 42.);
+    compare(
+        &studio,
+        &source.replace("28px", "42px"),
+        "leading-legacy-flow",
+    );
+    let after = crate::project::encode(&studio.doc).unwrap();
+    studio.undo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
+    studio.redo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
+}
+
+#[test]
+fn svg_positioned_leading_mixed_vertical_fonts_do_not_create_spurious_columns() {
+    let source = pair_tests::source(
+        r#"<text x="160" y="20" writing-mode="vertical-rl" font-family="MetricFace" font-size="24">AB<tspan x="120" y="20" font-size="40">CD</tspan><tspan x="80" y="20">EF</tspan></text>"#,
+    );
+    let expected = source
+        .replace("x=\"120\"", "x=\"124\"")
+        .replace("x=\"80\"", "x=\"64\"");
+    check(
+        &source,
+        &expected,
+        Leading::Auto(150.),
+        "leading-vertical-mixed",
+    );
+}
+
+#[test]
+fn svg_positioned_leading_keeps_the_existing_affine_text_route_and_full_document_history() {
+    let source = simple_source();
+    let mut studio = metric_tests::studio_for(&source);
+    studio.patch_character(|s| s.leading = Some(Leading::Fixed(50.)));
+    let before = crate::project::encode(&studio.doc).unwrap();
+    studio.patch_type(|r| r.apply_affine([1.1, 0.1, 0.15, 0.9, 5., 2.]));
+    let expected = source
+        .replace("y=\"65\"", "y=\"85\"")
+        .replace("y=\"95\"", "y=\"135\"")
+        .replace(
+            "<text ",
+            "<g transform=\"matrix(1.1 .1 .15 .9 5 2)\"><text ",
+        )
+        .replace("</text>", "</text></g>");
+    compare(&studio, &expected, "leading-affine");
+    let after = crate::project::encode(&studio.doc).unwrap();
+    studio.undo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
+    studio.redo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
 }

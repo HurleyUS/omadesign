@@ -141,6 +141,7 @@ pub(super) fn apply(
                         .iter()
                         .find(|s| s.start <= from + c.index && from + c.index < s.end)
                         .and_then(|s| s.leading)
+                        .or_else(|| (run.leading > 0.5).then_some(Leading::Fixed(run.leading)))
                         .map_or(distance, |v| v.pixels(c.px))
                 })
                 .reduce(f32::max)

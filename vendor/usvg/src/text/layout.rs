@@ -220,6 +220,7 @@ struct GlyphCluster {
     transform: Transform,
     path_transform: Transform,
     inline_angle: f32,
+    authored_position: [f32;2],
     visible: bool,
 }
 
@@ -393,8 +394,8 @@ pub(crate) fn layout_text(
                             pg.baseline=[origin.tx,origin.ty];
                             pg.cluster_origin=[cluster_origin.tx,cluster_origin.ty];
                             pg.authored_origin=if text_node.writing_mode==WritingMode::TopToBottom {
-                                [x-gc.transform.ty,y+gc.transform.tx]
-                            } else {[x+gc.transform.tx,y+gc.transform.ty]};
+                                [x-gc.authored_position[1],y+gc.authored_position[0]]
+                            } else {[x+gc.authored_position[0],y+gc.authored_position[1]]};
                             pg.cluster_ts = cluster_ts;
                             pg.span_ts = span_ts;
                         });
@@ -646,6 +647,7 @@ fn resolve_clusters_positions_horizontal(
             let (dx,dy) = shifts[cp-offset];
             if writing_mode == WritingMode::LeftToRight {px+=dx;py+=dy;} else {px+=dy;py-=dx;}
         }
+        cluster.authored_position=[px,py];
         cluster.transform = cluster.transform.pre_translate(px / cluster.length_scale, py);
 
         if let Some(angle) = text.rotate.get(cp).cloned() {
@@ -1286,6 +1288,7 @@ fn form_glyph_clusters(glyphs: &[Glyph], text: &str, font_size: f32) -> GlyphClu
         transform: Transform::default(),
         path_transform: Transform::default(),
         inline_angle:0.,
+        authored_position:[0.,0.],
         glyphs: positioned_glyphs,
         visible: true,
     }

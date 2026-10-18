@@ -64,6 +64,7 @@ pub(crate) fn leading(run: &TypeRun, at: usize) -> Option<crate::geom::Leading> 
     {
         return Some(value);
     }
+    if run.leading>0.5 {return Some(Leading::Fixed(run.leading));}
     let flow = svg.flow.as_ref()?;
     fn find<'a>(
         node: &'a TextNode,
@@ -128,8 +129,8 @@ pub(crate) fn pair_kerning(run: &TypeRun, at: usize) -> f32 {
 /// Apply accepted native pair and optical spacing to resolved source character positions.
 /// Args: native run, unmodified SVG, source range start and visible Unicode. Returns editable SVG.
 pub(super) fn pairs(run: &TypeRun, source: String, from: usize, content: &str) -> Option<String> {
-    let leading:Vec<_>=run.spans.iter().filter(|_|run.svg_text.as_ref().is_some_and(|s|s.flow.is_none()))
-        .filter_map(|s|{let a=s.start.max(from);let b=s.end.min(from+content.chars().count());(a<b).then(||s.leading.map(|v|(a-from,b-from,v))).flatten()}).collect();
+    let leading:Vec<_>=run.character_style_runs(from,from+content.chars().count()).into_iter()
+        .filter_map(|s|s.leading.or_else(||(run.leading>0.5).then_some(crate::geom::Leading::Fixed(run.leading))).map(|v|(s.start-from,s.end-from,v))).collect();
     if run
         .manual_kern
         .range(from..from + content.chars().count())
