@@ -866,6 +866,14 @@ fn content_fixture(depth: Depth, cmyk: bool) -> Studio {
     s
 }
 
+fn content_picture(doc: &Document) -> Pixels {
+    if crate::deep_color::has_native(doc) {
+        crate::deep_color::composite(doc, 1).unwrap()
+    } else {
+        Pixels::try_from_pixmap(&crate::compositor::render_export(doc, 1).unwrap()).unwrap()
+    }
+}
+
 #[test]
 fn craft_content_bounds_merges_and_stamps_hug_paint_across_all_native_color_depths() {
     for depth in [Depth::U8, Depth::U16, Depth::F32] {
@@ -886,7 +894,7 @@ fn craft_content_bounds_merges_and_stamps_hug_paint_across_all_native_color_dept
                     s.select_layer_rows(1, true, false);
                 }
                 let before = state(&s);
-                let expected = picture(&s.doc);
+                let expected = content_picture(&s.doc);
                 run(&mut s, kind);
                 let target = if matches!(kind, Kind::StampVisible | Kind::StampSelected) {
                     2
@@ -899,7 +907,11 @@ fn craft_content_bounds_merges_and_stamps_hug_paint_across_all_native_color_dept
                 assert_eq!(pixels.h, 40, "{depth:?}/{cmyk}/{kind:?}");
                 assert_eq!(layer.kind.raster_xform().unwrap().0, Pt::new(40., 300.));
                 assert_eq!(layer.kind.raster_xform().unwrap().1, Pt::new(75., 40.));
-                assert_eq!(picture(&s.doc), expected, "{depth:?}/{cmyk}/{kind:?}");
+                assert_eq!(
+                    content_picture(&s.doc),
+                    expected,
+                    "{depth:?}/{cmyk}/{kind:?}"
+                );
                 assert!(pixels.sample(5 * 75 + 5)[3] > 0.99);
                 assert!(pixels.sample(25 * 75 + 55)[3] > 0.99);
                 assert_eq!(pixels.sample(10 * 75 + 30)[3], 0.);
