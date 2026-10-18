@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) const META: &str = "data-oma-glyph-guides";
+pub(in crate::text) const META: &str = "data-oma-glyph-guides";
 const MAX_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]

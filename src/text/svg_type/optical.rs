@@ -21,14 +21,15 @@ fn band(glyphs: &[&GlyphMetric], axis: Pt, normal: Pt, height: f32) -> Option<(f
             ..Default::default()
         };
         let contours = super::super::metrics::glyph_contours(&font, glyph.id);
+        let transform=super::guides::desired(glyph);
         for contour in contours.iter() {
             for (a, b) in contour
                 .iter()
                 .zip(contour.iter().cycle().skip(1))
                 .take(contour.len())
             {
-                let a = point(super::guides::desired(glyph), *a);
-                let b = point(super::guides::desired(glyph), *b);
+                let a = point(transform, *a);
+                let b = point(transform, *b);
                 let ay = dot(a, normal);
                 let by = dot(b, normal);
                 if ay <= height && by > height || by <= height && ay > height {
