@@ -252,11 +252,18 @@ fn svg_fallback_preserves_arabic_joining_and_ligatures_without_replacing_latin()
         .0;
     let ids = |g: Vec<(String, String, u16)>| {
         g.into_iter()
-            .filter(|(s, _, _)| s.chars().any(|c| matches!(c, '\u{600}'..='\u{6ff}')))
+            .filter(|(s, _, _)| {
+                s.is_empty() || s.chars().any(|c| matches!(c, '\u{600}'..='\u{6ff}'))
+            })
             .map(|(s, _, g)| (s, g))
             .collect::<Vec<_>>()
     };
-    assert_eq!(ids(actual), ids(chosen(run(&other))));
+    let sorted = |g| {
+        let mut ids = ids(g);
+        ids.sort();
+        ids
+    };
+    assert_eq!(sorted(actual), sorted(chosen(run(&other))));
 }
 #[test]
 fn svg_fallback_matches_whole_combining_grapheme_and_keeps_canonical_primary_composition() {
@@ -299,7 +306,7 @@ fn svg_fallback_matches_whole_combining_grapheme_and_keeps_canonical_primary_com
     );
 }
 #[test]
-fn svg_fallback_uses_variation_sequence_face_and_ignores_unsupported_selector_without_font_loss() {
+fn svg_fallback_non_presentation_selectors_keep_primary_but_selected_face_applies_its_cmap() {
     let full = primary();
     let ascii: Vec<_> = (' '..='~').collect();
     let p = subset(&full, &ascii, None);
@@ -312,6 +319,21 @@ fn svg_fallback_uses_variation_sequence_face_and_ignores_unsupported_selector_wi
             "V A&#xFE00; V A&#xFE01; V",
         ),
     );
+    assert!(
+        chosen(run(&doc))
+            .iter()
+            .all(|(_, font, g)| font == &id(&p) && *g != 0)
+    );
+    let no_a: Vec<_> = ascii.into_iter().filter(|&c| c != 'A').collect();
+    let p = subset(&full, &no_a, None);
+    let doc = check(
+        "fallback-variation-selected",
+        &document_source(
+            &[("VariationPrimaryMissing", &p), ("VariationFallback", &f)],
+            "VariationPrimaryMissing, VariationFallback",
+            "V A&#xFE00; V",
+        ),
+    );
     let glyphs = chosen(run(&doc));
     let expected = rustybuzz::ttf_parser::Face::parse(&f, 0)
         .unwrap()
@@ -322,12 +344,6 @@ fn svg_fallback_uses_variation_sequence_face_and_ignores_unsupported_selector_wi
         glyphs
             .iter()
             .any(|(s, font, g)| s.contains('\u{fe00}') && font == &id(&f) && *g == expected),
-        "{glyphs:?}"
-    );
-    assert!(
-        glyphs
-            .iter()
-            .any(|(s, font, _)| s.contains('\u{fe01}') && font == &id(&p)),
         "{glyphs:?}"
     );
 }

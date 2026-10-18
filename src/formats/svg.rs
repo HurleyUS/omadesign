@@ -922,6 +922,13 @@ impl Reader<'_> {
         let glyph=text.layouted().iter().flat_map(|s|&s.positioned_glyphs).next();
         let font=glyph.and_then(|g|crate::text::webfonts::reference(self.tree.fontdb(),g.font)).ok_or("Cannot retain this SVG text face within the existing font archive limits")?;
         let px=text.chunks().iter().flat_map(|c|c.spans()).next().map_or(16.,|s|s.font_size().get());
+        if let crate::text::svg_type::TextNode::Element{attributes,..}=&mut svg.root {
+            if !attributes.contains_key("font-family") {
+                if let Some(span)=text.chunks().iter().flat_map(|c|c.spans()).next() {
+                    attributes.insert("font-family".into(),span.font().families().iter().map(crate::text::svg_type::family_css).collect::<Vec<_>>().join(", "));
+                }
+            }
+        }
         svg.base_font=font.clone();svg.base_px=px;
         for chunk in text.chunks(){for span in chunk.spans(){
             let available=span.font().families().iter().any(|f|match f {usvg::FontFamily::Named(name)=>self.tree.fontdb().faces().any(|f|f.families.iter().any(|(n,_)|n.eq_ignore_ascii_case(name))),_=>true});

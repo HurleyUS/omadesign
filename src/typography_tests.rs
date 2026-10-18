@@ -215,5 +215,5 @@ fn svg_unused_fallback_faces_and_missing_instance_baselines_use_the_same_native_
     let mut instance=Shape::new(Geom::Rect{origin:Pt::ZERO,size:Pt::new(10.,10.),radius:0.},Style::default());
     instance.layout.component=Some(crate::layout_components::ComponentBinding::Instance{main:987650,nodes:vec![crate::layout_components::InstanceNode{source:987651,instance:987652,slot:987653,nested_main:Some(987654),baseline:Box::new(baseline)}]});
     doc.layers[li].kind.shapes_mut().unwrap().push(instance);assert_eq!(document_font_ids(&doc).unwrap(),expected);
-    let output=temp.0.join("baseline");fs::create_dir_all(&output).unwrap();assert_eq!(archive_document_fonts(&doc,&output).unwrap().len(),2);
+    let separate=Temp::new();let output=separate.0.join("baseline");fs::create_dir_all(&output).unwrap();assert_eq!(archive_document_fonts(&doc,&output).unwrap().len(),2);
 }

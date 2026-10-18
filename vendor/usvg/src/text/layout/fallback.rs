@@ -158,7 +158,7 @@ fn selectors(text: &str) -> Vec<(char, char)> {
     chars
         .windows(2)
         .filter_map(|p| {
-            (matches!(p[1], '\u{fe00}'..='\u{fe0f}' | '\u{e0100}'..='\u{e01ef}')
+            (matches!(p[1], '\u{fe0e}' | '\u{fe0f}')
                 && !matches!(p[0], '\u{fe00}'..='\u{fe0f}' | '\u{e0100}'..='\u{e01ef}'))
             .then_some((p[0], p[1]))
         })
