@@ -82,7 +82,15 @@ fn svg_type_rotated_reflected_mixed_positioned_rtl_vertical_and_path_roundtrip()
         );
         let svg = crate::svg::export(&reopened).unwrap();
         assert!(svg.contains("<text"));
-        assert!(error(&render(&svg), &expected) < 0.1);
+        let exported=render(&svg);let difference=error(&exported,&expected);
+        if difference>=0.1 {
+            if let Some(root)=std::env::var_os("OMADESIGN_SVG_METRIC_QA") {
+                let out=std::path::Path::new(&root).join("legacy-export-mismatch");std::fs::create_dir_all(&out).unwrap();
+                std::fs::write(out.join("original.svg"),&source).unwrap();std::fs::write(out.join("exported.svg"),&svg).unwrap();
+                expected.save_png(out.join("expected.png")).unwrap();exported.save_png(out.join("exported.png")).unwrap();
+            }
+        }
+        assert!(difference < 0.1,"{}: {difference}; source {source}",runs[0].content);
         let again = crate::formats::svg::read(&svg, "Exported SVG").unwrap().0;
         assert_eq!(
             types(&again)

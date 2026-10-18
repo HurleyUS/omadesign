@@ -202,9 +202,9 @@ fn svg_type_native_span_only_portable_faces_are_validated_and_archived(){
 #[test]
 fn svg_unused_fallback_faces_and_missing_instance_baselines_use_the_same_native_font_archive() {
     use base64::Engine;
-    let p=include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"),"/tests/assets/fonts/EBGaramond.ttf"));
+    let p=fs::read("/usr/share/fonts/liberation/LiberationSerif-Regular.ttf").unwrap();
     let f=fs::read("/usr/share/fonts/liberation/LiberationSans-Regular.ttf").unwrap();
-    let source=format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="80"><style>@font-face{{font-family:ArchivePrimary;src:url(data:font/ttf;base64,{})}}@font-face{{font-family:ArchiveUnused;src:url(data:font/ttf;base64,{})}}</style><text x="10" y="50" font-size="32" font-family="ArchivePrimary,ArchiveUnused">AV</text></svg>"#,base64::engine::general_purpose::STANDARD.encode(p),base64::engine::general_purpose::STANDARD.encode(&f));
+    let source=format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="80"><style>@font-face{{font-family:ArchivePrimary;src:url(data:font/ttf;base64,{})}}@font-face{{font-family:ArchiveUnused;src:url(data:font/ttf;base64,{})}}</style><text x="10" y="50" font-size="32" font-family="ArchivePrimary,ArchiveUnused">AV</text></svg>"#,base64::engine::general_purpose::STANDARD.encode(&p),base64::engine::general_purpose::STANDARD.encode(&f));
     let (mut doc,notes)=crate::formats::svg::read(&source,"Unused fallback").unwrap();assert!(notes.is_empty(),"{notes:?}");
     let expected:HashSet<_>=[p.as_slice(),f.as_slice()].into_iter().map(|b|format!("omatype:{:032x}",fingerprint(b))).collect();assert_eq!(document_font_ids(&doc).unwrap(),expected);
     let temp=Temp::new();let path=temp.0.join("unused.oma");crate::project::save_to(&doc,&path).unwrap();
