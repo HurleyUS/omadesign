@@ -57,6 +57,15 @@ pub(super) fn prepare(doc: &Document, root: usize, delta: Pt) -> Result<Copied, 
     if indices.windows(2).any(|p| p[1] != p[0] + 1) {
         return Err("This layer group has an inconsistent order and cannot be copied".into());
     }
+    prepare_indices(doc, root, indices, delta)
+}
+
+pub(super) fn prepare_indices(
+    doc: &Document,
+    root: usize,
+    indices: Vec<usize>,
+    delta: Pt,
+) -> Result<Copied, String> {
     let layer_ids: HashMap<_, _> = indices
         .iter()
         .map(|&i| (doc.layers[i].id, crate::document::next_id()))
@@ -152,10 +161,19 @@ impl Studio {
     }
 
     pub(super) fn duplicate_layer_tree_by(&mut self, index: usize, delta: Pt) -> bool {
+        self.duplicate_layer_named(index, delta, None)
+    }
+
+    pub(super) fn duplicate_layer_named(
+        &mut self,
+        index: usize,
+        delta: Pt,
+        name: Option<&str>,
+    ) -> bool {
         if !self.can_duplicate_layer_tree(index) {
             return false;
         }
-        let copied = match prepare(&self.doc, index, delta) {
+        let mut copied = match prepare(&self.doc, index, delta) {
             Ok(copied) => copied,
             Err(error) => {
                 self.status = error;
@@ -163,6 +181,14 @@ impl Studio {
             }
         };
         let root = copied.layer_ids[&self.doc.layers[index].id];
+        if let Some(name) = name {
+            copied
+                .layers
+                .iter_mut()
+                .find(|l| l.id == root)
+                .unwrap()
+                .name = name.to_owned();
+        }
         let mut commands: Vec<_> = copied
             .layers
             .iter()

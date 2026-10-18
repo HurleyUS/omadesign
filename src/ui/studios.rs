@@ -2710,7 +2710,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                                     }
                                 ))
                                 .context_menu(|ui| {
-                                    if ui.add_enabled(studio.can_duplicate_layer_tree(i), eframe::egui::Button::new("Duplicate layer")).clicked() {
+                                    if ui.add_enabled(studio.can_duplicate_layer_tree(i), eframe::egui::Button::new("Duplicate layer…")).clicked() {
                                         duplicate_layer=Some(layer.id); ui.close();
                                     }
                                     if ui.add_enabled(studio.layer_unlocked(i), eframe::egui::Button::new("Delete layer")).clicked() {
@@ -3050,7 +3050,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
         }
     }
     if let Some(index)=duplicate_layer.and_then(|id|studio.doc.layers.iter().position(|l|l.id==id)) {
-        studio.duplicate_layer_tree(index);
+        super::layer_duplicate::open(ui.ctx(), studio, index);
     }
     if let Some(index)=start_rename.filter(|index|*index!=usize::MAX) {
         if let Some(layer)=studio.doc.layers.get(index) {

@@ -215,6 +215,18 @@ impl Studio {
         }
     }
 
+    pub(super) fn layer_copy_insertion(&self, index: usize) -> Option<(usize, Option<u64>)> {
+        let (doc, active) = if index == self.active_tab {
+            (&self.doc, self.active_layer)
+        } else {
+            let tab = self.tabs.get(index)?;
+            (&tab.doc, tab.active_layer)
+        };
+        Some(active.filter(|&i| i < doc.layers.len())
+            .map(|i| (i + 1, doc.layers[i].parent))
+            .unwrap_or((doc.layers.len(), None)))
+    }
+
     pub fn has_unsaved_changes(&self) -> bool {
         self.dirty
             || self

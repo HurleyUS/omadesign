@@ -35,6 +35,7 @@ impl Seat {
                 Panel::left("copy-layers-fixture")
                     .exact_size(320.)
                     .show(ui, |ui| layers_content(ui, s));
+                crate::ui::layer_duplicate::show(ui.ctx(), s);
             },
         );
         output.textures_delta.clear();
@@ -122,7 +123,11 @@ fn craft_layer_copy_row_context_uses_its_owner_instead_of_the_active_layer() {
     }
     assert_eq!(s.active_layer.map(|i| s.doc.layers[i].id), Some(other));
     let ctx = seat.ctx.clone();
-    keys::tab_to(&ctx, "Duplicate layer", |events| seat.frame(&mut s, events));
+    keys::tab_to(&ctx, "Duplicate layer…", |events| seat.frame(&mut s, events));
+    seat.frame(&mut s, keys::key(Key::Space, Modifiers::NONE));
+    seat.frame(&mut s, vec![]);
+    assert_eq!(crate::project::encode(&s.doc).unwrap(), before);
+    keys::tab_to(&ctx, "Duplicate", |events| seat.frame(&mut s, events));
     seat.frame(&mut s, keys::key(Key::Space, Modifiers::NONE));
     seat.frame(&mut s, vec![]);
     check(&mut s, &before);

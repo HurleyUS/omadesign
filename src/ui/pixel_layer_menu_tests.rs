@@ -224,7 +224,9 @@ fn craft_pixel_duplicate_layer_native_menu_copies_the_active_layer_not_other_sel
     studio.selected_layer = None;
     let before = encoded(&studio);
     let mut seat = Seat::new();
-    menu(&mut seat, &mut studio, None, "Duplicate layer");
+    menu(&mut seat, &mut studio, None, "Duplicate layer…");
+    assert_eq!(encoded(&studio), before);
+    seat.invoke(&mut studio, "Duplicate");
     assert_eq!(studio.doc.layers.len(), 3);
     assert_eq!(studio.doc.layers[0].id, source);
     assert_ne!(studio.doc.layers[1].id, source);

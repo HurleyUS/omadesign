@@ -34,6 +34,7 @@ impl Seat {
                 top_bar(ui, studio);
                 raster::show(ui, studio);
                 channel_adjustment::show(ui.ctx(), studio);
+                crate::ui::layer_duplicate::show(ui.ctx(), studio);
             },
         );
         output.textures_delta.clear();

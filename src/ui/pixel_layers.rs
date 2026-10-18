@@ -29,7 +29,7 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
             if ui
                 .add_enabled(
                     active.is_some_and(|i| studio.can_duplicate_layer_tree(i)),
-                    Button::new("Duplicate layer"),
+                    Button::new("Duplicate layer…"),
                 )
                 .clicked()
             {
@@ -89,7 +89,7 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
             Action::Pixel => studio.add_layer(true),
             Action::Group => studio.add_layer_group(),
             Action::DuplicateLayer(i) => {
-                studio.duplicate_layer_tree(i);
+                crate::ui::layer_duplicate::open(ui.ctx(), studio, i);
             }
             Action::Duplicate => studio.duplicate_selection(),
             Action::Delete(i) => studio.delete_layer_tree(i),

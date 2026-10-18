@@ -19,6 +19,8 @@ mod key_hints;
 pub(crate) mod keyboard_authoring;
 mod layer_groups;
 mod layer_copy;
+mod layer_copy_destination;
+pub(crate) use layer_copy_destination::{LayerCopyDestination, LayerCopyTarget};
 mod layout;
 pub(crate) use layout::LayoutStackField;
 mod layout_components;
