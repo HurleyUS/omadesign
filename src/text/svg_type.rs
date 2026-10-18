@@ -646,6 +646,7 @@ fn write_nodes(
                     ..super::char_to_byte(&run.content, span.end)];
                 let mut attrs = String::new();
                 let mut css = String::new();
+                if !span.features.is_empty(){css.push_str(&format!("font-feature-settings:{};",super::feature_css(&span.features)));}
                 if span.font_variations.is_some() {
                     let axes = super::variations::at(run, span.start);
                     css.push_str(&format!("font-variation-settings:{};", if axes.is_empty() { "normal".into() } else { super::variations::css(&axes) }));
@@ -703,8 +704,8 @@ fn write_nodes(
             let font_override=count.filter(|count|*count>0 && *cursor>=range.start && cursor.checked_add(*count).is_some_and(|end|end<=range.end)).and_then(|count|{
                 let spans=run.character_style_runs(*cursor,*cursor+count);
                 if spans.len()!=1{return None;}let style=spans[0].clone();
-                if style.font.is_none() && style.font_variations.is_none(){return None;}
-                let mut rest=style.clone();rest.start=0;rest.end=0;rest.font=None;rest.font_variations=None;
+                if style.font.is_none() && style.font_variations.is_none() && style.features.is_empty(){return None;}
+                let mut rest=style.clone();rest.start=0;rest.end=0;rest.font=None;rest.font_variations=None;rest.features.clear();
                 (rest==crate::geom::CharSpan::default()).then_some(style)
             });
             out.push_str(&format!("<{name}"));
@@ -712,6 +713,7 @@ fn write_nodes(
             for (key, value) in attributes {
                 if font_override.as_ref().is_some_and(|s| s.font.is_some()) && matches!(key.as_str(),"font-family"|"font-weight"|"font-style") {continue;}
                 if font_override.as_ref().is_some_and(|s| s.font_variations.is_some()) && key=="font-variation-settings" {continue;}
+                if font_override.as_ref().is_some_and(|s|!s.features.is_empty()) && key=="font-feature-settings" {continue;}
                 if root
                     && overrides_font(run)
                     && matches!(key.as_str(), "font-family" | "font-weight" | "font-style")
@@ -767,6 +769,7 @@ fn write_nodes(
                 if !run.font_variations.is_empty() { css.push_str(&format!("font-variation-settings:{};", super::variations::css(&run.font_variations))); }
             }
             if let Some(style)=&font_override {
+                if !style.features.is_empty(){css.push_str(&format!("font-feature-settings:{};",super::feature_css(&style.features)));}
                 if let Some(font)=&style.font {out.push_str(&font_attributes(font));}
                 if style.font_variations.is_some(){let axes=super::variations::at(run,*cursor);css.push_str(&format!("font-variation-settings:{};",if axes.is_empty(){"normal".into()}else{super::variations::css(&axes)}));}
             }
@@ -1450,6 +1453,7 @@ fn layout_tree(run: &TypeRun, tree: usvg::Tree, embedded: bool) -> Layout {
                         at + i,
                         crate::geom::CharSpan {
                             font: font.clone(),
+                            features: span.features.clone(),
                             font_variations: (!axes.is_empty() && font.as_ref().is_some_and(|f|f.starts_with("omatype:"))).then(|| super::variations::FontVariations::new(span.variations.iter().filter(|v|axes.contains(&v.tag)).map(|v|(v.tag,v.value)).collect()).ok()).flatten(),
                             px: Some(glyph.font_size()),
                             fill: fill.clone(),

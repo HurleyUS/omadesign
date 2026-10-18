@@ -367,3 +367,114 @@ fn craft_svg_text_layout_unsupported_path_details_keep_pixels_and_report_reducti
     assert!(super::tests::error(&d, &reopened) < 1.5);
     assert_eq!(crate::project::encode(&d).unwrap(), before);
 }
+
+#[test]
+fn craft_svg_text_layout_feature_settings_parse_inherit_reset_and_survive_text_write() {
+    use base64::Engine;
+    let font = base64::engine::general_purpose::STANDARD.encode(std::fs::read(FONT).unwrap());
+    let source = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="600" height="120"><style>@font-face{{font-family:Features;src:url(data:font/ttf;base64,{font})}}</style><g font-family="Features" font-size="26" font-feature-settings="'smcp' on, 'c2sc' 1, 'liga' off"><text x="10" y="35">Feature inheritance<tspan font-feature-settings="normal"> Default</tspan><tspan font-feature-settings="'liga' 1 2"> Invalid inherits</tspan><tspan font-feature-settings="'ss01' 2, '\74 num' on"> Escaped</tspan></text></g></svg>"#
+    );
+    let xml = roxmltree::Document::parse(&source).unwrap();
+    let mut options = crate::text::svg_type::options();
+    crate::text::webfonts::load(&xml, &mut options).unwrap();
+    let tree = usvg::Tree::from_str(&source, &options).unwrap();
+    fn settings(group: &usvg::Group, out: &mut Vec<(String, Vec<([u8; 4], u32)>)>) {
+        for n in group.children() {
+            match n {
+                usvg::Node::Group(g) => settings(g, out),
+                usvg::Node::Text(t) => {
+                    for c in t.chunks() {
+                        for s in c.spans() {
+                            out.push((
+                                c.text()[s.start()..s.end()].to_owned(),
+                                s.font().features().to_vec(),
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut actual = vec![];
+    settings(tree.root(), &mut actual);
+    assert!(actual.iter().any(|(s, f)| s.contains("Feature inheritance")
+        && f == &vec![(*b"smcp", 1), (*b"c2sc", 1), (*b"liga", 0)]));
+    assert!(
+        actual
+            .iter()
+            .any(|(s, f)| s.contains("Default") && f.is_empty())
+    );
+    assert!(
+        actual
+            .iter()
+            .any(|(s, f)| s.contains("Invalid inherits") && f.contains(&(*b"c2sc", 1)))
+    );
+    assert!(
+        actual
+            .iter()
+            .any(|(s, f)| s.contains("Escaped") && f == &vec![(*b"ss01", 2), (*b"tnum", 1)])
+    );
+    let text = tree.to_string(&usvg::WriteOptions {
+        preserve_text: true,
+        ..Default::default()
+    });
+    assert!(text.contains("font-feature-settings="));
+    let copied = usvg::Tree::from_str(&text, &options).unwrap();
+    let mut again = vec![];
+    settings(copied.root(), &mut again);
+    assert_eq!(actual, again);
+}
+#[test]
+fn craft_svg_text_layout_imported_feature_controls_change_real_glyphs_and_one_undo() {
+    let mut source = doc();
+    let mut run = text("office AVATAR 1234");
+    run.smcp = true;
+    add(&mut source, shape(run));
+    let svg = crate::svg::export_embedded(&source).unwrap();
+    let (imported, notes) = crate::formats::svg::read(&svg, "Feature editing").unwrap();
+    assert!(notes.is_empty());
+    let mut s = crate::app::Studio::new();
+    s.show_welcome = false;
+    s.doc = imported;
+    let hit = s
+        .doc
+        .layers
+        .iter()
+        .enumerate()
+        .find_map(|(li, l)| {
+            l.kind
+                .shapes()
+                .into_iter()
+                .flatten()
+                .find(|n| matches!(n.geom, Geom::Text(_)))
+                .map(|n| (li, n.id))
+        })
+        .unwrap();
+    s.selection = vec![hit];
+    s.active_layer = Some(hit.0);
+    s.mark();
+    s.history.clear();
+    let before = crate::project::encode(&s.doc).unwrap();
+    let image = crate::compositor::export_png(&s.doc, 1).unwrap();
+    s.patch_features(&[(*b"smcp", 0), (*b"c2sc", 0)]);
+    assert_eq!(s.history.len(), 1);
+    let Geom::Text(run) = &s.doc.find_shape(hit.0, hit.1).unwrap().geom else {
+        panic!()
+    };
+    assert_eq!(crate::text::feature_value(run, 0, *b"smcp"), 0);
+    assert_eq!(crate::text::feature_value(run, 0, *b"c2sc"), 0);
+    let after = crate::project::encode(&s.doc).unwrap();
+    let changed = crate::compositor::export_png(&s.doc, 1).unwrap();
+    assert_ne!(image, changed);
+    let reopened = crate::project::decode(&after).unwrap();
+    assert_eq!(
+        changed,
+        crate::compositor::export_png(&reopened, 1).unwrap()
+    );
+    s.undo();
+    assert_eq!(crate::project::encode(&s.doc).unwrap(), before);
+    s.redo();
+    assert_eq!(crate::project::encode(&s.doc).unwrap(), after);
+}

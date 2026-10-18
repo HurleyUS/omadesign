@@ -89,6 +89,7 @@ tar = "0.4"
 # zwp_pointer_gestures_v1 so a trackpad pinch zooms the canvas.
 [patch.crates-io]
 resvg = { path = "vendor/resvg" }
+usvg = { path = "vendor/usvg" }
 # Wait for Wayland frame callbacks instead of polling occluded windows.
 eframe = { path = "vendor/eframe" }
 # Retain native clipboard key presses for modifier-aware application shortcuts.

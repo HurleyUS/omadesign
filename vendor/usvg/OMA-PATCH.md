@@ -1,0 +1,5 @@
+# OpenType feature settings
+
+Source: usvg 0.47.0, original crates.io archive SHA-256 `d46cf96c5f498d36b7a9693bc6a7075c0bb9303189d61b2249b0dc3d309c07de`. `UPSTREAM.json` records the original source checksums and published Git revision. Original dual MIT/Apache-2.0 licenses and copyright notices are retained.
+
+The upstream parser recognizes the property name `font-feature-settings` but never passes its values to Rustybuzz. Consequently standard SVG small caps, alternate glyphs and numeric features disagree with native text using the same font. The correction parses inherited CSS feature tags/values, keeps them in the font style/cache key, passes them to the existing shaper and fallback faces, and writes them when text is preserved. Explicit feature settings follow higher-level small-cap/kerning defaults. Invalid declarations inherit, while `normal`/`initial` reset. Unicode content, original font data, variation settings, glyph geometry, paint and the compositor stay on their existing routes. No package or dependency version changes.

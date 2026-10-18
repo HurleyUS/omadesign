@@ -929,9 +929,10 @@ impl Reader<'_> {
         }}}}
         let t=text.abs_transform();
         let mut run=TypeRun{content,font,px,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
-        if self.tree.fontdb().faces().any(|f| matches!(f.source,usvg::fontdb::Source::Binary(_))) {
+        if self.tree.fontdb().faces().any(|f| matches!(f.source,usvg::fontdb::Source::Binary(_))) || text.chunks().iter().flat_map(|c|c.spans()).any(|s|!s.font().features().is_empty()) {
         if let Some(layout) = crate::text::svg_type::layout_with_options(&run, self.options) {
             for (at, style) in layout.styles {
+                if !style.features.is_empty(){run.set_character_style(at,at+1,|s|s.features=style.features.clone());}
                 if let Some(font) = style.font.filter(|f| f.starts_with("omatype:")) {
                     run.set_character_style(at, at+1, |s| {s.font=Some(font.clone()); s.font_variations=style.font_variations.clone();});
                 }
