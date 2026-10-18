@@ -53,6 +53,10 @@ pub struct PositionedGlyph {
     pub cluster_advance: f32,
     /// Shaped cluster advance after textLength scaling and before authored spacing.
     pub cluster_width: f32,
+    /// Cluster advance before textLength, including original authored gaps.
+    pub unadjusted_advance: f32,
+    /// Whether vertical writing keeps this glyph upright.
+    pub vertical_upright: bool,
     /// Applied textLength glyph scale.
     pub length_scale: f32,
     /// Whether this script permits extra inter-character spacing.
@@ -174,6 +178,8 @@ pub struct Span {
     pub features: Vec<([u8; 4], u32)>,
     /// Letter spacing in the local text coordinate system.
     pub letter_spacing: f32,
+    /// Word spacing in the local text coordinate system.
+    pub word_spacing: f32,
     /// Resolved cumulative baseline shift in the local text coordinate system.
     pub baseline_shift: f32,
     /// Whether font-provided kerning applies to this span.
@@ -201,6 +207,7 @@ struct GlyphCluster {
     codepoint: char,
     width: f32,
     advance: f32,
+    unadjusted_advance: f32,
     length_scale: f32,
     ascent: f32,
     descent: f32,
@@ -261,6 +268,9 @@ pub(crate) fn layout_text(
         apply_writing_mode(text_node.writing_mode, &mut clusters);
         apply_letter_spacing(chunk, &mut clusters);
         apply_word_spacing(chunk, &mut clusters);
+        for cluster in &mut clusters {
+            cluster.unadjusted_advance = cluster.advance;
+        }
 
         apply_length_adjust(chunk, &mut clusters);
         let mut curr_pos = resolve_clusters_positions(
@@ -371,6 +381,8 @@ pub(crate) fn layout_text(
                         gc.glyphs.iter_mut().for_each(|pg| {
                             pg.text_index=char_offset+gc.byte_idx.code_point_at(&chunk.text);
                             pg.cluster_advance=gc.advance;pg.cluster_width=gc.width;pg.length_scale=gc.length_scale;
+                            pg.unadjusted_advance=gc.unadjusted_advance;
+                            pg.vertical_upright=text_node.writing_mode==WritingMode::TopToBottom && unicode_vo::char_orientation(gc.codepoint)==unicode_vo::Orientation::Upright;
                             pg.spacing_allowed=script_supports_letter_spacing(gc.codepoint.script());
                             pg.inline_direction=if length>0. {[axis.sx/length,axis.ky/length]}else{[1.,0.]};
                             pg.baseline=[origin.tx,origin.ty];
@@ -389,6 +401,7 @@ pub(crate) fn layout_text(
                     variations: span.font.variations.clone(),
                     features: span.font.features.clone(),
                     letter_spacing: span.letter_spacing,
+                    word_spacing: span.word_spacing,
                     baseline_shift: resolve_baseline_shift(
                         &span.baseline_shift,
                         font,
@@ -1240,7 +1253,7 @@ fn form_glyph_clusters(glyphs: &[Glyph], text: &str, font_size: f32) -> GlyphClu
             font: glyph.font.id,
             text: glyph.text.clone(),
             id: glyph.id,
-            text_index:0,cluster_advance:0.,cluster_width:0.,length_scale:1.,spacing_allowed:true,inline_direction:[1.,0.],baseline:[0.,0.],
+            text_index:0,cluster_advance:0.,cluster_width:0.,unadjusted_advance:0.,vertical_upright:false,length_scale:1.,spacing_allowed:true,inline_direction:[1.,0.],baseline:[0.,0.],
         });
 
         x += glyph.width as f32;
@@ -1258,6 +1271,7 @@ fn form_glyph_clusters(glyphs: &[Glyph], text: &str, font_size: f32) -> GlyphClu
         codepoint: byte_idx.char_from(text),
         width,
         advance: width,
+        unadjusted_advance: width,
         length_scale: 1.,
         ascent: font.ascent(font_size),
         descent: font.descent(font_size),

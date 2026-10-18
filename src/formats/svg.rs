@@ -941,6 +941,7 @@ impl Reader<'_> {
 
         let t=text.abs_transform();
         let mut run=TypeRun{content,font,px,manual_kern,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
+        crate::text::svg_type::restore_scales(&mut run)?;
         crate::text::svg_type::restore_offsets(&mut run)?;
         if let Some(layout) = crate::text::svg_type::layout_with_options(&run, self.options) {
             for (at, style) in &layout.styles {

@@ -943,4 +943,17 @@ mod tests {
         optical_tests::check(&studio,"optical-native-input");let after=crate::project::encode(&studio.doc).unwrap();studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
     }
 
+    #[test]
+    fn character_spacing_imported_svg_scales_native_keys_change_real_axes_and_undo(){
+        use crate::text::svg_type::{metric_tests,pair_tests,scale_tests};
+        let ctx=egui::Context::default();ctx.enable_accesskit();crate::ui::theme::apply(&ctx);
+        let source=pair_tests::source(r#"<text x="25" y="80" font-family="MetricFace" font-size="40" style="font-kerning:none;font-feature-settings:'liga' 0">AVWaTo</text>"#);
+        let mut studio=metric_tests::studio_for(&source);let before=crate::project::encode(&studio.doc).unwrap();let original=studio.selected_type().unwrap().svg_text.clone();let pixels=crate::compositor::export_png(&studio.doc,1).unwrap();
+        frame(&ctx,&mut studio,vec![]);let output=tab_to(&ctx,&mut studio,"Vertical scale");assert_focused(&ctx,&output,"Vertical scale");replace(&ctx,&mut studio,"80");frame(&ctx,&mut studio,key(Key::Enter,Modifiers::NONE));
+        assert!(studio.selected_character_metrics().iter().all(|m|m.vscale==Some(80.)&&m.px==Some(40.)));assert_ne!(crate::compositor::export_png(&studio.doc,1).unwrap(),pixels);assert_eq!(studio.history.len(),1);
+        let vertical=crate::project::encode(&studio.doc).unwrap();let output=tab_to(&ctx,&mut studio,"Horizontal scale");assert_focused(&ctx,&output,"Horizontal scale");replace(&ctx,&mut studio,"125");frame(&ctx,&mut studio,key(Key::Enter,Modifiers::NONE));
+        assert!(studio.selected_character_metrics().iter().all(|m|m.hscale==Some(125.)&&m.vscale==Some(80.)&&m.px==Some(40.)));assert_eq!(studio.selected_type().unwrap().svg_text,original);assert_eq!(studio.history.len(),2);
+        scale_tests::check(&studio,"scale-native-input");let after=crate::project::encode(&studio.doc).unwrap();studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),vertical);studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);studio.redo();studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
+    }
+
 }

@@ -21,8 +21,10 @@ pub(super) fn spans(
         })
         .collect();
     for at in run.spans.iter().flat_map(|s|[s.start,s.end]).filter(|&at|at>0&&at<count) {
-        let mode=|index|run.spans.iter().find(|s|s.start<=index&&index<s.end).and_then(|s|s.kerning);
-        if mode(at-1)!=mode(at) && [mode(at-1),mode(at)].contains(&Some(crate::geom::KernMode::Optical)) && original.is_some_and(|l|l.clusters.iter().any(|r|r.start<at&&at<r.end)) {pairs.push(at);}
+        let style=|index|run.spans.iter().find(|s|s.start<=index&&index<s.end);
+        let mode=|index|style(index).and_then(|s|s.kerning);
+        let scale=|index|style(index).map(|s|(s.hscale,s.vscale)).unwrap_or_default();
+        if (mode(at-1)!=mode(at) && [mode(at-1),mode(at)].contains(&Some(crate::geom::KernMode::Optical)) || scale(at-1)!=scale(at)) && original.is_some_and(|l|l.clusters.iter().any(|r|r.start<at&&at<r.end)) {pairs.push(at);}
     }
     let mut result = Vec::new();
     for span in run.character_style_runs(start, end) {

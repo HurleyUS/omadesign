@@ -17,13 +17,17 @@ pub(crate) mod pair_tests;
 mod fallback_tests;
 #[cfg(test)]
 pub(crate) mod optical_tests;
+#[cfg(test)]
+pub(crate) mod scale_tests;
 mod positioning;
 mod optical;
+mod scaling;
 mod fonts;
 pub(crate) use fonts::family_css;
 pub(super) use fonts::{family_faces,map_families,map_flow_families};
 pub(crate) use fonts::{references,project_families};
 pub(crate) use positioning::{pair_kerning,restore_offsets};
+pub(crate) use scaling::restore as restore_scales;
 pub(crate) use positioning::leading;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -127,6 +131,8 @@ struct FlowSource {
 struct GlyphMetric {
     index:usize,node:usize,chunk:usize,font:String,id:u16,px:f32,point:super::variations::FontVariations,
     transform:Transform,advance:f32,width:f32,allowed:bool,inline:Pt,baseline:Pt,
+    length_scale:f32,unadjusted_advance:f32,upright:bool,letter_spacing:f32,word_spacing:f32,
+    variations:Vec<([u8;4],f32)>,auto_opsz:bool,
 }
 
 pub(crate) struct Layout {
@@ -500,7 +506,7 @@ pub(crate) fn capture(
         .and_then(|value| serde_json::from_str::<FlowSource>(value).ok())
     {
         root = saved.root;
-        if let TextNode::Element{attributes,..}=&mut root {if let Some(value)=node.attribute(positioning::META){attributes.insert(positioning::META.into(),value.into());}}
+        if let TextNode::Element{attributes,..}=&mut root {for key in [positioning::META,scaling::META] {if let Some(value)=node.attribute(key){attributes.insert(key.into(),value.into());}}}
         content = saved.content;
         let count = content.chars().count();
         manual_kern = saved.manual_kern.into_iter().filter(|(at,value)| *at > 0 && *at < count && value.is_finite()).collect();
@@ -694,7 +700,7 @@ fn write_nodes(
                 return;
             }
             if font_bound {out.push_str(&escape(&run.content[super::char_to_byte(&run.content,a)..super::char_to_byte(&run.content,b)]));return;}
-            for (span, split_pair) in positioning::spans(run, a, b, metrics) {
+            for (span, split_pair) in positioning::spans(run, a, b, metrics).into_iter().flat_map(|(span,split)|scaling::spans(span,metrics).into_iter().map(move |span|(span,split))) {
                 let inherited = metrics.and_then(|layout|layout.styles.iter().find(|(at,_)|*at==span.start)).map(|(_,style)|style);
                 let text = &run.content[super::char_to_byte(&run.content, span.start)
                     ..super::char_to_byte(&run.content, span.end)];
@@ -746,6 +752,9 @@ fn write_nodes(
                         crate::geom::Leading::Auto(value) => format!("{value}%"),
                         crate::geom::Leading::Fixed(value) => format!("{value}px"),
                     }));
+                }
+                if span.hscale.is_some() || span.vscale.is_some() {
+                    attrs.push_str(&format!(" {}=\"{}\"",scaling::MARKER,escape(&scaling::marker(&span))));
                 }
                 if !css.is_empty() { attrs.push_str(&format!(" style=\"{}\"", escape(&css))); }
                 if attrs.is_empty() {
@@ -1029,10 +1038,10 @@ fn bind_fonts(run: &TypeRun, options: &mut usvg::Options<'_>) {
 }
 
 fn plain_fragment(run: &TypeRun, range: std::ops::Range<usize>) -> String {
-    let metrics=(run.manual_kern.values().any(|v|*v!=0.) || run.spans.iter().any(|s|s.tracking.is_some()||s.baseline_shift.is_some()||s.kerning.is_some())).then(||{
+    let metrics=(run.manual_kern.values().any(|v|*v!=0.) || run.spans.iter().any(|s|s.tracking.is_some()||s.baseline_shift.is_some()||s.kerning.is_some()||s.hscale.is_some()||s.vscale.is_some())).then(||{
         let mut original=run.clone();
         original.manual_kern.clear();
-        for style in &mut original.spans {style.tracking=None;style.baseline_shift=None;style.kerning=None;}
+        for style in &mut original.spans {style.tracking=None;style.baseline_shift=None;style.kerning=None;style.hscale=None;style.vscale=None;}
         layout(&original)
     }).flatten();
     let mut out = String::new();
@@ -1113,6 +1122,7 @@ pub fn source(run: &TypeRun) -> Option<String> {
         ],
         svg.viewport,
     );
+    let source=scaling::apply(run,source,0,&run.content)?;
     positioning::pairs(run, source, 0, &run.content)
 }
 
@@ -1467,7 +1477,8 @@ fn layout_source(run: &TypeRun, source: String, content: &str) -> Option<Arc<Lay
         return Some(found);
     }
     let tree = usvg::Tree::from_str(&renderer_source(&source), &options_for(run)).ok()?;
-    let result = Arc::new(layout_tree(run, content, tree, false));
+    let scales=scaling::resolved(&source);
+    let result = Arc::new(layout_tree(run, content, tree, false,&scales));
     let mut cache = cache.lock().unwrap();
     if cache.len() >= 64 { cache.clear(); }
     cache.insert(key, result.clone());
@@ -1481,10 +1492,11 @@ pub(crate) fn layout_with_options(run: &TypeRun, options: &usvg::Options<'_>) ->
     resolved.fontdb=options.fontdb.clone();
     bind_fonts(run,&mut resolved);
     let source = renderer_source(&source(run)?);
-    Some(layout_tree(run, &run.content, usvg::Tree::from_str(&source, &resolved).ok()?, true))
+    let scales=scaling::resolved(&source);
+    Some(layout_tree(run, &run.content, usvg::Tree::from_str(&source, &resolved).ok()?, true,&scales))
 }
 
-fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -> Layout {
+fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, scales:&[scaling::Scale]) -> Layout {
     let mut text_nodes = Vec::new();
     texts(tree.root(), &mut text_nodes);
     let order = visual_characters(&text_nodes, content);
@@ -1542,7 +1554,9 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
                             if span.font_optical_sizing==usvg::FontOpticalSizing::Auto && !values.iter().any(|(tag,_)|*tag==*b"opsz") && let Some(axis)=face.variation_axes().into_iter().find(|a|a.tag.to_bytes()==*b"opsz") {values.push((*b"opsz",glyph.font_size().clamp(axis.min_value,axis.max_value)));}
                             Some((face.units_per_em() as f32,super::variations::FontVariations::new(values).ok()?))
                         }).flatten().unwrap_or((1000.,Default::default()));
-                        glyph_metrics.push(GlyphMetric{index:character.index,node:node_index,chunk:character.chunk,font:font.clone(),id:glyph.id.0,px:glyph.font_size(),point,transform:glyph.transform().pre_scale(units,units),advance:glyph.cluster_advance,width:glyph.cluster_width,allowed:glyph.spacing_allowed,inline:Pt::new(glyph.inline_direction[0],glyph.inline_direction[1]),baseline:Pt::new(glyph.baseline[0],glyph.baseline[1])});
+                        let compensation=scales.iter().find(|s|s.contains(character.index));
+                        let font_factor=compensation.map_or(1.,|s|s.font_factor);
+                        glyph_metrics.push(GlyphMetric{index:character.index,node:node_index,chunk:character.chunk,font:font.clone(),id:glyph.id.0,px:glyph.font_size()/font_factor,point,transform:glyph.transform().pre_scale(units,units),advance:glyph.cluster_advance,width:glyph.cluster_width,allowed:glyph.spacing_allowed,inline:Pt::new(glyph.inline_direction[0],glyph.inline_direction[1]),baseline:Pt::new(glyph.baseline[0],glyph.baseline[1]),length_scale:glyph.length_scale,unadjusted_advance:glyph.unadjusted_advance,upright:glyph.vertical_upright,letter_spacing:span.letter_spacing,word_spacing:span.word_spacing,variations:span.variations.iter().map(|v|(v.tag,v.value)).collect(),auto_opsz:span.font_optical_sizing==usvg::FontOpticalSizing::Auto});
                     }
                 }
                 let chars: Vec<_> = glyph.text.chars().filter(|c| !bidi_control(*c)).collect();
@@ -1589,6 +1603,10 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
                     })
                     .unwrap_or(1000.);
                 let scale=glyph.transform().get_scale();
+                let compensation=scales.iter().find(|s|s.contains(at));
+                let font_factor=compensation.map_or(1.,|s|s.font_factor);
+                let inline_factor=compensation.map_or(1.,|s|s.inline_factor);
+                let base_px=glyph.font_size()/font_factor;
                 for i in 0..chars.len() {
                     styles.push((
                         at + i,
@@ -1596,12 +1614,12 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
                             font: font.clone(),
                             features: span.features.clone(),
                             font_variations: (!axes.is_empty() && font.as_ref().is_some_and(|f|f.starts_with("omatype:"))).then(|| super::variations::FontVariations::new(span.variations.iter().filter(|v|axes.contains(&v.tag)).map(|v|(v.tag,v.value)).collect()).ok()).flatten(),
-                            px: Some(glyph.font_size()),
-                            tracking: Some(span.letter_spacing / glyph.font_size() * 1000.),
+                            px: Some(base_px),
+                            tracking: Some(span.letter_spacing * inline_factor / base_px * 1000.),
                             baseline_shift: Some(span.baseline_shift),
                             kerning: Some(if span.features.iter().rev().find(|(tag,_)|*tag==*b"kern").map_or(span.apply_kerning,|(_,value)|*value!=0) {crate::geom::KernMode::Metrics} else {crate::geom::KernMode::None}),
-                            hscale: Some(scale.0 / (glyph.font_size()/units) * 100.),
-                            vscale: Some(scale.1 / (glyph.font_size()/units) * 100.),
+                            hscale: Some(scale.0 / (base_px/units) * 100.),
+                            vscale: Some(scale.1 / (base_px/units) * 100.),
                             fill: fill.clone(),
                             ..Default::default()
                         },
@@ -1674,6 +1692,7 @@ fn flow_source_root(run: &TypeRun) -> TextNode {
         return svg.root.clone();
     }
     let mut original=run.clone();original.manual_kern.clear();
+    for span in &mut original.spans {span.hscale=None;span.vscale=None;}
     let fragment = plain_fragment(&original, 0..run.content.chars().count());
     let Ok(xml) = roxmltree::Document::parse(&fragment) else {
         return svg.root.clone();
@@ -1765,6 +1784,7 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
                     svg.viewport,
                 );
             let content=&run.content[super::char_to_byte(&run.content,start)..super::char_to_byte(&run.content,end)];
+            let source=scaling::apply(run,source,start,content)?;
             let source=positioning::pairs(run,source,start,content)?;
             layout_source(run,source,content)
         };
