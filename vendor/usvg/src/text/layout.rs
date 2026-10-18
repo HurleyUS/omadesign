@@ -1016,9 +1016,9 @@ fn apply_length_adjust(chunk: &TextChunk, clusters: &mut [GlyphCluster]) {
                     indices.push(i);
                     width += cluster.advance;
                 } else if let Some(parent) = span
-                    .text_length_ancestors
+                    .text_length_scopes
                     .iter()
-                    .position(|id| *id == owner)
+                    .position(|(id, _, _)| *id == owner)
                 {
                     if let Some(child) = parent
                         .checked_sub(1)
