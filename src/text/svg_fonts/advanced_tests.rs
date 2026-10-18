@@ -49,6 +49,17 @@ fn check(mut d: Document, name: &str) -> (Document, String) {
     std::fs::write(out.join("editable.svg"), &report.svg).unwrap();
     std::fs::write(out.join("native.png"), expected.encode_png().unwrap()).unwrap();
     std::fs::write(out.join("source.oma"), &before).unwrap();
+    let xml = roxmltree::Document::parse(&report.svg).unwrap();
+    let mut options = crate::text::svg_type::options();
+    crate::text::webfonts::load(&xml, &mut options).unwrap();
+    let tree = usvg::Tree::from_str(&report.svg, &options).unwrap();
+    let mut direct = tiny_skia::Pixmap::new(760, 400).unwrap();
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::identity(),
+        &mut direct.as_mut(),
+    );
+    std::fs::write(out.join("direct-parser.png"), direct.encode_png().unwrap()).unwrap();
     let (imported, notes) = crate::formats::svg::read(&report.svg, "Advanced SVG type").unwrap();
     assert!(notes.is_empty(), "{name}: {notes:?}");
     let actual = crate::compositor::render_export(&imported, 1).unwrap();

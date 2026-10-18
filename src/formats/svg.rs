@@ -940,7 +940,7 @@ impl Reader<'_> {
         crate::text::webfonts::bind(run.svg_text.as_mut().unwrap(), self.tree.fontdb());
         }
         run.contours=crate::text::shape(&run);
-        let fill=text.chunks().iter().flat_map(|c|c.spans()).next().and_then(|s|s.fill()).map(|f|paint(f.paint(),f.opacity().get(),text.abs_transform(),Geom::Text(run.clone()).bbox()).unwrap_or_else(||{warn(&mut self.warnings,"SVG type source paint retained; changing object paint replaces it.".into());Fill::Solid(Rgba::BLACK)})).unwrap_or(Fill::None);
+        let fill=text.chunks().iter().flat_map(|c|c.spans()).next().and_then(|s|s.fill()).map(|f|self.paint(f.paint(),f.opacity().get(),text.abs_transform(),Geom::Text(run.clone()).bbox()).unwrap_or_else(||{warn(&mut self.warnings,"SVG type source paint retained; changing object paint replaces it.".into());Fill::Solid(Rgba::BLACK)})).unwrap_or(Fill::None);
         run.svg_text.as_mut().unwrap().base_fill=fill.clone();
         let mut shape=Shape::new(Geom::Text(run),Style{fill,stroke:None});shape.name=self.name(text.id(),"Text");
         let mut layer=Layer::vector(shape.name.clone());layer.parent=parent;self.meta(&mut layer,text.id());layer.kind.shapes_mut().unwrap().push(shape);self.doc.layers.push(layer);Ok(true)

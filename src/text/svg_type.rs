@@ -628,6 +628,7 @@ fn write_nodes(
     range: std::ops::Range<usize>,
     out: &mut String,
     root: bool,
+    font_bound: bool,
 ) {
     match node {
         TextNode::Characters { count } => {
@@ -639,6 +640,7 @@ fn write_nodes(
             if a >= b {
                 return;
             }
+            if font_bound {out.push_str(&escape(&run.content[super::char_to_byte(&run.content,a)..super::char_to_byte(&run.content,b)]));return;}
             for span in run.character_style_runs(a, b) {
                 let text = &run.content[super::char_to_byte(&run.content, span.start)
                     ..super::char_to_byte(&run.content, span.end)];
@@ -697,9 +699,19 @@ fn write_nodes(
             } else {
                 "tspan"
             };
+            let count=children.iter().map(|n|if let TextNode::Characters{count}=n {Some(*count)} else {None}).collect::<Option<Vec<_>>>().and_then(|counts|counts.into_iter().try_fold(0usize,usize::checked_add));
+            let font_override=count.filter(|count|*count>0 && *cursor>=range.start && cursor.checked_add(*count).is_some_and(|end|end<=range.end)).and_then(|count|{
+                let spans=run.character_style_runs(*cursor,*cursor+count);
+                if spans.len()!=1{return None;}let style=spans[0].clone();
+                if style.font.is_none() && style.font_variations.is_none(){return None;}
+                let mut rest=style.clone();rest.start=0;rest.end=0;rest.font=None;rest.font_variations=None;
+                (rest==crate::geom::CharSpan::default()).then_some(style)
+            });
             out.push_str(&format!("<{name}"));
             let mut css = String::new();
             for (key, value) in attributes {
+                if font_override.as_ref().is_some_and(|s| s.font.is_some()) && matches!(key.as_str(),"font-family"|"font-weight"|"font-style") {continue;}
+                if font_override.as_ref().is_some_and(|s| s.font_variations.is_some()) && key=="font-variation-settings" {continue;}
                 if root
                     && overrides_font(run)
                     && matches!(key.as_str(), "font-family" | "font-weight" | "font-style")
@@ -750,16 +762,20 @@ fn write_nodes(
                 }
                 out.push_str(&format!(" {key}=\"{}\"", escape(&value)));
             }
-            if root && overrides_font(run) {
+            if root && overrides_font(run) && !font_override.as_ref().is_some_and(|s|s.font.is_some()) {
                 out.push_str(&font_attributes(&run.font));
                 if !run.font_variations.is_empty() { css.push_str(&format!("font-variation-settings:{};", super::variations::css(&run.font_variations))); }
+            }
+            if let Some(style)=&font_override {
+                if let Some(font)=&style.font {out.push_str(&font_attributes(font));}
+                if style.font_variations.is_some(){let axes=super::variations::at(run,*cursor);css.push_str(&format!("font-variation-settings:{};",if axes.is_empty(){"normal".into()}else{super::variations::css(&axes)}));}
             }
             if !css.is_empty() {
                 out.push_str(&format!(" style=\"{}\"", escape(&css)));
             }
             out.push('>');
             for child in children {
-                write_nodes(child, run, cursor, range.clone(), out, false);
+                write_nodes(child, run, cursor, range.clone(), out, false, font_override.is_some());
             }
             out.push_str(&format!("</{name}>"));
         }
@@ -929,6 +945,7 @@ fn plain_fragment(run: &TypeRun, range: std::ops::Range<usize>) -> String {
         range,
         &mut out,
         true,
+        false,
     );
     out
 }
