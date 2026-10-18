@@ -47,15 +47,19 @@ pub(crate) fn start(ctx: &egui::Context, studio: &mut Studio, kind: Kind) {
 pub(super) fn menu(ui: &mut Ui, studio: &Studio, owner: Option<u64>) -> Option<Kind> {
     let mut selected = None;
     for kind in [
-        owner.map(Kind::Down),
-        owner.map(Kind::Group),
+        studio.layer_merge_primary(owner),
         Some(Kind::Visible),
         Some(Kind::Flatten),
     ]
     .into_iter()
     .flatten()
     {
-        let enabled = !is_open(ui.ctx()) && studio.can_layer_merge(kind);
+        let action = if ui.input(|input| input.modifiers.alt) {
+            kind.stamp()
+        } else {
+            kind
+        };
+        let enabled = !is_open(ui.ctx()) && studio.can_layer_merge(action);
         let mut button = egui::Button::new(kind.name());
         if studio.persona == crate::tools::Persona::Pixel {
             if kind == Kind::Visible {
@@ -73,7 +77,7 @@ pub(super) fn menu(ui: &mut Ui, studio: &Studio, owner: Option<u64>) -> Option<K
         let response = ui.add_enabled(enabled, button);
         let response = super::agent::named(ui, response, kind.name());
         if response.clicked() {
-            selected = Some(kind);
+            selected = Some(action);
         }
     }
     if selected.is_some() {

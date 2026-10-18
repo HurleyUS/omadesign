@@ -29,6 +29,8 @@ impl Shortcut {
             Export => ("Ctrl+E", "Export PNG"),
             MergeActive => ("Ctrl+E","Merge Down"),
             MergeVisible => ("Ctrl+Shift+E","Merge Visible"),
+            StampActive => ("Ctrl+Alt+E","Stamp Down"),
+            StampVisible => ("Ctrl+Alt+Shift+E","Stamp Visible"),
             ToggleLayerClipping => ("Ctrl+Alt+G", "Toggle clipping mask"),
             Undo => ("Ctrl+Z", "Undo"),
             Redo if shift => ("Ctrl+Shift+Z", "Redo"),
@@ -165,8 +167,8 @@ impl Studio {
             }
             seen.push(shortcut);
             let (mut keys, mut label) = shortcut.hint(mods.shift);
-            if shortcut==Shortcut::MergeActive {
-                if let Some(kind)=self.pixel_merge_shortcut(false) {label=kind.name();}
+            if matches!(shortcut,Shortcut::MergeActive|Shortcut::StampActive) {
+                if let Some(kind)=self.pixel_merge_shortcut(false) {label=if shortcut==Shortcut::StampActive {kind.stamp()} else {kind}.name();}
             }
             if shortcut == Shortcut::Duplicate
                 && self.persona == Persona::Pixel

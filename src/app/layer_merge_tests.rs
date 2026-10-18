@@ -513,3 +513,220 @@ fn craft_merge_cancel_refusal_and_stale_result_preserve_original_and_redo_withou
     s.doc.layers[0].locked = true;
     assert!(!s.can_layer_merge(Kind::Down(id)));
 }
+
+#[test]
+fn craft_selected_merge_keeps_unselected_rows_top_identity_and_one_undo() {
+    let mut s = fixture();
+    let mut middle = Layer::placed_raster(
+        "Unselected",
+        Pixels::from_rgba(1, 1, vec![0, 255, 0, 255]).unwrap(),
+        Pt::new(12., 8.),
+        Pt::splat(1.),
+    );
+    middle.locked = true;
+    let original_middle = serde_json::to_value(&middle).unwrap();
+    s.doc.layers.insert(1, middle);
+    s.select_layer_rows(0, false, false);
+    s.select_layer_rows(2, false, true);
+    assert_eq!(s.pixel_merge_shortcut(false), Some(Kind::Selected));
+    let before = state(&s);
+    let expected = picture(&s.doc);
+    let top = s.doc.layers[2].id;
+    run(&mut s, Kind::Selected);
+    assert_eq!(s.doc.layers.len(), 2);
+    assert_eq!(
+        serde_json::to_value(&s.doc.layers[0]).unwrap(),
+        original_middle
+    );
+    assert_eq!(s.doc.layers[1].id, top);
+    assert_eq!(s.doc.layers[1].name, "Upper");
+    assert_eq!(picture(&s.doc), expected);
+    undo_reopen(&mut s, &before);
+}
+
+#[test]
+fn craft_stamp_visible_copies_current_pixels_keeps_originals_and_selects_new_layer() {
+    let mut s = fixture();
+    s.doc.layers[0].locked = true;
+    let before = state(&s);
+    let original = serde_json::to_value(&s.doc.layers).unwrap();
+    let expected = picture(&s.doc);
+    run(&mut s, Kind::StampVisible);
+    assert_eq!(s.doc.layers.len(), 3);
+    assert_eq!(s.active_layer, Some(2));
+    assert_eq!(serde_json::to_value(&s.doc.layers[..2]).unwrap(), original);
+    let mut isolated = s.doc.clone();
+    isolated.layers = vec![s.doc.layers[2].clone()];
+    assert_eq!(picture(&isolated), expected);
+    assert!(!isolated.layers[0].locked);
+    undo_reopen(&mut s, &before);
+}
+
+#[test]
+fn craft_stamp_down_keeps_upper_source_and_active_owner_while_editing_lower() {
+    let mut s = fixture();
+    let before = state(&s);
+    let expected = picture(&s.doc);
+    let upper = serde_json::to_value(&s.doc.layers[1]).unwrap();
+    let lower = s.doc.layers[0].id;
+    let upper_id = s.doc.layers[1].id;
+    run(&mut s, Kind::StampDown(upper_id));
+    assert_eq!(s.doc.layers.len(), 2);
+    assert_eq!(s.doc.layers[0].id, lower);
+    assert_eq!(serde_json::to_value(&s.doc.layers[1]).unwrap(), upper);
+    assert_eq!(s.active_layer, Some(1));
+    let mut isolated = s.doc.clone();
+    isolated.layers.truncate(1);
+    assert_eq!(picture(&isolated), expected);
+    undo_reopen(&mut s, &before);
+}
+
+#[test]
+fn craft_stamp_selected_native_hdr_cmyka_clipping_keeps_all_original_samples() {
+    for cmyk in [false, true] {
+        let mut s = fixture();
+        s.doc.width = 1.;
+        s.doc.height = 1.;
+        s.doc.color.depth = Depth::F32;
+        let pixel = |values: Vec<f32>| {
+            if cmyk {
+                Pixels::from_cmyk(1, 1, Depth::F32, values, vec![], 0).unwrap()
+            } else {
+                Pixels::from_samples(1, 1, Depth::F32, values).unwrap()
+            }
+        };
+        let lower = if cmyk {
+            vec![0.125, 0.25, 0.375, 0.5, 0.5]
+        } else {
+            vec![1.25, -0.125, 0.5, 0.5]
+        };
+        let upper = if cmyk {
+            vec![0.75, 0.625, 0.5, 0.375, 0.75]
+        } else {
+            vec![2., -0.5, 0.25, 0.75]
+        };
+        s.doc.color.model = if cmyk {
+            crate::deep_color::cms::Model::Cmyk
+        } else {
+            crate::deep_color::cms::Model::Rgb
+        };
+        s.doc.layers = vec![
+            Layer::placed_raster("Base", pixel(lower), Pt::ZERO, Pt::splat(1.)),
+            Layer::placed_raster("Clip", pixel(upper), Pt::ZERO, Pt::splat(1.)),
+        ];
+        s.doc.layers[1].clipped = true;
+        s.select_layer_rows(0, false, false);
+        s.select_layer_rows(1, true, false);
+        let before = state(&s);
+        let sources = serde_json::to_value(&s.doc.layers).unwrap();
+        run(&mut s, Kind::StampSelected);
+        assert_eq!(s.doc.layers.len(), 3);
+        assert_eq!(serde_json::to_value(&s.doc.layers[..2]).unwrap(), sources);
+        let mut isolated = s.doc.clone();
+        isolated.layers = vec![s.doc.layers[2].clone()];
+        let actual = crate::deep_color::composite(&isolated, 1).unwrap();
+        if cmyk {
+            for (&a, b) in actual
+                .native
+                .as_ref()
+                .unwrap()
+                .cmyk
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip([0.59375, 0.53125, 0.46875, 0.40625, 0.5])
+            {
+                assert!((a - b).abs() < 2e-7);
+            }
+        } else {
+            for (a, b) in actual
+                .sample(0)
+                .into_iter()
+                .zip([1.8125, -0.40625, 0.3125, 0.5])
+            {
+                assert!((a - b).abs() < 2e-7);
+            }
+        }
+        undo_reopen(&mut s, &before);
+    }
+}
+
+#[test]
+fn craft_stamp_and_selected_merge_refuse_stale_locked_and_cancelled_results_atomically() {
+    let mut s = fixture();
+    s.select_layer_rows(0, false, false);
+    s.select_layer_rows(1, true, false);
+    let before = state(&s);
+    let prepared = s
+        .capture_layer_merge(Kind::Selected)
+        .unwrap()
+        .render(&crate::ml::NoProgress)
+        .unwrap();
+    s.activate_layer_tree(1);
+    assert!(
+        s.apply_layer_merge(prepared)
+            .unwrap_err()
+            .contains("two sibling")
+    );
+    assert_eq!(state(&s), before);
+    assert_eq!(s.history.len(), 0);
+    s.select_layer_rows(0, false, false);
+    s.select_layer_rows(1, true, false);
+    s.doc.layers[0].locked = true;
+    assert!(s.capture_layer_merge(Kind::Selected).is_err());
+    assert!(s.capture_layer_merge(Kind::StampSelected).is_ok());
+    let before = state(&s);
+    let progress = crate::ml::NoProgress;
+    let request = s.capture_layer_merge(Kind::StampVisible).unwrap();
+    let mut prepared = request.render(&progress).unwrap();
+    prepared.target.document.push_str("stale");
+    assert!(s.apply_layer_merge(prepared).is_err());
+    assert_eq!(state(&s), before);
+    struct Cancel;
+    impl crate::ml::Progress for Cancel {
+        fn report(&self, _: &str, _: usize, _: usize) {}
+        fn cancelled(&self) -> bool {
+            true
+        }
+    }
+    assert!(
+        s.capture_layer_merge(Kind::StampVisible)
+            .unwrap()
+            .render(&Cancel)
+            .is_err()
+    );
+    assert_eq!(state(&s), before);
+    assert_eq!(s.history.len(), 0);
+}
+
+#[test]
+fn craft_visible_merge_and_stamp_do_not_reveal_hidden_clipping_followers() {
+    let mut s = fixture();
+    s.doc.layers[0].visible = false;
+    s.doc.layers[1].clipped = true;
+    for name in ["Visible one", "Visible two"] {
+        s.doc.layers.push(Layer::placed_raster(
+            name,
+            Pixels::from_rgba(1, 1, vec![50, 100, 150, 128]).unwrap(),
+            Pt::new(8., 6.),
+            Pt::splat(1.),
+        ));
+    }
+    s.activate_layer_tree(3);
+    let expected = picture(&s.doc);
+    let before = state(&s);
+    run(&mut s, Kind::Visible);
+    assert_eq!(s.doc.layers.len(), 3);
+    assert!(!s.doc.layers[0].visible);
+    assert!(s.doc.layers[1].clipped);
+    assert_eq!(picture(&s.doc), expected);
+    undo_reopen(&mut s, &before);
+    s.undo();
+    s.history.clear();
+    let original = serde_json::to_value(&s.doc.layers).unwrap();
+    run(&mut s, Kind::StampVisible);
+    assert_eq!(serde_json::to_value(&s.doc.layers[..4]).unwrap(), original);
+    let mut isolated = s.doc.clone();
+    isolated.layers = vec![s.doc.layers[4].clone()];
+    assert_eq!(picture(&isolated), expected);
+}

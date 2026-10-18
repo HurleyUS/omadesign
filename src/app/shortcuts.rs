@@ -49,12 +49,14 @@ pub(super) enum Shortcut {
     ToggleQuickMask,
     MergeActive,
     MergeVisible,
+    StampActive,
+    StampVisible,
     ToggleLayerClipping,
 }
 
 impl Shortcut {
     pub(super) fn available(self, persona: Persona) -> bool {
-        if matches!(self,Self::MergeActive|Self::MergeVisible|Self::ToggleLayerClipping) {return persona==Persona::Pixel;}
+        if matches!(self,Self::MergeActive|Self::MergeVisible|Self::StampActive|Self::StampVisible|Self::ToggleLayerClipping) {return persona==Persona::Pixel;}
         if self == Self::ToggleQuickMask {return persona == Persona::Pixel;}
         if self == Self::ToolPoints { return true; }
         if self == Self::NewPixelLayer { return persona == Persona::Pixel; }
@@ -110,8 +112,8 @@ pub(super) fn key_shortcut_for_persona(key:Key,mods:Modifiers,persona:Persona)->
     if persona==Persona::Pixel && key==Key::G && mods.alt && !mods.shift && (mods.ctrl||mods.command||mods.mac_cmd) {
         return Some(Shortcut::ToggleLayerClipping);
     }
-    if persona==Persona::Pixel && key==Key::E && !mods.alt && (mods.ctrl||mods.command||mods.mac_cmd) {
-        return Some(if mods.shift {Shortcut::MergeVisible} else {Shortcut::MergeActive});
+    if persona==Persona::Pixel && key==Key::E && (mods.ctrl||mods.command||mods.mac_cmd) {
+        return Some(match (mods.alt,mods.shift) {(true,true)=>Shortcut::StampVisible,(true,false)=>Shortcut::StampActive,(false,true)=>Shortcut::MergeVisible,(false,false)=>Shortcut::MergeActive});
     }
     key_shortcut(key,mods)
 }
@@ -443,9 +445,9 @@ impl Studio {
                 self.begin_place();
             }
             Shortcut::New => self.new_tab(),
-            Shortcut::MergeActive|Shortcut::MergeVisible => {
-                if let Some(kind)=self.pixel_merge_shortcut(shortcut==Shortcut::MergeVisible) {
-                    crate::ui::layer_merge::start(ctx,self,kind);
+            Shortcut::MergeActive|Shortcut::MergeVisible|Shortcut::StampActive|Shortcut::StampVisible => {
+                if let Some(kind)=self.pixel_merge_shortcut(matches!(shortcut,Shortcut::MergeVisible|Shortcut::StampVisible)) {
+                    crate::ui::layer_merge::start(ctx,self,if matches!(shortcut,Shortcut::StampActive|Shortcut::StampVisible) {kind.stamp()} else {kind});
                 }
             }
             Shortcut::ToggleLayerClipping => {

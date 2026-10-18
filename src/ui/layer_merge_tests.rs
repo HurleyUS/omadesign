@@ -26,6 +26,9 @@ impl Seat {
         self.output.clone()
     }
     fn click(&mut self, s: &mut Studio, name: &str) {
+        self.click_mods(s, name, Modifiers::NONE);
+    }
+    fn click_mods(&mut self, s: &mut Studio, name: &str, modifiers: Modifiers) {
         for _ in 0..3 {
             self.frame(s, vec![]);
         }
@@ -35,12 +38,13 @@ impl Seat {
             self.frame(
                 s,
                 vec![
+                    Event::ModifiersChanged(modifiers),
                     Event::PointerMoved(p),
                     Event::PointerButton {
                         pos: p,
                         button: egui::PointerButton::Primary,
                         pressed,
-                        modifiers: Modifiers::NONE,
+                        modifiers,
                     },
                 ],
             );
@@ -266,4 +270,87 @@ fn craft_merge_actual_cancel_and_stale_document_retire_worker_before_commit() {
         assert_eq!(state(&s), before);
         assert_eq!(s.history.len(), 0);
     }
+}
+
+#[test]
+fn craft_selected_merge_native_rows_menu_and_undo_reopen_use_actual_selection() {
+    let mut s = fixture();
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Lower");
+    seat.click_mods(&mut s, "Upper", Modifiers::SHIFT);
+    assert_eq!(s.selected_layer_rows(), [0, 1]);
+    let before = state(&s);
+    let expected = crate::compositor::render_export(&s.doc, 1).unwrap();
+    seat.menu(&mut s, "Merge Layers");
+    seat.wait(&mut s);
+    assert_eq!(s.doc.layers.len(), 1);
+    assert_eq!(s.doc.layers[0].name, "Upper");
+    assert_eq!(
+        crate::compositor::render_export(&s.doc, 1).unwrap().data(),
+        expected.data()
+    );
+    check(&mut s, &before);
+}
+
+#[test]
+fn craft_stamp_native_alt_menu_and_canvas_keys_preserve_real_source_and_field_owners() {
+    let mut s = fixture();
+    let before = state(&s);
+    let original = serde_json::to_value(&s.doc.layers).unwrap();
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Layer");
+    seat.click_mods(&mut s, "Merge Visible", Modifiers::ALT);
+    seat.wait(&mut s);
+    assert_eq!(s.doc.layers.len(), 3);
+    assert_eq!(serde_json::to_value(&s.doc.layers[..2]).unwrap(), original);
+    check(&mut s, &before);
+    let mut s = fixture();
+    let before = state(&s);
+    let upper = serde_json::to_value(&s.doc.layers[1]).unwrap();
+    let mut seat = Seat::new();
+    for _ in 0..3 {
+        seat.frame(&mut s, vec![]);
+    }
+    seat.frame(&mut s, keys::key(Key::F8, Modifiers::NONE));
+    seat.frame(&mut s, vec![]);
+    seat.frame(
+        &mut s,
+        keys::key(
+            Key::E,
+            Modifiers {
+                alt: true,
+                ..Modifiers::COMMAND
+            },
+        ),
+    );
+    seat.wait(&mut s);
+    assert_eq!(s.doc.layers.len(), 2);
+    assert_eq!(serde_json::to_value(&s.doc.layers[1]).unwrap(), upper);
+    assert_eq!(s.active_layer, Some(1));
+    check(&mut s, &before);
+    seat.context(&mut s, "Upper");
+    seat.invoke(&mut s, "Rename");
+    keys::focused_role(
+        &seat.ctx,
+        &seat.output,
+        "Rename layer",
+        egui::accesskit::Role::TextInput,
+    );
+    let before = state(&s);
+    let history = s.history.len();
+    seat.frame(
+        &mut s,
+        keys::key(
+            Key::E,
+            Modifiers {
+                alt: true,
+                shift: true,
+                ..Modifiers::COMMAND
+            },
+        ),
+    );
+    seat.frame(&mut s, vec![]);
+    assert!(!is_open(&seat.ctx));
+    assert_eq!(state(&s), before);
+    assert_eq!(s.history.len(), history);
 }
