@@ -255,3 +255,86 @@ fn craft_svg_fonts_cold_child() {
     )
     .unwrap();
 }
+
+#[test]
+fn craft_svg_fonts_imported_native_typing_keeps_face_axes_one_undo_and_reopen() {
+    let original = sample();
+    let before_source = crate::project::encode(&original).unwrap();
+    let svg = crate::svg::export_embedded(&original).unwrap();
+    let (doc, notes) = crate::formats::svg::read(&svg, "Type imported font").unwrap();
+    assert!(notes.is_empty());
+    let mut studio = crate::app::Studio::new();
+    studio.show_welcome = false;
+    studio.doc = doc;
+    let (layer, id, caret, old_length, font) = studio
+        .doc
+        .layers
+        .iter()
+        .enumerate()
+        .flat_map(|(li, l)| l.kind.shapes().into_iter().flatten().map(move |s| (li, s)))
+        .find_map(|(li, s)| {
+            let Geom::Text(run) = &s.geom else {
+                return None;
+            };
+            let n = run.content.chars().count();
+            (run.content == "Variable AV fi12"
+                && super::super::variations::at(run, 0)
+                    .settings()
+                    .contains(&(*b"wght", 800.)))
+            .then(|| {
+                (
+                    li,
+                    s.id,
+                    super::super::caret_pt(run, n),
+                    n,
+                    run.font.clone(),
+                )
+            })
+        })
+        .unwrap();
+    studio.selection = vec![(layer, id)];
+    studio.active_layer = Some(layer);
+    studio.mark();
+    studio.history.clear();
+    let before = crate::project::encode(&studio.doc).unwrap();
+    studio.begin_type_edit((layer, id), caret);
+    studio.type_insert(" QZ");
+    studio.commit_type_edit();
+    assert_eq!(studio.history.len(), 1);
+    let Geom::Text(run) = &studio.doc.find_shape(layer, id).unwrap().geom else {
+        panic!()
+    };
+    assert_eq!(run.content, "Variable AV fi12 QZ");
+    assert_eq!(run.font, font);
+    assert_eq!(
+        run.character_style(old_length + 1).font.as_deref(),
+        Some(font.as_str())
+    );
+    assert!(
+        super::super::variations::at(run, old_length + 1)
+            .settings()
+            .contains(&(*b"wght", 800.))
+    );
+    let after = crate::project::encode(&studio.doc).unwrap();
+    let reopened = crate::project::decode(&after).unwrap();
+    assert_eq!(error(&studio.doc, &reopened), 0.);
+    let edited = crate::svg::export_embedded(&studio.doc).unwrap();
+    assert!(edited.contains(" QZ"));
+    let (reimported, notes) = crate::formats::svg::read(&edited, "Edited SVG").unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    assert!(error(&studio.doc, &reimported) < 1.5);
+    studio.undo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
+    studio.redo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
+    assert_eq!(crate::project::encode(&original).unwrap(), before_source);
+    let out = root();
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("edited.svg"), edited).unwrap();
+    std::fs::write(out.join("edited.oma"), after).unwrap();
+    std::fs::write(
+        out.join("edited-native.png"),
+        crate::compositor::export_png(&studio.doc, 1).unwrap(),
+    )
+    .unwrap();
+}
