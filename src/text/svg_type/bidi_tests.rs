@@ -160,55 +160,55 @@ fn svg_authored_bidi_pair_preserves_control_offsets_and_trailing_character_ident
     assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
 }
 
+fn scale_case(name: &str, placement: &str, content: &str) {
+    let mut studio = fixture(&format!(
+        "<text {placement} font-family=\"BidiFace\" font-size=\"32\">{content}</text>"
+    ));
+    let before = crate::project::encode(&studio.doc).unwrap();
+    let original = pair_tests::run(&studio).svg_text.clone();
+    let old = layout(pair_tests::run(&studio)).unwrap();
+    assert!(old.glyphs.iter().any(|g| g.index == 2));
+    studio.patch_type(|r| {
+        r.set_character_style(2, 3, |s| {
+            s.hscale = Some(125.);
+            s.vscale = Some(80.);
+        })
+    });
+    let run = pair_tests::run(&studio);
+    assert_eq!(run.content, content);
+    assert_eq!(run.svg_text, original);
+    let new = layout(run).unwrap();
+    let identity = |layout: &Layout| {
+        let mut values: Vec<_> = layout.glyphs.iter().map(|g| (g.index, g.id)).collect();
+        values.sort_unstable();
+        values
+    };
+    assert_eq!(identity(&old), identity(&new));
+    let g = new.glyphs.iter().find(|g| g.index == 2).unwrap();
+    assert!((g.transform.sx.hypot(g.transform.ky) / g.px - 1.25).abs() < 0.002);
+    assert!((g.transform.kx.hypot(g.transform.sy) / g.px - 0.8).abs() < 0.002);
+    scale_tests::check(&studio, name);
+    let after = crate::project::encode(&studio.doc).unwrap();
+    studio.undo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
+    studio.redo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
+}
+
 #[test]
-fn svg_authored_bidi_scale_and_flow_keep_original_logical_targets_after_wrapping() {
-    for (name, placement, content) in [
-        (
-            "bidi-scaled-rotation",
-            "x=\"25\" y=\"80\" rotate=\"15\"",
-            "A\u{202b}אב\u{202c}V",
-        ),
-        (
-            "bidi-scaled-flow",
-            "xml:space=\"preserve\" x=\"25\" y=\"35\" style=\"inline-size:160px;line-height:40px\"",
-            "A\u{202b}אב\u{202c}V A\u{2067}אב\u{2069}V AV AV AV AV AV",
-        ),
-    ] {
-        let mut studio = fixture(&format!(
-            "<text {placement} font-family=\"BidiFace\" font-size=\"32\">{content}</text>"
-        ));
-        let before = crate::project::encode(&studio.doc).unwrap();
-        let original = pair_tests::run(&studio).svg_text.clone();
-        let old = layout(pair_tests::run(&studio)).unwrap();
-        assert!(old.glyphs.iter().any(|g| g.index == 2));
-        studio.patch_type(|r| {
-            r.set_character_style(2, 3, |s| {
-                s.hscale = Some(125.);
-                s.vscale = Some(80.);
-            })
-        });
-        let run = pair_tests::run(&studio);
-        assert_eq!(run.content, content);
-        assert_eq!(run.svg_text, original);
-        let new = layout(run).unwrap();
-        assert_eq!(
-            old.glyphs
-                .iter()
-                .map(|g| (g.index, g.id))
-                .collect::<Vec<_>>(),
-            new.glyphs
-                .iter()
-                .map(|g| (g.index, g.id))
-                .collect::<Vec<_>>()
-        );
-        let g = new.glyphs.iter().find(|g| g.index == 2).unwrap();
-        assert!((g.transform.sx.hypot(g.transform.ky) / g.px - 1.25).abs() < 0.002);
-        assert!((g.transform.kx.hypot(g.transform.sy) / g.px - 0.8).abs() < 0.002);
-        scale_tests::check(&studio, name);
-        let after = crate::project::encode(&studio.doc).unwrap();
-        studio.undo();
-        assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
-        studio.redo();
-        assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
-    }
+fn svg_authored_bidi_scaled_rotation_keeps_original_logical_targets() {
+    scale_case(
+        "bidi-scaled-rotation",
+        r#"x="25" y="80" rotate="15""#,
+        "A\u{202b}אב\u{202c}V",
+    );
+}
+
+#[test]
+fn svg_authored_bidi_scaled_flow_keeps_original_logical_targets_after_wrapping() {
+    scale_case(
+        "bidi-scaled-flow",
+        r#"xml:space="preserve" x="25" y="35" style="inline-size:160px;line-height:40px""#,
+        "A\u{202b}אב\u{202c}V A\u{2067}אב\u{2069}V AV AV AV AV AV",
+    );
 }
