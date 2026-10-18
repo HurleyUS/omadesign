@@ -2624,7 +2624,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
         super::fields::native_scope(ui,eframe::egui::Id::new(("layer-row",&studio.swap_id,studio.doc.layers[i].id)), |ui| {
             let active = studio.active_layer == Some(i);
             let header = Frame::new()
-                .fill(if studio.selected_layer == Some(studio.doc.layers[i].id) {
+                .fill(if studio.layer_row_selected(i) {
                     accent_soft()
                 } else if active {
                     bg_widget()
@@ -2668,7 +2668,9 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                         }
                         if layer.is_group {object_icon(ui,ph::FOLDER_OPEN,fg_weak());} else {
                             let thumbnail=super::pane_previews::thumbnail(ui,studio,i,None);
-                            if thumbnail.clicked()||layer_drag::source(&thumbnail,studio,i){activate=Some(i);}
+                            if thumbnail.clicked()||layer_drag::source(&thumbnail,studio,i){
+                                activate=Some((i,thumbnail.clicked() && studio.persona == Persona::Pixel && ui.input(|input|input.modifiers.ctrl)));
+                            }
                         }
                         if layer.filters.active() { ui.label(RichText::new("fx").small().color(accent())); }
                         let name_width = (ui.available_width()
@@ -2701,7 +2703,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                                 true,
                             );
                             if response.clicked() || layer_drag::source(&response, studio, i) {
-                                activate = Some(i);
+                                activate = Some((i,false));
                             }
                             if response.double_clicked() && studio.layer_unlocked(i) {
                                 start_rename = Some(i);
@@ -3038,24 +3040,13 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
             }
         }
     }
-    if let Some(i) = activate {
+    if let Some((i,outline)) = activate {
         if studio.apply_pending_item_mask(i, None) {
-        } else if studio.persona == Persona::Pixel && ui.input(|i| i.modifiers.ctrl) {
+        } else if outline {
             studio.select_item_outline(i, None);
         } else {
-            let previous = studio.selection.clone();
-            studio.activate_layer_tree(i);
-            if ui.input(|i| i.modifiers.shift) {
-                if studio.selection.is_empty() && studio.doc.layers[i].kind.pixels().is_some() {
-                    studio.selection.push((i, crate::document::RASTER_ID));
-                }
-                for hit in previous {
-                    if !studio.selection.contains(&hit) {
-                        studio.selection.push(hit);
-                    }
-                }
-                studio.selected_layer = None;
-            }
+            let modifiers=ui.input(|input|input.modifiers);
+            studio.select_layer_rows(i,modifiers.shift,modifiers.command||modifiers.mac_cmd);
         }
     }
     if let Some(index)=duplicate_layer.and_then(|id|studio.doc.layers.iter().position(|l|l.id==id)) {

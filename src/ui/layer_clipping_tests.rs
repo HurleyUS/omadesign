@@ -208,4 +208,75 @@ fn craft_clipping_row_context_owner_and_shift_selected_stack_follow_actual_rows(
     assert_eq!(s.history.len(), 1);
     s.undo();
     assert_eq!(state(&s), before);
+
+    seat.click(
+        &mut s,
+        "Clip base",
+        egui::PointerButton::Primary,
+        Modifiers::NONE,
+    );
+    seat.click(
+        &mut s,
+        "Clip upper",
+        egui::PointerButton::Primary,
+        Modifiers::COMMAND,
+    );
+    assert_eq!(s.selected_layer_rows(), [0, 1]);
+    assert!(
+        s.pixel_sel.is_none(),
+        "Command-click on the name selects rows, not thumbnail alpha"
+    );
+    seat.click(
+        &mut s,
+        "Clip upper",
+        egui::PointerButton::Primary,
+        Modifiers::COMMAND,
+    );
+    assert_eq!(s.selected_layer_rows(), [0]);
+
+    let mut s = fixture();
+    let lower = Layer::group("Base group");
+    let upper = Layer::group("Clipped group");
+    s.doc.layers[0].parent = Some(lower.id);
+    s.doc.layers[1].parent = Some(upper.id);
+    s.doc.layers.insert(1, lower);
+    s.doc.layers.push(upper);
+    s.layer_expanded.clear();
+    s.activate_layer_tree(1);
+    let mut seat = Seat::new();
+    seat.click(
+        &mut s,
+        "Base group",
+        egui::PointerButton::Primary,
+        Modifiers::NONE,
+    );
+    seat.click(
+        &mut s,
+        "Clipped group",
+        egui::PointerButton::Primary,
+        Modifiers::SHIFT,
+    );
+    assert_eq!(
+        s.selected_layer_rows(),
+        [1, 3],
+        "Collapsed descendants are not selected rows"
+    );
+    let before = state(&s);
+    seat.menu(&mut s, "Create Clipping Mask");
+    assert_eq!(
+        s.doc.layers.iter().map(|l| l.clipped).collect::<Vec<_>>(),
+        [false, false, false, true]
+    );
+    assert_eq!(
+        crate::compositor::render_export(&s.doc, 1).unwrap().data(),
+        [128, 0, 0, 128].repeat(4)
+    );
+    assert_eq!(s.history.len(), 1);
+    let after = state(&s);
+    assert_eq!(
+        crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(),
+        after
+    );
+    s.undo();
+    assert_eq!(state(&s), before);
 }

@@ -356,6 +356,7 @@ pub struct Studio {
     pub selection: Vec<(usize, u64)>,
     /// Explicit sidebar layer target, independent of its selected descendants.
     pub selected_layer: Option<u64>,
+    layer_rows: Option<layer_groups::LayerRows>,
     pub individual_object: Option<(usize, u64)>,
     pub active_layer: Option<usize>,
     pub history: History,
@@ -618,6 +619,7 @@ impl Studio {
             updates: Default::default(),
             settings_page: 0,
             selected_layer: None,
+            layer_rows: None,
             individual_object: None,
             active_layer: Some(1),
             history: History::default(),

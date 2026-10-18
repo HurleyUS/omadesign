@@ -160,6 +160,11 @@ impl Document {
                 layer: self.layers[i].id,
                 shape: None,
             })
+        }) || self.clipping_bases(layer).any(|base| {
+            sources.contains(&MaskSource {
+                layer: self.layers[base].id,
+                shape: None,
+            })
         }) {
             return true;
         }

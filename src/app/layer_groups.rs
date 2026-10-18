@@ -2,7 +2,155 @@
 
 use super::*;
 
+pub(super) struct LayerRows {
+    document: String,
+    ids: std::collections::BTreeSet<u64>,
+    hits: std::collections::BTreeSet<(u64, u64)>,
+    anchor: u64,
+}
+
 impl Studio {
+    fn current_layer_rows(&self) -> Option<&LayerRows> {
+        self.layer_rows.as_ref().filter(|rows| {
+            rows.document == self.swap_id
+                && self.selected_layer.is_none()
+                && rows.hits.len() == self.selection.len()
+                && self.selection.iter().all(|&(layer, id)| {
+                    self.doc
+                        .layers
+                        .get(layer)
+                        .is_some_and(|l| rows.hits.contains(&(l.id, id)))
+                })
+        })
+    }
+
+    /// Resolve explicit sidebar layer selection independently of selected object descendants.
+    /// Args: none. Returns current layer indices in painter order; changed documents or object selections retire old row ownership.
+    pub(crate) fn selected_layer_rows(&self) -> Vec<usize> {
+        if let Some(id) = self.selected_layer {
+            return self
+                .doc
+                .layers
+                .iter()
+                .position(|l| l.id == id)
+                .into_iter()
+                .collect();
+        }
+        if let Some(rows) = self.current_layer_rows() {
+            return self
+                .doc
+                .layers
+                .iter()
+                .enumerate()
+                .filter_map(|(i, l)| rows.ids.contains(&l.id).then_some(i))
+                .collect();
+        }
+        let mut selected: Vec<_> = self.selection.iter().map(|&(i, _)| i).collect();
+        if selected.is_empty() {
+            selected.extend(self.active_layer);
+        }
+        selected.sort_unstable();
+        selected.dedup();
+        selected
+    }
+
+    pub(crate) fn layer_row_selected(&self, index: usize) -> bool {
+        let Some(layer) = self.doc.layers.get(index) else {
+            return false;
+        };
+        self.selected_layer == Some(layer.id)
+            || self
+                .current_layer_rows()
+                .is_some_and(|rows| rows.ids.contains(&layer.id))
+    }
+
+    /// Select native layer rows with a persistent whole-layer range anchor.
+    /// Args: clicked index, Shift range flag and platform-command toggle flag. Returns without modifying document/history.
+    pub(crate) fn select_layer_rows(&mut self, index: usize, extend: bool, toggle: bool) {
+        let Some(layer) = self.doc.layers.get(index) else {
+            return;
+        };
+        let id = layer.id;
+        if !extend && !toggle {
+            self.activate_layer_tree(index);
+            return;
+        }
+        let anchor = self
+            .current_layer_rows()
+            .map(|rows| rows.anchor)
+            .or(self.selected_layer)
+            .or_else(|| {
+                self.active_layer
+                    .and_then(|i| self.doc.layers.get(i))
+                    .map(|l| l.id)
+            })
+            .unwrap_or(id);
+        let mut ids: std::collections::BTreeSet<_> = self
+            .selected_layer_rows()
+            .iter()
+            .filter_map(|&i| self.doc.layers.get(i).map(|l| l.id))
+            .collect();
+        if extend {
+            let first = self
+                .doc
+                .layers
+                .iter()
+                .position(|l| l.id == anchor)
+                .unwrap_or(index);
+            ids = (first.min(index)..=first.max(index))
+                .filter(|&i| {
+                    self.doc
+                        .layer_ancestors(i)
+                        .iter()
+                        .all(|p| self.layer_expanded.contains(&self.doc.layers[*p].id))
+                })
+                .map(|i| self.doc.layers[i].id)
+                .collect();
+        } else if !ids.insert(id) {
+            ids.remove(&id);
+        }
+        self.clear_layer_interaction();
+        self.active_layer = Some(index);
+        for i in 0..self.doc.layers.len() {
+            if !ids.contains(&self.doc.layers[i].id) {
+                continue;
+            }
+            if self.doc.layers[i].is_group {
+                self.selection.extend(self.group_members(i));
+            } else if self.doc.layers[i].kind.pixels().is_some() {
+                self.selection.push((i, RASTER_ID));
+            } else {
+                self.selection.extend(
+                    self.doc.layers[i]
+                        .kind
+                        .shapes()
+                        .unwrap_or(&[])
+                        .iter()
+                        .map(|s| (i, s.id)),
+                );
+            }
+        }
+        self.selection.sort_unstable();
+        self.selection.dedup();
+        self.selected_layer = if ids.len() == 1 {
+            ids.first().copied()
+        } else {
+            None
+        };
+        let hits = self
+            .selection
+            .iter()
+            .filter_map(|&(i, id)| self.doc.layers.get(i).map(|l| (l.id, id)))
+            .collect();
+        self.status = format!("{} layers selected", ids.len());
+        self.layer_rows = Some(LayerRows {
+            document: self.swap_id.clone(),
+            ids,
+            hits,
+            anchor,
+        });
+    }
+
     /// A canvas hit belongs to its outermost layer group until explicitly entered.
     pub fn selection_for_hit(&self, hit: (usize, u64)) -> Vec<(usize, u64)> {
         if self.individual_object == Some(hit) && self.selection.contains(&hit) {
@@ -520,7 +668,7 @@ mod tests {
                     studio.active_layer = Some(0);
                     let values: Vec<_> = (0..48).map(|i| [0, 64, 128, 255][i % 4]).collect();
                     studio.set_pixel_sel(Some(values.clone()));
-                    let values:Vec<f32>=values.iter().map(|v|f32::from(*v)/255.).collect();
+                    let values: Vec<f32> = values.iter().map(|v| f32::from(*v) / 255.).collect();
                     let space = studio.pixel_sel_space.unwrap();
                     let address = studio.pixel_sel.as_ref().unwrap().as_ptr();
                     let generation = studio.pixel_sel_gen;
@@ -541,7 +689,10 @@ mod tests {
                     studio.history.clear();
                     studio.paint_mask = true;
                     studio.add_layer(raster);
-                    assert_eq!(studio.pixel_sel.as_ref().map(|values| values.as_slice()), Some(values.as_slice()));
+                    assert_eq!(
+                        studio.pixel_sel.as_ref().map(|values| values.as_slice()),
+                        Some(values.as_slice())
+                    );
 
                     let index = studio.active_layer.unwrap();
                     let added_id = studio.doc.layers[index].id;
@@ -573,7 +724,10 @@ mod tests {
                             studio.undo();
                         }
                         assert_eq!(studio.doc.layers.len(), layers_before + usize::from(redo));
-                        assert_eq!(studio.pixel_sel.as_ref().map(|values| values.as_slice()), Some(values.as_slice()));
+                        assert_eq!(
+                            studio.pixel_sel.as_ref().map(|values| values.as_slice()),
+                            Some(values.as_slice())
+                        );
                         assert_eq!(
                             studio.pixel_sel.as_ref().unwrap().as_ptr(),
                             address,

@@ -11,7 +11,7 @@ impl Studio {
         {
             return Err("Finish the current operation before changing layer clipping".into());
         }
-        let mut selected: Vec<_> = if let Some(id) = owner.or(self.selected_layer) {
+        let mut selected: Vec<_> = if let Some(id) = owner {
             vec![
                 self.doc
                     .layers
@@ -19,10 +19,8 @@ impl Studio {
                     .position(|l| l.id == id)
                     .ok_or("The clipping layer is missing")?,
             ]
-        } else if !self.selection.is_empty() {
-            self.selection.iter().map(|&(i, _)| i).collect()
         } else {
-            self.active_layer.into_iter().collect()
+            self.selected_layer_rows()
         };
         selected.sort_unstable();
         selected.dedup();

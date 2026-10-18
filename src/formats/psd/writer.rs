@@ -543,7 +543,8 @@ fn add_mask(record: &mut Record, mask: &Pixels, bounds: Rect, depth: u16) -> Res
     let mut values = storage::Builder::with_capacity(dimensions(mask.w, mask.h)?.checked_mul(depth as usize / 8).ok_or("Photoshop mask byte size overflows")?)?;
     for i in 0..mask.w as usize * mask.h as usize {
         let p = mask.sample(i);
-        let value = ((p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722) * p[3]).clamp(0., 1.);
+        let gray = if p[0] == p[1] && p[1] == p[2] { p[0] } else { p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722 };
+        let value = (gray * p[3]).clamp(0., 1.);
         match depth {
             8 => values.extend(&[crate::deep_color::byte(value)])?,
             16 => values.extend(&((value * 65535.).round() as u16).to_be_bytes())?,

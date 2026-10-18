@@ -16,6 +16,9 @@ fn layer(name: &str, values: &[u8]) -> Layer {
         .replace_bytes(values.to_vec())
         .unwrap();
     layer
+        .kind
+        .set_raster_xform(Pt::ZERO, Pt::new((values.len() / 4) as f32, 1.), 0.);
+    layer
 }
 fn fixture() -> Studio {
     let mut s = Studio::new();
@@ -144,6 +147,36 @@ fn craft_clipping_base_edits_hide_reorder_and_hit_testing_stay_live() {
     );
     assert_eq!(s.history.len(), 1);
     undo_reopen(&mut s, &before);
+}
+
+#[test]
+fn craft_clipping_mask_source_stacks_remain_hidden_from_paint_and_hits() {
+    let mut s = fixture();
+    s.doc.layers.truncate(2);
+    s.doc.layers[1].clipped = true;
+    let mut target = layer("Masked target", &[255, 255, 255, 255].repeat(4));
+    let mut mask = crate::artwork_mask::ArtworkMask::new(crate::artwork_mask::MaskSource {
+        layer: s.doc.layers[0].id,
+        shape: None,
+    });
+    mask.mode = crate::artwork_mask::MaskMode::Alpha;
+    target.artwork_masks.push(mask);
+    s.doc.layers.push(target);
+    s.doc.validate_hierarchy().unwrap();
+    assert!(s.doc.is_mask_source(0, None));
+    assert!(s.doc.is_mask_source(1, None));
+    assert!(!s.doc.is_mask_source(2, None));
+    assert_eq!(
+        s.doc.hit_test(Pt::new(2.5, 0.5), 0.),
+        Some((2, crate::document::RASTER_ID))
+    );
+    s.doc.layers[2].visible = false;
+    assert_eq!(rgba(&s.doc), vec![0; 16]);
+    assert_eq!(s.doc.hit_test(Pt::new(2.5, 0.5), 0.), None);
+    assert_eq!(
+        crate::project::encode(&crate::project::decode(&state(&s)).unwrap()).unwrap(),
+        state(&s)
+    );
 }
 
 #[test]
