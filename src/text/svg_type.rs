@@ -612,6 +612,8 @@ fn font_attributes(path: &str) -> String {
     attrs
 }
 
+/// Find the installed family of an exact font program.
+/// Args: native font reference. Returns a family only for an identical installed face.
 fn installed_family(path: &str) -> Option<String> {
     static CACHE: OnceLock<Mutex<HashMap<(u64,u64,String),Option<String>>>>=OnceLock::new();
     let key=(super::INSTALLED_REVISION.load(std::sync::atomic::Ordering::Relaxed),super::FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed),path.to_owned());
@@ -912,6 +914,8 @@ fn substituted_font(font: &usvg::Font) -> Option<std::path::PathBuf> {
     substituted_path(font.families(),font.weight(),font.style())
 }
 
+/// Reuse the shared fontconfig substitution for unavailable families.
+/// Args: ordered families, weight and style. Returns the cached actual font path.
 fn substituted_path(families:&[usvg::FontFamily],weight:u16,style:usvg::FontStyle)->Option<std::path::PathBuf> {
     static MATCHES: OnceLock<Mutex<HashMap<String, Option<std::path::PathBuf>>>> = OnceLock::new();
     let family = families.iter()

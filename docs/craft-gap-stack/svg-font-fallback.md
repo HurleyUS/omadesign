@@ -13,3 +13,11 @@ Native files and portable SVG must reopen with identical pixels. Independent Chr
 This cut does not complete character scale, optical kerning, cross-chunk textLength or the remaining non-flow leading work in #391. It does not claim human or physical-device acceptance.
 
 Plain installed-font delivery records the current resolved face in an export-only clone so a fallback Medium face is not accidentally reopened as the same family's Regular face. This preserves the existing installed-face delivery policy; it does not freeze the native author source. Native and embedded-font delivery keep full author family lists. Library copy and save/recovery now share the same bounded logical-cell font visitor, so withdrawn property-path writes are not missed by a second key-name scanner.
+
+## Qualified development build
+
+Production source is `9f7b2b5c5a63b1735a00d279b09c49f8df6a841c`. The final affected group passed 11/11; the broader 66 passes remain recorded at `6e92c0a9` with its four failures separately retained and corrected. This is not a single-source 70/70 claim. The real current executable then passed all 19 packaged native cold opens plus seven original-source renders in 45 fresh CLI processes. Fourteen fresh Chromium comparisons against current native renders passed; the maximum mean error was 0.771277 against the unchanged 1.5 limit. Original emitted SVG identities remain pinned to `6e92c0a9`.
+
+Private QA launcher: `dist/omadesign-svg-fallback-qa-9f7b2b5c/run`. The existing human QA window was left untouched. The new bundle uses the native savewriter and contains its actual font sidecar and licenses. The earlier pair/leading QA folder also received its missing font sidecar and passed twelve real cold opens without changing its executable or documents.
+
+Durable handoff: `/home/michael/Projects/omadesign/.artifacts/craft-gap-stack/implementation/craft-svg-font-fallback.json`, SHA-256 `95e45dfe03e54a0ac0529470d92d5246f9d47316021a25ea07443b20dc0d079f`. Its 336-file manifest preserves all failed/intermediate receipts and final proofs. Full parity remains open.

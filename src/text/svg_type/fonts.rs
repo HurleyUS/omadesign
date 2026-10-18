@@ -1,5 +1,7 @@
 use super::*;
 
+/// Format one parsed CSS family.
+/// Args: family token. Returns an escaped named family or its generic keyword.
 pub(crate) fn family_css(family: &usvg::FontFamily) -> String {
     match family {
         usvg::FontFamily::Named(name) => quoted_family(name),
@@ -7,6 +9,8 @@ pub(crate) fn family_css(family: &usvg::FontFamily) -> String {
     }
 }
 
+/// Resolve ordered family candidates through the existing shared font environment.
+/// Args: inherited selection attributes and database. Returns ordered real face IDs and unavailable names.
 pub(in crate::text) fn family_faces(
     attributes: &BTreeMap<String, String>,
     db: &usvg::fontdb::Database,
@@ -160,6 +164,8 @@ pub(crate) fn references(svg: &SvgText) -> std::collections::BTreeSet<String> {
     out
 }
 
+/// Read portable identities from a complete CSS family list.
+/// Args: family declaration. Returns only content-addressed project font names, without loading them.
 pub(crate) fn project_families(value: &str) -> Vec<String> {
     usvg::parse_font_families(value)
         .unwrap_or_default()
