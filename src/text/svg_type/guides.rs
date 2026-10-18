@@ -19,6 +19,10 @@ pub(super) struct Position {
     pub baseline_shift: Option<f32>,
     #[serde(default)]
     pub upright: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored_origin: Option<[f32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_linear: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -68,6 +72,7 @@ fn decode(value: &str) -> Result<Guides, String> {
                 || p.px.is_some_and(|px| !px.is_finite() || px <= 0.)
                 || p.tracking.is_some_and(|v| !v.is_finite())
                 || p.baseline_shift.is_some_and(|v| !v.is_finite())
+                || p.authored_origin.is_some_and(|p| p.iter().any(|v| !v.is_finite()))
         })
         || saved.positions.windows(2).any(|p| p[0].index >= p[1].index)
     {
@@ -481,6 +486,8 @@ pub(super) fn compile(run: &TypeRun, source: String, content: &str) -> Option<St
                 .iter()
                 .find(|g| g.node == c.node && g.chunk == c.chunk && g.index == c.index)
                 .map(|g| g.upright),
+            authored_origin: layout.glyphs.iter().find(|g| g.node==c.node && g.chunk==c.chunk && g.index==c.index).map(|g|[g.authored.x,g.authored.y]),
+            source_linear: layout.glyphs.iter().find(|g| g.node==c.node && g.chunk==c.chunk && g.index==c.index).map(|g|g.source_linear),
         })
         .collect();
     positions.sort_by_key(|p| p.index);

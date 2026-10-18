@@ -972,4 +972,21 @@ mod tests {
         studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
     }
 
+    #[test]
+    fn character_spacing_positioned_svg_leading_native_keys_moves_real_rows_and_undo(){
+        use crate::text::svg_type::{metric_tests,line_spacing_tests};
+        let ctx=egui::Context::default();ctx.enable_accesskit();crate::ui::theme::apply(&ctx);
+        let source=line_spacing_tests::simple_source();let mut studio=metric_tests::studio_for(&source);
+        let before=crate::project::encode(&studio.doc).unwrap();let original=studio.selected_type().unwrap().svg_text;
+        frame(&ctx,&mut studio,vec![]);let output=tab_to(&ctx,&mut studio,"Leading amount");assert_focused(&ctx,&output,"Leading amount");
+        assert!(studio.selected_character_metrics().iter().all(|s|s.leading==Some(Leading::Fixed(30.))));
+        replace(&ctx,&mut studio,"50");frame(&ctx,&mut studio,key(Key::Enter,Modifiers::NONE));
+        assert!(studio.selected_character_metrics().iter().all(|s|s.leading==Some(Leading::Fixed(50.))));
+        assert_eq!(studio.selected_type().unwrap().svg_text,original);
+        let expected=source.replace("y=\"65\"","y=\"85\"").replace("y=\"95\"","y=\"135\"");
+        line_spacing_tests::compare(&studio,&expected,"leading-native-keys");
+        let after=crate::project::encode(&studio.doc).unwrap();assert_eq!(studio.history.len(),1);
+        studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
+    }
+
 }

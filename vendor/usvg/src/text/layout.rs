@@ -67,6 +67,8 @@ pub struct PositionedGlyph {
     pub baseline: [f32;2],
     /// Cluster origin before vertical glyph orientation and glyph offsets.
     pub cluster_origin: [f32;2],
+    /// Authored baseline before font baseline shifts, orientation and glyph offsets.
+    pub authored_origin: [f32;2],
 }
 
 impl PositionedGlyph {
@@ -390,6 +392,9 @@ pub(crate) fn layout_text(
                             pg.inline_direction=if length>0. {[axis.sx/length,axis.ky/length]}else{[1.,0.]};
                             pg.baseline=[origin.tx,origin.ty];
                             pg.cluster_origin=[cluster_origin.tx,cluster_origin.ty];
+                            pg.authored_origin=if text_node.writing_mode==WritingMode::TopToBottom {
+                                [x-gc.transform.ty,y+gc.transform.tx]
+                            } else {[x+gc.transform.tx,y+gc.transform.ty]};
                             pg.cluster_ts = cluster_ts;
                             pg.span_ts = span_ts;
                         });
@@ -1255,7 +1260,7 @@ fn form_glyph_clusters(glyphs: &[Glyph], text: &str, font_size: f32) -> GlyphClu
             font: glyph.font.id,
             text: glyph.text.clone(),
             id: glyph.id,
-            text_index:0,cluster_advance:0.,cluster_width:0.,unadjusted_advance:0.,vertical_upright:false,length_scale:1.,spacing_allowed:true,inline_direction:[1.,0.],baseline:[0.,0.],cluster_origin:[0.,0.],
+            text_index:0,cluster_advance:0.,cluster_width:0.,unadjusted_advance:0.,vertical_upright:false,length_scale:1.,spacing_allowed:true,inline_direction:[1.,0.],baseline:[0.,0.],cluster_origin:[0.,0.],authored_origin:[0.,0.],
         });
 
         x += glyph.width as f32;

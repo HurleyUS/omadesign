@@ -21,11 +21,14 @@ pub(crate) mod optical_tests;
 pub(crate) mod scale_tests;
 #[cfg(test)]
 pub(crate) mod bidi_tests;
+#[cfg(test)]
+pub(crate) mod line_spacing_tests;
 mod positioning;
 mod optical;
 mod scaling;
 mod guides;
 mod direction;
+mod line_spacing;
 mod fonts;
 pub(crate) use fonts::family_css;
 pub(super) use fonts::{family_faces,map_families,map_flow_families};
@@ -139,7 +142,7 @@ struct GlyphMetric {
     transform:Transform,advance:f32,width:f32,allowed:bool,inline:Pt,baseline:Pt,
     length_scale:f32,unadjusted_advance:f32,upright:bool,letter_spacing:f32,word_spacing:f32,
     variations:Vec<([u8;4],f32)>,auto_opsz:bool,
-    origin:Pt,font_px:f32,rotation:f32,linear:bool,native_factor:Option<f32>,
+    origin:Pt,font_px:f32,rotation:f32,linear:bool,native_factor:Option<f32>,authored:Pt,source_linear:bool,
 }
 
 pub(crate) struct Layout {
@@ -1412,7 +1415,7 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, s
                         }).flatten().unwrap_or((1000.,Default::default()));
                         let compensation=scales.iter().find(|s|s.contains(character.index));
                         let font_factor=compensation.map_or(1.,|s|s.font_factor);
-                        glyph_metrics.push(GlyphMetric{index:character.index,node:node_index,chunk:character.chunk,font:font.clone(),id:glyph.id.0,px:positions.iter().find(|p|p.index==character.index).and_then(|p|p.px).unwrap_or(glyph.font_size()/font_factor),point,transform:glyph.transform().pre_scale(units,units),advance:glyph.cluster_advance,width:glyph.cluster_width,allowed:glyph.spacing_allowed,inline:Pt::new(glyph.inline_direction[0],glyph.inline_direction[1]),baseline:Pt::new(glyph.baseline[0],glyph.baseline[1]),length_scale:glyph.length_scale,unadjusted_advance:glyph.unadjusted_advance,upright:positions.iter().find(|p|p.index==character.index).and_then(|p|p.upright).unwrap_or(glyph.vertical_upright),letter_spacing:span.letter_spacing,word_spacing:span.word_spacing,variations:span.variations.iter().map(|v|(v.tag,v.value)).collect(),auto_opsz:span.font_optical_sizing==usvg::FontOpticalSizing::Auto,origin:Pt::new(glyph.cluster_origin[0],glyph.cluster_origin[1]),font_px:glyph.font_size(),rotation:text.rotate().get(glyph.text_index).copied().unwrap_or(0.),linear:matches!(text.chunks()[character.chunk].text_flow(),usvg::TextFlow::Linear),native_factor:compensation.map(|s|s.inline_factor)});
+                        glyph_metrics.push(GlyphMetric{index:character.index,node:node_index,chunk:character.chunk,font:font.clone(),id:glyph.id.0,px:positions.iter().find(|p|p.index==character.index).and_then(|p|p.px).unwrap_or(glyph.font_size()/font_factor),point,transform:glyph.transform().pre_scale(units,units),advance:glyph.cluster_advance,width:glyph.cluster_width,allowed:glyph.spacing_allowed,inline:Pt::new(glyph.inline_direction[0],glyph.inline_direction[1]),baseline:Pt::new(glyph.baseline[0],glyph.baseline[1]),length_scale:glyph.length_scale,unadjusted_advance:glyph.unadjusted_advance,upright:positions.iter().find(|p|p.index==character.index).and_then(|p|p.upright).unwrap_or(glyph.vertical_upright),letter_spacing:span.letter_spacing,word_spacing:span.word_spacing,variations:span.variations.iter().map(|v|(v.tag,v.value)).collect(),auto_opsz:span.font_optical_sizing==usvg::FontOpticalSizing::Auto,origin:Pt::new(glyph.cluster_origin[0],glyph.cluster_origin[1]),font_px:glyph.font_size(),rotation:text.rotate().get(glyph.text_index).copied().unwrap_or(0.),linear:matches!(text.chunks()[character.chunk].text_flow(),usvg::TextFlow::Linear),native_factor:compensation.map(|s|s.inline_factor),authored:positions.iter().find(|p|p.index==character.index).and_then(|p|p.authored_origin).map_or(Pt::new(glyph.authored_origin[0],glyph.authored_origin[1]),|p|Pt::new(p[0],p[1])),source_linear:positions.iter().find(|p|p.index==character.index).and_then(|p|p.source_linear).unwrap_or(matches!(text.chunks()[character.chunk].text_flow(),usvg::TextFlow::Linear))});
                     }
                 }
                 let chars: Vec<_> = glyph.text.chars().filter(|c| !bidi_control(*c)).collect();
@@ -1530,7 +1533,7 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, s
             }
         }
     }
-    Some(Layout {
+    let mut result=Layout {
         tree,
         contours,
         carets,
@@ -1541,7 +1544,9 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, s
         glyphs:glyph_metrics,
         clusters,
         addressable_count:mapped.count,control_offsets:mapped.offsets,chunk_starts:mapped.chunks,
-    })
+    };
+    if run.svg_text.as_ref().is_some_and(|s|s.flow.is_none()) {let leading=line_spacing::measured(&result);for(index,style)in &mut result.styles {style.leading=leading.get(index).copied();}}
+    Some(result)
 }
 
 fn flow_source_root(run: &TypeRun) -> TextNode {
