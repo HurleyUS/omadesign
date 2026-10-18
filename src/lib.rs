@@ -34,6 +34,7 @@ pub mod layout_images;
 pub mod layout_prototype;
 pub mod layout_templates;
 pub mod layout_tokens;
+pub(crate) mod layer_clipping;
 pub mod motion;
 pub mod scene3d;
 pub mod ml;

@@ -110,6 +110,10 @@ fn common(path: &str, value: &Value) -> Result<u32, String> {
     refuse_future_layout(p, value)?;
     let parts: Vec<_> = p.split('/').skip(1).collect();
     let root = parts.first().copied().unwrap_or("");
+    if ["layers", "@entities"].contains(&root) && parts.get(2) == Some(&"clipped")
+        && !value.is_null() && value != &Value::Bool(false) {
+        return Err("LayerClippingUnsupported: live protocol 3 cannot preserve editable layer clipping".into());
+    }
     let document_fields = [
         "publishing",
         "color",

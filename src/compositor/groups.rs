@@ -1,5 +1,7 @@
 use super::*;
 use crate::artwork_mask::MaskSource;
+#[path = "group_clipping.rs"]
+mod clipping;
 
 /// Build the hierarchy once per draw; documents without groups retain the flat fast path.
 pub(super) fn draw(
@@ -9,13 +11,11 @@ pub(super) fn draw(
     draft: &Draft<'_>,
     motion: Option<f32>,
     overrides: Option<&HashMap<u64, Pose>>,
-) {
+) -> Result<(), String> {
     let sources = doc.mask_sources();
-    if doc
-        .layers
-        .iter()
-        .all(|layer| !layer.is_group && layer.parent.is_none() && layer.svg_filter.is_none())
-    {
+    if doc.layers.iter().all(|layer| {
+        !layer.clipped && !layer.is_group && layer.parent.is_none() && layer.svg_filter.is_none()
+    }) {
         for (index, layer) in doc.layers.iter().enumerate() {
             if sources.contains(&MaskSource {
                 layer: layer.id,
@@ -41,7 +41,7 @@ pub(super) fn draw(
                 &sources,
             );
         }
-        return;
+        return Ok(());
     }
     let mut children: HashMap<Option<u64>, Vec<usize>> = HashMap::new();
     for (index, layer) in doc.layers.iter().enumerate() {
@@ -56,7 +56,7 @@ pub(super) fn draw(
         children,
         sources,
     };
-    context.draw_children(pm, None, 0);
+    context.draw_children(pm, None, 0)
 }
 
 struct Context<'a, 'b> {
@@ -70,87 +70,129 @@ struct Context<'a, 'b> {
 }
 
 impl Context<'_, '_> {
-    fn draw_children(&self, pm: &mut Pixmap, parent: Option<u64>, depth: usize) {
+    fn draw_children(
+        &self,
+        pm: &mut Pixmap,
+        parent: Option<u64>,
+        depth: usize,
+    ) -> Result<(), String> {
         if depth > 64 {
-            return;
+            return Err("Layer render group depth exceeds 64".into());
         }
         let Some(children) = self.children.get(&parent) else {
-            return;
+            return Ok(());
         };
-        for &index in children {
+        self.draw_list(pm, children, depth, false)
+    }
+
+    fn draw_list(
+        &self,
+        pm: &mut Pixmap,
+        children: &[usize],
+        depth: usize,
+        normalize_first: bool,
+    ) -> Result<(), String> {
+        let mut start = 0;
+        while start < children.len() {
+            let mut end = crate::layer_clipping::stack_end(self.doc, children, start);
+            if normalize_first && start == 0 {
+                while end < children.len() && self.doc.layers[children[end]].clipped {
+                    end += 1;
+                }
+            }
+            let index = children[start];
             if self.sources.contains(&MaskSource {
                 layer: self.doc.layers[index].id,
                 shape: None,
             }) {
+                start = end;
                 continue;
             }
-            self.draw_layer(pm, index, depth);
+            if self.doc.layers[index].visible {
+                if end > start + 1 {
+                    self.draw_clipped(pm, &children[start..end], depth)?;
+                } else {
+                    self.draw_layer(pm, index, depth)?;
+                }
+            }
+            start = end;
         }
+        Ok(())
     }
 
-    fn draw_layer(&self, pm: &mut Pixmap, index: usize, depth: usize) {
+    fn draw_layer(&self, pm: &mut Pixmap, index: usize, depth: usize) -> Result<(), String> {
         let layer = &self.doc.layers[index];
         if depth > 64 || !layer.visible {
-            return;
+            return Ok(());
         }
         let mut filters = layer.filters.clone();
         crate::filter::scale(&mut filters, self.transform.get_scale().0);
         let pad = crate::filter::svg_pad(&filters).ceil() as u32;
         if (layer.is_group || layer.svg_filter.is_some()) && filters.active() && pad > 0 {
-            let expanded = pad.checked_mul(2).and_then(|border| {
-                Some((
-                    pm.width().checked_add(border)?,
-                    pm.height().checked_add(border)?,
-                ))
-            });
-            if let Some((width, height)) = expanded
-                && let Ok(bytes) = crate::deep_color::storage::count(width, height, 4)
-                && let Ok(_memory) =
-                    crate::resources::global().reserve_now(bytes as u64, &|| Ok(()))
-                && let Some(mut pixels) = Pixmap::new(width, height)
-            {
-                let source = PixmapPaint {
-                    blend_mode: tiny_skia::BlendMode::Source,
-                    ..Default::default()
-                };
-                pixels.draw_pixmap(
-                    pad as i32,
-                    pad as i32,
-                    pm.as_ref(),
-                    &source,
-                    Transform::identity(),
-                    None,
-                );
-                Context {
-                    doc: self.doc,
-                    transform: Transform::from_translate(pad as f32, pad as f32)
-                        .pre_concat(self.transform),
-                    draft: self.draft,
-                    motion: self.motion,
-                    overrides: self.overrides,
-                    children: self.children.clone(),
-                    sources: self.sources.clone(),
-                }
-                .draw_layer_inner(&mut pixels, index, depth);
-                pm.draw_pixmap(
-                    -(pad as i32),
-                    -(pad as i32),
-                    pixels.as_ref(),
-                    &source,
-                    Transform::identity(),
-                    None,
-                );
-                return;
+            let border = pad.checked_mul(2).ok_or("Layer effect padding overflow")?;
+            let width = pm
+                .width()
+                .checked_add(border)
+                .ok_or("Layer effect width overflow")?;
+            let height = pm
+                .height()
+                .checked_add(border)
+                .ok_or("Layer effect height overflow")?;
+            let bytes = crate::deep_color::storage::count(width, height, 4)?;
+            let _memory = crate::resources::global().reserve_now(bytes as u64, &|| Ok(()))?;
+            let mut pixels =
+                Pixmap::new(width, height).ok_or("Could not allocate layer effect padding")?;
+            let source = PixmapPaint {
+                blend_mode: tiny_skia::BlendMode::Source,
+                ..Default::default()
+            };
+            pixels.draw_pixmap(
+                pad as i32,
+                pad as i32,
+                pm.as_ref(),
+                &source,
+                Transform::identity(),
+                None,
+            );
+            Context {
+                doc: self.doc,
+                transform: Transform::from_translate(pad as f32, pad as f32)
+                    .pre_concat(self.transform),
+                draft: self.draft,
+                motion: self.motion,
+                overrides: self.overrides,
+                children: self.children.clone(),
+                sources: self.sources.clone(),
             }
+            .draw_layer_inner(&mut pixels, index, depth)?;
+            pm.draw_pixmap(
+                -(pad as i32),
+                -(pad as i32),
+                pixels.as_ref(),
+                &source,
+                Transform::identity(),
+                None,
+            );
+            return Ok(());
         }
-        self.draw_layer_inner(pm, index, depth);
+
+        self.draw_layer_inner(pm, index, depth)
     }
 
-    fn draw_layer_inner(&self, pm: &mut Pixmap, index: usize, depth: usize) {
+    fn draw_layer_inner(&self, pm: &mut Pixmap, index: usize, depth: usize) -> Result<(), String> {
+        self.draw_layer_content(pm, index, depth, &self.doc.layers[index])
+    }
+
+    fn draw_layer_content(
+        &self,
+        pm: &mut Pixmap,
+        index: usize,
+        depth: usize,
+        layer: &Layer,
+    ) -> Result<(), String> {
         if depth > 64 {
-            return;
+            return Err("Layer render group depth exceeds 64".into());
         }
-        let layer = &self.doc.layers[index];
         let mut filters = layer.filters.clone();
         crate::filter::scale(&mut filters, self.transform.get_scale().0);
         if !layer.visible
@@ -158,11 +200,11 @@ impl Context<'_, '_> {
                 && (layer.opacity <= 0.0
                     || masked_outside_view(layer, self.transform, pm.width(), pm.height())))
         {
-            return;
+            return Ok(());
         }
         if !layer.is_group && layer.svg_filter.is_none() {
             if is_paper_raster(layer) {
-                return;
+                return Ok(());
             }
             let brush = self
                 .draft
@@ -179,7 +221,7 @@ impl Context<'_, '_> {
                 self.overrides,
                 &self.sources,
             );
-            return;
+            return Ok(());
         }
         if layer.pass_through
             && layer.opacity >= 1.0
@@ -189,8 +231,8 @@ impl Context<'_, '_> {
             && !layer.filters.active()
             && layer.svg_filter.is_none()
         {
-            self.draw_children(pm, Some(layer.id), depth + 1);
-            return;
+            self.draw_children(pm, Some(layer.id), depth + 1)?;
+            return Ok(());
         }
         let passthrough = layer.pass_through
             && layer.artwork_masks.is_empty()
@@ -201,7 +243,7 @@ impl Context<'_, '_> {
         } else {
             Pixmap::new(pm.width(), pm.height())
         }) else {
-            return;
+            return Err("Could not allocate isolated layer pixels".into());
         };
         if layer.svg_filter.is_some() {
             match svg_effects::render(
@@ -215,12 +257,15 @@ impl Context<'_, '_> {
             ) {
                 Ok(surface) => temp = surface,
                 Err(error) => {
+                    if error.contains("LayerClippingUnsupported") {
+                        return Err(error);
+                    }
                     eprintln!("SVG effect graph: {error}");
-                    self.draw_children(&mut temp, Some(layer.id), depth + 1);
+                    self.draw_children(&mut temp, Some(layer.id), depth + 1)?;
                 }
             }
         } else {
-            self.draw_children(&mut temp, Some(layer.id), depth + 1);
+            self.draw_children(&mut temp, Some(layer.id), depth + 1)?;
         }
         let mask = layer.mask.as_ref().and_then(|pixels| {
             let mut placed = Pixmap::new(pm.width(), pm.height())?;
@@ -285,7 +330,7 @@ impl Context<'_, '_> {
                     layer.blend_interior,
                     live.as_ref(),
                 );
-                return;
+                return Ok(());
             }
             let cached;
             let (pixels, coverage) = if filters.active() {
@@ -318,17 +363,20 @@ impl Context<'_, '_> {
                 );
             }
         }
+        Ok(())
     }
 }
 
-pub(super) fn draw_item(
+/// Draw a selected sibling scope while keeping original mask and animation owners.
+/// Args: destination, complete document, painter-ordered roots, placement and current poses. Returns a render/allocation error before publication.
+pub(super) fn draw_items(
     pm: &mut Pixmap,
     doc: &Document,
-    index: usize,
+    roots: &[usize],
     transform: Transform,
     motion: Option<f32>,
     overrides: Option<&HashMap<u64, Pose>>,
-) {
+) -> Result<(), String> {
     let mut children: HashMap<Option<u64>, Vec<usize>> = HashMap::new();
     for (i, layer) in doc.layers.iter().enumerate() {
         children.entry(layer.parent).or_default().push(i);
@@ -342,7 +390,93 @@ pub(super) fn draw_item(
         children,
         sources: doc.mask_sources(),
     }
-    .draw_layer(pm, index, 0);
+    .draw_list(pm, roots, 0, true)
+}
+
+pub(super) fn draw_item(
+    pm: &mut Pixmap,
+    doc: &Document,
+    index: usize,
+    transform: Transform,
+    motion: Option<f32>,
+    overrides: Option<&HashMap<u64, Pose>>,
+) -> Result<(), String> {
+    let mut children: HashMap<Option<u64>, Vec<usize>> = HashMap::new();
+    for (i, layer) in doc.layers.iter().enumerate() {
+        children.entry(layer.parent).or_default().push(i);
+    }
+    Context {
+        doc,
+        transform,
+        draft: &Draft::none(),
+        motion,
+        overrides,
+        children,
+        sources: doc.mask_sources(),
+    }
+    .draw_layer(pm, index, 0)
+}
+
+/// Draw the live transparency that owns a clipping stack, excluding its outer effects.
+/// Args: destination, complete document, base index and current viewport/poses. Returns a render/allocation error.
+pub(super) fn clipping_base(
+    pm: &mut Pixmap,
+    doc: &Document,
+    index: usize,
+    transform: Transform,
+    motion: Option<f32>,
+    overrides: Option<&HashMap<u64, Pose>>,
+) -> Result<(), String> {
+    let mut layer = doc
+        .layers
+        .get(index)
+        .ok_or("Missing clipping base")?
+        .clone();
+    layer.filters = Default::default();
+    layer.blend = crate::color::Blend::Normal;
+    layer.pass_through = false;
+    let mut children: HashMap<Option<u64>, Vec<usize>> = HashMap::new();
+    for (i, layer) in doc.layers.iter().enumerate() {
+        children.entry(layer.parent).or_default().push(i);
+    }
+    Context {
+        doc,
+        transform,
+        draft: &Draft::none(),
+        motion,
+        overrides,
+        children,
+        sources: doc.mask_sources(),
+    }
+    .draw_layer_content(pm, index, 0, &layer)
+}
+
+/// Restrict an isolated layer or object to its live clipping base.
+/// Args: rendered item, document, owning layer and actual viewport/poses. Returns without changing unclipped artwork.
+pub(super) fn apply_clipping_mask(
+    pixels: &mut Pixmap,
+    doc: &Document,
+    index: usize,
+    transform: Transform,
+    motion: Option<f32>,
+    overrides: Option<&HashMap<u64, Pose>>,
+) -> Result<(), String> {
+    for base in doc.clipping_bases(index) {
+        if !doc.layer_visible(base) {
+            pixels.fill(tiny_skia::Color::TRANSPARENT);
+            return Ok(());
+        }
+        let bytes = crate::deep_color::storage::count(pixels.width(), pixels.height(), 5)?;
+        let _memory = crate::resources::global().reserve_now(bytes as u64, &|| Ok(()))?;
+        let mut mask = Pixmap::new(pixels.width(), pixels.height())
+            .ok_or("Could not allocate clipping mask")?;
+        clipping_base(&mut mask, doc, base, transform, motion, overrides)?;
+        pixels.apply_mask(&tiny_skia::Mask::from_pixmap(
+            mask.as_ref(),
+            tiny_skia::MaskType::Alpha,
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -389,7 +523,8 @@ mod tests {
             &Draft::none(),
             None,
             None,
-        );
+        )
+        .unwrap();
         draw(
             &mut cropped,
             &doc,
@@ -397,7 +532,8 @@ mod tests {
             &Draft::none(),
             None,
             None,
-        );
+        )
+        .unwrap();
         let expected: Vec<_> = full
             .data()
             .chunks_exact(64 * 4)

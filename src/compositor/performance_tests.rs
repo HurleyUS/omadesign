@@ -566,7 +566,7 @@ fn cached_nested_group_filters_match_fresh_compositing() {
                 &Draft::none(),
                 None,
                 Some(&overrides),
-            );
+            ).unwrap();
             assert_pixels_equal(&actual, &expected, "cached nested group filter pixels");
         }
     }

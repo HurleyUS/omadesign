@@ -185,7 +185,7 @@ pub fn sample_color(doc: &Document, at: Pt) -> Option<Rgba> {
         offset: Pt::new(0.5 - at.x, 0.5 - at.y),
     };
     draw_plates(&mut pm, doc, view);
-    groups::draw(&mut pm, doc, view.transform(), &Draft::none(), None, None);
+    groups::draw(&mut pm, doc, view.transform(), &Draft::none(), None, None).ok()?;
     motion_scene::draw(
         &mut pm,
         doc,
@@ -247,7 +247,10 @@ pub fn render_view_posed(
     if let Some(overrides) = overrides {
         poses.extend(overrides.iter().map(|(id, pose)| (*id, *pose)));
     }
-    groups::draw(&mut pm, doc, t, &draft, motion_t, Some(&poses));
+    if let Err(error) = groups::draw(&mut pm, doc, t, &draft, motion_t, Some(&poses)) {
+        MOTION_ERROR.with(|current| *current.borrow_mut() = Some(error));
+        return None;
+    }
     let scene_result = motion_scene::draw(
         &mut pm,
         doc,
@@ -282,7 +285,7 @@ pub(crate) fn render_export_sized(
     let mut pm = Pixmap::new(w, h).ok_or("could not allocate export pixmap")?;
     draw_export_plates(&mut pm, doc, s as f32);
     let t = Transform::from_scale(s as f32, s as f32);
-    groups::draw(&mut pm, doc, t, &Draft::none(), None, None);
+    groups::draw(&mut pm, doc, t, &Draft::none(), None, None)?;
     motion_scene::draw(
         &mut pm,
         doc,
@@ -319,7 +322,7 @@ pub(crate) fn render_export_preview(doc: &Document, max_edge: u32) -> Result<Pix
         &Draft::none(),
         None,
         None,
-    );
+    )?;
     motion_scene::draw(
         &mut pm,
         doc,
@@ -385,7 +388,7 @@ pub fn render_export_at_cancellable(
         }
     }
     let t = Transform::from_scale(s, s);
-    groups::draw(&mut pm, doc, t, &Draft::none(), Some(time), Some(&poses));
+    groups::draw(&mut pm, doc, t, &Draft::none(), Some(time), Some(&poses))?;
     motion_scene::draw(
         &mut pm,
         doc,
@@ -977,9 +980,24 @@ pub(crate) fn item_alpha(
     if let Some(id) = id {
         frames::draw_item(&mut pm, doc, index, id, transform, None, None);
     } else {
-        groups::draw_item(&mut pm, doc, index, transform, None, None);
+        groups::draw_item(&mut pm, doc, index, transform, None, None).ok()?;
     }
+    groups::apply_clipping_mask(&mut pm, doc, index, transform, None, None).ok()?;
     Some(pm.pixels().iter().map(|p| p.alpha()).collect())
+}
+
+/// Test live clipping transparency at the same point used by native object selection.
+/// Args: document, layer index, world point and optional current animation/poses. Returns false for hidden/empty clipping coverage.
+pub(crate) fn clipping_visible_at(
+    doc: &Document, index: usize, point: Pt, motion: Option<f32>, overrides: Option<&HashMap<u64, Pose>>,
+) -> bool {
+    for base in doc.clipping_bases(index) {
+        if !doc.layer_visible(base) { return false; }
+        let Some(mut pixels) = Pixmap::new(1, 1) else { return false; };
+        let transform = Transform::from_translate(0.5 - point.x, 0.5 - point.y);
+        if groups::clipping_base(&mut pixels, doc, base, transform, motion, overrides).is_err() || pixels.data()[3] <= 8 {return false;}
+    }
+    true
 }
 
 /// Paint the keyed fill, stroke width, and gradient angle onto a copy of the design.
@@ -1836,8 +1854,8 @@ mod tests {
         let (doc, _) = crate::formats::svg::read(source, "Integer text pan").unwrap();
         let mut initial = Pixmap::new(110, 64).unwrap();
         let mut moved = Pixmap::new(150, 90).unwrap();
-        groups::draw(&mut initial, &doc, Transform::identity(), &Draft::none(), None, None);
-        groups::draw(&mut moved, &doc, Transform::from_translate(17., 11.), &Draft::none(), None, None);
+        groups::draw(&mut initial, &doc, Transform::identity(), &Draft::none(), None, None).unwrap();
+        groups::draw(&mut moved, &doc, Transform::from_translate(17., 11.), &Draft::none(), None, None).unwrap();
         let cropped: Vec<_> = moved.data().chunks_exact(150 * 4).skip(11).take(64)
             .flat_map(|row| row[17 * 4..127 * 4].iter().copied()).collect();
         assert!(initial.data().chunks_exact(4).any(|pixel| pixel[3] > 0));

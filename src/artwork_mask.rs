@@ -186,12 +186,15 @@ impl Document {
             return Ok(());
         }
         let mut graph: HashMap<MaskSource, Vec<MaskSource>> = HashMap::new();
-        for layer in &self.layers {
+        for (index, layer) in self.layers.iter().enumerate() {
             let root = MaskSource {
                 layer: layer.id,
                 shape: None,
             };
             let edges = graph.entry(root).or_default();
+            for base in self.clipping_bases(index) {
+                edges.push(MaskSource { layer: self.layers[base].id, shape: None });
+            }
             edges.extend(
                 layer
                     .artwork_masks
@@ -225,6 +228,7 @@ impl Document {
                         .iter()
                         .map(|m| self.resolved_mask_source(m.source)),
                 );
+                graph.entry(item).or_default().extend(self.clipping_bases(index).map(|base| MaskSource {layer:self.layers[base].id,shape:None}));
             }
             for mask in layer.artwork_masks.iter().chain(
                 layer

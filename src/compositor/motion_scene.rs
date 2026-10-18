@@ -182,7 +182,7 @@ pub(super) fn draw(
             &Draft::none(),
             Some(local_time),
             Some(&child_poses),
-        );
+        )?;
         draw(
             &mut child,
             &comp.document,

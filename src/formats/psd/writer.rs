@@ -13,6 +13,7 @@ struct Record {
     name: String,
     blend: [u8; 4],
     opacity: u8,
+    clipping: bool,
     flags: u8,
     section: u32,
     mask_rect: Option<Rect>,
@@ -169,6 +170,7 @@ pub fn encode_admitted(doc: &Document, large: bool) -> Result<super::AdmittedPsd
             name: "Document paper".into(),
             blend: *b"norm",
             opacity: 255,
+            clipping: false,
             flags: 9,
             section: 0,
             mask_rect: None,
@@ -214,6 +216,7 @@ pub fn encode_admitted(doc: &Document, large: bool) -> Result<super::AdmittedPsd
             name: "Layer 1".into(),
             blend: *b"norm",
             opacity: 255,
+            clipping: false,
             flags: 8,
             section: 0,
             mask_rect: None,
@@ -334,6 +337,7 @@ fn collect(
                 name: "</Layer group>".into(),
                 blend: *b"norm",
                 opacity: 255,
+                clipping: false,
                 flags: 8,
                 section: 3,
                 mask_rect: None,
@@ -372,6 +376,7 @@ fn collect(
                 * 255.0)
                 .round() as u8,
             flags: 8 | if layer.visible { 0 } else { 2 } | u8::from(layer.locked),
+            clipping: layer.clipped,
             section: if layer.is_group { 1 } else { 0 },
             mask_rect: None,
             channels: Vec::new(),
@@ -666,7 +671,7 @@ fn write_record(out: &mut impl Write, record: &Record, large: bool) -> Result<()
     }
     out.write_all(b"8BIM").map_err(|e| e.to_string())?;
     out.write_all(&record.blend).map_err(|e| e.to_string())?;
-    out.write_all(&[record.opacity, 0, record.flags, 0]).map_err(|e| e.to_string())?;
+    out.write_all(&[record.opacity, u8::from(record.clipping), record.flags, 0]).map_err(|e| e.to_string())?;
     let mut extra = Vec::new();
     if let Some(bounds) = record.mask_rect {
         u32(&mut extra, 20)?;

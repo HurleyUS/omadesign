@@ -37,8 +37,9 @@ pub(super) fn render(
             if let Some(id) = mask.source.shape {
                 frames::draw_item(&mut image, doc, index, id, placement, motion, overrides);
             } else {
-                groups::draw_item(&mut image, doc, index, placement, motion, overrides);
+                groups::draw_item(&mut image, doc, index, placement, motion, overrides).ok()?;
             }
+            groups::apply_clipping_mask(&mut image, doc, index, placement, motion, overrides).ok()?;
         }
         let mut values = tiny_skia::Mask::from_pixmap(
             image.as_ref(),
@@ -126,7 +127,7 @@ pub(crate) fn raster_export_document(doc: &Document) -> Result<Document, String>
             Transform::identity(),
             None,
             None,
-        );
+        )?;
         scene.layers[index] = original.clone();
         let replacement = &mut output.layers[index];
         replacement.kind = LayerKind::Raster {

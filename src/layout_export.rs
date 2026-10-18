@@ -13,6 +13,9 @@ pub fn frame_document(doc: &Document, layer: usize, frame_id: u64) -> Result<Doc
         .find_shape(layer, frame_id)
         .filter(|s| s.layout.frame)
         .ok_or("Select a frame to export")?;
+    if doc.clipping_bases(layer).next().is_some() {
+        return Err("LayerClippingUnsupported: isolated frame export cannot retain its external clipping base yet. Export the complete PNG/TIFF canvas or save .oma.".into());
+    }
     let bounds = frame.world_bbox();
     if !bounds.width().is_finite()
         || !bounds.height().is_finite()

@@ -882,6 +882,7 @@ pub fn hit_test(
         if !doc.layer_editable(li) {
             continue;
         }
+        if !crate::compositor::clipping_visible_at(doc, li, p, Some(t), Some(overrides)) { continue; }
         if let Some(bounds) = layer.kind.raster_bounds() {
             let pose = overrides
                 .get(&layer.id)
@@ -968,6 +969,7 @@ pub fn hits_in_rect(
 /// Lottie shape export. Unsupported raster masks/effects fail explicitly;
 /// animated SVG remains the complete document export for those compositions.
 pub fn export_lottie(doc: &Document) -> Result<String, String> {
+    doc.require_no_layer_clipping("Lottie")?;
     if doc.layers.iter().any(|l| l.svg_filter.is_some() || l.kind.shapes().is_some_and(|shapes| shapes.iter().any(|s| matches!(s.style.fill, Fill::Pattern(_))))) { return Err("Lottie cannot preserve SVG patterns or source filter graphs. Export SVG to retain them.".into()); }
     if !doc.mask_sources().is_empty() {return Err("Lottie cannot preserve live artwork masks here. Export animated SVG to keep them.".into());}
     if doc.motion.scene3d.is_some() {

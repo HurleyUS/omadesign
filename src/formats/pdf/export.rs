@@ -21,6 +21,7 @@ pub fn write(document: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
     crate::motion::require_flat_artwork(document, "PDF")?;
     crate::compositor::admit_precise_export(document)?;
     document.validate_hierarchy()?;
+    document.require_no_layer_clipping("PDF")?;
     let (prepared, warnings) = fallback::prepare(document)?;
     let document = prepared.as_ref();
     let mut writer = Writer {

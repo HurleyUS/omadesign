@@ -158,6 +158,7 @@ impl Request {
         layer.id = original.id;
         layer.parent = original.parent;
         layer.locked = original.locked;
+        layer.clipped = original.clipped && matches!(self.kind, Kind::Down(_) | Kind::Group(_));
         if matches!(self.kind, Kind::Down(_)) {
             layer.blend = original.blend;
         }

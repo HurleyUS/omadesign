@@ -2938,5 +2938,50 @@
       "Value": 700
     },
     "error": true
+  },
+  {
+    "name": "clipping35 live field",
+    "path": "/@entities/clip/clipped",
+    "cell": {
+      "Value": true
+    },
+    "error": true
+  },
+  {
+    "name": "clipping35 typed layers",
+    "path": "/layers",
+    "cell": {
+      "Value": [
+        {
+          "id": 1,
+          "clipped": true
+        }
+      ]
+    },
+    "error": true
+  },
+  {
+    "name": "clipping35 embedded stable child",
+    "path": "/@compositions/c1/document/layers/0/clipped",
+    "cell": {
+      "Value": true
+    },
+    "error": true
+  },
+  {
+    "name": "clipping35 inactive false remains legacy",
+    "path": "/layers/0/clipped",
+    "cell": {
+      "Value": false
+    },
+    "required": 1
+  },
+  {
+    "name": "clipping35 deletion remains legacy",
+    "path": "/layers/0/clipped",
+    "cell": {
+      "Value": null
+    },
+    "required": 1
   }
 ]

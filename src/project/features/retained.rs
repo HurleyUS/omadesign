@@ -1,5 +1,5 @@
 use super::{
-    ADVANCED_LAYOUT, VARIABLE_FONTS, QUICK_MASK, CHANNELS, COLOR, COMPOSITIONS, EXPORT_FOLDERS, EXPORT_RESOLUTION, EXPRESSIONS, NATIVE,
+    ADVANCED_LAYOUT, LAYER_CLIPPING, VARIABLE_FONTS, QUICK_MASK, CHANNELS, COLOR, COMPOSITIONS, EXPORT_FOLDERS, EXPORT_RESOLUTION, EXPRESSIONS, NATIVE,
     PSD_TYPE, SCENE3D, SCREEN_EXPORT, SMART, SOURCE,
 };
 use serde::Deserialize;
@@ -13,6 +13,7 @@ struct Seen {
     exists: bool,
     word: Option<&'static str>,
     number: Option<u32>,
+    flag: Option<bool>,
     items: usize,
     motion_count: usize,
     motion_depth: usize,
@@ -82,6 +83,7 @@ fn field_version(key: &str, value: &Seen) -> u32 {
     }
     let path = layout_property(key).unwrap_or_else(|| key.rsplit('/').next().unwrap_or(key));
     match path {
+        "clipped" if value.flag == Some(true) => LAYER_CLIPPING,
         "grid" if value.explicit_grid => ADVANCED_LAYOUT,
         "stack" | "breakpoints" if value.baseline_align => ADVANCED_LAYOUT,
         "Main" if value.named_properties => ADVANCED_LAYOUT,
@@ -124,8 +126,9 @@ impl<'de> Deserialize<'de> for Seen {
             fn visit_unit<E: serde::de::Error>(self) -> Result<Seen, E> {
                 Ok(Seen::default())
             }
-            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Seen, E> {
+            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Seen, E> {
                 Ok(Seen {
+                    flag: Some(value),
                     present: true,
                     exists: true,
                     ..Default::default()
@@ -184,6 +187,7 @@ impl<'de> Deserialize<'de> for Seen {
                                 Some("sources") => Some("sources"),
                                 Some("screen_export") => Some("screen_export"),
                                 Some("native") => Some("native"),
+                                Some("clipped") => Some("clipped"),
                                 Some("psd_type") => Some("psd_type"),
                                 Some("psd_smart") => Some("psd_smart"),
                                 Some("cmyk") => Some("cmyk"),
@@ -300,6 +304,7 @@ impl<'de> Deserialize<'de> for Seen {
                     result.exists = child.exists;
                     result.word = child.word;
                     result.number = child.number;
+                    result.flag = child.flag;
                     result.items = child.items;
                     result.explicit_grid = child.explicit_grid;
                     result.baseline_align = child.baseline_align;

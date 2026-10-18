@@ -29,6 +29,7 @@ impl Shortcut {
             Export => ("Ctrl+E", "Export PNG"),
             MergeActive => ("Ctrl+E","Merge Down"),
             MergeVisible => ("Ctrl+Shift+E","Merge Visible"),
+            ToggleLayerClipping => ("Ctrl+Alt+G", "Toggle clipping mask"),
             Undo => ("Ctrl+Z", "Undo"),
             Redo if shift => ("Ctrl+Shift+Z", "Redo"),
             Redo => ("Ctrl+Y", "Redo"),

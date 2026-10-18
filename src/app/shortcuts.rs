@@ -49,11 +49,12 @@ pub(super) enum Shortcut {
     ToggleQuickMask,
     MergeActive,
     MergeVisible,
+    ToggleLayerClipping,
 }
 
 impl Shortcut {
     pub(super) fn available(self, persona: Persona) -> bool {
-        if matches!(self,Self::MergeActive|Self::MergeVisible) {return persona==Persona::Pixel;}
+        if matches!(self,Self::MergeActive|Self::MergeVisible|Self::ToggleLayerClipping) {return persona==Persona::Pixel;}
         if self == Self::ToggleQuickMask {return persona == Persona::Pixel;}
         if self == Self::ToolPoints { return true; }
         if self == Self::NewPixelLayer { return persona == Persona::Pixel; }
@@ -106,6 +107,9 @@ fn plain_paste_key(key: Key, mods: Modifiers) -> bool {
 }
 
 pub(super) fn key_shortcut_for_persona(key:Key,mods:Modifiers,persona:Persona)->Option<Shortcut> {
+    if persona==Persona::Pixel && key==Key::G && mods.alt && !mods.shift && (mods.ctrl||mods.command||mods.mac_cmd) {
+        return Some(Shortcut::ToggleLayerClipping);
+    }
     if persona==Persona::Pixel && key==Key::E && !mods.alt && (mods.ctrl||mods.command||mods.mac_cmd) {
         return Some(if mods.shift {Shortcut::MergeVisible} else {Shortcut::MergeActive});
     }
@@ -443,6 +447,10 @@ impl Studio {
                 if let Some(kind)=self.pixel_merge_shortcut(shortcut==Shortcut::MergeVisible) {
                     crate::ui::layer_merge::start(ctx,self,kind);
                 }
+            }
+            Shortcut::ToggleLayerClipping => {
+                let clipped = self.active_layer.and_then(|i| self.doc.layers.get(i)).is_some_and(|l| l.clipped);
+                self.set_layer_clipping(None, !clipped);
             }
             Shortcut::Export => {
                 self.commit_type_edit();

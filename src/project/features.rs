@@ -27,6 +27,7 @@ pub(super) const EXPORT_FOLDERS: u32 = 31;
 pub(super) const CHANNELS: u32 = 32;
 pub(super) const QUICK_MASK: u32 = 33;
 pub(super) const VARIABLE_FONTS: u32 = 34;
+pub(super) const LAYER_CLIPPING: u32 = 35;
 
 /// Identify implemented project readers.
 /// Args: envelope version. Returns false for reserved formats whose models are absent.
@@ -51,6 +52,7 @@ pub(super) fn supports_version(version: u32) -> bool {
             | CHANNELS
             | QUICK_MASK
             | VARIABLE_FONTS
+            | LAYER_CLIPPING
     )
 }
 
@@ -64,13 +66,13 @@ pub(super) fn required_version(doc: &Document) -> u32 {
                 .max()
                 .unwrap_or(5)
         })
-        .unwrap_or(VARIABLE_FONTS + 1)
+        .unwrap_or(LAYER_CLIPPING + 1)
 }
 
 fn local_required_version(doc: &Document) -> u32 {
     let mut version = if doc.mask_sources().is_empty() { 5 } else { 13 };
     if let Some(replica) = &doc.collaboration {
-        version = version.max(retained::replica_version(replica).unwrap_or(VARIABLE_FONTS + 1));
+        version = version.max(retained::replica_version(replica).unwrap_or(LAYER_CLIPPING + 1));
     }
     if crate::text::variations::document(doc) { version = version.max(VARIABLE_FONTS); }
     if !doc.channels.is_empty() { version=version.max(CHANNELS); }
@@ -142,6 +144,7 @@ fn local_required_version(doc: &Document) -> u32 {
         version = version.max(PUBLISHING);
     }
     for layer in &doc.layers {
+        if layer.clipped { version = version.max(LAYER_CLIPPING); }
         if layer.source_attachment.is_some() {
             version = version.max(SOURCE);
         }
@@ -493,10 +496,10 @@ mod tests {
         let encoded = super::super::encode(&doc).unwrap();
         let mut envelope: serde_json::Value = serde_json::from_str(&encoded).unwrap();
         assert_eq!(envelope["version"], 5);
-        for version in 0..=35 {
+        for version in 0..=36 {
             let supported = matches!(
                 version,
-                1..=17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33 | 34
+                1..=17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35
             );
             assert_eq!(supports_version(version), supported, "reader {version}");
             envelope["version"] = version.into();
@@ -826,7 +829,7 @@ mod tests {
             neutral["version"] = implemented.into();
             super::super::decode(&neutral.to_string()).unwrap();
         }
-        for reserved in [VARIABLE_FONTS + 1, u32::MAX] {
+        for reserved in [LAYER_CLIPPING + 1, u32::MAX] {
             neutral["version"] = reserved.into();
             assert!(
                 super::super::decode(&neutral.to_string())
@@ -905,4 +908,29 @@ mod variable_font_tests {
         doc.layers = vec![layer];
         assert_eq!(required_version(&doc), VARIABLE_FONTS);
     }
+    #[test]
+    fn layer_clipping35_gates_current_nested_and_all_retained_cells_before_typed_loss() {
+        let mut doc=Document::new("Clipping reader",2.,1.,72.);
+        assert_eq!(required_version(&doc),5);
+        doc.layers[0].clipped=true;
+        assert_eq!(required_version(&doc),LAYER_CLIPPING);
+        let text=crate::project::encode(&doc).unwrap();
+        let mut envelope:serde_json::Value=serde_json::from_str(&text).unwrap();
+        assert_eq!(envelope["version"],LAYER_CLIPPING);
+        assert!(crate::project::decode(&text).unwrap().layers[0].clipped);
+        envelope["version"]=34.into();
+        assert!(crate::project::decode(&envelope.to_string()).unwrap_err().contains("35"));
+        let mut parent=Document::new("Nested",2.,1.,72.);
+        parent.motion.compositions.push(crate::motion::compositions::Composition::new(doc));
+        assert_eq!(required_version(&parent),LAYER_CLIPPING);
+        for retained in [
+            serde_json::json!({"base":{"/layers/0/clipped":{"Value":true}}}),
+            serde_json::json!({"changes":[{"edit":{"Write":{"writes":[{"path":"/@compositions/child/document/layers/0/clipped","value":{"Value":true}}]}}}]}),
+        ] {
+            assert_eq!(value_version(&retained).unwrap(),LAYER_CLIPPING);
+            assert_eq!(serialized_version(&retained.to_string()).unwrap().0,LAYER_CLIPPING);
+        }
+        assert_eq!(value_version(&serde_json::json!({"base":{"/layers/0/clipped":{"Value":false}}})).unwrap(),1);
+    }
+
 }

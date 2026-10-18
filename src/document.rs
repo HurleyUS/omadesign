@@ -867,6 +867,8 @@ pub struct Layer {
     #[serde(default)]
     pub blend_interior: bool,
     pub blend: Blend,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clipped: bool,
     pub mask: Option<Pixels>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artwork_masks: Vec<crate::artwork_mask::ArtworkMask>,
@@ -911,6 +913,7 @@ impl Layer {
             fill_opacity: 1.0,
             blend_interior: false,
             blend: Blend::Normal,
+            clipped: false,
             svg_filter: None,
             parent: None,
             is_group: false,
@@ -949,6 +952,7 @@ impl Layer {
             fill_opacity: 1.0,
             blend_interior: false,
             blend: Blend::Normal,
+            clipped: false,
             svg_filter: None,
             parent: None,
             is_group: false,
@@ -1416,6 +1420,7 @@ impl Document {
         self.layers
             .get(index)
             .is_some_and(|l| l.visible && !l.locked && !l.is_group)
+            && self.layer_visible(index)
             && self
                 .layer_ancestors(index)
                 .iter()
@@ -1424,6 +1429,7 @@ impl Document {
 
     pub fn layer_visible(&self, index: usize) -> bool {
         self.layers.get(index).is_some_and(|l| l.visible)
+            && self.clipping_bases(index).all(|base| self.layers[base].visible)
             && self
                 .layer_ancestors(index)
                 .iter()
@@ -1705,6 +1711,7 @@ impl Document {
             if !self.layer_editable(li) || self.mask_source_member(li, None, &mask_sources) {
                 continue;
             }
+            if !crate::compositor::clipping_visible_at(self, li, p, None, None) { continue; }
             if let Some(shapes) = layer.kind.shapes() {
                 for index in self.layout_paint_order(li).into_iter().rev() {
                     let shape = &shapes[index];
@@ -1866,6 +1873,7 @@ impl RasterState {
 
 #[derive(Clone, Debug)]
 pub enum Cmd {
+    SetLayerClipping { index: usize, before: bool, after: bool },
     SetQuickMask {
         before: Option<crate::channels::quick_mask::QuickMask>,
         after: Option<crate::channels::quick_mask::QuickMask>,
@@ -2390,6 +2398,7 @@ fn coalesce(prev: &mut Cmd, next: &Cmd) -> bool {
 
 pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
     match cmd {
+        Cmd::SetLayerClipping {index,before,after} => Cmd::SetLayerClipping {index,before:after,after:before},
         Cmd::SetQuickMask {before,after,selection} => Cmd::SetQuickMask {before:after,after:before,selection:selection.map(|s| Box::new(crate::channels::quick_mask::SelectionChange {before:s.after,after:s.before}))},
         Cmd::SetChannels {before,after} => Cmd::SetChannels {before:after,after:before},
         Cmd::SetSmartLayer{index,before,after}=>Cmd::SetSmartLayer{index,before:after,after:before},
@@ -2774,6 +2783,7 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
 
 pub fn apply(doc: &mut Document, cmd: &Cmd) {
     match cmd {
+        Cmd::SetLayerClipping {index,after,..} => {if let Some(layer)=doc.layers.get_mut(*index){layer.clipped=*after;}}
         Cmd::SetSmartLayer{index,after,..}=>{if let Some(layer)=doc.layers.get_mut(*index){*layer=(**after).clone();}}
         Cmd::SetDocumentColor { after, .. } => doc.color = after.clone(),
         Cmd::SetCanvas { after, .. } => {

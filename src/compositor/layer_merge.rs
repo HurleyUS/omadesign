@@ -41,6 +41,10 @@ fn scope(doc: &Document, roots: &[usize]) -> Result<Document, String> {
             layer.parent = None;
         }
     }
+    if let Some(first) = roots.first().map(|&i| doc.layers[i].id)
+        && let Some(layer) = output.layers.iter_mut().find(|l| l.id == first) {
+        layer.clipped = false;
+    }
     output.transparent = true;
     output.motion.compositions.clear();
     output.motion.scene3d = None;
@@ -139,7 +143,7 @@ fn bounds(
             }
         }
     }
-    if !crate::deep_color::has_native(scoped)
+    if !crate::deep_color::has_native(scoped) && !scoped.layers.iter().any(|l| l.clipped)
         && scoped
             .layers
             .iter()
@@ -273,18 +277,8 @@ pub(crate) fn render(
             image.fill(tiny_skia::Color::WHITE);
         }
         let transform = Transform::from_translate(-area.min.x, -area.min.y);
-        let mask_sources = scoped.mask_sources();
-        for (done, &root) in roots.iter().enumerate() {
-            progress.check()?;
-            progress.report("Rendering layers", done, roots.len());
-            if mask_sources.contains(&crate::artwork_mask::MaskSource {
-                layer: doc.layers[root].id,
-                shape: None,
-            }) {
-                continue;
-            }
-            groups::draw_item(&mut image, doc, root, transform, Some(time), Some(&poses));
-        }
+        progress.report("Rendering layers", 0, roots.len());
+        groups::draw_items(&mut image, doc, roots, transform, Some(time), Some(&poses))?;
         progress.check()?;
         Pixels::try_from_pixmap(&image)?
     };

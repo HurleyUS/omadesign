@@ -220,98 +220,232 @@ fn render(
     if depth >= 64 {
         return Err("Native composite group depth exceeds limit".into());
     }
-    for layer in doc
+    let siblings: Vec<_> = doc
         .layers
         .iter()
-        .filter(|l| l.parent == parent && l.visible)
+        .enumerate()
+        .filter(|(_, l)| l.parent == parent)
+        .map(|(i, _)| i)
+        .collect();
+    let mut start = 0;
+    while start < siblings.len() {
+        let end = crate::layer_clipping::stack_end(doc, &siblings, start);
+        let layer = &doc.layers[siblings[start]];
+        if layer.visible {
+            if end > start + 1 {
+                render_clipped(doc, &siblings[start..end], out, w, h, scale, depth, cancel)?;
+            } else {
+                render_layer(doc, layer, out, w, h, scale, depth, cancel)?;
+            }
+        }
+        start = end;
+    }
+    Ok(())
+}
+
+fn render_layer(
+    doc: &Document,
+    layer: &Layer,
+    out: &mut [[f32; 4]],
+    w: u32,
+    h: u32,
+    scale: f32,
+    depth: usize,
+    cancel: &dyn crate::resources::CancellationCheck,
+) -> Result<(), String> {
+    cancel.check()?;
+    if layer
+        .svg_filter
+        .as_ref()
+        .is_some_and(|graph| !graph.filters.is_empty())
     {
-        cancel.check()?;
-        if layer
-            .svg_filter
-            .as_ref()
-            .is_some_and(|graph| !graph.filters.is_empty())
-        {
-            return Err("Native SVG filter graphs require a float effect renderer; save .oma to retain the authored document.".into());
+        return Err("Native SVG filter graphs require a float effect renderer; save .oma to retain the authored document.".into());
+    }
+    if layer.opacity <= 0. {
+        return Ok(());
+    }
+    if !layer.artwork_masks.is_empty() {
+        return Err(
+            "High-depth live artwork mask rendering requires explicit raster conversion".into(),
+        );
+    }
+    if layer.is_group {
+        if layer.filters.active() {
+            return Err("High-depth group effects require explicit raster conversion".into());
         }
-        if layer.opacity <= 0. {
-            continue;
+        let pass = layer.pass_through;
+        let mut temp = if pass {
+            crate::resources::global().copy_now(out, cancel)?
+        } else {
+            crate::resources::global().allocate_now::<[f32; 4], _>(out.len(), cancel)?
+        };
+        render(
+            doc,
+            Some(layer.id),
+            temp.as_mut_slice(),
+            w,
+            h,
+            scale,
+            depth + 1,
+            cancel,
+        )?;
+        for (i, (dst, src)) in out.iter_mut().zip(temp.iter().copied()).enumerate() {
+            if i % 4096 == 0 {
+                cancel.check()?;
+            }
+            let p = Pt::new(
+                (i % w as usize) as f32 / scale as f32,
+                (i / w as usize) as f32 / scale as f32,
+            );
+            let amount = layer.opacity * layer.fill_opacity * mask(layer, p, None);
+            if pass {
+                let a = dst[3] * (1. - amount) + src[3] * amount;
+                for c in 0..3 {
+                    dst[c] = if a > 0. {
+                        (dst[c] * dst[3] * (1. - amount) + src[c] * src[3] * amount) / a
+                    } else {
+                        0.
+                    };
+                }
+                dst[3] = a;
+            } else {
+                *dst = blend_pixel(*dst, src, layer.blend, amount);
+            }
         }
-        if !layer.artwork_masks.is_empty() {
-            return Err(
-                "High-depth live artwork mask rendering requires explicit raster conversion".into(),
+    } else if let Some(source) = layer.kind.pixels() {
+        let pixels = source.in_document_color(&doc.color)?;
+        if layer.filters.active() {
+            return Err("Apply pixel effects before high-depth export; native layer effect rendering is not yet supported".into());
+        }
+        let Some(inv) = crate::compositor::layer_pixel_transform(layer).invert() else {
+            return Ok(());
+        };
+        for (i, dst) in out.iter_mut().enumerate() {
+            if i % 4096 == 0 {
+                cancel.check()?;
+            }
+            let p = Pt::new(
+                (i % w as usize) as f32 / scale as f32 + 0.5 / scale as f32,
+                (i / w as usize) as f32 / scale as f32 + 0.5 / scale as f32,
+            );
+            let mut local = tiny_skia::Point::from_xy(p.x, p.y);
+            inv.map_point(&mut local);
+            let src = sample(&pixels, local.x, local.y);
+            *dst = blend_pixel(
+                *dst,
+                src,
+                layer.blend,
+                layer.opacity * layer.fill_opacity * mask(layer, p, Some((local.x, local.y))),
             );
         }
-        if layer.is_group {
-            if layer.filters.active() {
-                return Err("High-depth group effects require explicit raster conversion".into());
+    } else {
+        vector::render(doc, layer, out, w, h, scale, cancel)?;
+    }
+    Ok(())
+}
+
+fn render_clipped(
+    doc: &Document,
+    stack: &[usize],
+    out: &mut [[f32; 4]],
+    w: u32,
+    h: u32,
+    scale: f32,
+    depth: usize,
+    cancel: &dyn crate::resources::CancellationCheck,
+) -> Result<(), String> {
+    let base = &doc.layers[stack[0]];
+    if base.opacity <= 0. {
+        return Ok(());
+    }
+    if base.filters.active() {
+        return Err("Native clipping base effects require the float effect renderer; save .oma to retain the editable stack".into());
+    }
+    let mut normalized = base.clone();
+    normalized.opacity = 1.;
+    normalized.fill_opacity = 1.;
+    normalized.blend = Blend::Normal;
+    normalized.pass_through = false;
+    let mut pixels = crate::resources::global().allocate_now::<[f32; 4], _>(out.len(), cancel)?;
+    render_layer(
+        doc,
+        &normalized,
+        pixels.as_mut_slice(),
+        w,
+        h,
+        scale,
+        depth,
+        cancel,
+    )?;
+    let original = if base.pass_through && base.is_group {
+        Some(crate::resources::global().copy_now(pixels.as_slice(), cancel)?)
+    } else {
+        None
+    };
+    let mut source = crate::resources::global().allocate_now::<[f32; 4], _>(out.len(), cancel)?;
+    for &index in &stack[1..] {
+        cancel.check()?;
+        let layer = &doc.layers[index];
+        if !layer.visible {
+            continue;
+        }
+        source.as_mut_slice().fill([0.; 4]);
+        let mut normalized = layer.clone();
+        normalized.blend = Blend::Normal;
+        normalized.pass_through = false;
+        render_layer(
+            doc,
+            &normalized,
+            source.as_mut_slice(),
+            w,
+            h,
+            scale,
+            depth,
+            cancel,
+        )?;
+        for (i, (pixel, src)) in pixels
+            .as_mut_slice()
+            .iter_mut()
+            .zip(source.iter().copied())
+            .enumerate()
+        {
+            if i % 4096 == 0 {
+                cancel.check()?;
             }
-            let pass = layer.pass_through;
-            let mut temp = if pass {
-                crate::resources::global().copy_now(out, cancel)?
-            } else {
-                crate::resources::global().allocate_now::<[f32; 4], _>(out.len(), cancel)?
-            };
-            render(
-                doc,
-                Some(layer.id),
-                temp.as_mut_slice(),
-                w,
-                h,
-                scale,
-                depth + 1,
-                cancel,
-            )?;
-            for (i, (dst, src)) in out.iter_mut().zip(temp.iter().copied()).enumerate() {
-                if i % 4096 == 0 {
-                    cancel.check()?;
-                }
-                let p = Pt::new(
-                    (i % w as usize) as f32 / scale as f32,
-                    (i / w as usize) as f32 / scale as f32,
-                );
-                let amount = layer.opacity * layer.fill_opacity * mask(layer, p, None);
-                if pass {
-                    let a = dst[3] * (1. - amount) + src[3] * amount;
-                    for c in 0..3 {
-                        dst[c] = if a > 0. {
-                            (dst[c] * dst[3] * (1. - amount) + src[c] * src[3] * amount) / a
-                        } else {
-                            0.
-                        };
-                    }
-                    dst[3] = a;
+            *pixel = crate::layer_clipping::atop(*pixel, src, layer.blend);
+        }
+    }
+    let amount = base.opacity * base.fill_opacity;
+    if let Some(original) = original {
+        let before = crate::resources::global().copy_now(out, cancel)?;
+        render_layer(doc, base, out, w, h, scale, depth, cancel)?;
+        for (i, ((dst, src), plain)) in out
+            .iter_mut()
+            .zip(pixels.iter().copied())
+            .zip(original.iter().copied())
+            .enumerate()
+        {
+            if i % 4096 == 0 {
+                cancel.check()?;
+            }
+            let with = blend_pixel(before[i], src, Blend::Normal, amount);
+            let without = blend_pixel(before[i], plain, Blend::Normal, amount);
+            let alpha = (dst[3] + with[3] - without[3]).clamp(0., 1.);
+            for c in 0..3 {
+                dst[c] = if alpha > 0. {
+                    (dst[c] * dst[3] + with[c] * with[3] - without[c] * without[3]) / alpha
                 } else {
-                    *dst = blend_pixel(*dst, src, layer.blend, amount);
-                }
+                    0.
+                };
             }
-        } else if let Some(source) = layer.kind.pixels() {
-            let pixels = source.in_document_color(&doc.color)?;
-            if layer.filters.active() {
-                return Err("Apply pixel effects before high-depth export; native layer effect rendering is not yet supported".into());
+            dst[3] = alpha;
+        }
+    } else {
+        for (i, (dst, src)) in out.iter_mut().zip(pixels.iter().copied()).enumerate() {
+            if i % 4096 == 0 {
+                cancel.check()?;
             }
-            let Some(inv) = crate::compositor::layer_pixel_transform(layer).invert() else {
-                continue;
-            };
-            for (i, dst) in out.iter_mut().enumerate() {
-                if i % 4096 == 0 {
-                    cancel.check()?;
-                }
-                let p = Pt::new(
-                    (i % w as usize) as f32 / scale as f32 + 0.5 / scale as f32,
-                    (i / w as usize) as f32 / scale as f32 + 0.5 / scale as f32,
-                );
-                let mut local = tiny_skia::Point::from_xy(p.x, p.y);
-                inv.map_point(&mut local);
-                let src = sample(&pixels, local.x, local.y);
-                *dst = blend_pixel(
-                    *dst,
-                    src,
-                    layer.blend,
-                    layer.opacity * layer.fill_opacity * mask(layer, p, Some((local.x, local.y))),
-                );
-            }
-        } else {
-            vector::render(doc, layer, out, w, h, scale, cancel)?;
+            *dst = blend_pixel(*dst, src, base.blend, amount);
         }
     }
     Ok(())

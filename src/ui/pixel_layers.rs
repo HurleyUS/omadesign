@@ -11,6 +11,7 @@ enum Action {
     Arrange(usize, bool, bool),
     Mask(usize, masking::Action),
     Merge(crate::app::layer_merge::Kind),
+    Clipping(bool),
 }
 
 /// Keep the native Layer menu alive while a nested menu owns its popup.
@@ -113,6 +114,10 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
                 });
             });
             ui.separator();
+            if let Some(clipped) = crate::ui::layer_clipping::menu(ui, studio, None) {
+                action = Some(Action::Clipping(clipped));
+            }
+            ui.separator();
             if let Some(kind) = crate::ui::layer_merge::menu(ui, studio, owner) {
                 action = Some(Action::Merge(kind));
             }
@@ -131,6 +136,7 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
             Action::Arrange(i, up, false) => studio.move_layer_tree(i, up),
             Action::Mask(i, chosen) => chosen.run(studio, i),
             Action::Merge(kind) => crate::ui::layer_merge::start(ui.ctx(), studio, kind),
+            Action::Clipping(clipped) => { studio.set_layer_clipping(None, clipped); }
         }
         ui.close_kind(egui::UiKind::Menu);
     }

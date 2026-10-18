@@ -76,6 +76,7 @@ pub(super) fn scene(
         }
         if layer.id == group.id {
             layer.parent = None;
+            layer.clipped = false;
             layer.opacity = 1.;
             layer.fill_opacity = 1.;
             layer.blend = crate::color::Blend::Normal;

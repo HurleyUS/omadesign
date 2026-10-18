@@ -109,6 +109,8 @@ function commonProtocol(path: string, value: unknown): Protocol {
   refuseFutureLayout(p, value);
   const parts = p.split("/").slice(1),
     root = parts[0];
+  if (["layers", "@entities"].includes(root ?? "") && parts[2] === "clipped" && value != null && value !== false)
+    throw new LiveProtocolError("LayerClippingUnsupported: live protocol 3 cannot preserve editable layer clipping.");
   if (root && !documentFields.has(root))
     throw new LiveProtocolError("Unsupported retained document property.");
   if (

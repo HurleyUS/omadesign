@@ -197,6 +197,8 @@ fn native_mask_resize_and_tiny_alpha_keep_authored_values() {
 #[test]
 fn native_clipping_uses_authoritative_alpha_and_mask_samples() {
     let mut doc = Document::new("Clipping", 1., 1., 72.);
+    doc.transparent = true;
+    doc.color.depth = Depth::F32;
     let mut base = Layer::placed_raster(
         "Base",
         Pixels::from_samples(1, 1, Depth::F32, vec![1., 0., 0., 0.50001]).unwrap(),
@@ -215,11 +217,14 @@ fn native_clipping_uses_authoritative_alpha_and_mask_samples() {
     clipped.mask =
         Some(Pixels::from_samples(1, 1, Depth::F32, vec![0.70001, 0.70001, 0.70001, 1.]).unwrap());
     doc.layers = vec![base, clipped];
-    crate::formats::psd::test_native_clipping(&mut doc);
-    assert!(
-        (doc.layers[1].mask.as_ref().unwrap().sample(0)[0] - 0.50001 * 0.333333 * 0.70001).abs()
-            < 1e-7
-    );
+    doc.layers[1].clipped = true;
+    let bytes = crate::formats::psd::encode_admitted(&doc, false).unwrap();
+    let reopened = crate::formats::psd::decode(bytes.bytes.as_slice(), "Clipping").unwrap().document;
+    assert!(reopened.layers[1].clipped);
+    assert_eq!(reopened.layers[1].mask.as_ref().unwrap().sample(0), doc.layers[1].mask.as_ref().unwrap().sample(0));
+    let actual = composite(&reopened, 1).unwrap().sample(0);
+    assert!((actual[3] - 0.50001 * 0.333333).abs() < 1e-7);
+    assert!((actual[1] * actual[3] - 0.50001 * 0.333333 * 0.70001).abs() < 1e-7);
 }
 
 #[test]

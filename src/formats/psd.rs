@@ -169,7 +169,6 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
         linked.insert(file.id, (id, file.external));
     }
     let mut stack: Vec<Layer> = Vec::new();
-    let mut clipping: Vec<u64> = Vec::new();
     for record in parsed.layers {
         if record.section == 3 {
             if stack.len() >= 64 {
@@ -299,9 +298,7 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
                 );
             }
         }
-        if record.clipping {
-            clipping.push(layer.id);
-        }
+        layer.clipped = record.clipping;
         doc.layers.push(layer);
     }
     if !stack.is_empty() {
@@ -334,9 +331,6 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
             &mut warnings,
             "This Photoshop file contains only a merged image; no separate layers were saved.",
         );
-    }
-    if !clipping.is_empty() {
-        bake_clipping(&mut doc, &clipping, &mut warnings)?;
     }
     Ok(PsdImport {
         document: doc,
@@ -546,136 +540,6 @@ fn convert_mask(
     }
 }
 
-fn bake_clipping(
-    doc: &mut Document,
-    ids: &[u64],
-    warnings: &mut Vec<String>,
-) -> Result<(), String> {
-    warn(
-        warnings,
-        "Photoshop clipping relationships were converted to pixel masks; they no longer follow edits to the base layer.",
-    );
-    for idx in 0..doc.layers.len() {
-        if !ids.contains(&doc.layers[idx].id) {
-            continue;
-        }
-        let parent = doc.layers[idx].parent;
-        let base = (0..idx)
-            .rev()
-            .find(|i| doc.layers[*i].parent == parent && !ids.contains(&doc.layers[*i].id));
-        let Some(base_idx) = base else {
-            warn(
-                warnings,
-                "A Photoshop clipping layer has no base layer; its clipping is not applied.",
-            );
-            continue;
-        };
-        if doc.layers[base_idx].is_group || doc.layers[idx].is_group {
-            warn(
-                warnings,
-                "Clipping involving Photoshop groups is not applied.",
-            );
-            continue;
-        }
-        let base_layer = &doc.layers[base_idx];
-        let base_pixels = base_layer.kind.pixels();
-        let base_origin = base_layer
-            .kind
-            .raster_xform()
-            .map(|(origin, _, _)| origin)
-            .unwrap_or(Pt::ZERO);
-        let layer = &doc.layers[idx];
-        let Some(pixels) = layer.kind.pixels() else {
-            continue;
-        };
-        let (w, h) = (pixels.w, pixels.h);
-        let origin = layer
-            .kind
-            .raster_xform()
-            .map(|(origin, _, _)| origin)
-            .unwrap_or(Pt::ZERO);
-        if [
-            base_pixels,
-            base_layer.mask.as_ref(),
-            Some(pixels),
-            layer.mask.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|p| p.native.is_some())
-        {
-            let mut samples = crate::deep_color::storage::Builder::<f32>::new()?;
-            for y in 0..h {
-                for x in 0..w {
-                    let bx = x as i64 + origin.x as i64 - base_origin.x as i64;
-                    let by = y as i64 + origin.y as i64 - base_origin.y as i64;
-                    let alpha = base_pixels
-                        .filter(|p| bx >= 0 && by >= 0 && bx < p.w as i64 && by < p.h as i64)
-                        .map_or(0., |p| {
-                            let coverage = base_layer.mask.as_ref().map_or(1., |m| {
-                                crate::deep_color::sample_at(
-                                    m,
-                                    (bx as f32 + 0.5) * m.w as f32 / p.w as f32,
-                                    (by as f32 + 0.5) * m.h as f32 / p.h as f32,
-                                )[0]
-                            });
-                            p.sample(by as usize * p.w as usize + bx as usize)[3] * coverage
-                        });
-                    let coverage = layer.mask.as_ref().map_or(1., |m| {
-                        crate::deep_color::sample_at(
-                            m,
-                            (x as f32 + 0.5) * m.w as f32 / w as f32,
-                            (y as f32 + 0.5) * m.h as f32 / h as f32,
-                        )[0]
-                    });
-                    let value = coverage * alpha;
-                    samples.extend(&[value, value, value, 1.])?;
-                }
-            }
-            doc.layers[idx].mask = Some(Pixels::from_sample_allocation(
-                w,
-                h,
-                crate::deep_color::Depth::F32,
-                samples.finish()?,
-            )?);
-            continue;
-        }
-        let mut mask = match layer.mask.clone() {
-            Some(mask) => mask,
-            None => {
-                let mut mask = Pixels::new(w, h)?;
-                mask.bytes_mut()?.fill(255);
-                mask
-            }
-        };
-        for y in 0..h {
-            for x in 0..w {
-                let bx = x as i64 + origin.x as i64 - base_origin.x as i64;
-                let by = y as i64 + origin.y as i64 - base_origin.y as i64;
-                let alpha = base_pixels
-                    .filter(|p| bx >= 0 && by >= 0 && bx < p.w as i64 && by < p.h as i64)
-                    .map_or(0, |p| {
-                        let i = (by as usize * p.w as usize + bx as usize) * 4;
-                        let pixel_alpha = p.data[i + 3] as u16;
-                        let mask_value = base_layer
-                            .mask
-                            .as_ref()
-                            .and_then(|m| m.data.get(i))
-                            .copied()
-                            .unwrap_or(255) as u16;
-                        (pixel_alpha * mask_value / 255) as u8
-                    });
-                let i = (y as usize * w as usize + x as usize) * 4;
-                let value = (mask.data[i] as u16 * alpha as u16 / 255) as u8;
-                mask.bytes_mut()?[i..i + 4].copy_from_slice(&[value, value, value, 255]);
-            }
-        }
-        mask.touch();
-        doc.layers[idx].mask = Some(mask);
-    }
-    Ok(())
-}
-
 mod writer;
 pub use writer::{encode, encode_admitted};
 
@@ -858,10 +722,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn test_native_clipping(doc: &mut Document) {
-    bake_clipping(doc, &[doc.layers[1].id], &mut Vec::new()).unwrap();
-}
 
 #[cfg(test)]
 mod merged_channel_tests {

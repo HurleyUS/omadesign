@@ -330,6 +330,7 @@ pub fn write(doc: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
     if crate::deep_color::has_native(doc) {
         return Err("This exchange writer cannot preserve native pixel or mask samples. Export PSD, PSB, TIFF or an explicit 8-bit document copy.".into());
     }
+    doc.require_no_layer_clipping("OpenRaster")?;
     if !doc.mask_sources().is_empty() {
         let prepared = crate::compositor::raster_export_document(doc)?;
         let (bytes, mut notes) = write(&prepared)?;

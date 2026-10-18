@@ -1625,6 +1625,7 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool, embed_fonts:
 
 fn export_inner_report(doc: &Document, animate: bool, text_as_paths: bool, embed_fonts: bool) -> Result<SvgExport, String> {
     doc.validate_hierarchy()?;
+    doc.require_no_layer_clipping("SVG")?;
     let mut prepared;
     let doc=if embed_fonts {prepared=doc.clone();crate::text_geometry::reflow(&mut prepared);&prepared} else {doc};
     let embedded = embed_fonts.then(|| crate::text::svg_fonts::Embedded::new(doc)).transpose()?;

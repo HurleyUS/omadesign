@@ -38,6 +38,7 @@ mod key_hud_tests;
 mod layer_drag;
 mod layer_duplicate;
 pub(crate) mod layer_merge;
+mod layer_clipping;
 mod layout;
 mod layout_preview;
 #[cfg(test)]

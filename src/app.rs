@@ -22,6 +22,7 @@ mod layer_copy;
 mod layer_copy_destination;
 pub(crate) use layer_copy_destination::{LayerCopyDestination, LayerCopyTarget};
 pub(crate) mod layer_merge;
+mod layer_clipping;
 mod layout;
 pub(crate) use layout::LayoutStackField;
 mod layout_components;
