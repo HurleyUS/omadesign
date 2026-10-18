@@ -39,7 +39,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
         egui::Popup::close_id(ui.ctx(), popup);
     }
     ui.data_mut(|data| data.insert_temp(key, open));
-    super::welcome::focus_control(ui, &response);
+    crate::ui::welcome::focus_control(ui, &response);
 }
 
 /// Run the native Pixel Layer menu.
