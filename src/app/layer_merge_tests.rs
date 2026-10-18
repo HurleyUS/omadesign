@@ -1326,6 +1326,7 @@ fn craft_history_targets_selected_merge_stamp_and_group_restore_rows_active_and_
         let mut s = cross_group_fixture(Depth::U8, false);
         let before = state(&s);
         let target = s.history_target();
+        assert_eq!(target.rows.as_ref().unwrap().1, s.doc.layers[0].id);
         run(&mut s, kind);
         let after = state(&s);
         let result_target = s.history_target();
@@ -1342,7 +1343,7 @@ fn craft_history_targets_selected_merge_stamp_and_group_restore_rows_active_and_
         assert_eq!(s.history_target(), result_target);
         s.undo();
         s.select_layer_rows(4, true, false);
-        assert_eq!(s.selected_layer_rows(), [3, 4]);
+        assert_eq!(s.selected_layer_rows(), [0, 1, 2, 3, 4]);
         assert_eq!(
             crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(),
             after
