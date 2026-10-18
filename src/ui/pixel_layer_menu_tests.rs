@@ -174,9 +174,9 @@ fn craft_pixel_layer_arrange_moves_whole_groups_and_keeps_stable_target_history(
 
 #[test]
 fn craft_pixel_layer_creation_deletion_and_invalid_owners_follow_real_menu_gates() {
-    let mut studio = fixture();
-    let mut seat = Seat::new();
     for command in ["New group", "New pixel layer", "Delete layer"] {
+        let mut studio = fixture();
+        let mut seat = Seat::new();
         let before = encoded(&studio);
         let history = studio.history.len();
         menu(&mut seat, &mut studio, None, command);
