@@ -5,7 +5,7 @@ impl Studio {
     /// Capture stable target IDs for one completed edit.
     /// Args: current editor. Returns no document data or renderer resources.
     pub(super) fn history_target(&self) -> HistoryTarget {
-        let id_at = |i| self.doc.layers.get(i).map(|layer| layer.id);
+        let id_at = |i: usize| self.doc.layers.get(i).map(|layer| layer.id);
         HistoryTarget {
             document: self.swap_id.clone(),
             active: self.active_layer.and_then(id_at),
