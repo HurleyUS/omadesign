@@ -956,4 +956,20 @@ mod tests {
         scale_tests::check(&studio,"scale-native-input");let after=crate::project::encode(&studio.doc).unwrap();studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),vertical);studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);studio.redo();studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
     }
 
+    #[test]
+    fn character_spacing_authored_bidi_selection_baseline_native_keys_targets_the_original_letter(){
+        use crate::text::svg_type::{bidi_tests,pair_tests,scale_tests};
+        let ctx=egui::Context::default();ctx.enable_accesskit();crate::ui::theme::apply(&ctx);
+        let mut studio=bidi_tests::fixture("<text x=\"25 65 105 145 185 225\" y=\"80\" font-family=\"BidiFace\" font-size=\"32\">A\u{202b}אב\u{202c}V</text>");
+        let before=crate::project::encode(&studio.doc).unwrap();let original=pair_tests::run(&studio).clone();
+        let point=crate::text::caret_pt(&original,2);studio.begin_type_edit(studio.selection[0],point);
+        let edit=studio.type_edit.as_mut().unwrap();edit.anchor=2;edit.caret=3;
+        frame(&ctx,&mut studio,vec![]);let output=tab_to(&ctx,&mut studio,"Baseline shift");assert_focused(&ctx,&output,"Baseline shift");
+        replace(&ctx,&mut studio,"12");frame(&ctx,&mut studio,key(Key::Enter,Modifiers::NONE));
+        assert_eq!(studio.selected_character_metrics()[0].baseline_shift,Some(12.));
+        bidi_tests::baseline(&original,studio.selected_type().unwrap());studio.commit_type_edit();
+        scale_tests::check(&studio,"bidi-native-baseline");let after=crate::project::encode(&studio.doc).unwrap();assert_eq!(studio.history.len(),1);
+        studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
+    }
+
 }

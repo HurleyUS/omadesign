@@ -138,9 +138,10 @@ pub(super) fn pairs(run: &TypeRun, source: String, from: usize, content: &str) -
     }
     let layout = layout_source(run, source.clone(), content)?;
     let optical=super::optical::adjustments(run,&layout,from);
-    let count = layout.characters.len();
+    let count = layout.addressable_count;
     let mut dx = vec![0.; count];
     let mut dy = vec![0.; count];
+    for &(at,x,y) in &layout.control_offsets {dx[at]=x;dy[at]=y;}
     for c in &layout.characters {
         dx[c.ordinal] = c.dx;
         dy[c.ordinal] = c.dy;

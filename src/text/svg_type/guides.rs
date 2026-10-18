@@ -351,7 +351,7 @@ pub(super) fn compile(run: &TypeRun, source: String, content: &str) -> Option<St
     chunks.sort_by_key(|(_, c)| c.iter().map(|c| c.ordinal).min().unwrap_or(usize::MAX));
     let starts: Vec<_> = chunks
         .iter()
-        .map(|(_, c)| c.iter().map(|c| c.ordinal).min().unwrap_or(0))
+        .map(|(key, c)| layout.chunk_starts.get(key).copied().unwrap_or_else(|| c.iter().map(|c| c.ordinal).min().unwrap_or(0)))
         .collect();
     let mut root = original.clone();
     if let TextNode::Element { attributes, .. } = &mut root {

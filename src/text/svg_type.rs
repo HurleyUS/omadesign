@@ -19,10 +19,13 @@ mod fallback_tests;
 pub(crate) mod optical_tests;
 #[cfg(test)]
 pub(crate) mod scale_tests;
+#[cfg(test)]
+pub(crate) mod bidi_tests;
 mod positioning;
 mod optical;
 mod scaling;
 mod guides;
+mod direction;
 mod fonts;
 pub(crate) use fonts::family_css;
 pub(super) use fonts::{family_faces,map_families,map_flow_families};
@@ -149,6 +152,9 @@ pub(crate) struct Layout {
     characters: Vec<VisualCharacter>,
     glyphs:Vec<GlyphMetric>,
     clusters: Vec<std::ops::Range<usize>>,
+    addressable_count:usize,
+    control_offsets:Vec<(usize,f32,f32)>,
+    chunk_starts:BTreeMap<(usize,usize),usize>,
 }
 
 impl Layout {
@@ -1300,65 +1306,6 @@ fn solid(fill: Option<&usvg::Fill>) -> Option<crate::color::Rgba> {
     ))
 }
 
-fn visual_characters(nodes: &[usvg::Text], content: &str) -> Vec<VisualCharacter> {
-    let mut result = Vec::new();
-    let mut cursor = 0;
-    let mut ordinal = 0;
-    for (node_index,node) in nodes.iter().enumerate() {
-        let mut offset = 0;
-        for (chunk_index,chunk) in node.chunks().iter().enumerate() {
-            let text = chunk.text();
-            if text.is_empty() {
-                continue;
-            }
-            let clean: String = text.chars().filter(|c| !bidi_control(*c)).collect();
-            let start = content[cursor..]
-                .find(&clean)
-                .map_or(cursor, |offset| cursor + offset);
-            let base = content[..start].chars().count();
-            let bidi = unicode_bidi::BidiInfo::new(text, Some(unicode_bidi::Level::ltr()));
-            for paragraph in &bidi.paragraphs {
-                let (levels, runs) = bidi.visual_runs(paragraph, paragraph.range.clone());
-                for range in runs {
-                    let rtl = levels[range.start].is_rtl();
-                    let mut characters: Vec<_> = text[range.clone()]
-                        .char_indices()
-                        .map(|(offset, _)| range.start + offset)
-                        .collect();
-                    if rtl {
-                        characters.reverse();
-                    }
-                    for byte in characters {
-                        if text[byte..].chars().next().is_some_and(bidi_control) {
-                            continue;
-                        }
-                        let span = chunk
-                            .spans()
-                            .iter()
-                            .find(|s| s.start() <= byte && byte < s.end());
-                        result.push(VisualCharacter {
-                            node:node_index,chunk:chunk_index,text_index:offset+text[..byte].chars().count(),
-                            index: base
-                                + text[..byte].chars().filter(|c| !bidi_control(*c)).count(),
-                            ordinal: ordinal + text[..byte].chars().filter(|c| !bidi_control(*c)).count(),
-                            dx: node.dx().get(offset + text[..byte].chars().count()).copied().unwrap_or(0.),
-                            dy: node.dy().get(offset + text[..byte].chars().count()).copied().unwrap_or(0.),
-                            vertical: node.writing_mode() == usvg::WritingMode::TopToBottom && matches!(chunk.text_flow(),usvg::TextFlow::Linear),
-                            line_start: text[..byte].chars().all(bidi_control),
-                            rtl,
-                            px: span.map_or(16., |s| s.font_size().get()),
-                            color: solid(span.and_then(|s| s.fill())),
-                        });
-                    }
-                }
-            }
-            cursor = (start + clean.len()).min(content.len());
-            offset += text.chars().count();
-            ordinal += clean.chars().count();
-        }
-    }
-    result
-}
 
 fn bidi_control(c: char) -> bool {
     matches!(c,'\u{202a}'..='\u{202e}'|'\u{2066}'..='\u{2069}')
@@ -1366,119 +1313,7 @@ fn bidi_control(c: char) -> bool {
 
 /// Normalize SVG direction for the shaper while preserving semantic export.
 /// Args: canonical SVG type source. Returns runtime SVG with bidi controls and equivalent anchors.
-pub(crate) fn renderer_source(source: &str) -> String {
-    let Ok(xml) = roxmltree::Document::parse(source) else {
-        return source.into();
-    };
-    let nodes: Vec<_> = xml
-        .descendants()
-        .filter(|n| n.is_element() && matches!(n.tag_name().name(), "text" | "tspan" | "textPath"))
-        .collect();
-    let inherited = |node: roxmltree::Node<'_, '_>, key: &str, initial: &str| {
-        node.ancestors()
-            .filter_map(|n| n.attribute(key))
-            .find(|v| !matches!(*v, "inherit" | "unset"))
-            .unwrap_or(initial)
-            .to_string()
-    };
-    let mut controls = Vec::new();
-    let mut edits = Vec::new();
-    for node in &nodes {
-        let rtl = inherited(*node, "direction", "ltr") == "rtl";
-        if rtl {
-            let anchor = inherited(*node, "text-anchor", "start");
-            let anchor = match anchor.as_str() {
-                "start" => "end",
-                "end" => "start",
-                other => other,
-            };
-            if let Some(attr) = node.attributes().find(|a| a.name() == "text-anchor") {
-                edits.push((attr.range_value(), anchor.into()));
-            } else if let Some(end) = source[node.range()].find('>') {
-                let at = node.range().start + end;
-                edits.push((at..at, format!(" text-anchor=\"{anchor}\"")));
-            }
-        }
-        let mode = inherited(*node, "unicode-bidi", "normal");
-        if (node.has_tag_name("text")
-            || node.attribute("unicode-bidi").is_some()
-            || node.attribute("x").is_some()
-            || node.attribute("y").is_some())
-            && (rtl || mode != "normal")
-            && node.children().next().is_some()
-        {
-            let isolate = mode.contains("isolate");
-            let prefix = if isolate {
-                if rtl { '\u{2067}' } else { '\u{2066}' }
-            } else if mode.contains("override") {
-                if rtl { '\u{202e}' } else { '\u{202d}' }
-            } else if rtl {
-                '\u{202b}'
-            } else {
-                '\u{202a}'
-            };
-            if let Some(open) = source[node.range()].find('>')
-                && let Some(close) = source[node.range()].rfind("</")
-            {
-                controls.push((node.range().start + open + 1, prefix));
-                controls.push((
-                    node.range().start + close,
-                    if isolate { '\u{2069}' } else { '\u{202c}' },
-                ));
-            }
-        }
-    }
-    controls.sort_by_key(|(at, _)| *at);
-    for node in nodes {
-        let positions: Vec<_> = controls
-            .iter()
-            .filter(|(at, _)| node.range().contains(at))
-            .map(|(at, _)| {
-                node.descendants()
-                    .filter(|n| n.is_text() && n.range().end <= *at)
-                    .map(|n| n.text().unwrap_or("").chars().count())
-                    .sum::<usize>()
-            })
-            .collect();
-        for attr in node
-            .attributes()
-            .filter(|a| matches!(a.name(), "x" | "y" | "dx" | "dy" | "rotate"))
-        {
-            let mut values: Vec<_> = attr
-                .value()
-                .split(|c: char| c.is_whitespace() || c == ',')
-                .filter(|v| !v.is_empty())
-                .map(str::to_owned)
-                .collect();
-            let mut added = 0;
-            for position in &positions {
-                if matches!(attr.name(), "x" | "y") && *position==0 && values.len()==1 {
-                    continue;
-                }
-                let at = position + added;
-                if at < values.len() {
-                    let dummy = if matches!(attr.name(), "x" | "y") {
-                        values[at].clone()
-                    } else {
-                        "0".into()
-                    };
-                    values.insert(at, dummy);
-                    added += 1;
-                }
-            }
-            if added > 0 {
-                edits.push((attr.range_value(), values.join(" ")));
-            }
-        }
-    }
-    edits.extend(controls.into_iter().map(|(at, c)| (at..at, c.to_string())));
-    edits.sort_by_key(|(r, _)| std::cmp::Reverse(r.start));
-    let mut result = source.to_owned();
-    for (range, value) in edits {
-        result.replace_range(range, &value);
-    }
-    result
-}
+pub(crate) fn renderer_source(source:&str)->String{direction::source(source)}
 
 pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
     layout_source(run, source(run)?, &run.content)
@@ -1491,10 +1326,11 @@ fn layout_source(run: &TypeRun, source: String, content: &str) -> Option<Arc<Lay
     if let Some(found) = cache.lock().unwrap().get(&key).cloned() {
         return Some(found);
     }
-    let tree = usvg::Tree::from_str(&renderer_source(&source), &options_for(run)).ok()?;
+    let (rendered,indices)=direction::indexed(&source);
+    let tree = usvg::Tree::from_str(&rendered, &options_for(run)).ok()?;
     let scales=scaling::resolved(&source);
     let positions=guides::positions(&source);
-    let result = Arc::new(layout_tree(run, content, tree, false,&scales,&positions));
+    let result = Arc::new(layout_tree(run, content, tree, false,&scales,&positions,&indices)?);
     let mut cache = cache.lock().unwrap();
     if cache.len() >= 64 { cache.clear(); }
     cache.insert(key, result.clone());
@@ -1510,14 +1346,15 @@ pub(crate) fn layout_with_options(run: &TypeRun, options: &usvg::Options<'_>) ->
     let source = source(run)?;
     let scales=scaling::resolved(&source);
     let positions=guides::positions(&source);
-    let source=renderer_source(&source);
-    Some(layout_tree(run, &run.content, usvg::Tree::from_str(&source, &resolved).ok()?, true,&scales,&positions))
+    let (source,indices)=direction::indexed(&source);
+    layout_tree(run, &run.content, usvg::Tree::from_str(&source, &resolved).ok()?, true,&scales,&positions,&indices)
 }
 
-fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, scales:&[scaling::Scale],positions:&[guides::Position]) -> Layout {
+fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, scales:&[scaling::Scale],positions:&[guides::Position],indices:&[Vec<usize>]) -> Option<Layout> {
     let mut text_nodes = Vec::new();
     texts(tree.root(), &mut text_nodes);
-    let mut order = visual_characters(&text_nodes, content);
+    let mapped=direction::characters(&text_nodes,content,indices)?;
+    let mut order=mapped.order;
     for c in &mut order {if let Some(scale)=scales.iter().find(|s|s.contains(c.index)){c.px/=scale.font_factor;}if let Some(p)=positions.iter().find(|p|p.index==c.index){c.dx=p.dx;c.dy=p.dy;c.vertical=p.vertical;c.line_start=p.line_start;if let Some(px)=p.px{c.px=px;}}}
     let all: Vec<_> = content.chars().collect();
     let mut contours = Vec::new();
@@ -1693,7 +1530,7 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, s
             }
         }
     }
-    Layout {
+    Some(Layout {
         tree,
         contours,
         carets,
@@ -1703,7 +1540,8 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, s
         characters: order,
         glyphs:glyph_metrics,
         clusters,
-    }
+        addressable_count:mapped.count,control_offsets:mapped.offsets,chunk_starts:mapped.chunks,
+    })
 }
 
 fn flow_source_root(run: &TypeRun) -> TextNode {
