@@ -39,12 +39,12 @@ impl Scale {
             && [self.hscale, self.vscale]
                 .into_iter()
                 .flatten()
-                .all(|v| v.is_finite() && (1. ..=1000.).contains(&v))
+                .all(f32::is_finite)
             && (self.hscale.is_some() || self.vscale.is_some())
             && self.font_factor.is_finite()
-            && (0.001..=1000.).contains(&self.font_factor)
+            && self.font_factor > 0.
             && self.inline_factor.is_finite()
-            && (0.001..=1000.).contains(&self.inline_factor)
+            && self.inline_factor > 0.
             && self
                 .before
                 .keys()
@@ -163,16 +163,22 @@ pub(super) fn apply(run: &TypeRun, source: String, from: usize, content: &str) -
                 .or_insert(glyph);
         }
         let first = *clusters.values().next()?;
-        let hscale = scale.hscale.map(|v| v / 100.).unwrap_or(if first.upright {
-            1.
-        } else {
-            first.length_scale
-        });
-        let vscale = scale.vscale.map(|v| v / 100.).unwrap_or(if first.upright {
-            first.length_scale
-        } else {
-            1.
-        });
+        let hscale = scale
+            .hscale
+            .map(|v| v.clamp(1., 1000.) / 100.)
+            .unwrap_or(if first.upright {
+                1.
+            } else {
+                first.length_scale
+            });
+        let vscale = scale
+            .vscale
+            .map(|v| v.clamp(1., 1000.) / 100.)
+            .unwrap_or(if first.upright {
+                first.length_scale
+            } else {
+                1.
+            });
         let font_factor = if first.upright { hscale } else { vscale };
         let inline_scale = if first.upright { vscale } else { hscale };
         let factor = inline_scale / font_factor;
@@ -329,14 +335,15 @@ pub(crate) fn restore(run: &mut TypeRun) -> Result<(), String> {
         count: usize,
         scales: &[Scale],
         seen: &mut Vec<usize>,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         if let TextNode::Characters { count: n } = node {
             *cursor = cursor
                 .checked_add(*n)
                 .ok_or("SVG character scale count overflow")?;
-            return Ok(());
+            return Ok(false);
         }
         let TextNode::Element {
+            name,
             attributes,
             children,
             ..
@@ -368,13 +375,22 @@ pub(crate) fn restore(run: &mut TypeRun) -> Result<(), String> {
                 }
             }
         }
-        for child in children {
-            restore_node(child, cursor, count, scales, seen)?;
+        let mut normalized = Vec::new();
+        for mut child in std::mem::take(children) {
+            if restore_node(&mut child, cursor, count, scales, seen)? {
+                let TextNode::Element { children, .. } = child else {
+                    unreachable!()
+                };
+                normalized.extend(children);
+            } else {
+                normalized.push(child);
+            }
         }
+        *children = normalized;
         if expected_end.is_some_and(|end| end != *cursor) {
             return Err("Invalid SVG character scale range".into());
         }
-        Ok(())
+        Ok(expected_end.is_some() && name == "tspan" && attributes.is_empty())
     }
     let mut root = svg.root.clone();
     let mut seen = Vec::new();

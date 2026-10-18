@@ -184,9 +184,8 @@ fn other(body: &str) -> String {
     )
 }
 
-#[test]
-fn svg_character_scales_follow_real_vertical_rtl_path_and_explicit_chunk_geometry() {
-    for(name,body)in[
+fn scale_cases() -> Vec<(&'static str, String)> {
+    vec![
         ("scale-mixed",r#"<text x="25" y="80" font-family="MetricFace" font-size="40"><tspan>AV</tspan><tspan font-size="20">WaTo</tspan></text>"#.to_string()),
         ("scale-length",r#"<text x="25" y="80" font-family="MetricFace" font-size="40" textLength="220" lengthAdjust="spacingAndGlyphs"><tspan>AV</tspan><tspan font-size="20" textLength="50" lengthAdjust="spacingAndGlyphs">WaTo</tspan> AV</text>"#.to_string()),
         ("scale-anchors",r#"<text x="25 70 110 155" y="50 80 60 90" rotate="0 20 -15 10" font-family="MetricFace" font-size="32">AVWA</text>"#.to_string()),
@@ -194,11 +193,80 @@ fn svg_character_scales_follow_real_vertical_rtl_path_and_explicit_chunk_geometr
         ("scale-upright",other(r#"<text x="120" y="15" font-family="Other" font-size="32" writing-mode="vertical-rl">○A●V</text>"#)),
         ("scale-path",r##"<defs><path id="guide" d="M20 110 Q190 10 390 100"/></defs><text font-family="MetricFace" font-size="32"><textPath href="#guide">AVWaTo</textPath></text>"##.to_string()),
         ("scale-rtl",other(r#"<text x="350" y="80" font-family="Other" font-size="40" direction="rtl">אבג דה</text>"#)),
-    ]{
-        let mut s=studio(&body);let before=png(&s);let original=run(&s).svg_text.clone();let base=layout(run(&s)).unwrap();scaled(&mut s,125.,80.);assert_eq!(run(&s).svg_text,original);assert_ne!(png(&s),before,"{name}");let now=layout(run(&s)).unwrap();assert_eq!(base.glyphs.iter().map(|g|(g.index,g.id,&g.font)).collect::<Vec<_>>(),now.glyphs.iter().map(|g|(g.index,g.id,&g.font)).collect::<Vec<_>>(),"{name}");
-        for g in &now.glyphs {assert_ne!(g.id,0,"{name}: missing fixture glyph");let a=axes(g);assert!((a[0]/g.px-1.25).abs()<0.002,"{name} x {:?} px{}",a,g.px);assert!((a[1]/g.px-0.8).abs()<0.002,"{name} y {:?} px{}",a,g.px);}
-        check(&s,name);
+
+]
+}
+fn geometry_case(name: &str) {
+    let body = scale_cases()
+        .into_iter()
+        .find(|(case, _)| *case == name)
+        .unwrap()
+        .1;
+    let mut s = studio(&body);
+    let before = png(&s);
+    let original = run(&s).svg_text.clone();
+    let base = layout(run(&s)).unwrap();
+    scaled(&mut s, 125., 80.);
+    assert_eq!(run(&s).svg_text, original);
+    assert_ne!(png(&s), before, "{name}");
+    let now = layout(run(&s)).unwrap();
+    assert_eq!(
+        base.glyphs
+            .iter()
+            .map(|g| (g.index, g.id, &g.font))
+            .collect::<Vec<_>>(),
+        now.glyphs
+            .iter()
+            .map(|g| (g.index, g.id, &g.font))
+            .collect::<Vec<_>>(),
+        "{name}"
+    );
+    diagnostic(&s, name);
+    for g in &now.glyphs {
+        assert_ne!(g.id, 0, "{name}: missing fixture glyph");
+        let a = axes(g);
+        assert!(
+            (a[0] / g.px - 1.25).abs() < 0.002,
+            "{name} x {:?} px{}",
+            a,
+            g.px
+        );
+        assert!(
+            (a[1] / g.px - 0.8).abs() < 0.002,
+            "{name} y {:?} px{}",
+            a,
+            g.px
+        );
     }
+    check(&s, name);
+}
+#[test]
+fn svg_character_scale_mixed_keeps_real_glyph_axes() {
+    geometry_case("scale-mixed");
+}
+#[test]
+fn svg_character_scale_nested_lengths_keeps_real_glyph_axes() {
+    geometry_case("scale-length");
+}
+#[test]
+fn svg_character_scale_fixed_anchors_and_rotations_keeps_real_glyph_axes() {
+    geometry_case("scale-anchors");
+}
+#[test]
+fn svg_character_scale_vertical_latin_keeps_real_glyph_axes() {
+    geometry_case("scale-vertical-latin");
+}
+#[test]
+fn svg_character_scale_vertical_upright_symbols_keeps_real_glyph_axes() {
+    geometry_case("scale-upright");
+}
+#[test]
+fn svg_character_scale_curved_path_keeps_real_glyph_axes() {
+    geometry_case("scale-path");
+}
+#[test]
+fn svg_character_scale_rtl_keeps_real_glyph_axes() {
+    geometry_case("scale-rtl");
 }
 
 #[test]
@@ -244,5 +312,109 @@ fn svg_character_scales_refuse_malformed_metadata_before_replacing_artwork() {
         source.replace_range(attr.range_value(), &escape(&bad.to_string()));
         assert!(crate::formats::svg::read(&source, "Invalid character scales").is_err());
         assert_eq!(crate::project::encode(&s.doc).unwrap(), before);
+    }
+}
+
+fn diagnostic(studio: &Studio, name: &str) {
+    if let Some(root) = std::env::var_os("OMADESIGN_SVG_METRIC_QA") {
+        let out = std::path::Path::new(&root).join(name);
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(
+            out.join("unqualified.svg"),
+            crate::svg::export_embedded(&studio.doc).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(out.join("unqualified.png"), png(studio)).unwrap();
+        std::fs::write(
+            out.join("unqualified.oma"),
+            crate::project::encode(&studio.doc).unwrap(),
+        )
+        .unwrap();
+        let l = layout(run(studio)).unwrap();
+        let glyphs:Vec<_>=l.glyphs.iter().map(|g|serde_json::json!({"index":g.index,"glyph":g.id,"font":g.font,"px":g.px,"upright":g.upright,"length_scale":g.length_scale,"axes":axes(g),"matrix":[g.transform.sx,g.transform.ky,g.transform.kx,g.transform.sy,g.transform.tx,g.transform.ty],"baseline":[g.baseline.x,g.baseline.y]})).collect();
+        std::fs::write(
+            out.join("unqualified-glyphs.json"),
+            serde_json::to_vec_pretty(&glyphs).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn svg_character_scale_editable_cycles_keep_the_same_pixels_without_growing_wrapper_depth() {
+    let mut s =
+        studio(r#"<text x="25" y="80" font-family="MetricFace" font-size="40">AVWaTo</text>"#);
+    s.patch_character(|c| {
+        c.hscale = Some(125.);
+        c.vscale = Some(80.);
+        c.kerning = Some(crate::geom::KernMode::Optical);
+        c.tracking = Some(100.);
+        c.baseline_shift = Some(3.);
+    });
+    let pixels = png(&s);
+    let mut doc = s.doc.clone();
+    let mut normalized = None;
+    fn depth(n: &TextNode) -> usize {
+        match n {
+            TextNode::Characters { .. } => 0,
+            TextNode::Element { children, .. } => 1 + children.iter().map(depth).max().unwrap_or(0),
+        }
+    }
+    for _ in 0..4 {
+        let svg = crate::svg::export_embedded(&doc).unwrap();
+        let (again, notes) = crate::formats::svg::read(&svg, "Repeated scale roundtrip").unwrap();
+        assert!(notes.is_empty());
+        assert_eq!(pixels, crate::compositor::export_png(&again, 1).unwrap());
+        let r = again
+            .layers
+            .iter()
+            .filter_map(|l| l.kind.shapes())
+            .flatten()
+            .find_map(|s| {
+                if let Geom::Text(r) = &s.geom {
+                    Some(r)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let d = depth(&r.svg_text.as_ref().unwrap().root);
+        if let Some(n) = normalized {
+            assert!(d <= n, "wrapper depth {d} > {n}");
+        } else {
+            normalized = Some(d);
+        }
+        doc = again;
+    }
+}
+
+#[test]
+fn svg_character_scale_keeps_loaded_values_and_uses_the_existing_native_paint_limits() {
+    for h in [0.5, 1500.] {
+        let mut s =
+            studio(r#"<text x="25" y="80" font-family="MetricFace" font-size="40">AV</text>"#);
+        scaled(&mut s, h, 80.);
+        let current = layout(run(&s)).unwrap();
+        for g in &current.glyphs {
+            assert!((axes(g)[0] / g.px - h.clamp(1., 1000.) / 100.).abs() < 0.002);
+        }
+        let exported = crate::svg::export_embedded(&s.doc).unwrap();
+        let (doc, notes) = crate::formats::svg::read(&exported, "Loaded scale bounds").unwrap();
+        assert!(notes.is_empty());
+        let r = doc
+            .layers
+            .iter()
+            .filter_map(|l| l.kind.shapes())
+            .flatten()
+            .find_map(|s| {
+                if let Geom::Text(r) = &s.geom {
+                    Some(r)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(r.character_style(0).hscale, Some(h));
+        assert_eq!(png(&s), crate::compositor::export_png(&doc, 1).unwrap());
     }
 }

@@ -686,7 +686,7 @@ fn write_nodes(
     range: std::ops::Range<usize>,
     out: &mut String,
     root: bool,
-    font_bound: bool,
+    leaf_bound: bool,
     metrics: Option<&Layout>,
 ) {
     match node {
@@ -699,7 +699,7 @@ fn write_nodes(
             if a >= b {
                 return;
             }
-            if font_bound {out.push_str(&escape(&run.content[super::char_to_byte(&run.content,a)..super::char_to_byte(&run.content,b)]));return;}
+            if leaf_bound {out.push_str(&escape(&run.content[super::char_to_byte(&run.content,a)..super::char_to_byte(&run.content,b)]));return;}
             for (span, split_pair) in positioning::spans(run, a, b, metrics).into_iter().flat_map(|(span,split)|scaling::spans(span,metrics).into_iter().map(move |span|(span,split))) {
                 let inherited = metrics.and_then(|layout|layout.styles.iter().find(|(at,_)|*at==span.start)).map(|(_,style)|style);
                 let text = &run.content[super::char_to_byte(&run.content, span.start)
@@ -775,21 +775,21 @@ fn write_nodes(
                 "tspan"
             };
             let count=children.iter().map(|n|if let TextNode::Characters{count}=n {Some(*count)} else {None}).collect::<Option<Vec<_>>>().and_then(|counts|counts.into_iter().try_fold(0usize,usize::checked_add));
-            let font_override=count.filter(|count|*count>0 && *cursor>=range.start && cursor.checked_add(*count).is_some_and(|end|end<=range.end)).and_then(|count|{
+            let leaf_override=count.filter(|count|*count>0 && *cursor>=range.start && cursor.checked_add(*count).is_some_and(|end|end<=range.end)).and_then(|count|{
                 if run.manual_kern.values().any(|v|*v!=0.) {return None;}
                 let spans=run.character_style_runs(*cursor,*cursor+count);
                 if spans.len()!=1{return None;}let style=spans[0].clone();
-                if style.font.is_none() && style.font_variations.is_none() && style.features.is_empty(){return None;}
-                let mut rest=style.clone();rest.start=0;rest.end=0;rest.font=None;rest.font_variations=None;rest.features.clear();
+                if style.font.is_none() && style.font_variations.is_none() && style.features.is_empty() && style.hscale.is_none() && style.vscale.is_none() && style.kerning.is_none(){return None;}
+                let mut rest=style.clone();rest.start=0;rest.end=0;rest.font=None;rest.font_variations=None;rest.features.clear();rest.hscale=None;rest.vscale=None;rest.kerning=None;
                 (rest==crate::geom::CharSpan::default()).then_some(style)
             });
             out.push_str(&format!("<{name}"));
             if root {paint_defaults(attributes,out);}
             let mut css = String::new();
             for (key, value) in attributes {
-                if font_override.as_ref().is_some_and(|s| s.font.is_some()) && matches!(key.as_str(),"font-family"|"font-weight"|"font-style") {continue;}
-                if font_override.as_ref().is_some_and(|s| s.font_variations.is_some()) && key=="font-variation-settings" {continue;}
-                if font_override.as_ref().is_some_and(|s|!s.features.is_empty()) && key=="font-feature-settings" {continue;}
+                if leaf_override.as_ref().is_some_and(|s| s.font.is_some()) && matches!(key.as_str(),"font-family"|"font-weight"|"font-style") {continue;}
+                if leaf_override.as_ref().is_some_and(|s| s.font_variations.is_some()) && key=="font-variation-settings" {continue;}
+                if leaf_override.as_ref().is_some_and(|s|!s.features.is_empty()||s.kerning.is_some()) && key=="font-feature-settings" {continue;}
                 if root
                     && overrides_font(run)
                     && matches!(key.as_str(), "font-family" | "font-weight" | "font-style")
@@ -840,12 +840,16 @@ fn write_nodes(
                 }
                 out.push_str(&format!(" {key}=\"{}\"", escape(&value)));
             }
-            if root && overrides_font(run) && !font_override.as_ref().is_some_and(|s|s.font.is_some()) {
+            if root && overrides_font(run) && !leaf_override.as_ref().is_some_and(|s|s.font.is_some()) {
                 out.push_str(&font_attributes(&run.font));
                 if !run.font_variations.is_empty() { css.push_str(&format!("font-variation-settings:{};", super::variations::css(&run.font_variations))); }
             }
-            if let Some(style)=&font_override {
-                if !style.features.is_empty(){css.push_str(&format!("font-feature-settings:{};",super::feature_css(&style.features)));}
+            if let Some(style)=&leaf_override {
+                if style.hscale.is_some() || style.vscale.is_some() {out.push_str(&format!(" {}=\"{}\"",scaling::MARKER,escape(&scaling::marker(style))));}
+                let mut features=if style.kerning.is_some(){metrics.and_then(|m|m.styles.iter().find(|(at,_)|*at==*cursor)).map(|(_,s)|s.features.iter().copied().collect::<BTreeMap<_,_>>()).unwrap_or_default()}else{BTreeMap::new()};
+                features.extend(style.features.iter().copied());
+                if let Some(mode)=style.kerning {features.insert(*b"kern",u32::from(mode==crate::geom::KernMode::Metrics));css.push_str(if mode==crate::geom::KernMode::Metrics{"font-kerning:normal;"}else{"font-kerning:none;"});}
+                if !features.is_empty(){css.push_str(&format!("font-feature-settings:{};",super::feature_css(&features.into_iter().collect::<Vec<_>>())));}
                 if let Some(font)=&style.font {out.push_str(&font_attributes(font));}
                 if style.font_variations.is_some(){let axes=super::variations::at(run,*cursor);css.push_str(&format!("font-variation-settings:{};",if axes.is_empty(){"normal".into()}else{super::variations::css(&axes)}));}
             }
@@ -854,7 +858,7 @@ fn write_nodes(
             }
             out.push('>');
             for child in children {
-                write_nodes(child, run, cursor, range.clone(), out, false, font_override.is_some(), metrics);
+                write_nodes(child, run, cursor, range.clone(), out, false, leaf_override.is_some(), metrics);
             }
             out.push_str(&format!("</{name}>"));
         }
@@ -1491,8 +1495,9 @@ pub(crate) fn layout_with_options(run: &TypeRun, options: &usvg::Options<'_>) ->
     let mut resolved=self::options();
     resolved.fontdb=options.fontdb.clone();
     bind_fonts(run,&mut resolved);
-    let source = renderer_source(&source(run)?);
+    let source = source(run)?;
     let scales=scaling::resolved(&source);
+    let source=renderer_source(&source);
     Some(layout_tree(run, &run.content, usvg::Tree::from_str(&source, &resolved).ok()?, true,&scales))
 }
 
