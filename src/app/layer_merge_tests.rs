@@ -71,7 +71,17 @@ fn undo_reopen(s: &mut Studio, before: &str) {
     if let Some(root) = std::env::var_os("OMA_LAYER_MERGE_QA_OUT") {
         let thread = std::thread::current();
         let test = thread.name().unwrap();
-        let folder = std::path::PathBuf::from(root).join(test.rsplit("::").next().unwrap());
+        let mut name = test.rsplit("::").next().unwrap().to_owned();
+        if name == "craft_stamp_selected_native_hdr_cmyka_clipping_keeps_all_original_samples" {
+            name.push_str(
+                if s.doc.color.model == crate::deep_color::cms::Model::Cmyk {
+                    "-cmyka"
+                } else {
+                    "-rgb"
+                },
+            );
+        }
+        let folder = std::path::PathBuf::from(root).join(name);
         std::fs::create_dir_all(&folder).unwrap();
         let original = crate::project::decode(before).unwrap();
         crate::project::save_to(&original, &folder.join("before.oma")).unwrap();
@@ -724,9 +734,62 @@ fn craft_visible_merge_and_stamp_do_not_reveal_hidden_clipping_followers() {
     s.undo();
     s.history.clear();
     let original = serde_json::to_value(&s.doc.layers).unwrap();
+    let inserted = s.active_layer.unwrap() + 1;
     run(&mut s, Kind::StampVisible);
-    assert_eq!(serde_json::to_value(&s.doc.layers[..4]).unwrap(), original);
+    assert_eq!(s.active_layer, Some(inserted));
+    assert_eq!(
+        serde_json::to_value(
+            s.doc
+                .layers
+                .iter()
+                .enumerate()
+                .filter_map(|(i, l)| (i != inserted).then_some(l))
+                .collect::<Vec<_>>()
+        )
+        .unwrap(),
+        original
+    );
     let mut isolated = s.doc.clone();
-    isolated.layers = vec![s.doc.layers[4].clone()];
+    isolated.layers = vec![s.doc.layers[inserted].clone()];
     assert_eq!(picture(&isolated), expected);
+}
+
+#[test]
+fn craft_stamp_group_keeps_locked_source_mask_styles_and_full_off_canvas_paint() {
+    let mut s = fixture();
+    let mut group = Layer::group("Styled source");
+    group.pass_through = false;
+    group.opacity = 0.5;
+    group.locked = true;
+    for layer in &mut s.doc.layers {
+        layer.parent = Some(group.id);
+    }
+    group.mask = Some(Pixels::from_rgba(16, 12, [128, 128, 128, 255].repeat(16 * 12)).unwrap());
+    group.filters.items.push(crate::filter::Fx::Shadow {
+        dx: 2.,
+        dy: 1.,
+        blur: 0.,
+        spread: 0.,
+        color: Rgba::rgb(30, 20, 10),
+        knockout: false,
+        blend: crate::color::Blend::Normal,
+        opacity: 1.,
+    });
+    let owner = group.id;
+    s.doc.layers.push(group);
+    s.activate_layer_tree(2);
+    let before = state(&s);
+    let original = serde_json::to_value(&s.doc.layers).unwrap();
+    let expected = picture(&s.doc);
+    let outside = view(&s.doc);
+    run(&mut s, Kind::StampGroup(owner));
+    assert_eq!(s.doc.layers.len(), 4);
+    assert_eq!(s.active_layer, Some(3));
+    assert_eq!(serde_json::to_value(&s.doc.layers[..3]).unwrap(), original);
+    assert!(!s.doc.layers[3].locked);
+    let mut isolated = s.doc.clone();
+    isolated.layers = vec![s.doc.layers[3].clone()];
+    assert_eq!(picture(&isolated), expected);
+    assert_eq!(view(&isolated), outside);
+    undo_reopen(&mut s, &before);
 }
