@@ -245,6 +245,7 @@ const PROPERTIES: &[&str] = &[
     "alignment-baseline",
     "baseline-shift",
     "text-decoration",
+    "text-rendering",
     "visibility",
     "color",
     "white-space",
@@ -969,7 +970,7 @@ fn plain_fragment(run: &TypeRun, range: std::ops::Range<usize>) -> String {
 
 fn wrap(fragment: &str, definitions: &str, matrix: [f32; 6], viewport: [f32; 2]) -> String {
     format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{}\" height=\"{}\" overflow=\"visible\"><defs>{definitions}</defs><g transform=\"matrix({} {} {} {} {} {})\">{fragment}</g></svg>",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{}\" height=\"{}\" overflow=\"visible\" text-rendering=\"geometricPrecision\"><defs>{definitions}</defs><g transform=\"matrix({} {} {} {} {} {})\">{fragment}</g></svg>",
         viewport[0], viewport[1], matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]
     )
 }

@@ -1880,7 +1880,7 @@ fn export_inner_report(doc: &Document, animate: bool, text_as_paths: bool, embed
         format!("<style>\n{css}</style>\n")
     };
     Ok(SvgExport {warnings:embedded.as_ref().map_or_else(Vec::new,|fonts|fonts.warnings.clone()),svg:format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n{style}<defs>\n{defs}</defs>\n{body}</svg>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" text-rendering=\"geometricPrecision\">\n{style}<defs>\n{defs}</defs>\n{body}</svg>\n",
         doc.width, doc.height, doc.width, doc.height
     )})
 }

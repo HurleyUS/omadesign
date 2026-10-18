@@ -1023,11 +1023,10 @@ fn apply_length_adjust(chunk: &TextChunk, clusters: &mut [GlyphCluster]) {
                 }
             }
         }
-        let Some(&last) = indices.last() else {
+        let Some(_) = indices.last() else {
             continue;
         };
-        let trailing = clusters[last].advance - clusters[last].width;
-        let width = indices.iter().map(|i| clusters[*i].advance).sum::<f32>() - trailing;
+        let width = indices.iter().map(|i| clusters[*i].advance).sum::<f32>();
         let wanted = target - fixed;
         if width <= 0. || wanted < 0. {
             continue;
@@ -1048,11 +1047,7 @@ fn apply_length_adjust(chunk: &TextChunk, clusters: &mut [GlyphCluster]) {
                 let cluster = &mut clusters[i];
                 cluster.transform = cluster.transform.pre_scale(factor, 1.);
                 cluster.width *= factor;
-                cluster.advance = if i == last {
-                    cluster.width + trailing
-                } else {
-                    cluster.advance * factor
-                };
+                cluster.advance *= factor;
                 cluster.length_scale *= factor;
             }
         }

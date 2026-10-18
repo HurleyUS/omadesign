@@ -86,6 +86,18 @@ pub(crate) fn compare(studio: &Studio, expected: &str, name: &str) {
         std::fs::write(out.join("native.png"), image.encode_png().unwrap()).unwrap();
         std::fs::write(out.join("expected.png"), wanted.encode_png().unwrap()).unwrap();
         std::fs::write(out.join("source.oma"), saved).unwrap();
+        let text = run(studio);
+        let positions = (0..text.content.chars().count())
+            .map(|i| {
+                let p = crate::text::caret_pt(text, i);
+                [p.x, p.y]
+            })
+            .collect::<Vec<_>>();
+        std::fs::write(
+            out.join("positions.json"),
+            serde_json::to_vec(&positions).unwrap(),
+        )
+        .unwrap();
     }
 }
 
@@ -212,5 +224,34 @@ fn svg_character_nested_length_groups_keep_parent_budget_and_explicit_child_widt
         let mut s=studio();s.doc=crate::formats::svg::read(&source,name).unwrap().0;
         let (li,id)=s.doc.layers.iter().enumerate().find_map(|(li,l)|l.kind.shapes().into_iter().flatten().find(|s|matches!(s.geom,Geom::Text(_))).map(|s|(li,s.id))).unwrap();s.selection=vec![(li,id)];
         compare(&s,&source,name);
+        if name=="length-parent" {
+            let text=run(&s);let bytes=crate::text::font_bytes_for(text).unwrap();
+            let face=rustybuzz::ttf_parser::Face::parse(&bytes,0).unwrap();
+            let space=f32::from(face.glyph_hor_advance(face.glyph_index(' ').unwrap()).unwrap())*20./f32::from(face.units_per_em());
+            assert!((crate::text::caret_pt(text,3).x-(25.+width as f32+space)).abs()<0.01);
+        }
     }
+}
+
+#[test]
+fn svg_character_export_requests_precise_geometry_and_retains_explicit_source_rendering_hints() {
+    let s = studio();
+    let generated = crate::svg::export_embedded(&s.doc).unwrap();
+    assert!(generated.contains("text-rendering=\"geometricPrecision\""));
+    let original = source().replace(
+        "<text xml:space",
+        "<text text-rendering=\"optimizeSpeed\" xml:space",
+    );
+    let doc = crate::formats::svg::read(&original, "Authored rendering hint")
+        .unwrap()
+        .0;
+    let generated = crate::svg::export_embedded(&doc).unwrap();
+    assert!(generated.contains("text-rendering=\"optimizeSpeed\""));
+    let again = crate::formats::svg::read(&generated, "Preserved hint")
+        .unwrap()
+        .0;
+    assert_eq!(
+        crate::compositor::export_png(&doc, 1).unwrap(),
+        crate::compositor::export_png(&again, 1).unwrap()
+    );
 }
