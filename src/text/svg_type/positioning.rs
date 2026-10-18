@@ -1,11 +1,24 @@
 use super::*;
 
-pub(super) fn spans(run: &TypeRun, start: usize, end: usize) -> Vec<(crate::geom::CharSpan, bool)> {
+/// Split optional ligatures only when an edited pair lies inside an existing glyph.
+/// Args: native text, visible range and original layout. Returns styled intervals and split flags.
+pub(super) fn spans(
+    run: &TypeRun,
+    start: usize,
+    end: usize,
+    original: Option<&Layout>,
+) -> Vec<(crate::geom::CharSpan, bool)> {
     let count = run.content.chars().count();
     let pairs: Vec<_> = run
         .manual_kern
         .iter()
-        .filter_map(|(&at, &value)| (at > 0 && at < count && value != 0.).then_some(at))
+        .filter_map(|(&at, &value)| {
+            (at > 0
+                && at < count
+                && value != 0.
+                && original.is_some_and(|l| l.clusters.iter().any(|r| r.start < at && at < r.end)))
+            .then_some(at)
+        })
         .collect();
     let mut result = Vec::new();
     for span in run.character_style_runs(start, end) {

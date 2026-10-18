@@ -71,6 +71,24 @@ pub(crate) fn ligature_expected(source: &str) -> String {
 }
 
 #[test]
+fn svg_rtl_single_anchor_keeps_the_embedding_in_the_same_text_chunk() {
+    let original = r#"<svg xmlns="http://www.w3.org/2000/svg"><text x="350" y="80" dx="0 -4" direction="rtl"><tspan>אב ג AV</tspan></text></svg>"#;
+    let runtime = renderer_source(original);
+    let xml = roxmltree::Document::parse(&runtime).unwrap();
+    let text = xml.descendants().find(|n| n.has_tag_name("text")).unwrap();
+    assert_eq!(text.attribute("x"), Some("350"));
+    assert_eq!(text.attribute("y"), Some("80"));
+    assert_eq!(text.attribute("dx"), Some("0 0 -4"));
+    let content: String = text
+        .descendants()
+        .filter(|n| n.is_text())
+        .filter_map(|n| n.text())
+        .collect();
+    assert_eq!(content, "\u{202b}אב ג AV\u{202c}");
+    assert!(original.contains(">אב ג AV<"));
+}
+
+#[test]
 fn svg_pair_offsets_replace_inherited_values_in_each_resolved_em_and_clear_to_zero() {
     let source = source(
         r#"<text x="25" y="80" font-family="MetricFace" font-size="40" style="font-kerning:none;font-feature-settings:'liga' 0"><tspan dx="3 7">AV</tspan><tspan font-size="20" dx="5"> next</tspan></text>"#,

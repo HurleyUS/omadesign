@@ -123,6 +123,7 @@ pub(crate) struct Layout {
     pub bounds: crate::geom::Bounds,
     pub stroke_width: f32,
     characters: Vec<VisualCharacter>,
+    clusters: Vec<std::ops::Range<usize>>,
 }
 
 pub(crate) fn paint_tree(run: &TypeRun, fill: bool) -> Option<Arc<usvg::Tree>> {
@@ -665,7 +666,7 @@ fn write_nodes(
                 return;
             }
             if font_bound {out.push_str(&escape(&run.content[super::char_to_byte(&run.content,a)..super::char_to_byte(&run.content,b)]));return;}
-            for (span, split_pair) in positioning::spans(run, a, b) {
+            for (span, split_pair) in positioning::spans(run, a, b, metrics) {
                 let inherited = metrics.and_then(|layout|layout.styles.iter().find(|(at,_)|*at==span.start)).map(|(_,style)|style);
                 let text = &run.content[super::char_to_byte(&run.content, span.start)
                     ..super::char_to_byte(&run.content, span.end)];
@@ -952,6 +953,11 @@ fn substituted_font(font: &usvg::Font) -> Option<std::path::PathBuf> {
 
 fn options_for(run: &TypeRun) -> usvg::Options<'static> {
     let mut options = options();
+    bind_fonts(run, &mut options);
+    options
+}
+
+fn bind_fonts(run: &TypeRun, options: &mut usvg::Options<'_>) {
     let mut fonts: std::collections::BTreeSet<String> = std::iter::once(&run.font)
         .chain(run.spans.iter().filter_map(|s| s.font.as_ref()))
         .cloned()
@@ -960,7 +966,8 @@ fn options_for(run: &TypeRun) -> usvg::Options<'static> {
         if let TextNode::Element { attributes, children, .. } = node {
             if let Some(value) = attributes.get("font-family") {
                 let family = super::font_inventory::first_family(value);
-                if family.starts_with("omatype:") || std::path::Path::new(&family).is_absolute() {
+                let cached=super::BYTES.get().and_then(|c|c.lock().ok().map(|c|c.contains_key(std::path::Path::new(&family)))).unwrap_or(false);
+                if family.starts_with("omatype:") || cached {
                     fonts.insert(family);
                 }
             }
@@ -987,7 +994,6 @@ fn options_for(run: &TypeRun) -> usvg::Options<'static> {
             }
         }
     }
-    options
 }
 
 fn plain_fragment(run: &TypeRun, range: std::ops::Range<usize>) -> String {
@@ -1395,6 +1401,9 @@ pub(crate) fn renderer_source(source: &str) -> String {
                 .collect();
             let mut added = 0;
             for position in &positions {
+                if matches!(attr.name(), "x" | "y") && *position==0 && values.len()==1 {
+                    continue;
+                }
                 let at = position + added;
                 if at < values.len() {
                     let dummy = if matches!(attr.name(), "x" | "y") {
@@ -1442,8 +1451,11 @@ fn layout_source(run: &TypeRun, source: String, content: &str) -> Option<Arc<Lay
 /// Resolve imported text against its already loaded, bounded embedded font database.
 /// Args: captured text and actual SVG parser options. Returns the same native layout and resolved font ranges.
 pub(crate) fn layout_with_options(run: &TypeRun, options: &usvg::Options<'_>) -> Option<Layout> {
+    let mut resolved=self::options();
+    resolved.fontdb=options.fontdb.clone();
+    bind_fonts(run,&mut resolved);
     let source = renderer_source(&source(run)?);
-    Some(layout_tree(run, &run.content, usvg::Tree::from_str(&source, options).ok()?, true))
+    Some(layout_tree(run, &run.content, usvg::Tree::from_str(&source, &resolved).ok()?, true))
 }
 
 fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -> Layout {
@@ -1455,6 +1467,7 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
     let mut carets = Vec::new();
     let mut starts = std::collections::HashSet::new();
     let mut styles = Vec::new();
+    let mut clusters = Vec::new();
     let mut resolved_fonts = HashMap::new();
     let mut used = vec![false; all.len()];
     let mut bounds: Option<crate::geom::Bounds> = None;
@@ -1507,6 +1520,7 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
                     |c| c.index,
                 );
                 let rtl = character.is_some_and(|c| c.rtl);
+                if chars.len()>1 {clusters.push(at..at+chars.len());}
                 for value in used.iter_mut().skip(at).take(chars.len()) {
                     *value = true;
                 }
@@ -1610,6 +1624,7 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -
         bounds: bounds.unwrap_or_else(|| crate::geom::Bounds::from_pt(run.map_point(run.origin))),
         stroke_width,
         characters: order,
+        clusters,
     }
 }
 
