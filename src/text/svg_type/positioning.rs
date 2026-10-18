@@ -209,7 +209,7 @@ pub(crate) fn restore_offsets(run:&mut TypeRun)->Result<(),String> {
     let bound=count.checked_mul(200).and_then(|n|n.checked_add(1024)).unwrap_or(usize::MAX).min(256*1024*1024);
     if value.len()>bound{return Err("SVG optical positioning metadata exceeds source bounds".into());}
     let offsets:Offsets=serde_json::from_str(value).map_err(|e|format!("Invalid SVG optical positioning: {e}"))?;
-    if offsets.version!=1 || offsets.length!=count || offsets.dx.len()!=offsets.dy.len() || offsets.dx.len()>count || svg.flow.is_none()&&offsets.dx.len()!=count || offsets.dx.iter().chain(&offsets.dy).any(|v|!v.is_finite()) || offsets.optical.len()>count || offsets.optical.iter().any(|[a,b]|a>=b||*b>count) || offsets.optical.windows(2).any(|p|p[0][1]>p[1][0]) {return Err("Invalid SVG optical positioning bounds".into());}
+    if offsets.version!=1 || offsets.length!=count || offsets.dx.len()!=offsets.dy.len() || offsets.dx.len()>count || offsets.dx.iter().chain(&offsets.dy).any(|v|!v.is_finite()) || offsets.optical.len()>count || offsets.optical.iter().any(|[a,b]|a>=b||*b>count) || offsets.optical.windows(2).any(|p|p[0][1]>p[1][0]) {return Err("Invalid SVG optical positioning bounds".into());}
     fn clear(node:&mut TextNode){if let TextNode::Element{attributes,children,..}=node {attributes.remove("dx");attributes.remove("dy");for child in children{clear(child);}}}
     let svg=run.svg_text.as_mut().unwrap();
     if svg.flow.is_none(){clear(&mut svg.root);}

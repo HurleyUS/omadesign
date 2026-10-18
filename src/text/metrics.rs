@@ -563,6 +563,15 @@ mod tests {
         assert_eq!(run.character_style(6).baseline_shift, Some(5.));
         assert_eq!(run.character_style(3).tracking, None);
     }
+    #[test]
+    fn native_kerning_mode_overrides_a_conflicting_feature_without_dropping_other_tags(){
+        for mode in [KernMode::None,KernMode::Optical] {
+            let mut ordinary=run("AVWaTo");ordinary.set_character_style(0,6,|s|{s.kerning=Some(mode);s.features=vec![(*b"tnum",1)];});
+            let expected=compose(&ordinary);let mut conflict=ordinary.clone();conflict.set_character_style(0,6,|s|s.features.insert(0,(*b"kern",1)));
+            assert_eq!(*compose(&conflict),*expected);assert_eq!(conflict.spans[0].features,vec![(*b"kern",1),(*b"tnum",1)]);
+        }
+    }
+
 }
 
 #[cfg(test)]
@@ -621,13 +630,5 @@ mod svg_type_native_acceptance {
         let mut run=sample("Auto height words wrap over multiple lines");run.frame=Some(TextFrame{size:Pt::new(120.,100.),auto_height:true,..Default::default()});let mut plain=document(run.clone());run.transform=Some([1.,0.,0.,1.,0.,100.]);let mut shifted=document(run);crate::text_geometry::reflow_areas(&mut plain);crate::text_geometry::reflow_areas(&mut shifted);let height=|d:&Document|{let Geom::Text(t)=&d.layers[0].kind.shapes().unwrap()[0].geom else{unreachable!()};t.frame.as_ref().unwrap().size.y};assert!((height(&plain)-height(&shifted)).abs()<0.01);
     }
 
-    #[test]
-    fn native_kerning_mode_overrides_a_conflicting_feature_without_dropping_other_tags(){
-        for mode in [KernMode::None,KernMode::Optical] {
-            let mut ordinary=run("AVWaTo");ordinary.set_character_style(0,6,|s|{s.kerning=Some(mode);s.features=vec![(*b"tnum",1)];});
-            let expected=compose(&ordinary);let mut conflict=ordinary.clone();conflict.set_character_style(0,6,|s|s.features.insert(0,(*b"kern",1)));
-            assert_eq!(*compose(&conflict),*expected);assert_eq!(conflict.spans[0].features,vec![(*b"kern",1),(*b"tnum",1)]);
-        }
-    }
 
 }
