@@ -421,7 +421,7 @@ struct Reader<'a> {
     effect_sources: std::collections::HashSet<String>,
     pixel_bytes: u64,
     mask_sources: HashMap<usize, MaskSource>,
-    rich_text: HashMap<String,(crate::text::svg_type::SvgText,String)>,
+    rich_text: HashMap<String,(crate::text::svg_type::SvgText,String,std::collections::BTreeMap<usize,f32>)>,
 }
 impl Reader<'_> {
     fn paint(
@@ -608,7 +608,7 @@ impl Reader<'_> {
                 }
                 usvg::Node::Image(image) => self.image(node, image, parent)?,
                 usvg::Node::Text(text) => {
-                    let native=!self.rich_text.get(text.id()).is_some_and(|(svg,_)|svg.flow.is_some()) && text.chunks().iter().all(|c|c.text().is_ascii()) && self.text(text,parent)?;
+                    let native=!self.rich_text.get(text.id()).is_some_and(|(svg,_,_)|svg.flow.is_some()) && text.chunks().iter().all(|c|c.text().is_ascii()) && self.text(text,parent)?;
                     if !native && !self.rich_type(text,parent)? {
                         warn(&mut self.warnings,"Complex SVG text retained as editable outlines; text content cannot be edited as type.".into());
                         self.children(text.flattened(), parent, depth + 1)?;
@@ -918,7 +918,7 @@ impl Reader<'_> {
         Ok(())
     }
     fn rich_type(&mut self,text:&usvg::Text,parent:Option<u64>)->Result<bool,String> {
-        let Some((mut svg,content))=self.rich_text.get(text.id()).cloned() else {return Ok(false);};
+        let Some((mut svg,content,manual_kern))=self.rich_text.get(text.id()).cloned() else {return Ok(false);};
         let glyph=text.layouted().iter().flat_map(|s|&s.positioned_glyphs).next();
         let font=glyph.and_then(|g|crate::text::webfonts::reference(self.tree.fontdb(),g.font)).unwrap_or_default();
         let px=text.chunks().iter().flat_map(|c|c.spans()).next().map_or(16.,|s|s.font_size().get());
@@ -928,7 +928,7 @@ impl Reader<'_> {
             warn(&mut self.warnings,format!("SVG font '{requested}' substituted with '{actual}'."));
         }}}}
         let t=text.abs_transform();
-        let mut run=TypeRun{content,font,px,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
+        let mut run=TypeRun{content,font,px,manual_kern,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
         if self.tree.fontdb().faces().any(|f| matches!(f.source,usvg::fontdb::Source::Binary(_))) || text.chunks().iter().flat_map(|c|c.spans()).any(|s|!s.font().features().is_empty()) {
         if let Some(layout) = crate::text::svg_type::layout_with_options(&run, self.options) {
             for (at, style) in layout.styles {

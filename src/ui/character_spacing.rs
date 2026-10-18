@@ -330,7 +330,11 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
                 if let Some(value) = numeric(
                     ui,
                     "Pair kerning",
-                    Some(*run.manual_kern.get(&edit.caret).unwrap_or(&0.)),
+                    Some(if run.svg_text.is_some() {
+                        crate::text::svg_type::pair_kerning(run, edit.caret)
+                    } else {
+                        *run.manual_kern.get(&edit.caret).unwrap_or(&0.)
+                    }),
                     0.,
                     -1000.0..=10000.0,
                     " /1000",
@@ -887,6 +891,43 @@ mod tests {
         let after=crate::project::encode(&studio.doc).unwrap();studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),tracked);
         studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);
         studio.redo();studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
+    }
+
+    #[test]
+    fn character_spacing_imported_svg_pair_native_keys_move_ligature_and_undo() {
+        use crate::text::svg_type::{metric_tests,pair_tests};
+        let ctx=egui::Context::default();ctx.enable_accesskit();crate::ui::theme::apply(&ctx);
+        let source=pair_tests::source(r#"<text x="25" y="80" font-family="MetricFace" font-size="40">fi office AV</text>"#);
+        let mut studio=metric_tests::studio_for(&source);
+        let before=crate::project::encode(&studio.doc).unwrap();
+        let point=crate::text::caret_pt(pair_tests::run(&studio),1);
+        studio.begin_type_edit(studio.selection[0],point);
+        assert_eq!(studio.type_edit.as_ref().unwrap().caret,1);
+        frame(&ctx,&mut studio,vec![]);
+        let output=tab_to(&ctx,&mut studio,"Pair kerning");assert_focused(&ctx,&output,"Pair kerning");
+        replace(&ctx,&mut studio,"150");frame(&ctx,&mut studio,key(Key::Enter,Modifiers::NONE));
+        assert_eq!(studio.selected_type().unwrap().manual_kern.get(&1),Some(&150.));
+        studio.commit_type_edit();
+        metric_tests::compare(&studio,&source.replace("font-size=\"40\"","font-size=\"40\" dx=\"0 6\""),"pair-native-input");
+        let after=crate::project::encode(&studio.doc).unwrap();assert_eq!(studio.history.len(),1);
+        studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);
+        studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
+    }
+
+    #[test]
+    fn character_spacing_imported_svg_flow_leading_native_keys_moves_lines_and_undo() {
+        use crate::text::svg_type::{metric_tests,pair_tests};
+        let ctx=egui::Context::default();ctx.enable_accesskit();crate::ui::theme::apply(&ctx);
+        let source=pair_tests::flow_source();let mut studio=metric_tests::studio_for(&source);
+        let before=crate::project::encode(&studio.doc).unwrap();
+        frame(&ctx,&mut studio,vec![]);
+        let output=tab_to(&ctx,&mut studio,"Leading amount");assert_focused(&ctx,&output,"Leading amount");
+        replace(&ctx,&mut studio,"42");frame(&ctx,&mut studio,key(Key::Enter,Modifiers::NONE));
+        assert!(studio.selected_character_metrics().iter().all(|s|s.leading==Some(Leading::Fixed(42.))));
+        metric_tests::compare(&studio,&source.replace("28px","42px"),"flow-leading-native-input");
+        let after=crate::project::encode(&studio.doc).unwrap();assert_eq!(studio.history.len(),1);
+        studio.undo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);
+        studio.redo();assert_eq!(crate::project::encode(&studio.doc).unwrap(),after);
     }
 
 }

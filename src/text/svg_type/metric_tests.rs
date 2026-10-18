@@ -18,7 +18,11 @@ pub(crate) fn source() -> String {
 }
 
 pub(crate) fn studio() -> Studio {
-    let (doc, notes) = crate::formats::svg::read(&source(), "Imported character metrics").unwrap();
+    studio_for(&source())
+}
+
+pub(crate) fn studio_for(source: &str) -> Studio {
+    let (doc, notes) = crate::formats::svg::read(source, "Imported character metrics").unwrap();
     assert!(notes.is_empty(), "{notes:?}");
     let mut studio = Studio::new();
     studio.show_welcome = false;

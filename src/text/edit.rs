@@ -166,6 +166,9 @@ impl TypeRun {
             if style.vscale.is_none(){style.vscale=source.vscale;}
         }
         style.start = 0;
+        if style.leading.is_none() {
+            style.leading = super::svg_type::leading(self, index);
+        }
         style.end = 0;
         style
     }

@@ -11,6 +11,11 @@ use tiny_skia::Transform;
 mod tests;
 #[cfg(test)]
 pub(crate) mod metric_tests;
+#[cfg(test)]
+pub(crate) mod pair_tests;
+mod positioning;
+pub(crate) use positioning::pair_kerning;
+pub(crate) use positioning::leading;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TextNode {
@@ -106,6 +111,8 @@ pub struct Flow {
 struct FlowSource {
     root: TextNode,
     content: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    manual_kern: BTreeMap<usize, f32>,
 }
 
 pub(crate) struct Layout {
@@ -115,6 +122,7 @@ pub(crate) struct Layout {
     pub styles: Vec<(usize, crate::geom::CharSpan)>,
     pub bounds: crate::geom::Bounds,
     pub stroke_width: f32,
+    characters: Vec<VisualCharacter>,
 }
 
 pub(crate) fn paint_tree(run: &TypeRun, fill: bool) -> Option<Arc<usvg::Tree>> {
@@ -429,9 +437,10 @@ pub(crate) fn capture(
     node: roxmltree::Node<'_, '_>,
     font: String,
     px: f32,
-) -> (SvgText, String) {
+) -> (SvgText, String, BTreeMap<usize, f32>) {
     let sheet = sheet(xml);
     let mut content = String::new();
+    let mut manual_kern = BTreeMap::new();
     let preserve = node
         .ancestors()
         .find_map(|n| n.attribute((roxmltree::NS_XML_URI, "space")))
@@ -470,6 +479,8 @@ pub(crate) fn capture(
     {
         root = saved.root;
         content = saved.content;
+        let count = content.chars().count();
+        manual_kern = saved.manual_kern.into_iter().filter(|(at,value)| *at > 0 && *at < count && value.is_finite()).collect();
     }
     if let TextNode::Element { attributes, .. } = &mut root {
         for property in PROPERTIES {
@@ -529,6 +540,7 @@ pub(crate) fn capture(
             flow,
         },
         content,
+        manual_kern,
     )
 }
 
@@ -698,6 +710,12 @@ fn write_nodes(
                         " letter-spacing=\"{}\"",
                         tracking * span.px.or_else(||inherited.and_then(|s|s.px)).unwrap_or(run.px) / 1000.
                     ));
+                }
+                if let Some(leading) = span.leading {
+                    css.push_str(&format!("line-height:{};",match leading {
+                        crate::geom::Leading::Auto(value) => format!("{value}%"),
+                        crate::geom::Leading::Fixed(value) => format!("{value}px"),
+                    }));
                 }
                 if !css.is_empty() { attrs.push_str(&format!(" style=\"{}\"", escape(&css))); }
                 if attrs.is_empty() {
@@ -1033,14 +1051,19 @@ pub fn source(run: &TypeRun) -> Option<String> {
             ));
         }
     }
-    Some(wrap(
+    let source = wrap(
         &fragment,
         &definitions,
         [
             matrix.sx, matrix.ky, matrix.kx, matrix.sy, matrix.tx, matrix.ty,
         ],
         svg.viewport,
-    ))
+    );
+    if run.manual_kern.is_empty() {
+        Some(source)
+    } else {
+        positioning::pairs(run, source, 0, &run.content)
+    }
 }
 
 /// Apply inherited object paint to a temporary SVG source view.
@@ -1182,6 +1205,11 @@ fn texts(group: &usvg::Group, out: &mut Vec<usvg::Text>) {
 
 struct VisualCharacter {
     index: usize,
+    ordinal: usize,
+    dx: f32,
+    dy: f32,
+    vertical: bool,
+    line_start: bool,
     rtl: bool,
     px: f32,
     color: Option<crate::color::Rgba>,
@@ -1203,7 +1231,9 @@ fn solid(fill: Option<&usvg::Fill>) -> Option<crate::color::Rgba> {
 fn visual_characters(nodes: &[usvg::Text], content: &str) -> Vec<VisualCharacter> {
     let mut result = Vec::new();
     let mut cursor = 0;
+    let mut ordinal = 0;
     for node in nodes {
+        let mut offset = 0;
         for chunk in node.chunks() {
             let text = chunk.text();
             if text.is_empty() {
@@ -1237,6 +1267,11 @@ fn visual_characters(nodes: &[usvg::Text], content: &str) -> Vec<VisualCharacter
                         result.push(VisualCharacter {
                             index: base
                                 + text[..byte].chars().filter(|c| !bidi_control(*c)).count(),
+                            ordinal: ordinal + text[..byte].chars().filter(|c| !bidi_control(*c)).count(),
+                            dx: node.dx().get(offset + text[..byte].chars().count()).copied().unwrap_or(0.),
+                            dy: node.dy().get(offset + text[..byte].chars().count()).copied().unwrap_or(0.),
+                            vertical: node.writing_mode() == usvg::WritingMode::TopToBottom && matches!(chunk.text_flow(),usvg::TextFlow::Linear),
+                            line_start: text[..byte].chars().all(bidi_control),
                             rtl,
                             px: span.map_or(16., |s| s.font_size().get()),
                             color: solid(span.and_then(|s| s.fill())),
@@ -1245,6 +1280,8 @@ fn visual_characters(nodes: &[usvg::Text], content: &str) -> Vec<VisualCharacter
                 }
             }
             cursor = (start + clean.len()).min(content.len());
+            offset += text.chars().count();
+            ordinal += clean.chars().count();
         }
     }
     result
@@ -1368,15 +1405,18 @@ pub(crate) fn renderer_source(source: &str) -> String {
 }
 
 pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
-    static CACHE: OnceLock<Mutex<HashMap<(String, u64), Arc<Layout>>>> = OnceLock::new();
-    let source = source(run)?;
-    let key = (source.clone(), super::FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed));
+    layout_source(run, source(run)?, &run.content)
+}
+
+fn layout_source(run: &TypeRun, source: String, content: &str) -> Option<Arc<Layout>> {
+    static CACHE: OnceLock<Mutex<HashMap<(String, String, u64), Arc<Layout>>>> = OnceLock::new();
+    let key = (source.clone(), content.to_owned(), super::FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed));
     let cache = CACHE.get_or_init(Default::default);
     if let Some(found) = cache.lock().unwrap().get(&key).cloned() {
         return Some(found);
     }
     let tree = usvg::Tree::from_str(&renderer_source(&source), &options_for(run)).ok()?;
-    let result = Arc::new(layout_tree(run, tree, false));
+    let result = Arc::new(layout_tree(run, content, tree, false));
     let mut cache = cache.lock().unwrap();
     if cache.len() >= 64 { cache.clear(); }
     cache.insert(key, result.clone());
@@ -1387,20 +1427,20 @@ pub(crate) fn layout(run: &TypeRun) -> Option<Arc<Layout>> {
 /// Args: captured text and actual SVG parser options. Returns the same native layout and resolved font ranges.
 pub(crate) fn layout_with_options(run: &TypeRun, options: &usvg::Options<'_>) -> Option<Layout> {
     let source = renderer_source(&source(run)?);
-    Some(layout_tree(run, usvg::Tree::from_str(&source, options).ok()?, true))
+    Some(layout_tree(run, &run.content, usvg::Tree::from_str(&source, options).ok()?, true))
 }
 
-fn layout_tree(run: &TypeRun, tree: usvg::Tree, embedded: bool) -> Layout {
+fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool) -> Layout {
     let mut text_nodes = Vec::new();
     texts(tree.root(), &mut text_nodes);
-    let order = visual_characters(&text_nodes, &run.content);
-    let all: Vec<_> = run.content.chars().collect();
+    let order = visual_characters(&text_nodes, content);
+    let all: Vec<_> = content.chars().collect();
     let mut contours = Vec::new();
     let mut carets = Vec::new();
     let mut starts = std::collections::HashSet::new();
     let mut styles = Vec::new();
     let mut resolved_fonts = HashMap::new();
-    let mut used = vec![false; run.content.chars().count()];
+    let mut used = vec![false; all.len()];
     let mut bounds: Option<crate::geom::Bounds> = None;
     let mut stroke_width = 0_f32;
     fn paths(group: &usvg::Group, contours: &mut Vec<Vec<Pt>>) {
@@ -1553,6 +1593,7 @@ fn layout_tree(run: &TypeRun, tree: usvg::Tree, embedded: bool) -> Layout {
         styles,
         bounds: bounds.unwrap_or_else(|| crate::geom::Bounds::from_pt(run.map_point(run.origin))),
         stroke_width,
+        characters: order,
     }
 }
 
@@ -1598,7 +1639,6 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
     let mut out = String::new();
     let mut start = 0;
     let count = run.content.chars().count();
-    let mut row = 0;
     let svg = run.svg_text.as_ref().unwrap();
     let TextNode::Element { attributes, .. } = &svg.root else {
         return out;
@@ -1607,6 +1647,7 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
         .get("font-size")
         .and_then(|v| length(v, svg.base_px))
         .unwrap_or(svg.base_px);
+    let mut baseline = px;
     out.push_str("<text");
     paint_defaults(attributes,&mut out);
     let mut css = String::new();
@@ -1651,7 +1692,8 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
         escape(
             &serde_json::to_string(&FlowSource {
                 root: flow_source_root(run),
-                content: run.content.clone()
+                content: run.content.clone(),
+                manual_kern: run.manual_kern.clone(),
             })
             .unwrap()
         )
@@ -1667,19 +1709,20 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
         }
         let measure = |end| {
             let fragment = plain_fragment(run, start..end);
-            usvg::Tree::from_str(
-                &wrap(
+            let source = wrap(
                     &fragment,
                     &svg.definitions,
                     [1., 0., 0., 1., 0., 0.],
                     svg.viewport,
-                ),
-                &options_for(run),
-            )
-            .ok()
-            .and_then(|tree| {
+                );
+            let content=&run.content[super::char_to_byte(&run.content,start)..super::char_to_byte(&run.content,end)];
+            let source=positioning::pairs(run,source,start,content)?;
+            layout_source(run,source,content)
+        };
+        let width = |end| {
+            measure(end).and_then(|layout| {
                 let mut nodes = Vec::new();
-                texts(tree.root(), &mut nodes);
+                texts(layout.tree.root(), &mut nodes);
                 nodes.first().map(|t| t.bounding_box().width())
             })
             .unwrap_or(0.)
@@ -1688,7 +1731,7 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
         let mut hi = ends.len();
         while lo < hi {
             let mid = (lo + hi) / 2;
-            if measure(ends[mid]) <= flow.width {
+            if width(ends[mid]) <= flow.width {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -1708,15 +1751,18 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
             out.push_str(&format!(
                 "<tspan x=\"{}\" y=\"{}\"{}>{inner}</tspan>",
                 flow.x,
-                flow.y + px + row as f32 * flow.leading,
-                if px + row as f32 * flow.leading > flow.height {
+                flow.y + baseline,
+                if baseline > flow.height {
                     " visibility=\"hidden\""
                 } else {
                     ""
                 }
             ));
         }
-        row += 1;
+        baseline += measure(end).map_or(flow.leading,|layout| {
+            layout.characters.iter().filter_map(|c| leading(run,start+c.index).map(|v|v.pixels(c.px)))
+                .reduce(f32::max).unwrap_or(flow.leading)
+        });
         let previous = start;
         start = end;
         if run.content.chars().nth(start) == Some('\n') || start == previous {
@@ -1746,7 +1792,7 @@ pub(crate) fn prepare_flow(source: &str) -> Result<Option<String>, String> {
         .filter(|n| n.has_tag_name("flowRoot") || n.has_tag_name("text"))
     {
         let outer = attributes(node, &sheet);
-        let (mut svg, content) = capture(&xml, node, String::new(), 16.);
+        let (mut svg, content, _) = capture(&xml, node, String::new(), 16.);
         let attrs = if let TextNode::Element { attributes, .. } = &svg.root {
             attributes.clone()
         } else {
