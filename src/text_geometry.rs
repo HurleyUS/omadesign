@@ -154,8 +154,18 @@ pub fn guide_path(shape: &Shape) -> Option<ArcPath> {
     Some(ArcPath::new(cubics, closed))
 }
 
+/// A visible frame line in local text coordinates, shared by drawing and editable export.
+/// The run holds only this line's source and styles; frame transforms remain on its owning text.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PositionedTextLine {
+    pub run: Box<TypeRun>,
+    pub line: crate::text::LayoutLine,
+    pub origin: Pt,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextGeometryLayout {
+    pub(crate) export_lines: Vec<PositionedTextLine>,
     pub contours: Vec<Vec<Pt>>,
     pub paint_ranges: Vec<(Option<crate::document::Fill>, std::ops::Range<usize>)>,
     pub caret_heights: Vec<(usize, f32)>,

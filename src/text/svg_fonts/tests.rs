@@ -5,7 +5,7 @@ use crate::{
     geom::Pt,
     text::variations::FontVariations,
 };
-const FONT: &str = concat!(
+pub(super) const FONT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/assets/fonts/EBGaramond.ttf"
 );
@@ -39,7 +39,7 @@ fn sample() -> Document {
     }
     doc
 }
-fn error(a: &Document, b: &Document) -> f64 {
+pub(super) fn error(a: &Document, b: &Document) -> f64 {
     let a = crate::compositor::render_export(a, 1).unwrap();
     let b = crate::compositor::render_export(b, 1).unwrap();
     assert_eq!((a.width(), a.height()), (b.width(), b.height()));
@@ -50,7 +50,7 @@ fn error(a: &Document, b: &Document) -> f64 {
         .sum::<u64>() as f64
         / a.data().len() as f64
 }
-fn root() -> std::path::PathBuf {
+pub(super) fn root() -> std::path::PathBuf {
     std::env::var_os("OMADESIGN_SVG_FONT_QA")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {

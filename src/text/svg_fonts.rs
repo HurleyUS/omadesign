@@ -7,11 +7,16 @@ use crate::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::collections::{BTreeMap, HashMap};
 #[cfg(test)]
+mod advanced_tests;
+mod layout;
+#[cfg(test)]
 mod tests;
 
 pub(crate) struct Embedded {
     pub css: String,
     pub fragments: HashMap<u64, String>,
+    pub outlined: std::collections::HashSet<u64>,
+    pub warnings: Vec<String>,
     fonts: BTreeMap<u128, Arc<Vec<u8>>>,
     total: usize,
 }
@@ -22,6 +27,8 @@ impl Embedded {
         let mut output = Self {
             css: String::new(),
             fragments: HashMap::new(),
+            outlined: Default::default(),
+            warnings: vec![],
             fonts: BTreeMap::new(),
             total: 0,
         };
@@ -46,7 +53,25 @@ impl Embedded {
                         .ok_or("Cannot export this SVG text")?;
                     output.rich(&source, layout.tree.fontdb())?
                 } else {
-                    output.native(run)?
+                    let before = output
+                        .fonts
+                        .keys()
+                        .copied()
+                        .collect::<std::collections::HashSet<_>>();
+                    let css = output.css.len();
+                    let total = output.total;
+                    match output.native_layout(shape) {
+                        Ok(fragment) => fragment,
+                        Err(layout::Issue::Invalid(error)) => return Err(error),
+                        Err(layout::Issue::Outline(reason)) => {
+                            output.css.truncate(css);
+                            output.total = total;
+                            output.fonts.retain(|key, _| before.contains(key));
+                            output.outlined.insert(shape.id);
+                            output.warnings.push(format!("{}: {reason}", shape.name));
+                            continue;
+                        }
+                    }
                 };
                 output.fragments.insert(shape.id, fragment);
             }
@@ -96,102 +121,6 @@ impl Embedded {
         self.css.push_str(&format!("@font-face{{font-family:'{family}';font-style:{};font-weight:{weight};src:url(data:font/ttf;base64,{}) format('truetype');}}\n", if face.is_italic(){"italic"}else{"normal"}, STANDARD.encode(bytes.as_slice())));
         self.fonts.insert(key, bytes);
         Ok(family)
-    }
-    fn native(&mut self, run: &TypeRun) -> Result<String, String> {
-        if run.frame.is_some() || run.on_path.is_some() || !run.manual_kern.is_empty() {
-            return Err("SVG font embedding for framed, path or manually kerned native text is not available. Choose outlined text instead.".into());
-        }
-        let mut out = String::from("<text xml:space=\"preserve\"");
-        if let Some(m) = run.transform {
-            out.push_str(&format!(
-                " transform=\"matrix({} {} {} {} {} {})\"",
-                m[0], m[1], m[2], m[3], m[4], m[5]
-            ));
-        }
-        out.push('>');
-        for line in super::compose(run).iter() {
-            if line.hyphenated {
-                return Err("SVG font embedding for automatic hyphenation is not available. Choose outlined text instead.".into());
-            }
-            for range in run.character_style_runs(line.start, line.end) {
-                let metrics = super::character_metrics(run, range.start);
-                if metrics.hscale != Some(100.)
-                    || metrics.vscale != Some(100.)
-                    || metrics.kerning == Some(crate::geom::KernMode::Optical)
-                {
-                    return Err("SVG font embedding for scaled or optically kerned characters is not available. Choose outlined text instead.".into());
-                }
-                let font = range.font.as_ref().unwrap_or(&run.font);
-                let bytes = super::font_bytes_for(&TypeRun {
-                    font: font.clone(),
-                    ..Default::default()
-                })
-                .ok_or("The font needed for SVG export is unavailable")?;
-                let face = rustybuzz::ttf_parser::Face::parse(&bytes, 0)
-                    .map_err(|_| "Invalid SVG export font")?;
-                let authored = super::variations::at(run, range.start);
-                let axes = super::variations::FontVariations::new(
-                    face.variation_axes()
-                        .into_iter()
-                        .map(|a| {
-                            let v = authored
-                                .settings()
-                                .iter()
-                                .find(|(t, _)| *t == a.tag.to_bytes())
-                                .map_or(a.def_value, |(_, v)| *v);
-                            (a.tag.to_bytes(), v.clamp(a.min_value, a.max_value))
-                        })
-                        .collect(),
-                )?;
-                let weight = face.weight().to_number();
-                let italic = face.is_italic();
-                let family = self.add(bytes)?;
-                let px = metrics.px.unwrap_or(run.px);
-                let mut features = run.features.clone();
-                for (tag, value) in &range.features {
-                    if let Some(old) = features.iter_mut().find(|(t, _)| t == tag) {
-                        old.1 = *value;
-                    } else {
-                        features.push((*tag, *value));
-                    }
-                }
-                let css = format!(
-                    "font-optical-sizing:none;font-variation-settings:{};font-feature-settings:{};font-kerning:{};",
-                    if axes.is_empty() {
-                        "normal".into()
-                    } else {
-                        super::variations::css(&axes)
-                    },
-                    if features.is_empty() {
-                        "normal".into()
-                    } else {
-                        super::feature_css(&features)
-                    },
-                    if metrics.kerning == Some(crate::geom::KernMode::None) {
-                        "none"
-                    } else {
-                        "normal"
-                    }
-                );
-                out.push_str(&format!("<tspan x=\"{}\" y=\"{}\" font-family=\"{family}\" font-size=\"{px}\" font-weight=\"{weight}\" font-style=\"{}\" letter-spacing=\"{}\" style=\"{}\"",run.origin.x+line.caret_x(range.start),run.origin.y+line.baseline-metrics.baseline_shift.unwrap_or(0.),if italic{"italic"}else{"normal"},metrics.tracking.unwrap_or(0.)*px/1000.,super::svg_type::escape(&css)));
-                if let Some(fill) = &range.fill {
-                    match fill {
-                    Fill::Solid(c)=>out.push_str(&format!(" fill=\"{}\" fill-opacity=\"1\"",c.css())),
-                    Fill::None=>out.push_str(" fill=\"none\""),
-                    _=>return Err("SVG font embedding for painted character ranges is not available. Choose outlined text instead.".into()),
-                }
-                }
-                let text: String = run
-                    .content
-                    .chars()
-                    .skip(range.start)
-                    .take(range.end - range.start)
-                    .collect();
-                out.push_str(&format!(">{}</tspan>", super::svg_type::escape(&text)));
-            }
-        }
-        out.push_str("</text>");
-        Ok(out)
     }
     fn rich(&mut self, source: &str, db: &usvg::fontdb::Database) -> Result<String, String> {
         let xml = roxmltree::Document::parse(source).map_err(|e| e.to_string())?;

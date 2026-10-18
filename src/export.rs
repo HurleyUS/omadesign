@@ -254,7 +254,7 @@ fn encode_inner_admitted(
             return Ok((output.bytes, output.warnings));
         }
         let output = match settings.format {
-            Format::Svg => (if svg_fonts { crate::svg::export_embedded(doc)? } else { crate::svg::export(doc)? }.into_bytes(), vec![]),
+            Format::Svg => if svg_fonts { let report=crate::svg::export_embedded_report(doc)?;(report.svg.into_bytes(),report.warnings) } else { (crate::svg::export(doc)?.into_bytes(),vec![]) },
             Format::Pdf => crate::formats::pdf::write(doc)?,
             Format::Ora => crate::formats::openraster::write(doc)?,
             Format::Idml => crate::formats::idml::write(doc)?,

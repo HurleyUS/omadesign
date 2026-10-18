@@ -787,6 +787,15 @@ fn layout_frame_pass(
         if placed.line.hyphenated {
             layout.visible_text.push('-');
         }
+        let mut line_run=placed.run;
+        line_run.content=line_run.content.chars().take(placed.line.end).collect();
+        line_run.spans.retain(|span|span.start<placed.line.end);
+        for span in &mut line_run.spans {span.end=span.end.min(placed.line.end);}
+        line_run.spans.shrink_to_fit();
+        line_run.paragraphs.retain(|p|p.start<placed.line.end);
+        line_run.paragraphs.shrink_to_fit();
+        line_run.manual_kern.retain(|&i,_|i<placed.line.end);
+        layout.export_lines.push(PositionedTextLine {run:Box::new(line_run),line:placed.line,origin:base});
     }
     if mode != Overflow::Visible {
         let contours=std::mem::take(&mut layout.contours);

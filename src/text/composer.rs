@@ -3,7 +3,7 @@ use super::*;
 use crate::geom::{BreakMode, LastLine, ParagraphStyle, TextAlign};
 use unicode_segmentation::UnicodeSegmentation;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LayoutGlyph {
     pub id: u16,
     pub cluster: usize,
@@ -14,7 +14,7 @@ pub struct LayoutGlyph {
     pub hscale: f32,
     pub vscale: f32,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LayoutLine {
     pub text: String,
     pub hyphenated: bool,
