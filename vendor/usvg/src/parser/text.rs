@@ -856,6 +856,7 @@ fn convert_baseline_shift(node: SvgNode, state: &converter::State) -> Vec<Baseli
     let nodes: Vec<_> = node
         .ancestors()
         .take_while(|n| n.tag_name() != Some(EId::Text))
+        .chain(node.ancestors().find(|n| n.tag_name()==Some(EId::Text)))
         .collect();
     for n in nodes {
         if let Some(len) = n.try_attribute::<Length>(AId::BaselineShift) {

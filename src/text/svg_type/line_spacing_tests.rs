@@ -180,9 +180,12 @@ fn svg_positioned_leading_keeps_single_baselines_and_real_text_paths_intact() {
 
 #[test]
 fn svg_positioned_leading_and_authored_bidi_controls_keep_character_slots_and_actual_baselines() {
-    let source = pair_tests::source(
-        "<text x=\"25\" y=\"35\" font-family=\"MetricFace\" font-size=\"24\">A\u{202b}אב\u{202c}V<tspan x=\"25\" y=\"65\">CD</tspan><tspan x=\"25\" dy=\"30\">EF</tspan></text>",
-    );
+    use base64::Engine;
+    let face = base64::engine::general_purpose::STANDARD
+        .encode(std::fs::read("/usr/share/fonts/liberation/LiberationMono-Bold.ttf").unwrap());
+    let source = pair_tests::source(&format!(
+        "<style>@font-face{{font-family:PinnedHebrew;src:url(data:font/ttf;base64,{face})}}</style><text x=\"25\" y=\"35\" font-family=\"MetricFace,PinnedHebrew\" font-size=\"24\">A\u{202b}אב\u{202c}V<tspan x=\"25\" y=\"65\">CD</tspan><tspan x=\"25\" dy=\"30\">EF</tspan></text>",
+    ));
     let expected = source
         .replace("y=\"65\"", "y=\"85\"")
         .replace("dy=\"30\"", "dy=\"50\"");
@@ -197,6 +200,10 @@ fn cycles(source: String, name: &str) {
         s.vscale = Some(80.);
         s.kerning = Some(crate::geom::KernMode::Optical);
     });
+    for g in &layout(pair_tests::run(&studio)).unwrap().glyphs {
+        assert!((g.transform.sx.hypot(g.transform.ky) / g.px - 1.25).abs() < 0.002);
+        assert!((g.transform.kx.hypot(g.transform.sy) / g.px - 0.8).abs() < 0.002);
+    }
     let before = crate::compositor::export_png(&studio.doc, 1).unwrap();
     let story = pair_tests::run(&studio).content.clone();
     for _ in 0..4 {
@@ -335,11 +342,10 @@ fn svg_positioned_leading_legacy_run_also_preserves_flow_spacing_through_editabl
     let mut studio = metric_tests::studio_for(&source);
     let before = crate::project::encode(&studio.doc).unwrap();
     studio.patch_type(|r| r.leading = 42.);
-    compare(
-        &studio,
-        &source.replace("28px", "42px"),
-        "leading-legacy-flow",
+    let expected = pair_tests::source(
+        r#"<text xml:space="preserve" font-family="MetricFace" font-size="24"><tspan x="25" y="35">AVAV AVAV </tspan><tspan x="25" y="77">AVAV AVAV </tspan><tspan x="25" y="119">AVAV AVAV </tspan><tspan x="25" y="161">AVAV</tspan></text>"#,
     );
+    compare(&studio, &expected, "leading-legacy-flow");
     let after = crate::project::encode(&studio.doc).unwrap();
     studio.undo();
     assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
@@ -441,4 +447,118 @@ fn svg_positioned_leading_keeps_loaded_finite_values_and_native_minimum_paint_se
                 .all(|s| s.leading == Some(mode))
         );
     }
+}
+
+#[test]
+fn svg_positioned_leading_retains_root_baseline_shift_and_absolute_native_shift_edits() {
+    let source = pair_tests::source(
+        r#"<text x="25" y="80" baseline-shift="5" font-family="MetricFace" font-size="24">AB</text>"#,
+    );
+    let mut studio = metric_tests::studio_for(&source);
+    let before = crate::project::encode(&studio.doc).unwrap();
+    assert!(
+        layout(pair_tests::run(&studio))
+            .unwrap()
+            .glyphs
+            .iter()
+            .all(|g| (g.baseline.y - 75.).abs() < 0.001)
+    );
+    studio.patch_character(|s| s.baseline_shift = Some(12.));
+    compare(
+        &studio,
+        &source.replace("baseline-shift=\"5\"", "baseline-shift=\"12\""),
+        "leading-root-baseline",
+    );
+    assert!(
+        layout(pair_tests::run(&studio))
+            .unwrap()
+            .glyphs
+            .iter()
+            .all(|g| (g.baseline.y - 68.).abs() < 0.001)
+    );
+    let after = crate::project::encode(&studio.doc).unwrap();
+    studio.undo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
+    studio.redo();
+    assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
+}
+
+fn vertical_font_metrics(font: &str, px: f32, shift: f32, name: &str) {
+    use base64::Engine;
+    let face = base64::engine::general_purpose::STANDARD.encode(std::fs::read(font).unwrap());
+    let style = format!(
+        "<style>@font-face{{font-family:MetricProbe;src:url(data:font/ttf;base64,{face})}}</style>"
+    );
+    let source = pair_tests::source(&format!(
+        "{style}<text x=\"200\" y=\"20\" writing-mode=\"vertical-rl\" font-family=\"MetricProbe\" font-size=\"{px}\">AB</text>"
+    ));
+    let expected = pair_tests::source(&format!(
+        "{style}<g transform=\"translate(200 20) rotate(90)\"><text x=\"0\" y=\"{shift}\" font-family=\"MetricProbe\" font-size=\"{px}\">AB</text></g>"
+    ));
+    let studio = metric_tests::studio_for(&source);
+    compare(&studio, &expected, name);
+}
+
+#[test]
+fn svg_vertical_metrics_eb24_match_the_independent_rotated_baseline() {
+    vertical_font_metrics(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/assets/fonts/EBGaramond.ttf"
+        ),
+        24.,
+        7.5,
+        "vertical-metrics-eb24",
+    );
+}
+#[test]
+fn svg_vertical_metrics_eb32_match_the_independent_rotated_baseline() {
+    vertical_font_metrics(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/assets/fonts/EBGaramond.ttf"
+        ),
+        32.,
+        11.,
+        "vertical-metrics-eb32",
+    );
+}
+#[test]
+fn svg_vertical_metrics_eb40_match_the_independent_rotated_baseline() {
+    vertical_font_metrics(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/assets/fonts/EBGaramond.ttf"
+        ),
+        40.,
+        14.,
+        "vertical-metrics-eb40",
+    );
+}
+#[test]
+fn svg_vertical_metrics_sans24_match_the_independent_rotated_baseline() {
+    vertical_font_metrics(
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        24.,
+        7.5,
+        "vertical-metrics-sans24",
+    );
+}
+#[test]
+fn svg_vertical_metrics_sans32_match_the_independent_rotated_baseline() {
+    vertical_font_metrics(
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        32.,
+        11.,
+        "vertical-metrics-sans32",
+    );
+}
+#[test]
+fn svg_vertical_metrics_sans40_match_the_independent_rotated_baseline() {
+    vertical_font_metrics(
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        40.,
+        13.,
+        "vertical-metrics-sans40",
+    );
 }

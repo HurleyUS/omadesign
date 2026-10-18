@@ -1157,7 +1157,10 @@ fn apply_writing_mode(writing_mode: WritingMode, clusters: &mut [GlyphCluster]) 
             cluster.transform = cluster
                 .transform
                 .pre_translate(0.0, if cluster.ascent >= 3. && cluster.height() >= 2. {
-                    (cluster.ascent.round() + cluster.descent.round()) / 2.
+                    let mut ascent=cluster.ascent.round();
+                    let mut descent=cluster.descent.round();
+                    if descent>cluster.descent && ascent>=1. {ascent-=1.;descent-=1.;}
+                    (ascent+descent)/2.
                 } else {
                     (cluster.ascent + cluster.descent) / 2.
                 });

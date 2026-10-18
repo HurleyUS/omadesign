@@ -327,7 +327,7 @@ pub(super) fn compile(run: &TypeRun, source: String, content: &str) -> Option<St
                 || g.inline.y.abs() > 0.001
                 || g.letter_spacing != 0.
                 || g.word_spacing != 0.)
-    }) {
+    }) && !layout.characters.iter().any(|c|c.dx!=0. || c.dy!=0.) {
         return Some(source);
     }
     for g in &layout.glyphs {
