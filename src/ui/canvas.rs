@@ -3875,6 +3875,13 @@ fn context_menu(resp: &eframe::egui::Response, studio: &mut Studio) {
             studio.group_selected();
             ui.close();
         }
+        if ui
+            .add_enabled(studio.can_group_selection(), eframe::egui::Button::new("Group from Layers…"))
+            .clicked()
+        {
+            super::layer_group::open(ui.ctx(), studio);
+            ui.close();
+        }
         if ui.button("Ungroup     Ctrl+Shift+G").clicked() {
             studio.ungroup_selected();
             ui.close();

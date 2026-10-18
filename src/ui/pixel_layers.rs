@@ -7,6 +7,7 @@ enum Action {
     Group,
     DuplicateLayer(usize),
     Duplicate,
+    GroupFromLayers,
     Delete(usize),
     Arrange(usize, bool, bool),
     Mask(usize, masking::Action),
@@ -66,9 +67,18 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
             {
                 action = active.map(Action::DuplicateLayer);
             }
-            let selection = !studio.selection.is_empty() || studio.selected_layer.is_some();
             if ui
-                .add_enabled(selection, Button::new("Duplicate selection"))
+                .add_enabled(
+                    studio.can_group_selection(),
+                    Button::new("Group from Layers…"),
+                )
+                .clicked()
+            {
+                action = Some(Action::GroupFromLayers);
+            }
+            let duplicate = !studio.selection.is_empty() || studio.selected_layer.is_some();
+            if ui
+                .add_enabled(duplicate, Button::new("Duplicate selection"))
                 .clicked()
             {
                 action = Some(Action::Duplicate);
@@ -131,6 +141,7 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
                 crate::ui::layer_duplicate::open(ui.ctx(), studio, i);
             }
             Action::Duplicate => studio.duplicate_selection(),
+            Action::GroupFromLayers => super::super::layer_group::open(ui.ctx(), studio),
             Action::Delete(i) => studio.delete_layer_tree(i),
             Action::Arrange(i, up, true) => studio.move_layer_tree_extreme(i, up),
             Action::Arrange(i, up, false) => studio.move_layer_tree(i, up),

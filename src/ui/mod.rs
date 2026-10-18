@@ -37,6 +37,7 @@ mod keyboard_controls;
 mod key_hud_tests;
 mod layer_drag;
 mod layer_duplicate;
+mod layer_group;
 pub(crate) mod layer_merge;
 mod layer_clipping;
 mod layout;
@@ -188,6 +189,7 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
         && !find_replace::is_open(&ctx)
         && !find_font::is_open(&ctx)
         && !layer_duplicate::is_open(&ctx)
+        && !layer_group::is_open(&ctx)
         && !layer_merge::is_open(&ctx)
         && !panel_keyboard::is_open(&ctx)
         && !studio.show_templates
@@ -217,6 +219,7 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
         && !find_replace::is_open(&ctx)
         && !find_font::is_open(&ctx)
         && !layer_duplicate::is_open(&ctx)
+        && !layer_group::is_open(&ctx)
         && !layer_merge::is_open(&ctx)
         && !panel_keyboard::is_open(&ctx)
         && !studio.show_templates
@@ -230,7 +233,7 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
     layout::poll_image(&ctx, studio);
 
     // Keep the canvas visible for previews while preventing edits behind the dialog.
-    if pixel_selection::is_open(&ctx) || background_removal::is_open(&ctx) || export_dialog::is_open(&ctx) || artboard_dialog::is_open(&ctx) || keyboard_authoring::is_open(&ctx) || keyboard_tools::is_open(&ctx) || guide_keyboard::is_open(&ctx) || type_commands::is_open(&ctx) || find_replace::is_open(&ctx) || find_font::is_open(&ctx) || layer_duplicate::is_open(&ctx) || layer_merge::is_open(&ctx) {
+    if pixel_selection::is_open(&ctx) || background_removal::is_open(&ctx) || export_dialog::is_open(&ctx) || artboard_dialog::is_open(&ctx) || keyboard_authoring::is_open(&ctx) || keyboard_tools::is_open(&ctx) || guide_keyboard::is_open(&ctx) || type_commands::is_open(&ctx) || find_replace::is_open(&ctx) || find_font::is_open(&ctx) || layer_duplicate::is_open(&ctx) || layer_group::is_open(&ctx) || layer_merge::is_open(&ctx) {
         ui.disable();
     }
 
@@ -285,6 +288,7 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
         find_replace::show(&ctx, studio);
         find_font::show(&ctx, studio);
         layer_duplicate::show(&ctx, studio);
+        layer_group::show(&ctx, studio);
         layer_merge::show(&ctx, studio);
         anim_export::show(ui, studio);
         pixel_selection::show(&ctx, studio);

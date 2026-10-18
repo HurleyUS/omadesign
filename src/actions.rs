@@ -7,6 +7,7 @@ use std::path::Path;
 pub(crate) enum Step {
     Duplicate { delta: Pt },
     Group,
+    GroupNamed(String),
     Ungroup,
     Flip { horizontal: bool },
     Outline { selected: Option<usize> },
@@ -38,6 +39,7 @@ impl Step {
             }
             Self::Duplicate { .. } => "Duplicate".into(),
             Self::Group => "Group".into(),
+            Self::GroupNamed(name) => format!("Group {name}"),
             Self::Ungroup => "Ungroup".into(),
             Self::Flip { horizontal: true } => "Flip horizontal".into(),
             Self::Flip { horizontal: false } => "Flip vertical".into(),
@@ -58,6 +60,14 @@ impl Step {
                 Err("Action offsets must be finite".into())
             }
             Self::Appearance(value) => crate::graphic_styles::validate_appearance(value),
+            Self::GroupNamed(name)
+                if name.is_empty()
+                    || name.chars().count() > 1024
+                    || name.chars().any(|c| c.is_control())
+                    || name != name.trim() =>
+            {
+                Err("Name the group with 1 to 1024 characters".into())
+            }
             Self::Outline {
                 selected: Some(index),
             } if *index == usize::MAX => {

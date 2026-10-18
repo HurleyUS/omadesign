@@ -2588,6 +2588,7 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
     }
     let mut delete_item = None;
     let mut duplicate_layer = None;
+    let mut group_from_layers = None;
     let mut merge_layer = None;
     let mut clip_layer = None;
     let mut artwork_action = None;
@@ -2712,6 +2713,10 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
                                     }
                                 ))
                                 .context_menu(|ui| {
+                                    if ui.add_enabled(studio.can_group_selection() || !studio.layer_row_selected(i), eframe::egui::Button::new("Group from Layers…")).clicked() {
+                                        group_from_layers = Some(i);
+                                        ui.close();
+                                    }
                                     if ui.add_enabled(studio.can_duplicate_layer_tree(i), eframe::egui::Button::new("Duplicate layer…")).clicked() {
                                         duplicate_layer=Some(layer.id); ui.close();
                                     }
@@ -3044,6 +3049,12 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
     }
     if let Some(index)=duplicate_layer.and_then(|id|studio.doc.layers.iter().position(|l|l.id==id)) {
         super::layer_duplicate::open(ui.ctx(), studio, index);
+    }
+    if let Some(index) = group_from_layers {
+        if !studio.layer_row_selected(index) {
+            studio.select_layer_rows(index, false, false);
+        }
+        super::layer_group::open(ui.ctx(), studio);
     }
     if let Some(kind)=merge_layer {super::layer_merge::start(ui.ctx(),studio,kind);}
     if let Some((owner, clipped))=clip_layer {studio.set_layer_clipping(Some(owner),clipped);}

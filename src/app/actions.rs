@@ -398,7 +398,7 @@ impl Studio {
                 }));
             }
             Step::Front | Step::Back | Step::Appearance(_) => return Ok(true),
-            Step::Group | Step::Ungroup => {}
+            Step::Group | Step::GroupNamed(_) | Step::Ungroup => {}
         }
         Ok(false)
     }
@@ -407,7 +407,8 @@ impl Studio {
         self.check_action_step(step)?;
         match step {
             Step::Duplicate { delta } => self.duplicate_selection_by(*delta),
-            Step::Group => self.group_selected(),
+            Step::Group => self.group_named("Group"),
+            Step::GroupNamed(name) => self.group_named(name.clone()),
             Step::Ungroup => self.ungroup_selected(),
             Step::Flip { horizontal } => self.flip_selection(*horizontal),
             Step::Outline {
@@ -462,7 +463,10 @@ impl Studio {
                 self.action_step(step)
                     .map_err(|e| format!("Step {} ({}): {e}", index + 1, step.name()))?;
                 if before == self.actions.serial
-                    && matches!(step, Step::Duplicate { .. } | Step::Group | Step::Ungroup)
+                    && matches!(
+                        step,
+                        Step::Duplicate { .. } | Step::Group | Step::GroupNamed(_) | Step::Ungroup
+                    )
                 {
                     return Err(format!(
                         "Step {} ({}): {}",

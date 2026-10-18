@@ -608,12 +608,22 @@ fn object_menu(ui: &mut Ui, studio: &mut Studio) {
         ui.separator();
         if ui
             .add_enabled(
-                !studio.selection.is_empty() || studio.selected_layer.is_some(),
+                studio.can_group_selection(),
                 Button::new("Group").shortcut_text("Ctrl+G"),
             )
             .clicked()
         {
             studio.group_selected();
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                studio.can_group_selection(),
+                Button::new("Group from Layers…"),
+            )
+            .clicked()
+        {
+            super::layer_group::open(ui.ctx(), studio);
             ui.close();
         }
         if ui

@@ -15,6 +15,7 @@ mod file_io;
 mod guides;
 mod hierarchy_edit;
 pub use hierarchy_edit::TreePlacement;
+pub(crate) use hierarchy_edit::GroupRequest;
 mod key_hints;
 pub(crate) mod keyboard_authoring;
 mod layer_groups;
