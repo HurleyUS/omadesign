@@ -1575,7 +1575,7 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, s
                         }).flatten().unwrap_or((1000.,Default::default()));
                         let compensation=scales.iter().find(|s|s.contains(character.index));
                         let font_factor=compensation.map_or(1.,|s|s.font_factor);
-                        glyph_metrics.push(GlyphMetric{index:character.index,node:node_index,chunk:character.chunk,font:font.clone(),id:glyph.id.0,px:positions.iter().find(|p|p.index==character.index).and_then(|p|p.px).unwrap_or(glyph.font_size()/font_factor),point,transform:glyph.transform().pre_scale(units,units),advance:glyph.cluster_advance,width:glyph.cluster_width,allowed:glyph.spacing_allowed,inline:Pt::new(glyph.inline_direction[0],glyph.inline_direction[1]),baseline:Pt::new(glyph.baseline[0],glyph.baseline[1]),length_scale:glyph.length_scale,unadjusted_advance:glyph.unadjusted_advance,upright:glyph.vertical_upright,letter_spacing:span.letter_spacing,word_spacing:span.word_spacing,variations:span.variations.iter().map(|v|(v.tag,v.value)).collect(),auto_opsz:span.font_optical_sizing==usvg::FontOpticalSizing::Auto,origin:Pt::new(glyph.cluster_origin[0],glyph.cluster_origin[1]),font_px:glyph.font_size(),rotation:text.rotate().get(glyph.text_index).copied().unwrap_or(0.),linear:matches!(text.chunks()[character.chunk].text_flow(),usvg::TextFlow::Linear),native_factor:compensation.map(|s|s.inline_factor)});
+                        glyph_metrics.push(GlyphMetric{index:character.index,node:node_index,chunk:character.chunk,font:font.clone(),id:glyph.id.0,px:positions.iter().find(|p|p.index==character.index).and_then(|p|p.px).unwrap_or(glyph.font_size()/font_factor),point,transform:glyph.transform().pre_scale(units,units),advance:glyph.cluster_advance,width:glyph.cluster_width,allowed:glyph.spacing_allowed,inline:Pt::new(glyph.inline_direction[0],glyph.inline_direction[1]),baseline:Pt::new(glyph.baseline[0],glyph.baseline[1]),length_scale:glyph.length_scale,unadjusted_advance:glyph.unadjusted_advance,upright:positions.iter().find(|p|p.index==character.index).and_then(|p|p.upright).unwrap_or(glyph.vertical_upright),letter_spacing:span.letter_spacing,word_spacing:span.word_spacing,variations:span.variations.iter().map(|v|(v.tag,v.value)).collect(),auto_opsz:span.font_optical_sizing==usvg::FontOpticalSizing::Auto,origin:Pt::new(glyph.cluster_origin[0],glyph.cluster_origin[1]),font_px:glyph.font_size(),rotation:text.rotate().get(glyph.text_index).copied().unwrap_or(0.),linear:matches!(text.chunks()[character.chunk].text_flow(),usvg::TextFlow::Linear),native_factor:compensation.map(|s|s.inline_factor)});
                     }
                 }
                 let chars: Vec<_> = glyph.text.chars().filter(|c| !bidi_control(*c)).collect();
@@ -1625,7 +1625,8 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, s
                 let compensation=scales.iter().find(|s|s.contains(at));
                 let font_factor=compensation.map_or(1.,|s|s.font_factor);
                 let inline_factor=compensation.map_or(1.,|s|s.inline_factor);
-                let base_px=glyph.font_size()/font_factor;
+                let original=positions.iter().find(|p|p.index==at);
+                let base_px=original.and_then(|p|p.px).unwrap_or(glyph.font_size()/font_factor);
                 for i in 0..chars.len() {
                     styles.push((
                         at + i,
@@ -1634,8 +1635,8 @@ fn layout_tree(run: &TypeRun, content: &str, tree: usvg::Tree, embedded: bool, s
                             features: span.features.clone(),
                             font_variations: (!axes.is_empty() && font.as_ref().is_some_and(|f|f.starts_with("omatype:"))).then(|| super::variations::FontVariations::new(span.variations.iter().filter(|v|axes.contains(&v.tag)).map(|v|(v.tag,v.value)).collect()).ok()).flatten(),
                             px: Some(base_px),
-                            tracking: Some(span.letter_spacing * inline_factor / base_px * 1000.),
-                            baseline_shift: Some(span.baseline_shift),
+                            tracking: Some(original.and_then(|p|p.tracking).unwrap_or(span.letter_spacing * inline_factor / base_px * 1000.)),
+                            baseline_shift: Some(original.and_then(|p|p.baseline_shift).unwrap_or(span.baseline_shift)),
                             kerning: Some(if span.features.iter().rev().find(|(tag,_)|*tag==*b"kern").map_or(span.apply_kerning,|(_,value)|*value!=0) {crate::geom::KernMode::Metrics} else {crate::geom::KernMode::None}),
                             hscale: Some(scale.0 / (base_px/units) * 100.),
                             vscale: Some(scale.1 / (base_px/units) * 100.),

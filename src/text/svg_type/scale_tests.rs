@@ -176,8 +176,14 @@ fn svg_character_scale_range_keeps_untouched_ligatures_and_other_metrics() {
 }
 
 fn other(body: &str) -> String {
+    with_font(
+        body,
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+    )
+}
+fn with_font(body: &str, path: &str) -> String {
     use base64::Engine;
-    let bytes = std::fs::read("/usr/share/fonts/liberation/LiberationSans-Regular.ttf").unwrap();
+    let bytes = std::fs::read(path).unwrap();
     format!(
         "<style>@font-face{{font-family:Other;src:url(data:font/ttf;base64,{})}}</style>{body}",
         base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -186,6 +192,9 @@ fn other(body: &str) -> String {
 
 fn scale_cases() -> Vec<(&'static str, String)> {
     vec![
+        ("scale-rotation-arabic",with_font(r#"<text x="350" y="80" rotate="20" font-family="Other" font-size="32" direction="rtl">سلام العربية</text>"#, "/usr/share/fonts/noto/NotoSansArabic-Regular.ttf")),
+        ("scale-rotation-marks",other(r#"<text x="25" y="80" rotate="20" font-family="Other" font-size="32">Áạ V</text>"#)),
+        ("scale-rotation-paint",r##"<defs><linearGradient id="ink"><stop stop-color="#ec3170"/><stop offset="1" stop-color="#218ff0"/></linearGradient></defs><text x="25" y="80" rotate="0 20 -15 10" font-family="MetricFace" font-size="32" fill="url(#ink)" stroke="#203040" stroke-width="1.25" opacity=".65">AVWa</text>"##.into()),
         ("scale-rotation-paragraph",r#"<text x="25" y="80" rotate="0 20 -15 10 30 -25" font-family="MetricFace" font-size="32" style="font-feature-settings:'liga' 0">AVWaTo</text>"#.to_string()),
         ("scale-rotation-offsets",r#"<text x="25" y="80" rotate="0 20 -15 10 30 -25" dx="0 -18 4 -16 2 -8" letter-spacing="-2" font-family="MetricFace" font-size="32" style="font-feature-settings:'liga' 0">AVWaTo</text>"#.to_string()),
         ("scale-rotation-rtl",other(r#"<text x="350" y="80" rotate="0 20 -15 10 30 -25" font-family="Other" font-size="32" direction="rtl" letter-spacing="2">אבג דה</text>"#)),
@@ -435,6 +444,18 @@ fn svg_character_scale_rotated_rtl_keeps_shaping_and_local_axes() {
     geometry_case("scale-rotation-rtl");
 }
 #[test]
+fn svg_character_scale_rotated_arabic_keeps_joining_and_local_axes() {
+    geometry_case("scale-rotation-arabic");
+}
+#[test]
+fn svg_character_scale_rotated_marks_keep_cluster_offsets_and_local_axes() {
+    geometry_case("scale-rotation-marks");
+}
+#[test]
+fn svg_character_scale_rotated_paint_keeps_gradient_stroke_and_opacity() {
+    geometry_case("scale-rotation-paint");
+}
+#[test]
 fn svg_character_scale_guides_do_not_expose_intrinsic_distances_as_pair_edits() {
     let body = scale_cases()
         .into_iter()
@@ -532,4 +553,47 @@ fn svg_character_scale_guides_bake_spacing_without_stretching_synthetic_jumps() 
             assert!((g.px - 32.).abs() < 0.001, "{name}: {}", g.px);
         }
     }
+}
+
+#[test]
+fn svg_character_scale_guides_keep_native_metrics_and_upright_orientation_on_the_next_edit() {
+    let body = scale_cases()
+        .into_iter()
+        .find(|(n, _)| *n == "scale-upright")
+        .unwrap()
+        .1;
+    let mut s = studio(&body);
+    let original = run(&s).svg_text.clone();
+    for (h, v) in [(125., 80.), (150., 75.)] {
+        scaled(&mut s, h, v);
+        let actual = layout(run(&s)).unwrap();
+        for g in &actual.glyphs {
+            assert_eq!(g.upright, g.index % 2 == 0);
+            assert!((g.px - 32.).abs() < 0.001);
+            let a = axes(g);
+            assert!((a[0] / 32. - h / 100.).abs() < 0.002, "{a:?}");
+            assert!((a[1] / 32. - v / 100.).abs() < 0.002, "{a:?}");
+        }
+        assert!(
+            s.selected_character_metrics()
+                .iter()
+                .all(|m| m.px == Some(32.) && m.tracking == Some(0.))
+        );
+        assert_eq!(run(&s).svg_text, original);
+    }
+    check(&s, "scale-upright-repeated");
+}
+
+#[test]
+fn svg_character_scale_guides_follow_projected_flow_positions_and_preserve_native_tracking() {
+    let mut s = metric_tests::studio_for(&pair_tests::flow_source());
+    s.patch_character(|style| style.tracking = Some(100.));
+    scaled(&mut s, 135., 85.);
+    assert!(
+        s.selected_character_metrics()
+            .iter()
+            .all(|m| (m.tracking.unwrap() - 100.).abs() < 0.001)
+    );
+    assert!(source(run(&s)).unwrap().contains(guides::META));
+    check(&s, "scale-flow-tracking");
 }
