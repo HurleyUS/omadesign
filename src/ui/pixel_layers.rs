@@ -1,0 +1,93 @@
+use crate::app::Studio;
+use crate::ui::masking;
+use eframe::egui::{self, Button, Ui};
+
+enum Action {
+    Pixel,
+    Group,
+    Duplicate,
+    Delete(usize),
+    Arrange(usize, bool, bool),
+    Mask(usize, masking::Action),
+}
+
+/// Run the native Pixel Layer menu.
+/// Args: menu UI and editor. Returns nothing; accepted choices use existing typed layer and mask commands.
+pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
+    let active = studio.active_layer.filter(|&i| i < studio.doc.layers.len());
+    let owner = active.map(|i| studio.doc.layers[i].id);
+    let mut action = None;
+    ui.push_id(("pixel-layer-menu", &studio.swap_id, owner), |ui| {
+        ui.add_enabled_ui(!studio.updates.freezing && studio.op.is_none(), |ui| {
+            if ui.button("New pixel layer").clicked() {
+                action = Some(Action::Pixel);
+            }
+            if ui.button("New group").clicked() {
+                action = Some(Action::Group);
+            }
+            let selection = !studio.selection.is_empty() || studio.selected_layer.is_some();
+            if ui
+                .add_enabled(selection, Button::new("Duplicate selection"))
+                .clicked()
+            {
+                action = Some(Action::Duplicate);
+            }
+            let unlocked = active.is_some_and(|i| studio.layer_unlocked(i));
+            let deletable = active.is_some_and(|i| {
+                unlocked
+                    && studio
+                        .layer_tree_indices(i)
+                        .iter()
+                        .all(|&child| !studio.doc.layers[child].locked)
+            });
+            if ui
+                .add_enabled(deletable, Button::new("Delete layer"))
+                .clicked()
+            {
+                action = active.map(Action::Delete);
+            }
+            ui.separator();
+            ui.add_enabled_ui(unlocked, |ui| {
+                ui.menu_button("Arrange", |ui| {
+                    for (label, up, extreme) in [
+                        ("Bring to front", true, true),
+                        ("Bring forward", true, false),
+                        ("Send backward", false, false),
+                        ("Send to back", false, true),
+                    ] {
+                        let enabled = active.is_some_and(|i| studio.layer_sibling(i, up).is_some());
+                        if ui.add_enabled(enabled, Button::new(label)).clicked() {
+                            action = active.map(|i| Action::Arrange(i, up, extreme));
+                        }
+                    }
+                });
+            });
+            let visible = active.is_some_and(|i| studio.doc.layer_visible(i));
+            ui.add_enabled_ui(unlocked && visible, |ui| {
+                ui.menu_button("Layer mask", |ui| {
+                    if let Some(index) = active
+                        && let Some(chosen) = masking::menu(ui, studio, index)
+                    {
+                        action = Some(Action::Mask(index, chosen));
+                    }
+                });
+            });
+        });
+    });
+    if let Some(action) = action {
+        match action {
+            Action::Pixel => studio.add_layer(true),
+            Action::Group => studio.add_layer_group(),
+            Action::Duplicate => studio.duplicate_selection(),
+            Action::Delete(i) => studio.delete_layer_tree(i),
+            Action::Arrange(i, up, true) => studio.move_layer_tree_extreme(i, up),
+            Action::Arrange(i, up, false) => studio.move_layer_tree(i, up),
+            Action::Mask(i, chosen) => chosen.run(studio, i),
+        }
+        ui.close_kind(egui::UiKind::Menu);
+    }
+}
+
+#[cfg(test)]
+#[path = "pixel_layer_menu_tests.rs"]
+mod tests;

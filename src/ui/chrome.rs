@@ -6,6 +6,8 @@ mod pixel_menu_tests;
 #[cfg(test)]
 #[path = "type_menu_tests.rs"]
 mod type_menu_tests;
+#[path = "pixel_layers.rs"]
+mod pixel_layers;
 
 use crate::app::Studio;
 use crate::geom::Pt;
@@ -140,16 +142,7 @@ fn main_menus(ui: &mut Ui, studio: &mut Studio) {
                     if ui.button(label).clicked() {super::panel_workspace::open(ui.ctx(), studio, panel);ui.close();}
                 }
             });
-            ui.menu_button("Layer",|ui| {
-                if ui.button("New pixel layer").clicked(){studio.add_layer(true);ui.close();}
-                if ui.button("New group").clicked(){studio.add_layer_group();ui.close();}
-                if ui.button("Duplicate").clicked(){studio.duplicate_selection();ui.close();}
-                if ui.button("Delete").clicked(){studio.delete_layer();ui.close();}
-                ui.separator();
-                if let Some(layer)=studio.active_layer {
-                    if ui.button("Add layer mask").clicked(){studio.add_layer_mask(layer,true);ui.close();}
-                }
-            });
+            ui.menu_button("Layer", |ui| pixel_layers::menu(ui, studio));
         } else { object_menu(ui, studio); }
         let type_menu = ui.menu_button("Type", |ui| {
             super::text_geometry::menu(ui, studio);
