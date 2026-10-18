@@ -89,6 +89,64 @@ impl Context<'_, '_> {
     }
 
     fn draw_layer(&self, pm: &mut Pixmap, index: usize, depth: usize) {
+        let layer = &self.doc.layers[index];
+        if depth > 64 || !layer.visible {
+            return;
+        }
+        let mut filters = layer.filters.clone();
+        crate::filter::scale(&mut filters, self.transform.get_scale().0);
+        let pad = crate::filter::svg_pad(&filters).ceil() as u32;
+        if (layer.is_group || layer.svg_filter.is_some()) && filters.active() && pad > 0 {
+            let expanded = pad.checked_mul(2).and_then(|border| {
+                Some((
+                    pm.width().checked_add(border)?,
+                    pm.height().checked_add(border)?,
+                ))
+            });
+            if let Some((width, height)) = expanded
+                && let Ok(bytes) = crate::deep_color::storage::count(width, height, 4)
+                && let Ok(_memory) =
+                    crate::resources::global().reserve_now(bytes as u64, &|| Ok(()))
+                && let Some(mut pixels) = Pixmap::new(width, height)
+            {
+                let source = PixmapPaint {
+                    blend_mode: tiny_skia::BlendMode::Source,
+                    ..Default::default()
+                };
+                pixels.draw_pixmap(
+                    pad as i32,
+                    pad as i32,
+                    pm.as_ref(),
+                    &source,
+                    Transform::identity(),
+                    None,
+                );
+                Context {
+                    doc: self.doc,
+                    transform: Transform::from_translate(pad as f32, pad as f32)
+                        .pre_concat(self.transform),
+                    draft: self.draft,
+                    motion: self.motion,
+                    overrides: self.overrides,
+                    children: self.children.clone(),
+                    sources: self.sources.clone(),
+                }
+                .draw_layer_inner(&mut pixels, index, depth);
+                pm.draw_pixmap(
+                    -(pad as i32),
+                    -(pad as i32),
+                    pixels.as_ref(),
+                    &source,
+                    Transform::identity(),
+                    None,
+                );
+                return;
+            }
+        }
+        self.draw_layer_inner(pm, index, depth);
+    }
+
+    fn draw_layer_inner(&self, pm: &mut Pixmap, index: usize, depth: usize) {
         if depth > 64 {
             return;
         }
@@ -294,6 +352,62 @@ mod tests {
         color::Blend,
         document::{Layer, Pixels},
     };
+
+    #[test]
+    fn filtered_group_keeps_the_same_pixels_when_the_viewport_crops_its_source() {
+        let mut doc = Document::new("Group edge", 16., 12., 96.);
+        let mut group = Layer::group("Shadow");
+        group.pass_through = false;
+        group.filters.items.push(crate::filter::Fx::Shadow {
+            dx: 2.,
+            dy: 1.,
+            blur: 0.,
+            spread: 0.,
+            color: Rgba::rgb(30, 20, 10),
+            knockout: false,
+            blend: Blend::Normal,
+            opacity: 1.,
+        });
+        let mut layer = Layer::raster("Source", 4, 4).unwrap();
+        layer
+            .kind
+            .pixels_mut()
+            .unwrap()
+            .replace_bytes([210, 60, 40, 128].repeat(16))
+            .unwrap();
+        layer
+            .kind
+            .set_raster_xform(Pt::new(-2., -2.), Pt::splat(8.), 0.);
+        layer.parent = Some(group.id);
+        doc.layers = vec![layer, group];
+        let mut full = Pixmap::new(64, 48).unwrap();
+        let mut cropped = Pixmap::new(16, 12).unwrap();
+        draw(
+            &mut full,
+            &doc,
+            Transform::from_translate(12., 12.),
+            &Draft::none(),
+            None,
+            None,
+        );
+        draw(
+            &mut cropped,
+            &doc,
+            Transform::identity(),
+            &Draft::none(),
+            None,
+            None,
+        );
+        let expected: Vec<_> = full
+            .data()
+            .chunks_exact(64 * 4)
+            .skip(12)
+            .take(12)
+            .flat_map(|row| row[12 * 4..28 * 4].iter().copied())
+            .collect();
+        assert!(expected.chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert_eq!(cropped.data(), expected);
+    }
     #[test]
     fn group_opacity_is_applied_once_and_hidden_parent_hides_children() {
         let mut doc = Document::new("groups", 2., 2., 72.);

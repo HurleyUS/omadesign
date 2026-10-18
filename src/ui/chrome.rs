@@ -142,7 +142,7 @@ fn main_menus(ui: &mut Ui, studio: &mut Studio) {
                     if ui.button(label).clicked() {super::panel_workspace::open(ui.ctx(), studio, panel);ui.close();}
                 }
             });
-            ui.menu_button("Layer", |ui| pixel_layers::menu(ui, studio));
+            pixel_layers::show(ui, studio);
         } else { object_menu(ui, studio); }
         let type_menu = ui.menu_button("Type", |ui| {
             super::text_geometry::menu(ui, studio);

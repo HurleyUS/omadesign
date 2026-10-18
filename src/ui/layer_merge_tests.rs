@@ -56,6 +56,7 @@ impl Seat {
         keys::tab_to(&ctx, name, |events| self.frame(s, events));
         self.frame(s, keys::key(Key::Space, Modifiers::NONE));
         self.frame(s, vec![]);
+        self.frame(s, vec![]);
     }
     fn context(&mut self, s: &mut Studio, name: &str) {
         for _ in 0..3 {

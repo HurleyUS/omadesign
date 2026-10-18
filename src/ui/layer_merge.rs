@@ -86,6 +86,7 @@ pub(super) fn show(ctx: &egui::Context, studio: &mut Studio) {
     let Some(mut state) = ctx.data(|data| data.get_temp::<State>(Id::new(ID))) else {
         return;
     };
+    let escape = ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     let stale =
         studio.swap_id != state.target.document || studio.last_input != state.target.revision;
     let mut close = false;
@@ -117,7 +118,7 @@ pub(super) fn show(ctx: &egui::Context, studio: &mut Studio) {
             })
             .clicked();
         });
-    close |= modal.should_close() || stale;
+    close |= escape || modal.should_close() || stale;
     if !close {
         if let Some(result) = super::jobs::poll::<Prepared>(ctx, ID) {
             match result.and_then(|prepared| studio.apply_layer_merge(prepared)) {

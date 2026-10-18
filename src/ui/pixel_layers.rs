@@ -13,6 +13,35 @@ enum Action {
     Merge(crate::app::layer_merge::Kind),
 }
 
+/// Keep the native Layer menu alive while a nested menu owns its popup.
+/// Args: menu bar and current editor. Returns nothing; choices keep their existing typed routes.
+pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
+    let key = ui.make_persistent_id(("pixel-layer-popup", &studio.swap_id));
+    let mut open = ui.data(|data| data.get_temp::<bool>(key)).unwrap_or(false);
+    let response = ui.button("Layer");
+    if response.clicked() {
+        open = !open;
+    }
+    egui::Popup::menu(&response)
+        .open_bool(&mut open)
+        .show(|ui| {
+            if !response.enabled() {
+                ui.disable();
+            }
+            menu(ui, studio);
+        });
+    let popup = egui::Popup::default_response_id(&response);
+    if open {
+        if !egui::Popup::is_any_open(ui.ctx()) || egui::Popup::is_id_open(ui.ctx(), popup) {
+            egui::Popup::open_id(ui.ctx(), popup);
+        }
+    } else if egui::Popup::is_id_open(ui.ctx(), popup) {
+        egui::Popup::close_id(ui.ctx(), popup);
+    }
+    ui.data_mut(|data| data.insert_temp(key, open));
+    super::welcome::focus_control(ui, &response);
+}
+
 /// Run the native Pixel Layer menu.
 /// Args: menu UI and editor. Returns nothing; accepted choices use existing typed layer and mask commands.
 pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {

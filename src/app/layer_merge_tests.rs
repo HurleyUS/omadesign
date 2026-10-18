@@ -374,7 +374,8 @@ fn craft_merge_svg_graph_pattern_and_editable_text_match_current_pixels_and_nati
     let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="50"><defs><pattern id="p" width="6" height="6" patternUnits="userSpaceOnUse"><rect width="3" height="6" fill="#d24"/><rect x="3" width="3" height="6" fill="#28b"/></pattern><filter id="f" x="-20%" y="-20%" width="160%" height="160%"><feGaussianBlur stdDeviation="0.35"/></filter></defs><g filter="url(#f)"><rect x="5" y="4" width="55" height="18" fill="url(#p)"/></g><text x="6" y="43" font-family="DejaVu Sans" font-size="18">Native Ω</text></svg>"##;
     let (mut doc, _) = crate::formats::svg::read(svg, "Graph merge").unwrap();
     doc.transparent = true;
-    let group = Layer::group("Imported design");
+    let mut group = Layer::group("Imported design");
+    group.pass_through = false;
     let id = group.id;
     for layer in &mut doc.layers {
         if layer.parent.is_none() {
