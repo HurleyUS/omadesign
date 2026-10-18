@@ -185,6 +185,9 @@ impl Studio {
         } else {
             if ids.contains(&id) {
                 if ids.len() == 1 {
+                    if !self.layer_row_selected(index) {
+                        self.activate_layer_tree(index);
+                    }
                     return;
                 }
                 ids.remove(&id);

@@ -737,3 +737,43 @@ fn craft_tree_rows_native_group_drag_and_arrange_key_keep_parent_data_and_one_un
         );
     }
 }
+
+#[test]
+fn craft_tree_rows_native_last_toggle_from_partial_objects_targets_the_clicked_whole_layer() {
+    let mut s = tree_rows_ui_fixture();
+    let mut layer = Layer::vector("Partial objects");
+    layer.parent = s.doc.layers[0].parent;
+    for x in [0., 2.] {
+        layer
+            .kind
+            .shapes_mut()
+            .unwrap()
+            .push(crate::document::Shape::new(
+                crate::geom::Geom::Rect {
+                    origin: crate::geom::Pt::new(x, 0.),
+                    size: crate::geom::Pt::splat(1.),
+                    radius: 0.,
+                },
+                crate::document::Style::default(),
+            ));
+    }
+    let layer_id = layer.id;
+    let object = layer.kind.shapes().unwrap()[0].id;
+    s.doc.layers[0] = layer;
+    s.deselect_all();
+    s.selection = vec![(0, object)];
+    s.selected_layer = None;
+    s.active_layer = Some(0);
+    let before = state(&s);
+    let dirty = s.dirty;
+    let mut seat = Seat::new();
+    seat.click_mods(&mut s, "Partial objects", Modifiers::COMMAND);
+    assert!(s.layer_row_selected(0));
+    assert_eq!(s.selected_layer, Some(layer_id));
+    assert_eq!(s.active_layer, Some(0));
+    assert_eq!(s.selected_layer_rows(), [0]);
+    assert!(s.selection.is_empty());
+    assert_eq!(state(&s), before);
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(s.dirty, dirty);
+}

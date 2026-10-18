@@ -92,6 +92,10 @@ fn craft_tree_rows_ranges_toggle_active_anchor_and_collapsed_endpoints_use_the_a
     s.select_layer_rows(1, true, false);
     assert_eq!(s.selected_layer_rows(), [1, 2, 0]);
     assert_eq!(s.active_layer, Some(1));
+    assert_eq!(
+        s.layer_merge_primary(Some(s.doc.layers[1].id)),
+        Some(crate::app::layer_merge::Kind::Selected)
+    );
     s.select_layer_rows(0, false, false);
     s.select_layer_rows(0, false, true);
     assert_eq!(s.selected_layer_rows(), [0]);
@@ -284,4 +288,40 @@ fn craft_tree_rows_clipping_uses_bottom_to_top_group_order_not_flat_indices() {
     assert_eq!(s.history_target(), target);
     s.redo();
     assert_eq!(state(&s), after);
+}
+
+#[test]
+fn craft_tree_rows_last_toggle_from_partial_objects_establishes_a_whole_layer_target() {
+    let mut s = fixture(Depth::U8, false);
+    let mut layer = Layer::vector("Partial objects");
+    layer.parent = s.doc.layers[0].parent;
+    for x in [0., 2.] {
+        layer.kind.shapes_mut().unwrap().push(Shape::new(
+            Geom::Rect {
+                origin: Pt::new(x, 0.),
+                size: Pt::splat(1.),
+                radius: 0.,
+            },
+            Style::default(),
+        ));
+    }
+    let layer_id = layer.id;
+    let object = layer.kind.shapes().unwrap()[0].id;
+    s.doc.layers[0] = layer;
+    s.deselect_all();
+    s.selection = vec![(0, object)];
+    s.selected_layer = None;
+    s.active_layer = Some(0);
+    let before = state(&s);
+    let dirty = s.dirty;
+    assert!(!s.layer_row_selected(0));
+    s.select_layer_rows(0, false, true);
+    assert_eq!(s.selected_layer, Some(layer_id));
+    assert_eq!(s.selected_layer_rows(), [0]);
+    assert!(s.layer_row_selected(0));
+    assert_eq!(s.active_layer, Some(0));
+    assert!(s.selection.is_empty());
+    assert_eq!(state(&s), before);
+    assert_eq!(s.dirty, dirty);
+    assert_eq!(s.history.len(), 0);
 }

@@ -442,7 +442,12 @@ impl Studio {
     pub(crate) fn layer_merge_primary(&self, owner: Option<u64>) -> Option<Kind> {
         let id = owner?;
         let roots = self.merge_row_roots();
-        if roots.len() > 1 && roots.iter().any(|&i| self.doc.layers[i].id == id) {
+        if roots.len() > 1
+            && self
+                .selected_layer_rows()
+                .iter()
+                .any(|&i| self.doc.layers[i].id == id)
+        {
             return Some(Kind::Selected);
         }
         self.doc.layers.iter().find(|l| l.id == id).map(|l| {
