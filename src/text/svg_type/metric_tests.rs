@@ -265,6 +265,7 @@ fn svg_character_nested_length_groups_keep_parent_budget_and_explicit_child_widt
         ("length-parent","AV".to_owned(),"spacingAndGlyphs",160),
         ("length-mixed","AV<tspan font-size=\"20\" fill=\"#248\"> To</tspan>X".to_owned(),"spacingAndGlyphs",160),
         ("length-child-only","<tspan font-size=\"20\" textLength=\"60\" lengthAdjust=\"spacingAndGlyphs\" fill=\"#248\"> To</tspan>".to_owned(),"spacingAndGlyphs",200),
+        ("length-child-only-alpha","<tspan font-size=\"20\" textLength=\"60\" lengthAdjust=\"spacingAndGlyphs\" fill-opacity=\"0.4\" fill=\"#248\"> To</tspan>".to_owned(),"spacingAndGlyphs",200),
         ("length-child","AV<tspan font-size=\"20\" textLength=\"60\" lengthAdjust=\"spacingAndGlyphs\" fill=\"#248\"> To</tspan>X".to_owned(),"spacingAndGlyphs",200),
         ("length-spacing","AV<tspan font-size=\"20\" fill=\"#248\"> To</tspan>X".to_owned(),"spacing",160),
     ] {

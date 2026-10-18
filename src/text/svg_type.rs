@@ -624,6 +624,14 @@ fn paint_id(fill: &crate::document::Fill) -> String {
     )
 }
 
+/// Isolate source text paint from the surrounding object wrapper.
+/// Args: captured root attributes and SVG output. Returns no value; emits only absent SVG defaults.
+fn paint_defaults(attributes:&BTreeMap<String,String>, out:&mut String) {
+    for (name,value) in [("fill","#000000"),("fill-opacity","1")] {
+        if !attributes.contains_key(name){out.push_str(&format!(" {name}=\"{value}\""));}
+    }
+}
+
 fn write_nodes(
     node: &TextNode,
     run: &TypeRun,
@@ -718,6 +726,7 @@ fn write_nodes(
                 (rest==crate::geom::CharSpan::default()).then_some(style)
             });
             out.push_str(&format!("<{name}"));
+            if root {paint_defaults(attributes,out);}
             let mut css = String::new();
             for (key, value) in attributes {
                 if font_override.as_ref().is_some_and(|s| s.font.is_some()) && matches!(key.as_str(),"font-family"|"font-weight"|"font-style") {continue;}
@@ -1599,6 +1608,7 @@ fn flow_fragment(run: &TypeRun, flow: &Flow) -> String {
         .and_then(|v| length(v, svg.base_px))
         .unwrap_or(svg.base_px);
     out.push_str("<text");
+    paint_defaults(attributes,&mut out);
     let mut css = String::new();
     for (key, value) in attributes {
         if overrides_font(run)
