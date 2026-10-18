@@ -1013,33 +1013,46 @@ fn apply_length_adjust(chunk: &TextChunk, clusters: &mut [GlyphCluster]) {
     owners.sort_by_key(|(_, _, _, depth)| std::cmp::Reverse(*depth));
     for (owner, target, adjust, _) in owners {
         let mut indices = Vec::new();
-        let mut fixed = 0.;
+        let mut children = std::collections::BTreeMap::<u32, Vec<usize>>::new();
+        let mut width = 0.;
         for (i, cluster) in clusters.iter().enumerate() {
             if let Some(span) = chunk_span_at(chunk, cluster.byte_idx) {
                 if span.text_length_owner == Some(owner) {
                     indices.push(i);
-                } else if span.text_length_ancestors.contains(&owner) {
-                    fixed += cluster.advance;
+                    width += cluster.advance;
+                } else if let Some(parent) = span
+                    .text_length_ancestors
+                    .iter()
+                    .position(|id| *id == owner)
+                {
+                    if let Some(child) = parent
+                        .checked_sub(1)
+                        .and_then(|at| span.text_length_ancestors.get(at))
+                    {
+                        children.entry(*child).or_default().push(i);
+                        width += cluster.advance;
+                    }
                 }
             }
         }
-        let Some(_) = indices.last() else {
-            continue;
-        };
-        let width = indices.iter().map(|i| clusters[*i].advance).sum::<f32>();
-        let wanted = target - fixed;
-        if width <= 0. || wanted < 0. {
+        let items = indices.len() + children.len();
+        if width <= 0. || items == 0 {
             continue;
         }
         if adjust == LengthAdjust::Spacing {
-            if indices.len() > 1 {
-                let delta = (wanted - width) / (indices.len() - 1) as f32;
-                for &i in &indices[..indices.len() - 1] {
-                    clusters[i].advance += delta;
+            if items > 1 {
+                let delta = (target - width) / (items - 1) as f32;
+                for i in indices
+                    .into_iter()
+                    .chain(children.values().filter_map(|group| group.last().copied()))
+                {
+                    if i + 1 < clusters.len() {
+                        clusters[i].advance += delta;
+                    }
                 }
             }
         } else {
-            let factor = wanted / width;
+            let factor = target / width;
             if factor < 0.001 || !factor.is_finite() {
                 continue;
             }
@@ -1049,6 +1062,12 @@ fn apply_length_adjust(chunk: &TextChunk, clusters: &mut [GlyphCluster]) {
                 cluster.width *= factor;
                 cluster.advance *= factor;
                 cluster.length_scale *= factor;
+            }
+            for group in children.values() {
+                let reserved = group.iter().map(|i| clusters[*i].advance).sum::<f32>();
+                if let Some(last) = group.last() {
+                    clusters[*last].advance += reserved * (factor - 1.);
+                }
             }
         }
     }
