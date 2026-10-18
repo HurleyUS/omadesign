@@ -838,19 +838,13 @@ fn collect_normals(
     let mut prev_x = prev_mx;
     let mut prev_y = prev_my;
 
-    fn create_curve_from_line(px: f32, py: f32, x: f32, y: f32) -> kurbo::CubicBez {
-        let line = kurbo::Line::new(
+    /// Retain a straight baseline and its analytic distance parameter.
+    /// Args: source endpoints. Returns the original line segment without cubic sampling.
+    fn line_segment(px: f32, py: f32, x: f32, y: f32) -> kurbo::PathSeg {
+        kurbo::PathSeg::Line(kurbo::Line::new(
             kurbo::Point::new(px as f64, py as f64),
             kurbo::Point::new(x as f64, y as f64),
-        );
-        let p1 = line.eval(1.0 / 3.0);
-        let p2 = line.eval(2.0 / 3.0);
-        kurbo::CubicBez {
-            p0: line.p0,
-            p1,
-            p2,
-            p3: line.p1,
-        }
+        ))
     }
 
     let mut length: f64 = 0.0;
@@ -864,22 +858,22 @@ fn collect_normals(
                 continue;
             }
             tiny_skia_path::PathSegment::LineTo(p) => {
-                create_curve_from_line(prev_x, prev_y, p.x, p.y)
+                line_segment(prev_x, prev_y, p.x, p.y)
             }
-            tiny_skia_path::PathSegment::QuadTo(p1, p) => kurbo::QuadBez {
+            tiny_skia_path::PathSegment::QuadTo(p1, p) => kurbo::PathSeg::Cubic(kurbo::QuadBez {
                 p0: kurbo::Point::new(prev_x as f64, prev_y as f64),
                 p1: kurbo::Point::new(p1.x as f64, p1.y as f64),
                 p2: kurbo::Point::new(p.x as f64, p.y as f64),
             }
-            .raise(),
-            tiny_skia_path::PathSegment::CubicTo(p1, p2, p) => kurbo::CubicBez {
+            .raise()),
+            tiny_skia_path::PathSegment::CubicTo(p1, p2, p) => kurbo::PathSeg::Cubic(kurbo::CubicBez {
                 p0: kurbo::Point::new(prev_x as f64, prev_y as f64),
                 p1: kurbo::Point::new(p1.x as f64, p1.y as f64),
                 p2: kurbo::Point::new(p2.x as f64, p2.y as f64),
                 p3: kurbo::Point::new(p.x as f64, p.y as f64),
-            },
+            }),
             tiny_skia_path::PathSegment::Close => {
-                create_curve_from_line(prev_x, prev_y, prev_mx, prev_my)
+                line_segment(prev_x, prev_y, prev_mx, prev_my)
             }
         };
 
@@ -897,13 +891,17 @@ fn collect_normals(
 
         for offset in &offsets[normals.len()..] {
             if *offset >= length && *offset <= length + curve_len {
-                let mut offset = curve.inv_arclen(offset - length, arclen_accuracy as f64);
+                let mut offset = if curve_len == 0. {0.} else {curve.inv_arclen((offset - length).clamp(0.,curve_len), arclen_accuracy as f64)};
                 // some rounding error may occur, so we give offset a little tolerance
                 debug_assert!((-1.0e-3..=1.0 + 1.0e-3).contains(&offset));
                 offset = offset.clamp(0.0, 1.0);
 
                 let pos = curve.eval(offset);
-                let d = curve.deriv().eval(offset);
+                let d = match curve {
+                    kurbo::PathSeg::Line(line) => line.p1-line.p0,
+                    kurbo::PathSeg::Quad(quad) => quad.deriv().eval(offset).to_vec2(),
+                    kurbo::PathSeg::Cubic(cubic) => cubic.deriv().eval(offset).to_vec2(),
+                };
                 let d = kurbo::Vec2::new(-d.y, d.x); // tangent
                 let angle = d.atan2().to_degrees() - 90.0;
 
@@ -920,8 +918,8 @@ fn collect_normals(
         }
 
         length += curve_len;
-        prev_x = curve.p3.x as f32;
-        prev_y = curve.p3.y as f32;
+        prev_x = curve.end().x as f32;
+        prev_y = curve.end().y as f32;
     }
 
     // If path ended and we still have unresolved normals - set them to `None`.
