@@ -577,10 +577,12 @@ impl Studio {
             );
         }
         self.commit_type_edit();
+        let before = self.history_target();
         self.commit(prepared.command);
         if let Some(index) = self.doc.layers.iter().position(|l| l.id == prepared.layer) {
             self.activate_layer_tree(index);
         }
+        self.history.remember_target(before, self.history_target());
         self.status = format!("{} complete", prepared.kind.name());
         Ok(())
     }

@@ -331,7 +331,6 @@ fn history(ui: &mut Ui, studio: &mut Studio) {
     let entries: Vec<_> = studio
         .history
         .entries()
-        .iter()
         .enumerate()
         .map(|(index, cmd)| (index, command_name(cmd)))
         .collect();

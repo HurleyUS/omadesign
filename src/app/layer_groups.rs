@@ -3,14 +3,14 @@
 use super::*;
 
 pub(super) struct LayerRows {
-    document: String,
-    ids: std::collections::BTreeSet<u64>,
-    hits: std::collections::BTreeSet<(u64, u64)>,
-    anchor: u64,
+    pub(super) document: String,
+    pub(super) ids: std::collections::BTreeSet<u64>,
+    pub(super) hits: std::collections::BTreeSet<(u64, u64)>,
+    pub(super) anchor: u64,
 }
 
 impl Studio {
-    fn current_layer_rows(&self) -> Option<&LayerRows> {
+    pub(super) fn current_layer_rows(&self) -> Option<&LayerRows> {
         self.layer_rows.as_ref().filter(|rows| {
             rows.document == self.swap_id
                 && self.selected_layer.is_none()

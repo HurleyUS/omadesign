@@ -1319,3 +1319,77 @@ fn craft_cross_group_local_visibility_clipping_and_locks_are_validated_before_mu
     assert!(s.capture_layer_merge(Kind::StampSelected).is_err());
     assert_eq!(s.history.len(), 0);
 }
+
+#[test]
+fn craft_history_targets_selected_merge_stamp_and_group_restore_rows_active_and_range_anchor() {
+    for kind in [Kind::Selected, Kind::StampSelected] {
+        let mut s = cross_group_fixture(Depth::U8, false);
+        let before = state(&s);
+        let target = s.history_target();
+        run(&mut s, kind);
+        let after = state(&s);
+        let result_target = s.history_target();
+        s.activate_layer_tree(0);
+        s.undo();
+        assert_eq!(state(&s), before);
+        assert_eq!(s.history_target(), target);
+        assert_eq!(s.selected_layer_rows(), [0, 3]);
+        assert!(s.layer_row_selected(0));
+        assert!(s.layer_row_selected(3));
+        s.activate_layer_tree(4);
+        s.redo();
+        assert_eq!(state(&s), after);
+        assert_eq!(s.history_target(), result_target);
+        s.undo();
+        s.select_layer_rows(4, true, false);
+        assert_eq!(s.selected_layer_rows(), [3, 4]);
+        assert_eq!(
+            crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(),
+            after
+        );
+    }
+    let mut s = cross_group_fixture(Depth::U8, false);
+    s.select_layer_rows(2, false, false);
+    s.select_layer_rows(0, false, true);
+    s.select_layer_rows(3, false, true);
+    let target = s.history_target();
+    run(&mut s, Kind::Selected);
+    s.undo();
+    assert_eq!(s.history_target(), target);
+    assert_eq!(s.selected_layer_rows(), [0, 2, 3]);
+}
+
+#[test]
+fn craft_history_targets_travel_with_tab_history_and_reject_another_document() {
+    let mut s = cross_group_fixture(Depth::U8, false);
+    let before = state(&s);
+    let target = s.history_target();
+    run(&mut s, Kind::Selected);
+    let after = state(&s);
+    let result_target = s.history_target();
+    let tab = s.active_tab;
+    s.new_tab();
+    let foreign = s.history_target();
+    s.restore_history_target(target.clone());
+    assert_eq!(s.history_target(), foreign);
+    assert_eq!(s.history.len(), 0);
+    s.switch_tab(tab);
+    s.undo();
+    assert_eq!(state(&s), before);
+    assert_eq!(s.history_target(), target);
+    s.redo();
+    assert_eq!(state(&s), after);
+    assert_eq!(s.history_target(), result_target);
+    s.undo();
+    s.commit(Cmd::AddLayer {
+        index: 0,
+        layer: Layer::vector("New branch"),
+    });
+    assert!(!s.history.can_redo());
+    s.undo();
+    assert_eq!(state(&s), before);
+    s.history.clear();
+    let selected = s.history_target();
+    s.undo();
+    assert_eq!(s.history_target(), selected);
+}

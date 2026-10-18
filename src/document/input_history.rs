@@ -1,4 +1,4 @@
-use super::{Cmd, Document, History, MAX_HISTORY, coalesce};
+use super::{Cmd, Document, History, HistoryEntry, MAX_HISTORY, coalesce};
 
 impl History {
     /// End field grouping after an edit from another owner.
@@ -22,16 +22,16 @@ impl History {
         let mut previous = Vec::new();
         if self.field == Some(field)
             && let Some(last) = self.undo.last()
-            && flatten(last.clone(), &mut previous)
+            && flatten(last.command.clone(), &mut previous)
         {
             for command in next {
                 if !previous.iter_mut().any(|old| merge(old, &command)) {
                     previous.push(command);
                 }
             }
-            *self.undo.last_mut().unwrap() = pack(previous, doc);
+            self.undo.last_mut().unwrap().command = pack(previous, doc);
         } else {
-            self.undo.push(pack(next, doc));
+            self.undo.push(HistoryEntry::new(pack(next, doc)));
             if !self.staging && self.undo.len() > MAX_HISTORY {
                 self.undo.remove(0);
             }

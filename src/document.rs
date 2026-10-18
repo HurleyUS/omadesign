@@ -2147,10 +2147,15 @@ pub enum Cmd {
 
 const MAX_HISTORY: usize = 200;
 
+#[path = "document/history_target.rs"]
+mod history_target;
+pub(crate) use history_target::HistoryTarget;
+use history_target::HistoryEntry;
+
 #[derive(Default, Clone)]
 pub struct History {
-    undo: Vec<Cmd>,
-    redo: Vec<Cmd>,
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
     field: Option<u64>,
     sealed: bool,
     staging: bool,
@@ -2166,18 +2171,18 @@ impl History {
 
     /// Take the actual commands accepted by a completed action.
     /// Args: this staging history. Returns commands in their original apply order.
-    pub(crate) fn into_commands(self) -> Vec<Cmd> { self.undo }
+    pub(crate) fn into_commands(self) -> Vec<Cmd> { self.undo.into_iter().map(|entry| entry.command).collect() }
 
     pub fn push(&mut self, cmd: Cmd) {
         self.field = None;
         if !std::mem::take(&mut self.sealed)
             && let Some(prev) = self.undo.last_mut()
-            && coalesce(prev, &cmd)
+            && coalesce(&mut prev.command, &cmd)
         {
             self.redo.clear();
             return;
         }
-        self.undo.push(cmd);
+        self.undo.push(HistoryEntry::new(cmd));
         self.redo.clear();
         if !self.staging && self.undo.len() > MAX_HISTORY {
             self.undo.remove(0);
@@ -2192,20 +2197,11 @@ impl History {
     }
 
     pub fn undo(&mut self) -> Option<Cmd> {
-        self.field = None;
-        self.sealed = true;
-        let cmd = self.undo.pop()?;
-        let inv = invert_cmd(cmd.clone());
-        self.redo.push(cmd);
-        Some(inv)
+        self.undo_targeted().map(|(command, _)| command)
     }
 
     pub fn redo(&mut self) -> Option<Cmd> {
-        self.field = None;
-        self.sealed = true;
-        let cmd = self.redo.pop()?;
-        self.undo.push(cmd.clone());
-        Some(cmd)
+        self.redo_targeted().map(|(command, _)| command)
     }
 
     pub fn clear(&mut self) {
@@ -2221,8 +2217,8 @@ impl History {
 
     /// Inspect the actual committed edit sequence without copying document data.
     /// Args: none. Returns commands from oldest to newest.
-    pub fn entries(&self) -> &[Cmd] {
-        &self.undo
+    pub fn entries(&self) -> impl DoubleEndedIterator<Item = &Cmd> + ExactSizeIterator {
+        self.undo.iter().map(|entry| &entry.command)
     }
 }
 

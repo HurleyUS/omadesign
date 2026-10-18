@@ -523,3 +523,47 @@ fn craft_cross_group_native_alt_menu_and_canvas_shortcut_keep_all_source_layers(
         check(&mut s, &before);
     }
 }
+
+#[test]
+fn craft_history_targets_native_merge_undo_redo_restore_rows_after_other_native_clicks() {
+    for stamp in [false, true] {
+        let mut s = cross_group_ui_fixture();
+        let mut seat = Seat::new();
+        seat.click(&mut s, "Left pixel");
+        seat.click_mods(&mut s, "Right pixel", Modifiers::COMMAND);
+        let before = state(&s);
+        let before_active = s.doc.layers[s.active_layer.unwrap()].id;
+        if stamp {
+            seat.click(&mut s, "Layer");
+            seat.click_mods(&mut s, "Merge Layers", Modifiers::ALT);
+        } else {
+            seat.menu(&mut s, "Merge Layers");
+        }
+        seat.wait(&mut s);
+        let after = state(&s);
+        let result = s.doc.layers[s.active_layer.unwrap()].id;
+        seat.click(&mut s, "Left group");
+        seat.frame(&mut s, keys::key(Key::F8, Modifiers::NONE));
+        seat.frame(&mut s, vec![]);
+        seat.frame(&mut s, keys::key(Key::Z, Modifiers::COMMAND));
+        seat.frame(&mut s, vec![]);
+        assert_eq!(state(&s), before);
+        assert_eq!(s.selected_layer_rows(), [0, 2]);
+        assert!(s.layer_row_selected(0));
+        assert!(s.layer_row_selected(2));
+        assert_eq!(s.doc.layers[s.active_layer.unwrap()].id, before_active);
+        seat.click(&mut s, "Right group");
+        seat.frame(&mut s, keys::key(Key::F8, Modifiers::NONE));
+        seat.frame(&mut s, vec![]);
+        seat.frame(&mut s, keys::key(Key::Y, Modifiers::COMMAND));
+        seat.frame(&mut s, vec![]);
+        assert_eq!(state(&s), after);
+        assert_eq!(s.doc.layers[s.active_layer.unwrap()].id, result);
+        assert_eq!(s.selected_layer, Some(result));
+        assert_eq!(s.selected_layer_rows().len(), 1);
+        assert_eq!(
+            crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(),
+            after
+        );
+    }
+}

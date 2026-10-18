@@ -18,6 +18,7 @@ pub use hierarchy_edit::TreePlacement;
 mod key_hints;
 pub(crate) mod keyboard_authoring;
 mod layer_groups;
+mod history_targets;
 mod layer_copy;
 mod layer_copy_destination;
 pub(crate) use layer_copy_destination::{LayerCopyDestination, LayerCopyTarget};
@@ -1628,8 +1629,9 @@ impl Studio {
             return;
         }
         if self.live_undo(false) { return; }
-        if let Some(inv) = self.history.undo() {
+        if let Some((inv, target)) = self.history.undo_targeted() {
             self.apply_with_layer_selection(&inv);
+            if let Some(target) = target { self.restore_history_target(target); }
             self.dirty = true;
             self.sanitize();
             self.mark();
@@ -1651,8 +1653,9 @@ impl Studio {
         self.end_deform(true);
         self.reset_snap_gesture();
         if self.live_undo(true) { return; }
-        if let Some(cmd) = self.history.redo() {
+        if let Some((cmd, target)) = self.history.redo_targeted() {
             self.apply_with_layer_selection(&cmd);
+            if let Some(target) = target { self.restore_history_target(target); }
             self.dirty = true;
             self.sanitize();
             self.mark();
