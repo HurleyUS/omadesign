@@ -217,7 +217,7 @@ pub(crate) fn restore_offsets(run:&mut TypeRun)->Result<(),String> {
     if value.len()>bound{return Err("SVG optical positioning metadata exceeds source bounds".into());}
     let offsets:Offsets=serde_json::from_str(value).map_err(|e|format!("Invalid SVG optical positioning: {e}"))?;
     if offsets.version!=1 || offsets.length!=count || offsets.dx.len()!=offsets.dy.len() || offsets.dx.len()>count || offsets.dx.iter().chain(&offsets.dy).any(|v|!v.is_finite()) || offsets.optical.len()>count || offsets.optical.iter().any(|[a,b]|a>=b||*b>count) || offsets.optical.windows(2).any(|p|p[0][1]>p[1][0]) {return Err("Invalid SVG optical positioning bounds".into());}
-    if offsets.leading.len()>count || offsets.leading.iter().any(|(a,b,v)|{let(crate::geom::Leading::Auto(v)|crate::geom::Leading::Fixed(v))=v; a>=b || *b>count || !v.is_finite() || *v<0.}) || offsets.leading.windows(2).any(|p|p[0].1>p[1].0) {return Err("Invalid SVG line spacing bounds".into());}
+    if offsets.leading.len()>count || offsets.leading.iter().any(|(a,b,v)|{let(crate::geom::Leading::Auto(v)|crate::geom::Leading::Fixed(v))=v; a>=b || *b>count || !v.is_finite()}) || offsets.leading.windows(2).any(|p|p[0].1>p[1].0) {return Err("Invalid SVG line spacing bounds".into());}
     fn clear(node:&mut TextNode){if let TextNode::Element{attributes,children,..}=node {attributes.remove("dx");attributes.remove("dy");for child in children{clear(child);}}}
     let svg=run.svg_text.as_mut().unwrap();
     if svg.flow.is_none(){clear(&mut svg.root);}

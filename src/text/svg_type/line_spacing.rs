@@ -12,8 +12,6 @@ struct Row<'a> {
 }
 
 fn rows(layout: &Layout) -> Vec<Row<'_>> {
-    let mut nodes = Vec::new();
-    texts(layout.tree.root(), &mut nodes);
     let glyphs: BTreeMap<_, _> = layout
         .glyphs
         .iter()
@@ -44,17 +42,11 @@ fn rows(layout: &Layout) -> Vec<Row<'_>> {
         } else {
             g.authored.y
         };
-        let measured_anchor = if c.vertical {
+        let anchor = if c.vertical {
             g.authored.y
         } else {
             g.authored.x
         };
-        let chunk = nodes
-            .get(c.node)
-            .and_then(|text| text.chunks().get(c.chunk));
-        let anchor = chunk
-            .and_then(|chunk| if c.vertical { chunk.y() } else { chunk.x() })
-            .unwrap_or(measured_anchor);
         if let Some(i) = previous {
             let row = &result[i];
             if row.cross == cross && row.vertical == c.vertical && row.node == c.node {

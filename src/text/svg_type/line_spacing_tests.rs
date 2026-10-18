@@ -231,7 +231,7 @@ fn svg_positioned_leading_metadata_rejects_invalid_ranges_before_typed_loss() {
     for leading in [
         serde_json::json!([[0,7,{"Fixed":42}]]),
         serde_json::json!([[1,1,{"Fixed":42}]]),
-        serde_json::json!([[0,3,{"Fixed":-2}]]),
+        serde_json::json!([[4,2,{"Fixed":42}]]),
         serde_json::json!([[0,4,{"Fixed":42}],[3,6,{"Fixed":42}]]),
     ] {
         let mut value = saved.clone();
@@ -384,4 +384,61 @@ fn svg_positioned_leading_keeps_the_existing_affine_text_route_and_full_document
     assert_eq!(crate::project::encode(&studio.doc).unwrap(), before);
     studio.redo();
     assert_eq!(crate::project::encode(&studio.doc).unwrap(), after);
+}
+
+#[test]
+fn svg_positioned_leading_keeps_separate_column_metrics_after_rotated_guide_compilation() {
+    let source = pair_tests::source(
+        r#"<text x="25" y="35" rotate="15" font-family="MetricFace" font-size="24">AB<tspan x="25" y="65">CD</tspan><tspan x="25" y="95">EF</tspan><tspan x="200" y="35">GH</tspan><tspan x="200" y="65">IJ</tspan></text>"#,
+    );
+    let mut studio = metric_tests::studio_for(&source);
+    studio.patch_type(|r| {
+        r.set_character_style(0, 10, |s| {
+            s.hscale = Some(125.);
+            s.vscale = Some(80.);
+        });
+        r.set_character_style(0, 4, |s| s.leading = Some(Leading::Fixed(50.)));
+    });
+    let pixels = crate::compositor::export_png(&studio.doc, 1).unwrap();
+    for _ in 0..3 {
+        assert_eq!(
+            pair_tests::run(&studio).character_style(4).leading,
+            Some(Leading::Fixed(50.))
+        );
+        assert_eq!(
+            pair_tests::run(&studio).character_style(6).leading,
+            Some(Leading::Fixed(30.))
+        );
+        let exported = crate::svg::export_embedded(&studio.doc).unwrap();
+        studio = metric_tests::studio_for(&exported);
+        assert_eq!(
+            pixels,
+            crate::compositor::export_png(&studio.doc, 1).unwrap()
+        );
+    }
+    scale_tests::check(&studio, "leading-rotated-columns");
+}
+
+#[test]
+fn svg_positioned_leading_keeps_loaded_finite_values_and_native_minimum_paint_semantics() {
+    let source = simple_source();
+    for (mode, name) in [
+        (Leading::Fixed(-2.), "leading-loaded-fixed"),
+        (Leading::Auto(-20.), "leading-loaded-auto"),
+    ] {
+        let mut studio = metric_tests::studio_for(&source);
+        studio.patch_character(|s| s.leading = Some(mode));
+        let expected = source
+            .replace("y=\"65\"", "y=\"36\"")
+            .replace("y=\"95\"", "y=\"37\"");
+        compare(&studio, &expected, name);
+        let exported = crate::svg::export_embedded(&studio.doc).unwrap();
+        let again = metric_tests::studio_for(&exported);
+        assert!(
+            again
+                .selected_character_metrics()
+                .iter()
+                .all(|s| s.leading == Some(mode))
+        );
+    }
 }
