@@ -10,6 +10,79 @@ pub(super) struct LayerRows {
 }
 
 impl Studio {
+    /// Walk the actual layer tree in the sidebar's top-to-bottom order.
+    /// Args: include collapsed descendants. Returns each reachable layer index once.
+    pub(crate) fn layer_panel_order(&self, include_collapsed: bool) -> Vec<usize> {
+        let mut children: HashMap<Option<u64>, Vec<usize>> = HashMap::new();
+        for (i, layer) in self.doc.layers.iter().enumerate() {
+            children.entry(layer.parent).or_default().push(i);
+        }
+        let mut pending = children.remove(&None).unwrap_or_default();
+        let mut order = Vec::with_capacity(self.doc.layers.len());
+        while let Some(i) = pending.pop() {
+            order.push(i);
+            let layer = &self.doc.layers[i];
+            if layer.is_group && (include_collapsed || self.layer_expanded.contains(&layer.id)) {
+                pending.extend(children.remove(&Some(layer.id)).unwrap_or_default());
+            }
+        }
+        order
+    }
+
+    /// Place a whole subtree in the logical paint order before building commands.
+    /// Args: validated source, destination and sidebar placement. Returns layer IDs, children before parents.
+    pub(super) fn layer_drop_order(
+        &self,
+        source: usize,
+        target: usize,
+        place: TreePlacement,
+    ) -> Vec<u64> {
+        let source_ids: HashSet<_> = self
+            .layer_tree_indices(source)
+            .into_iter()
+            .map(|i| self.doc.layers[i].id)
+            .collect();
+        let target_ids: HashSet<_> = self
+            .layer_tree_indices(target)
+            .into_iter()
+            .map(|i| self.doc.layers[i].id)
+            .collect();
+        let paint: Vec<_> = self
+            .layer_panel_order(true)
+            .into_iter()
+            .rev()
+            .map(|i| self.doc.layers[i].id)
+            .collect();
+        let (moved, mut order): (Vec<_>, Vec<_>) = paint
+            .iter()
+            .copied()
+            .partition(|id| source_ids.contains(id));
+        let insertion = match place {
+            TreePlacement::Above => {
+                order
+                    .iter()
+                    .position(|id| *id == self.doc.layers[target].id)
+                    .unwrap()
+                    + 1
+            }
+            TreePlacement::Inside => order
+                .iter()
+                .position(|id| *id == self.doc.layers[target].id)
+                .unwrap(),
+            TreePlacement::Below => order.iter().position(|id| target_ids.contains(id)).unwrap(),
+        };
+        order.splice(insertion..insertion, moved);
+        let parent = if place == TreePlacement::Inside {
+            Some(self.doc.layers[target].id)
+        } else {
+            self.doc.layers[target].parent
+        };
+        if order == paint && self.doc.layers[source].parent == parent {
+            return self.doc.layers.iter().map(|layer| layer.id).collect();
+        }
+        order
+    }
+
     pub(super) fn current_layer_rows(&self) -> Option<&LayerRows> {
         self.layer_rows.as_ref().filter(|rows| {
             rows.document == self.swap_id
@@ -38,20 +111,22 @@ impl Studio {
         }
         if let Some(rows) = self.current_layer_rows() {
             return self
-                .doc
-                .layers
-                .iter()
-                .enumerate()
-                .filter_map(|(i, l)| rows.ids.contains(&l.id).then_some(i))
+                .layer_panel_order(true)
+                .into_iter()
+                .rev()
+                .filter(|&i| rows.ids.contains(&self.doc.layers[i].id))
                 .collect();
         }
         let mut selected: Vec<_> = self.selection.iter().map(|&(i, _)| i).collect();
         if selected.is_empty() {
             selected.extend(self.active_layer);
         }
-        selected.sort_unstable();
-        selected.dedup();
-        selected
+        let selected: HashSet<_> = selected.into_iter().collect();
+        self.layer_panel_order(true)
+            .into_iter()
+            .rev()
+            .filter(|i| selected.contains(i))
+            .collect()
     }
 
     pub(crate) fn layer_row_selected(&self, index: usize) -> bool {
@@ -75,7 +150,7 @@ impl Studio {
             self.activate_layer_tree(index);
             return;
         }
-        let anchor = self
+        let mut anchor = self
             .current_layer_rows()
             .map(|rows| rows.anchor)
             .or(self.selected_layer)
@@ -90,27 +165,50 @@ impl Studio {
             .iter()
             .filter_map(|&i| self.doc.layers.get(i).map(|l| l.id))
             .collect();
+        let mut active = index;
         if extend {
-            let first = self
-                .doc
-                .layers
+            let mut order = self.layer_panel_order(false);
+            if !order.iter().any(|&i| self.doc.layers[i].id == anchor) || !order.contains(&index) {
+                order = self.layer_panel_order(true);
+            }
+            let Some(last) = order.iter().position(|&i| i == index) else {
+                return;
+            };
+            let first = order
                 .iter()
-                .position(|l| l.id == anchor)
-                .unwrap_or(index);
-            ids = (first.min(index)..=first.max(index))
-                .filter(|&i| {
-                    self.doc
-                        .layer_ancestors(i)
-                        .iter()
-                        .all(|p| self.layer_expanded.contains(&self.doc.layers[*p].id))
-                })
-                .map(|i| self.doc.layers[i].id)
+                .position(|&i| self.doc.layers[i].id == anchor)
+                .unwrap_or(last);
+            ids = order[first.min(last)..=first.max(last)]
+                .iter()
+                .map(|&i| self.doc.layers[i].id)
                 .collect();
-        } else if !ids.insert(id) {
-            ids.remove(&id);
+        } else {
+            if ids.contains(&id) {
+                if ids.len() == 1 {
+                    return;
+                }
+                ids.remove(&id);
+                active = self
+                    .active_layer
+                    .filter(|&i| {
+                        self.doc
+                            .layers
+                            .get(i)
+                            .is_some_and(|layer| ids.contains(&layer.id))
+                    })
+                    .or_else(|| {
+                        self.layer_panel_order(true)
+                            .into_iter()
+                            .find(|&i| ids.contains(&self.doc.layers[i].id))
+                    })
+                    .unwrap();
+            } else {
+                ids.insert(id);
+            }
+            anchor = self.doc.layers[active].id;
         }
         self.clear_layer_interaction();
-        self.active_layer = Some(index);
+        self.active_layer = Some(active);
         for i in 0..self.doc.layers.len() {
             if !ids.contains(&self.doc.layers[i].id) {
                 continue;
@@ -301,26 +399,16 @@ impl Studio {
         {
             return false;
         }
-        let source = self.layer_tree_indices(index);
-        let destination = self.layer_tree_indices(target);
-        let contiguous = |indices: &[usize], marker| {
-            indices.last() == Some(&marker) && indices.windows(2).all(|w| w[1] == w[0] + 1)
-        };
-        if !contiguous(&source, index) || !contiguous(&destination, target) {
-            self.status = "This layer group has an inconsistent order and cannot be moved.".into();
-            return false;
-        }
-        let start = source[0];
-        let end = index + 1;
-        let insertion = if above { target + 1 } else { destination[0] };
-        if insertion >= start && insertion <= end {
-            return false;
-        }
         let mut order: Vec<_> = self.doc.layers.iter().map(|l| l.id).collect();
-        let mut desired = order.clone();
-        let moved: Vec<_> = desired.drain(start..end).collect();
-        let to = insertion - if insertion > end { end - start } else { 0 };
-        desired.splice(to..to, moved);
+        let desired = self.layer_drop_order(
+            index,
+            target,
+            if above {
+                TreePlacement::Above
+            } else {
+                TreePlacement::Below
+            },
+        );
         let mut commands = Vec::new();
         for to in 0..order.len() {
             if order[to] == desired[to] {
@@ -335,9 +423,16 @@ impl Studio {
             return false;
         }
         let name = self.doc.layers[index].name.clone();
+        let command = Cmd::Batch(commands);
+        if let Err(error) = layer_copy::validate(&self.doc, &command) {
+            self.status = error;
+            return false;
+        }
         self.commit_type_edit();
         self.reset_snap_gesture();
-        self.commit(Cmd::Batch(commands));
+        let before = self.history_target();
+        self.commit(command);
+        self.history.remember_target(before, self.history_target());
         self.status = format!("{name} moved {}", if above { "up" } else { "down" });
         true
     }
@@ -760,3 +855,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "layer_row_tests.rs"]
+mod row_tests;

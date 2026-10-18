@@ -2611,15 +2611,8 @@ fn layers_studio_contents(ui: &mut Ui, studio: &mut Studio) {
     let mut shape_up: Option<(usize, usize)> = None;
     let mut shape_down: Option<(usize, usize)> = None;
     let mut flip_shape: Option<(usize, u64, bool)> = None;
-    let n = studio.doc.layers.len();
-    for i in (0..n).rev() {
+    for i in studio.layer_panel_order(false) {
         let ancestors = studio.doc.layer_ancestors(i);
-        if ancestors
-            .iter()
-            .any(|&a| !studio.layer_expanded.contains(&studio.doc.layers[a].id))
-        {
-            continue;
-        }
         let indent = (ancestors.len() as f32 * 12.0).min(ui.available_width()*0.3);
         super::fields::native_scope(ui,eframe::egui::Id::new(("layer-row",&studio.swap_id,studio.doc.layers[i].id)), |ui| {
             let active = studio.active_layer == Some(i);

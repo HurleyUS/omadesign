@@ -22,11 +22,16 @@ impl Studio {
         } else {
             self.selected_layer_rows()
         };
-        selected.sort_unstable();
-        selected.dedup();
         if selected.iter().any(|&i| i >= self.doc.layers.len()) {
             return Err("The clipping selection changed".into());
         }
+        let ids: HashSet<_> = selected.drain(..).collect();
+        let selected: Vec<_> = self
+            .layer_panel_order(true)
+            .into_iter()
+            .rev()
+            .filter(|i| ids.contains(i))
+            .collect();
         let roots: Vec<_> = selected
             .iter()
             .copied()
@@ -89,7 +94,9 @@ impl Studio {
         match result {
             Ok(command) => {
                 self.commit_type_edit();
+                let before = self.history_target();
                 self.commit(command);
+                self.history.remember_target(before, self.history_target());
                 self.status = if clipped {
                     "Clipping mask created"
                 } else {

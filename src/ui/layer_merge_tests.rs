@@ -567,3 +567,173 @@ fn craft_history_targets_native_merge_undo_redo_restore_rows_after_other_native_
         );
     }
 }
+
+fn tree_rows_ui_fixture() -> Studio {
+    let mut s = cross_group_ui_fixture();
+    let original = s.doc.layers.clone();
+    let spare = Layer::placed_raster(
+        "Spare pixel",
+        crate::document::Pixels::from_rgba(1, 1, vec![0, 0, 255, 255]).unwrap(),
+        crate::geom::Pt::new(4., 0.),
+        crate::geom::Pt::splat(1.),
+    );
+    s.doc.layers = vec![
+        original[0].clone(),
+        original[2].clone(),
+        original[3].clone(),
+        original[1].clone(),
+        spare,
+    ];
+    s.doc.name = "Native tree rows".into();
+    s.activate_layer_tree(0);
+    s.history.clear();
+    s
+}
+
+#[test]
+fn craft_tree_rows_native_group_headers_shift_merge_and_history_follow_actual_tree() {
+    let mut s = tree_rows_ui_fixture();
+    let mut seat = Seat::new();
+    for _ in 0..3 {
+        seat.frame(&mut s, vec![]);
+    }
+    let ys: Vec<_> = [
+        "Spare pixel",
+        "Left group",
+        "Left pixel",
+        "Right group",
+        "Right pixel",
+    ]
+    .into_iter()
+    .map(|name| {
+        let b = keys::named(&seat.output, name).1.bounds().unwrap();
+        (b.y0 + b.y1) / 2.
+    })
+    .collect();
+    assert!(
+        ys.windows(2).all(|v| v[0] < v[1]),
+        "actual tree rows {ys:?}"
+    );
+    seat.click(&mut s, "Left pixel");
+    seat.click_mods(&mut s, "Right pixel", Modifiers::SHIFT);
+    assert_eq!(s.selected_layer_rows(), [1, 2, 0]);
+    let before = state(&s);
+    let parent = s.doc.layers[3].id;
+    seat.menu(&mut s, "Merge Layers");
+    seat.wait(&mut s);
+    assert_eq!(s.doc.layers.len(), 3);
+    assert_eq!(s.doc.layers[0].parent, Some(parent));
+    assert_eq!(
+        s.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(s.history.len(), 1);
+    let after = state(&s);
+    seat.frame(&mut s, keys::key(Key::F8, Modifiers::NONE));
+    seat.frame(&mut s, vec![]);
+    seat.frame(&mut s, keys::key(Key::Z, Modifiers::COMMAND));
+    seat.frame(&mut s, vec![]);
+    assert_eq!(state(&s), before);
+    assert_eq!(s.selected_layer_rows(), [1, 2, 0]);
+    assert_eq!(s.active_layer, Some(1));
+    seat.frame(&mut s, keys::key(Key::Y, Modifiers::COMMAND));
+    seat.frame(&mut s, vec![]);
+    assert_eq!(state(&s), after);
+    assert_eq!(
+        crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(),
+        after
+    );
+}
+
+#[test]
+fn craft_tree_rows_native_toggle_keeps_last_target_and_shift_uses_latest_active_anchor() {
+    let mut s = tree_rows_ui_fixture();
+    let mut seat = Seat::new();
+    let before = state(&s);
+    seat.click(&mut s, "Left pixel");
+    seat.click_mods(&mut s, "Left pixel", Modifiers::COMMAND);
+    assert_eq!(s.selected_layer_rows(), [0]);
+    assert_eq!(s.active_layer, Some(0));
+    seat.click_mods(&mut s, "Right pixel", Modifiers::COMMAND);
+    assert_eq!(s.selected_layer_rows(), [1, 0]);
+    assert_eq!(s.active_layer, Some(1));
+    seat.click_mods(&mut s, "Right pixel", Modifiers::COMMAND);
+    assert_eq!(s.selected_layer_rows(), [0]);
+    assert_eq!(s.active_layer, Some(0));
+    seat.click_mods(&mut s, "Right pixel", Modifiers::COMMAND);
+    seat.click_mods(&mut s, "Left group", Modifiers::SHIFT);
+    assert_eq!(s.selected_layer_rows(), [1, 2, 0, 3]);
+    assert_eq!(s.active_layer, Some(3));
+    assert_eq!(state(&s), before);
+    assert_eq!(s.history.len(), 0);
+}
+
+#[test]
+fn craft_tree_rows_native_group_drag_and_arrange_key_keep_parent_data_and_one_undo() {
+    for drag in [false, true] {
+        let mut s = tree_rows_ui_fixture();
+        let mut seat = Seat::new();
+        let left = s.doc.layers[3].id;
+        let right = s.doc.layers[2].id;
+        seat.click(&mut s, "Left group");
+        let before = state(&s);
+        if drag {
+            let point = |name: &str| {
+                let b = keys::named(&seat.output, name).1.bounds().unwrap();
+                egui::pos2(((b.x0 + b.x1) / 2.) as f32, ((b.y0 + b.y1) / 2.) as f32)
+            };
+            let from = point("Left group");
+            let to = point("Right group");
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            seat.frame(&mut s, vec![Event::PointerMoved(from), button(from, true)]);
+            seat.frame(
+                &mut s,
+                vec![Event::PointerMoved(from + egui::vec2(0., 10.))],
+            );
+            seat.frame(&mut s, vec![Event::PointerMoved(to)]);
+            seat.frame(&mut s, vec![button(to, false)]);
+            seat.frame(&mut s, vec![]);
+        } else {
+            seat.frame(&mut s, keys::key(Key::F8, Modifiers::NONE));
+            seat.frame(&mut s, vec![]);
+            seat.frame(&mut s, keys::key(Key::OpenBracket, Modifiers::COMMAND));
+            seat.frame(&mut s, vec![]);
+        }
+        assert_eq!(s.history.len(), 1, "drag={drag}");
+        s.doc.validate_hierarchy().unwrap();
+        assert_eq!(
+            s.doc.layers.iter().find(|l| l.id == left).unwrap().parent,
+            if drag { Some(right) } else { None }
+        );
+        let pm = crate::compositor::render_export(&s.doc, 1).unwrap();
+        assert_eq!(
+            &pm.data()[..4],
+            if drag {
+                &[255, 0, 0, 255]
+            } else {
+                &[0, 255, 0, 255]
+            }
+        );
+        let after = state(&s);
+        seat.click(&mut s, "Spare pixel");
+        seat.frame(&mut s, keys::key(Key::F8, Modifiers::NONE));
+        seat.frame(&mut s, vec![]);
+        seat.frame(&mut s, keys::key(Key::Z, Modifiers::COMMAND));
+        seat.frame(&mut s, vec![]);
+        assert_eq!(state(&s), before);
+        assert_eq!(s.selected_layer, Some(left));
+        seat.frame(&mut s, keys::key(Key::Y, Modifiers::COMMAND));
+        seat.frame(&mut s, vec![]);
+        assert_eq!(state(&s), after);
+        assert_eq!(s.selected_layer, Some(left));
+        assert_eq!(
+            crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(),
+            after
+        );
+    }
+}

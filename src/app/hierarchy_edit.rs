@@ -458,24 +458,13 @@ impl Studio {
         if !self.can_drop_layer(source, target, place) {
             return false;
         }
-        let source_tree = self.layer_tree_indices(source);
-        let target_tree = self.layer_tree_indices(target);
         let parent = if place == TreePlacement::Inside {
             Some(self.doc.layers[target].id)
         } else {
             self.doc.layers[target].parent
         };
         let mut order: Vec<_> = self.doc.layers.iter().map(|l| l.id).collect();
-        let moved: Vec<_> = source_tree.iter().map(|&i| order[i]).collect();
-        let anchor = match place {
-            TreePlacement::Above | TreePlacement::Inside => self.doc.layers[target].id,
-            TreePlacement::Below => self.doc.layers[target_tree[0]].id,
-        };
-        let mut desired = order.clone();
-        desired.retain(|id| !moved.contains(id));
-        let insertion = desired.iter().position(|id| *id == anchor).unwrap()
-            + usize::from(place == TreePlacement::Above);
-        desired.splice(insertion..insertion, moved);
+        let desired = self.layer_drop_order(source, target, place);
         let mut commands = Vec::new();
         if self.doc.layers[source].parent != parent {
             commands.push(Cmd::SetLayerParent {
@@ -488,8 +477,12 @@ impl Studio {
         if commands.is_empty() {
             return false;
         }
+        let command = Cmd::Batch(commands);
+        if let Err(error) = layer_copy::validate(&self.doc, &command) { self.status = error; return false; }
         self.commit_type_edit();
-        self.commit(Cmd::Batch(commands));
+        let before = self.history_target();
+        self.commit(command);
+        self.history.remember_target(before, self.history_target());
         if let Some(parent) = parent {
             self.layer_expanded.insert(parent);
         }
