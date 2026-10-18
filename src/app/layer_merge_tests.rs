@@ -81,6 +81,16 @@ fn undo_reopen(s: &mut Studio, before: &str) {
                 },
             );
         }
+        if name.starts_with("craft_content_bounds_") {
+            name.push_str(
+                &format!(
+                    "-{:?}-{:?}-{}-{}",
+                    s.doc.color.model, s.doc.color.depth, s.doc.name, s.status
+                )
+                .replace(' ', "-")
+                .to_lowercase(),
+            );
+        }
         let folder = std::path::PathBuf::from(root).join(name);
         std::fs::create_dir_all(&folder).unwrap();
         let original = crate::project::decode(before).unwrap();
@@ -792,4 +802,204 @@ fn craft_stamp_group_keeps_locked_source_mask_styles_and_full_off_canvas_paint()
     assert_eq!(picture(&isolated), expected);
     assert_eq!(view(&isolated), outside);
     undo_reopen(&mut s, &before);
+}
+
+fn content_fixture(depth: Depth, cmyk: bool) -> Studio {
+    let mut s = fixture();
+    s.doc = Document::new("Content bounds", 300., 400., 96.);
+    s.doc.transparent = true;
+    s.doc.color.depth = depth;
+    s.doc.color.model = if cmyk {
+        crate::deep_color::cms::Model::Cmyk
+    } else {
+        crate::deep_color::cms::Model::Rgb
+    };
+    s.doc.layers.clear();
+    for (name, origin, w, h, color) in [
+        (
+            "First",
+            Pt::new(36., 296.),
+            20usize,
+            30usize,
+            [0.75, 0.25, 0.125],
+        ),
+        (
+            "Second",
+            Pt::new(86., 316.),
+            25usize,
+            20usize,
+            [0.125, 0.375, 0.75],
+        ),
+    ] {
+        let mut rgba = vec![0.; 64 * 64 * 4];
+        let mut inks = vec![0.; 64 * 64 * 5];
+        for y in 4..4 + h {
+            for x in 4..4 + w {
+                let i = y * 64 + x;
+                let r = if depth == Depth::F32 {
+                    color[0] * 2.
+                } else {
+                    color[0]
+                };
+                rgba[i * 4..i * 4 + 4].copy_from_slice(&[r, color[1], color[2], 1.]);
+                inks[i * 5..i * 5 + 5].copy_from_slice(&[color[0], color[1], color[2], 0.25, 1.]);
+            }
+        }
+        let pixels = if cmyk {
+            Pixels::from_cmyk(64, 64, depth, inks, vec![], 0).unwrap()
+        } else if depth == Depth::U8 {
+            Pixels::from_rgba(
+                64,
+                64,
+                rgba.into_iter().map(crate::deep_color::byte).collect(),
+            )
+            .unwrap()
+        } else {
+            Pixels::from_samples(64, 64, depth, rgba).unwrap()
+        };
+        s.doc
+            .layers
+            .push(Layer::placed_raster(name, pixels, origin, Pt::splat(64.)));
+    }
+    s.activate_layer_tree(1);
+    s.history.clear();
+    s
+}
+
+#[test]
+fn craft_content_bounds_merges_and_stamps_hug_paint_across_all_native_color_depths() {
+    for depth in [Depth::U8, Depth::U16, Depth::F32] {
+        for cmyk in [false, true] {
+            for op in 0..6 {
+                let mut s = content_fixture(depth, cmyk);
+                let owner = s.doc.layers[1].id;
+                let kind = match op {
+                    0 => Kind::Down(owner),
+                    1 => Kind::Selected,
+                    2 => Kind::Visible,
+                    3 => Kind::StampDown(owner),
+                    4 => Kind::StampSelected,
+                    _ => Kind::StampVisible,
+                };
+                if matches!(kind, Kind::Selected | Kind::StampSelected) {
+                    s.select_layer_rows(0, false, false);
+                    s.select_layer_rows(1, true, false);
+                }
+                let before = state(&s);
+                let expected = picture(&s.doc);
+                run(&mut s, kind);
+                let target = if matches!(kind, Kind::StampVisible | Kind::StampSelected) {
+                    2
+                } else {
+                    0
+                };
+                let layer = &s.doc.layers[target];
+                let pixels = layer.kind.pixels().unwrap();
+                assert_eq!(pixels.w, 75, "{depth:?}/{cmyk}/{kind:?}");
+                assert_eq!(pixels.h, 40, "{depth:?}/{cmyk}/{kind:?}");
+                assert_eq!(layer.kind.raster_xform().unwrap().0, Pt::new(40., 300.));
+                assert_eq!(layer.kind.raster_xform().unwrap().1, Pt::new(75., 40.));
+                assert_eq!(picture(&s.doc), expected, "{depth:?}/{cmyk}/{kind:?}");
+                assert!(pixels.sample(5 * 75 + 5)[3] > 0.99);
+                assert!(pixels.sample(25 * 75 + 55)[3] > 0.99);
+                assert_eq!(pixels.sample(10 * 75 + 30)[3], 0.);
+                if cmyk {
+                    assert!(pixels.native.as_ref().unwrap().cmyk.is_some());
+                }
+                if depth != Depth::U8 {
+                    assert_eq!(pixels.native.as_ref().unwrap().depth, depth);
+                }
+                undo_reopen(&mut s, &before);
+            }
+        }
+    }
+}
+
+#[test]
+fn craft_content_bounds_masked_fill_and_live_clipping_follow_actual_coverage() {
+    for clipped in [false, true] {
+        let mut s = fixture();
+        s.doc = Document::new(format!("Masked fill {clipped}"), 40., 32., 96.);
+        s.doc.transparent = true;
+        let mut fill = Layer::raster("Masked fill", 40, 32).unwrap();
+        fill.kind
+            .pixels_mut()
+            .unwrap()
+            .replace_bytes([30, 90, 150, 255].repeat(40 * 32))
+            .unwrap();
+        fill.kind.set_raster_xform(Pt::ZERO, Pt::new(40., 32.), 0.);
+        let mut mask = vec![0; 40 * 32 * 4];
+        for y in 8..13 {
+            for x in 7..11 {
+                mask[(y * 40 + x) * 4..(y * 40 + x + 1) * 4].copy_from_slice(&[255; 4]);
+            }
+        }
+        fill.mask = Some(Pixels::from_rgba(40, 32, mask).unwrap());
+        let mut top = Layer::placed_raster(
+            "Top",
+            Pixels::from_rgba(2, 3, [210, 70, 20, 255].repeat(6)).unwrap(),
+            Pt::new(14., 17.),
+            Pt::new(2., 3.),
+        );
+        top.clipped = clipped;
+        s.doc.layers = vec![fill, top];
+        s.activate_layer_tree(1);
+        let before = state(&s);
+        let expected = picture(&s.doc);
+        run(&mut s, Kind::Visible);
+        let layer = &s.doc.layers[0];
+        assert_eq!(layer.kind.raster_xform().unwrap().0, Pt::new(7., 8.));
+        assert_eq!(
+            layer.kind.raster_xform().unwrap().1,
+            if clipped {
+                Pt::new(4., 5.)
+            } else {
+                Pt::new(9., 12.)
+            }
+        );
+        assert_eq!(picture(&s.doc), expected);
+        undo_reopen(&mut s, &before);
+    }
+}
+
+#[test]
+fn craft_content_bounds_empty_merge_uses_one_pixel_and_flatten_keeps_opaque_canvas() {
+    for depth in [Depth::U8, Depth::F32] {
+        let mut s = fixture();
+        s.doc = Document::new("Empty content", 40., 32., 96.);
+        s.doc.transparent = true;
+        s.doc.color.depth = depth;
+        s.doc.layers = vec![
+            Layer::placed_raster(
+                "Empty first",
+                Pixels::new(3, 2).unwrap(),
+                Pt::new(4., 7.),
+                Pt::new(3., 2.),
+            ),
+            Layer::placed_raster(
+                "Empty last",
+                Pixels::new(3, 2).unwrap(),
+                Pt::new(11., 14.),
+                Pt::new(3., 2.),
+            ),
+        ];
+        s.activate_layer_tree(1);
+        let before = state(&s);
+        run(&mut s, Kind::Visible);
+        let layer = &s.doc.layers[0];
+        assert_eq!(layer.kind.raster_xform().unwrap().0, Pt::ZERO);
+        assert_eq!(layer.kind.raster_xform().unwrap().1, Pt::splat(1.));
+        assert_eq!(layer.kind.pixels().unwrap().sample(0), [0.; 4]);
+        undo_reopen(&mut s, &before);
+        s.undo();
+        s.history.clear();
+        let before = state(&s);
+        run(&mut s, Kind::Flatten);
+        let layer = &s.doc.layers[0];
+        assert_eq!(layer.kind.raster_xform().unwrap().0, Pt::ZERO);
+        assert_eq!(layer.kind.raster_xform().unwrap().1, Pt::new(40., 32.));
+        assert_eq!(layer.kind.pixels().unwrap().sample(0), [1.; 4]);
+        assert!(layer.locked);
+        undo_reopen(&mut s, &before);
+    }
 }

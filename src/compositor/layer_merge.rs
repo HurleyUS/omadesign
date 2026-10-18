@@ -42,7 +42,8 @@ fn scope(doc: &Document, roots: &[usize]) -> Result<Document, String> {
         }
     }
     if let Some(first) = roots.first().map(|&i| doc.layers[i].id)
-        && let Some(layer) = output.layers.iter_mut().find(|l| l.id == first) {
+        && let Some(layer) = output.layers.iter_mut().find(|l| l.id == first)
+    {
         layer.clipped = false;
     }
     output.transparent = true;
@@ -143,7 +144,8 @@ fn bounds(
             }
         }
     }
-    if !crate::deep_color::has_native(scoped) && !scoped.layers.iter().any(|l| l.clipped)
+    if !crate::deep_color::has_native(scoped)
+        && !scoped.layers.iter().any(|l| l.clipped)
         && scoped
             .layers
             .iter()
@@ -205,6 +207,104 @@ fn native_scope(mut doc: Document, roots: &HashSet<u64>, origin: Pt) -> Document
     }
     doc.motion = Default::default();
     doc
+}
+
+fn crop_plane<T: Copy + Default>(
+    source: &[T],
+    width: u32,
+    rect: [u32; 4],
+    channels: usize,
+    progress: &dyn Progress,
+) -> Result<std::sync::Arc<crate::resources::Allocation<T>>, String> {
+    let [x, y, w, h] = rect;
+    let mut output = crate::resources::global()
+        .allocate_now::<T, _>(crate::deep_color::storage::count(w, h, channels)?, &|| {
+            progress.check()
+        })?;
+    for row in 0..h as usize {
+        progress.check()?;
+        let start = ((y as usize + row) * width as usize + x as usize) * channels;
+        let count = w as usize * channels;
+        output.as_mut_slice()[row * count..(row + 1) * count]
+            .copy_from_slice(&source[start..start + count]);
+    }
+    Ok(std::sync::Arc::new(output))
+}
+
+/// Remove transparent merge borders using authored alpha without resampling.
+/// Args: admitted rendered pixels, their document origin and cancellation owner. Returns tight pixels/origin, or a zero one-pixel image for empty paint.
+fn content_bounds(
+    pixels: Pixels,
+    origin: Pt,
+    progress: &dyn Progress,
+) -> Result<(Pixels, Pt), String> {
+    progress.report("Trimming transparent borders", 0, pixels.h as usize);
+    let (mut x0, mut y0, mut x1, mut y1) = (pixels.w, pixels.h, 0, 0);
+    for y in 0..pixels.h {
+        progress.check()?;
+        for x in 0..pixels.w {
+            if x.is_multiple_of(4096) {
+                progress.check()?;
+            }
+            if pixels.sample(y as usize * pixels.w as usize + x as usize)[3] > 0. {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+            }
+        }
+    }
+    if (x0, y0, x1, y1) == (0, 0, pixels.w, pixels.h) {
+        return Ok((pixels, origin));
+    }
+    let empty = x0 >= x1;
+    let rect = if empty {
+        [0, 0, 1, 1]
+    } else {
+        [x0, y0, x1 - x0, y1 - y0]
+    };
+    let [_, _, w, h] = rect;
+    let data = if empty {
+        std::sync::Arc::new(
+            crate::resources::global().allocate_now::<u8, _>(4, &|| progress.check())?,
+        )
+    } else {
+        crop_plane(&pixels.data, pixels.w, rect, 4, progress)?
+    };
+    let mut output = Pixels::from_byte_allocation(w, h, data)?;
+    if let Some(source) = &pixels.native {
+        let mut native = source.clone();
+        native.samples = if empty {
+            std::sync::Arc::new(
+                crate::resources::global().allocate_now::<f32, _>(4, &|| progress.check())?,
+            )
+        } else {
+            crop_plane(&source.samples, pixels.w, rect, 4, progress)?
+        };
+        native.cmyk = source
+            .cmyk
+            .as_ref()
+            .map(|inks| {
+                if empty {
+                    crate::resources::global()
+                        .allocate_now::<f32, _>(5, &|| progress.check())
+                        .map(std::sync::Arc::new)
+                } else {
+                    crop_plane(inks, pixels.w, rect, 5, progress)
+                }
+            })
+            .transpose()?;
+        output.native = Some(native);
+    }
+    progress.check()?;
+    Ok((
+        output,
+        if empty {
+            Pt::ZERO
+        } else {
+            origin + Pt::new(x0 as f32, y0 as f32)
+        },
+    ))
 }
 
 /// Render selected concrete layer trees through the existing byte or native compositor.
@@ -283,6 +383,15 @@ pub(crate) fn render(
         Pixels::try_from_pixmap(&image)?
     };
     progress.check()?;
+    let result = if opaque {
+        (pixels, area.min)
+    } else {
+        content_bounds(pixels, area.min, progress)?
+    };
     progress.report("Preparing layer history", 1, 1);
-    Ok((pixels, area.min))
+    Ok(result)
 }
+
+#[cfg(test)]
+#[path = "layer_content_bounds_tests.rs"]
+mod content_tests;

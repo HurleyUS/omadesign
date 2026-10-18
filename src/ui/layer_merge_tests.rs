@@ -354,3 +354,61 @@ fn craft_stamp_native_alt_menu_and_canvas_keys_preserve_real_source_and_field_ow
     assert_eq!(state(&s), before);
     assert_eq!(s.history.len(), history);
 }
+
+#[test]
+fn craft_content_bounds_actual_merge_menu_canvas_pick_and_native_history_use_painted_size() {
+    let mut s = fixture();
+    let before = state(&s);
+    let mut seat = Seat::new();
+    seat.menu(&mut s, "Merge Visible");
+    seat.wait(&mut s);
+    let after = state(&s);
+    assert_eq!(s.doc.layers.len(), 1);
+    assert_eq!(
+        s.doc.layers[0].kind.raster_xform().unwrap().1,
+        crate::geom::Pt::new(2., 2.)
+    );
+    seat.frame(&mut s, keys::key(Key::F8, Modifiers::NONE));
+    seat.frame(&mut s, keys::key(Key::V, Modifiers::NONE));
+    seat.frame(&mut s, vec![]);
+    assert_eq!(s.tool, crate::tools::Tool::Select);
+    let rect = s.canvas_rect.unwrap();
+    let point = s.view.world_to_window(
+        crate::geom::Pt::new(rect.min.x, rect.min.y),
+        crate::geom::Pt::new(0.5, 0.5),
+    );
+    let p = egui::pos2(point.x, point.y);
+    for pressed in [true, false] {
+        seat.frame(
+            &mut s,
+            vec![
+                Event::PointerMoved(p),
+                Event::PointerButton {
+                    pos: p,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    seat.frame(&mut s, vec![]);
+    assert_eq!(s.primary(), Some((0, crate::document::RASTER_ID)));
+    assert_eq!(
+        seat.ctx.memory(|m| m.focused()),
+        Some(Id::new("studio-canvas"))
+    );
+    assert_eq!(state(&s), after);
+    assert_eq!(s.history.len(), 1);
+    seat.frame(&mut s, keys::key(Key::Z, Modifiers::COMMAND));
+    seat.frame(&mut s, vec![]);
+    assert_eq!(state(&s), before);
+    seat.frame(&mut s, keys::key(Key::Y, Modifiers::COMMAND));
+    seat.frame(&mut s, vec![]);
+    assert_eq!(state(&s), after);
+    let reopened = crate::project::decode(&after).unwrap();
+    assert_eq!(
+        reopened.layers[0].kind.raster_xform().unwrap().1,
+        crate::geom::Pt::new(2., 2.)
+    );
+}
