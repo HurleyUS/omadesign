@@ -373,7 +373,7 @@ fn craft_svg_text_layout_feature_settings_parse_inherit_reset_and_survive_text_w
     use base64::Engine;
     let font = base64::engine::general_purpose::STANDARD.encode(std::fs::read(FONT).unwrap());
     let source = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="600" height="120"><style>@font-face{{font-family:Features;src:url(data:font/ttf;base64,{font})}}</style><g font-family="Features" font-size="26" font-feature-settings="'smcp' on, 'c2sc' 1, 'liga' off"><text x="10" y="35">Feature inheritance<tspan font-feature-settings="normal"> Default</tspan><tspan font-feature-settings="'liga' 1 2"> Invalid inherits</tspan><tspan font-feature-settings="'ss01' 2, '\74 num' on"> Escaped</tspan></text></g></svg>"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="600" height="120"><style>@font-face{{font-family:Features;src:url(data:font/ttf;base64,{font})}}</style><g font-family="Features" font-size="26" style="font-feature-settings:'smcp' on, 'c2sc' 1, 'liga' off"><text x="10" y="35">Feature inheritance<tspan font-feature-settings="normal"> Default</tspan><tspan font-feature-settings="'liga' 1 2"> Invalid inherits</tspan><tspan style="font-feature-settings:'ss01' 2, '\74 num' on"> Escaped</tspan></text></g></svg>"#
     );
     let xml = roxmltree::Document::parse(&source).unwrap();
     let mut options = crate::text::svg_type::options();
