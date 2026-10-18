@@ -89,6 +89,28 @@ fn svg_rtl_single_anchor_keeps_the_embedding_in_the_same_text_chunk() {
 }
 
 #[test]
+fn svg_rtl_pair_moves_logically_following_characters_without_moving_the_first_anchor() {
+    let source = source(
+        r#"<text x="350" y="80" direction="rtl" font-family="MetricFace" font-size="40">אב ג AV</text>"#,
+    );
+    let mut studio = super::metric_tests::studio_for(&source);
+    let before: Vec<_> = (0..run(&studio).content.chars().count())
+        .map(|i| crate::text::caret_pt(run(&studio), i))
+        .collect();
+    studio.patch_type(|r| {
+        r.manual_kern.insert(1, -100.);
+    });
+    for (i, p) in before.iter().enumerate() {
+        let after = crate::text::caret_pt(run(&studio), i);
+        assert!(
+            (after.x - p.x - if i == 0 { 0. } else { -4. }).abs() < 0.001,
+            "{i}: {p:?} -> {after:?}"
+        );
+        assert_eq!(after.y, p.y);
+    }
+}
+
+#[test]
 fn svg_pair_offsets_replace_inherited_values_in_each_resolved_em_and_clear_to_zero() {
     let source = source(
         r#"<text x="25" y="80" font-family="MetricFace" font-size="40" style="font-kerning:none;font-feature-settings:'liga' 0"><tspan dx="3 7">AV</tspan><tspan font-size="20" dx="5"> next</tspan></text>"#,

@@ -568,21 +568,38 @@ fn resolve_clusters_positions_horizontal(
 ) -> (f32, f32) {
     let mut x = process_anchor(chunk.anchor, clusters_length(clusters));
     let mut y = 0.0;
+    let count=chunk.text.chars().count();
+    let shifted=text.dx.iter().skip(offset).take(count).chain(text.dy.iter().skip(offset).take(count)).any(|v|*v!=0.);
+    let logical_shifts = (shifted && clusters.windows(2).any(|p| p[0].byte_idx.0 > p[1].byte_idx.0)).then(|| {
+        let mut shift = (0., 0.);
+        (0..count).map(|i| {
+            shift.0 += text.dx.get(offset+i).copied().unwrap_or(0.);
+            shift.1 += text.dy.get(offset+i).copied().unwrap_or(0.);
+            shift
+        }).collect::<Vec<_>>()
+    });
 
     for cluster in clusters {
         let cp = offset + cluster.byte_idx.code_point_at(&chunk.text);
         if let (Some(dx), Some(dy)) = (text.dx.get(cp), text.dy.get(cp)) {
-            if writing_mode == WritingMode::LeftToRight {
-                x += dx;
-                y += dy;
-            } else {
-                y -= dx;
-                x += dy;
+            if logical_shifts.is_none() {
+                if writing_mode == WritingMode::LeftToRight {
+                    x += dx;
+                    y += dy;
+                } else {
+                    y -= dx;
+                    x += dy;
+                }
             }
             cluster.has_relative_shift = !dx.approx_zero_ulps(4) || !dy.approx_zero_ulps(4);
         }
 
-        cluster.transform = cluster.transform.pre_translate(x / cluster.length_scale, y);
+        let (mut px, mut py) = (x,y);
+        if let Some(shifts) = &logical_shifts {
+            let (dx,dy) = shifts[cp-offset];
+            if writing_mode == WritingMode::LeftToRight {px+=dx;py+=dy;} else {px+=dy;py-=dx;}
+        }
+        cluster.transform = cluster.transform.pre_translate(px / cluster.length_scale, py);
 
         if let Some(angle) = text.rotate.get(cp).cloned() {
             if !angle.approx_zero_ulps(4) {
@@ -594,6 +611,9 @@ fn resolve_clusters_positions_horizontal(
         x += cluster.advance;
     }
 
+    if let Some(shift) = logical_shifts.and_then(|v|v.last().copied()) {
+        if writing_mode == WritingMode::LeftToRight {x+=shift.0;y+=shift.1;} else {x+=shift.1;y-=shift.0;}
+    }
     (x, y)
 }
 
