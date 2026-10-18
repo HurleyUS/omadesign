@@ -236,6 +236,14 @@ fn geometry_case(name: &str) {
     diagnostic(&s, name);
     for g in &now.glyphs {
         assert_ne!(g.id, 0, "{name}: missing fixture glyph");
+        if name == "scale-anchors" {
+            let [x, y] = [[25., 50.], [70., 80.], [110., 60.], [155., 90.]][g.index];
+            assert!(
+                (g.baseline.x - x).hypot(g.baseline.y - y) < 0.001,
+                "{name}: {:?}",
+                g.baseline
+            );
+        }
         let a = axes(g);
         assert!(
             (a[0] / g.px - 1.25).abs() < 0.002,

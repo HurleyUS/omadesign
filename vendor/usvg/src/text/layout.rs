@@ -843,8 +843,8 @@ fn collect_normals(
             kurbo::Point::new(px as f64, py as f64),
             kurbo::Point::new(x as f64, y as f64),
         );
-        let p1 = line.eval(0.33);
-        let p2 = line.eval(0.66);
+        let p1 = line.eval(1.0 / 3.0);
+        let p2 = line.eval(2.0 / 3.0);
         kurbo::CubicBez {
             p0: line.p0,
             p1,
