@@ -47,6 +47,8 @@ pub(crate) enum TypeCommand {
     Font(fonts::Replacement),
     /// Signed pixel change applied to each authored font size in the target.
     Size(f32),
+    /// Track the first paragraph of area type so it fills the frame width.
+    FitHeadline,
 }
 pub(crate) const SPECIAL_CHARACTERS: &[(&str, &str)] = &[
     ("Bullet •", "•"),
@@ -139,7 +141,10 @@ fn rewritten_caret(at: usize, edits: &[CharacterRewrite]) -> usize {
 /// Rewrite content while carrying word/sentence/quote context across styled intervals.
 /// Args: source run, original range and command. Returns only actual character replacements.
 fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<CharacterRewrite> {
-    if matches!(command, TypeCommand::Font(_) | TypeCommand::Size(_)) {
+    if matches!(
+        command,
+        TypeCommand::Font(_) | TypeCommand::Size(_) | TypeCommand::FitHeadline
+    ) {
         return vec![];
     }
     if let TypeCommand::Replace(replacement) = command {
@@ -242,7 +247,8 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
             TypeCommand::Insert(_)
             | TypeCommand::Replace(_)
             | TypeCommand::Font(_)
-            | TypeCommand::Size(_) => {
+            | TypeCommand::Size(_)
+            | TypeCommand::FitHeadline => {
                 unreachable!()
             }
         };
@@ -299,6 +305,106 @@ fn step_authored_size(run: &mut TypeRun, range: Range<usize>, delta: f32) -> Res
         run.layout = None;
     }
     Ok(changed)
+}
+
+/// Area type is a text frame that is not following a path.
+/// Args: text run. Returns whether Fit Headline can track it.
+fn area_text(run: &TypeRun) -> bool {
+    run.frame.is_some() && run.on_path.is_none()
+}
+
+/// Width of one paragraph measured as point type at a uniform tracking value.
+/// Args: source run, character end of that paragraph, and tracking in thousandths of an em.
+/// Returns the composed width. An empty paragraph has no width.
+fn headline_width(run: &TypeRun, end: usize, tracking: f32) -> Option<f32> {
+    if end == 0 || !tracking.is_finite() {
+        return None;
+    }
+    let mut head = run.clone();
+    head.content = run.content.chars().take(end).collect();
+    head.wrap_width = None;
+    head.frame = None;
+    head.on_path = None;
+    head.thread = None;
+    head.layout = None;
+    head.align = crate::geom::TextAlign::Start;
+    if let Some(paragraph) = head.paragraphs.first_mut() {
+        paragraph.align = crate::geom::TextAlign::Start;
+    }
+    head.set_character_style(0, end, |span| span.tracking = Some(tracking));
+    Some(
+        crate::text::compose(&head)
+            .first()
+            .map(|line| line.width)
+            .unwrap_or(0.),
+    )
+}
+
+/// Usable width of the first line already laid into the frame.
+/// Args: area-text run. Returns that span in pixels, or a readable error when the frame is not finite.
+fn headline_target(run: &TypeRun) -> Result<f32, String> {
+    let frame = run.frame.as_ref().ok_or("Select area type")?;
+    let inner = frame.size.x - frame.inset[1] - frame.inset[3];
+    if !frame.size.x.is_finite()
+        || !frame.size.y.is_finite()
+        || frame.inset.iter().any(|value| !value.is_finite())
+        || !inner.is_finite()
+    {
+        return Err("The type frame has no finite width".into());
+    }
+    let layout = crate::text_geometry::layout_frame(run, run, 0, &[], false);
+    let laid = layout
+        .export_lines
+        .first()
+        .and_then(|line| line.run.wrap_width)
+        .filter(|width| width.is_finite() && *width > 0.);
+    Ok(laid.unwrap_or(inner.max(0.)))
+}
+
+/// Track the first paragraph of area type until it fills the frame width.
+/// Args: text run. Returns whether stored character tracking changed.
+/// Point type, path type, an empty first line, and a zero-width frame stay unchanged.
+/// Tracking remains between -1000 and 10000 thousandths of an em, a hair under the frame so the line does not wrap.
+fn fit_authored_headline(run: &mut TypeRun) -> Result<bool, String> {
+    if !area_text(run) {
+        return Ok(false);
+    }
+    let end = run
+        .content
+        .chars()
+        .position(|c| c == '\n')
+        .unwrap_or(run.content.chars().count());
+    if end == 0 {
+        return Ok(false);
+    }
+    let target = f64::from(headline_target(run)?);
+    if target <= 0. {
+        return Ok(false);
+    }
+    let w0 = f64::from(headline_width(run, end, 0.).unwrap_or(0.));
+    let w1 = f64::from(headline_width(run, end, 100.).unwrap_or(0.));
+    let slope = (w1 - w0) / 100.;
+    if slope <= 1e-9 {
+        return Ok(false);
+    }
+    let tracking = (((target - w0) / slope) - 0.05).clamp(-1000., 10000.);
+    if !tracking.is_finite() {
+        return Err("Fit headline could not resolve a tracking value".into());
+    }
+    let tracking = tracking as f32;
+    let needs = (0..end).any(|index| {
+        run.spans
+            .iter()
+            .find(|span| span.start <= index && index < span.end)
+            .and_then(|span| span.tracking)
+            .is_none_or(|value| (value - tracking).abs() >= 0.001)
+    });
+    if !needs {
+        return Ok(false);
+    }
+    run.set_character_style(0, end, |span| span.tracking = Some(tracking));
+    run.layout = None;
+    Ok(true)
 }
 
 /// Keep a rewritten text object's existing rotation frame instead of moving its baseline.
@@ -517,9 +623,19 @@ impl Studio {
         {
             return Err("Quotation marks must be printable characters".into());
         }
-        let live = (target.scope == TextScope::Selection)
-            .then_some(target.edit.as_ref())
-            .flatten();
+        if matches!(command, TypeCommand::FitHeadline)
+            && !target.hits.iter().any(|&(layer, id)| {
+                self.doc
+                    .find_shape(layer, id)
+                    .is_some_and(|shape| matches!(&shape.geom, Geom::Text(run) if area_text(run)))
+            })
+        {
+            return Err("Select area type".into());
+        }
+        let live = (target.scope == TextScope::Selection
+            && !matches!(command, TypeCommand::FitHeadline))
+        .then_some(target.edit.as_ref())
+        .flatten();
         if let TypeCommand::Size(_) = &command
             && let Some(edit) = live
             && edit.caret == edit.anchor
@@ -533,6 +649,9 @@ impl Studio {
             let Geom::Text(source) = &shape.geom else {
                 return Err("The text destination changed".into());
             };
+            if matches!(command, TypeCommand::FitHeadline) && !area_text(source) {
+                continue;
+            }
             let mut run = source.clone();
             let count = run.content.chars().count();
             let range = live
@@ -543,6 +662,8 @@ impl Studio {
             }
             let changed = if let TypeCommand::Size(delta) = &command {
                 step_authored_size(&mut run, range.unwrap_or(0..count), *delta)?
+            } else if let TypeCommand::FitHeadline = &command {
+                fit_authored_headline(&mut run)?
             } else if let TypeCommand::Font(replacement) = &command {
                 crate::text::font_inventory::replace_at(
                     &mut run,

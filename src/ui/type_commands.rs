@@ -101,7 +101,7 @@ fn open(ctx: &egui::Context, studio: &Studio) {
     ctx.data_mut(|d| d.insert_temp(Id::new(ID), draft));
 }
 
-/// Add the real reference content and font-size commands to the existing Type menu.
+/// Add the real reference content, font-size, and fit-headline commands to the existing Type menu.
 /// Args: menu UI and editor. Returns no value; accepted commands share the app-owned route.
 pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
     let owner = Id::new(("type-content-menu", &studio.swap_id, &studio.selection));
@@ -125,6 +125,14 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
                 studio.type_selection_command(TypeCommand::Size(delta));
                 ui.close();
             }
+        }
+        if control(ui, owner.with("Fit headline"), "Fit headline", |ui| {
+            ui.button("Fit headline")
+        })
+        .clicked()
+        {
+            studio.type_selection_command(TypeCommand::FitHeadline);
+            ui.close();
         }
         for (name, entries) in [
             ("Insert special character", commands::SPECIAL_CHARACTERS),

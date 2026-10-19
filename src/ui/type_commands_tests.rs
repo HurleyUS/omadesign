@@ -331,3 +331,77 @@ fn craft_type_size_native_menu_stays_disabled_on_locked_text() {
     assert_eq!(s.history.len(), 0);
     assert_eq!(wire(&s), before);
 }
+
+fn area_editor() -> Studio {
+    let mut s = editor();
+    let hit = s.selection[0];
+    if let Geom::Text(run) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        run.content = "Headline\nBody copy".into();
+        run.px = 24.;
+        run.frame = Some(crate::text_geometry::TextFrame {
+            size: Pt::new(420., 160.),
+            inset: [0., 10., 0., 10.],
+            ..Default::default()
+        });
+        run.set_character_style(9, run.content.chars().count(), |span| {
+            span.tracking = Some(18.);
+        });
+        run.layout = None;
+    }
+    crate::text::fill_contours(&mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom);
+    s.mark();
+    s.history.clear();
+    s
+}
+
+#[test]
+fn craft_type_fit_headline_native_type_menu_fills_one_undo_and_reopens() {
+    let mut s = area_editor();
+    let before = wire(&s);
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Type");
+    seat.invoke(&mut s, "Fit headline");
+    let text = s.selected_type().unwrap();
+    let layout = crate::text_geometry::layout_frame(&text, &text, 0, &[], false);
+    let line = layout.export_lines.first().expect("headline");
+    assert_eq!(line.line.text, "Headline");
+    let avail = line.run.wrap_width.expect("span");
+    assert!(
+        (line.line.width - avail).abs() < 1.,
+        "{} of {avail}",
+        line.line.width
+    );
+    assert!(text.character_style(0).tracking.unwrap() > 100.);
+    assert_eq!(text.character_style(9).tracking, Some(18.));
+    assert_eq!(text.content, "Headline\nBody copy");
+    assert_eq!(s.history.len(), 1);
+    let fitted = wire(&s);
+    let doc = crate::project::decode(&fitted).unwrap();
+    assert_eq!(crate::project::encode(&doc).unwrap(), fitted);
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    assert_eq!(wire(&s), fitted);
+}
+
+#[test]
+fn craft_type_fit_headline_native_menu_refuses_point_type_and_locked_text() {
+    let mut s = editor();
+    let before = wire(&s);
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Type");
+    seat.invoke(&mut s, "Fit headline");
+    assert_eq!(s.status, "Select area type");
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+
+    let mut s = area_editor();
+    let hit = s.selection[0];
+    s.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    let before = wire(&s);
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Type");
+    assert!(keys::named(&seat.output, "Fit headline").1.is_disabled());
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+}

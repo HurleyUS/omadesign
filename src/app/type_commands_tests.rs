@@ -711,3 +711,192 @@ fn craft_type_size_steps_imported_svg_sizes_without_replacing_the_face() {
     s.redo();
     assert_eq!(wire(&s), after);
 }
+
+fn area(text: &str, size: Pt) -> (Studio, (usize, u64)) {
+    let (mut s, hit) = editor(text);
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.px = 24.;
+        r.tracking = 1.5;
+        r.frame = Some(crate::text_geometry::TextFrame {
+            size,
+            inset: [4., 12., 6., 8.],
+            ..Default::default()
+        });
+        r.manual_kern.insert(2, -4.);
+        let body = text
+            .chars()
+            .position(|c| c == '\n')
+            .map(|index| index + 1)
+            .unwrap_or(text.chars().count());
+        if body < text.chars().count() {
+            r.set_character_style(body, text.chars().count(), |span| {
+                span.tracking = Some(30.);
+            });
+        }
+        r.layout = None;
+    }
+    crate::text::fill_contours(&mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom);
+    s.mark();
+    s.history.clear();
+    (s, hit)
+}
+
+fn first_line(run: &TypeRun) -> (String, f32, f32) {
+    let layout = crate::text_geometry::layout_frame(run, run, 0, &[], false);
+    let line = layout.export_lines.first().expect("area line");
+    (
+        line.line.text.clone(),
+        line.line.width,
+        line.run.wrap_width.expect("frame span"),
+    )
+}
+
+#[test]
+fn craft_type_fit_headline_fills_the_first_line_and_keeps_the_body() {
+    let (mut s, hit) = area("Headline\nBody copy", Pt::new(420., 180.));
+    let mut point = Shape::new(
+        Geom::Text(TypeRun {
+            content: "point".into(),
+            origin: Pt::new(40., 200.),
+            px: 18.,
+            font: run(&s, hit).font.clone(),
+            tracking: 3.,
+            ..Default::default()
+        }),
+        Style::default(),
+    );
+    crate::text::fill_contours(&mut point.geom);
+    let point_hit = (0, point.id);
+    s.doc.layers[0].kind.shapes_mut().unwrap().push(point);
+    s.selection = vec![hit, point_hit];
+    s.mark();
+    s.history.clear();
+    let before = wire(&s);
+    assert_eq!(apply(&mut s, TypeCommand::FitHeadline), 1);
+    let fitted = run(&s, hit);
+    let (text, width, avail) = first_line(fitted);
+    assert_eq!(text, "Headline");
+    assert!((width - avail).abs() < 1., "first line {width} of {avail}");
+    assert!(fitted.character_style(0).tracking.unwrap() > 100.);
+    assert_eq!(
+        fitted.character_style(0).fill,
+        Some(Fill::Solid(Rgba::rgb(210, 30, 70)))
+    );
+    assert_eq!(fitted.character_style(9).tracking, Some(30.));
+    assert_eq!(fitted.tracking, 1.5);
+    assert_eq!(fitted.manual_kern.get(&2), Some(&-4.));
+    assert_eq!(fitted.content, "Headline\nBody copy");
+    assert!(run(&s, point_hit).frame.is_none());
+    assert_eq!(run(&s, point_hit).tracking, 3.);
+    assert_eq!(run(&s, point_hit).content, "point");
+    assert!(run(&s, point_hit).spans.is_empty());
+    assert_eq!(s.history.len(), 1);
+    reopen(&s);
+    let after = wire(&s);
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    assert_eq!(wire(&s), after);
+    assert_eq!(apply(&mut s, TypeCommand::FitHeadline), 0);
+    assert_eq!(s.history.len(), 1);
+    assert_eq!(wire(&s), after);
+    s.undo();
+    s.begin_type_edit(hit, Pt::new(50., 70.));
+    assert!(s.type_edit.is_some());
+    assert_eq!(apply(&mut s, TypeCommand::FitHeadline), 1);
+    assert!(s.type_edit.is_none());
+    assert_eq!(s.history.len(), 1);
+    let (text, width, avail) = first_line(run(&s, hit));
+    assert_eq!(text, "Headline");
+    assert!((width - avail).abs() < 1., "{width} of {avail}");
+}
+
+#[test]
+fn craft_type_fit_headline_tightens_a_line_that_is_already_too_wide() {
+    let (mut s, hit) = area("HEADLINE", Pt::new(140., 90.));
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.px = 48.;
+        r.layout = None;
+    }
+    s.history.clear();
+    let before = wire(&s);
+    let (text, wide, avail) = first_line(run(&s, hit));
+    assert_eq!(text, "HEADLINE");
+    assert!(wide > avail, "{wide} of {avail}");
+    assert_eq!(apply(&mut s, TypeCommand::FitHeadline), 1);
+    let fitted = run(&s, hit);
+    let tracking = fitted.character_style(0).tracking.unwrap();
+    assert!(tracking < 0., "{tracking}");
+    assert!(tracking >= -1000.);
+    let (text, width, avail) = first_line(fitted);
+    assert_eq!(text, "HEADLINE");
+    assert!((width - avail).abs() < 1., "{width} of {avail}");
+    assert_eq!(s.history.len(), 1);
+    reopen(&s);
+    s.undo();
+    assert_eq!(wire(&s), before);
+}
+
+#[test]
+fn craft_type_fit_headline_refuses_point_path_empty_and_locked_text() {
+    let (mut point, _hit) = editor("point");
+    let before = wire(&point);
+    let target = point.capture_type_command(TextScope::Selection).unwrap();
+    assert_eq!(
+        point
+            .apply_type_command(&target, TypeCommand::FitHeadline)
+            .unwrap_err(),
+        "Select area type"
+    );
+    assert_eq!(point.history.len(), 0);
+    assert_eq!(wire(&point), before);
+
+    let (mut path, hit) = area("On path\nrest", Pt::new(300., 120.));
+    if let Geom::Text(r) = &mut path.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.on_path = Some(crate::text_geometry::TextOnPath::default());
+    }
+    path.mark();
+    path.history.clear();
+    let before = wire(&path);
+    let target = path.capture_type_command(TextScope::Selection).unwrap();
+    assert_eq!(
+        path.apply_type_command(&target, TypeCommand::FitHeadline)
+            .unwrap_err(),
+        "Select area type"
+    );
+    assert_eq!(wire(&path), before);
+    assert_eq!(path.history.len(), 0);
+
+    let (mut empty, hit) = area("\nBody only", Pt::new(300., 120.));
+    let before = wire(&empty);
+    assert_eq!(apply(&mut empty, TypeCommand::FitHeadline), 0);
+    assert_eq!(empty.history.len(), 0);
+    assert_eq!(wire(&empty), before);
+    assert_eq!(run(&empty, hit).content, "\nBody only");
+
+    let (mut broken, hit) = area("Headline", Pt::new(300., 120.));
+    if let Geom::Text(r) = &mut broken.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.frame.as_mut().unwrap().size.x = f32::NAN;
+    }
+    broken.history.clear();
+    let spans = run(&broken, hit).spans.clone();
+    let target = broken.capture_type_command(TextScope::Selection).unwrap();
+    assert_eq!(
+        broken
+            .apply_type_command(&target, TypeCommand::FitHeadline)
+            .unwrap_err(),
+        "The type frame has no finite width"
+    );
+    assert_eq!(broken.history.len(), 0);
+    assert_eq!(run(&broken, hit).spans, spans);
+    assert_eq!(run(&broken, hit).content, "Headline");
+
+    let (mut locked, _) = area("Headline\nBody", Pt::new(300., 120.));
+    let id = locked.selection[0];
+    locked.doc.find_shape_mut(id.0, id.1).unwrap().locked = true;
+    let before = wire(&locked);
+    locked.type_selection_command(TypeCommand::FitHeadline);
+    assert!(locked.status.contains("Unlock"));
+    assert_eq!(locked.history.len(), 0);
+    assert_eq!(wire(&locked), before);
+}
