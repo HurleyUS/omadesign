@@ -98,6 +98,7 @@ pub enum Action {
     Remove,
     Apply,
     Edit(bool),
+    Filter(crate::app::mask_filter::MaskFilter),
 }
 
 impl Action {
@@ -110,6 +111,11 @@ impl Action {
             Self::Remove => studio.remove_layer_mask(index),
             Self::Apply => studio.apply_layer_mask(index),
             Self::Edit(enabled) => studio.set_mask_edit(index, enabled),
+            Self::Filter(filter) => {
+                if let Err(error) = studio.filter_layer_mask(index, &filter.filter()) {
+                    studio.status = error;
+                }
+            }
         }
     }
 }
@@ -160,6 +166,13 @@ pub fn menu(ui: &mut Ui, studio: &Studio, index: usize) -> Option<Action> {
         ui.separator();
         item(ui, editable, "Paint mask", Action::Edit(true));
         item(ui, editable, "Invert mask", Action::Invert);
+        ui.add_enabled_ui(editable, |ui| {
+            ui.menu_button("Filter mask", |ui| {
+                for filter in crate::app::mask_filter::MaskFilter::ALL {
+                    item(ui, true, filter.label(), Action::Filter(filter));
+                }
+            })
+        });
         item(
             ui,
             editable && layer.kind.pixels().is_some(),

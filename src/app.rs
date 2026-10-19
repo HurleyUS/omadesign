@@ -48,6 +48,7 @@ pub(crate) mod channel_adjustment;
 pub(crate) mod quick_mask;
 mod active_selection;
 pub(crate) mod mask_affine;
+pub(crate) mod mask_filter;
 mod restart;
 pub(crate) mod selection;
 mod alignment;
