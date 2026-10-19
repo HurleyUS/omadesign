@@ -10,6 +10,11 @@ mod type_menu_tests;
 mod pixel_layers;
 #[path = "animation_menu.rs"]
 mod animation_menu;
+#[path = "layout_menu.rs"]
+mod layout_menu;
+#[cfg(test)]
+#[path = "layout_menu_tests.rs"]
+mod layout_menu_tests;
 #[cfg(test)]
 #[path = "animation_menu_tests.rs"]
 mod animation_menu_tests;
@@ -160,7 +165,10 @@ fn main_menus(ui: &mut Ui, studio: &mut Studio) {
         if type_menu.response.clicked() { type_menu.response.request_focus(); }
         ui.menu_button("Select", |ui| super::selection::menu(ui, studio));
         if studio.persona==Persona::Layout {
-            pane_menu(ui,studio,"Layout",&["layout","hierarchy","components","variables","prototype"]);
+            ui.menu_button("Layout", |ui| {
+                layout_menu::menu(ui, studio);
+                pane_items(ui, studio, &["layout","hierarchy","components","variables","prototype"]);
+            });
         } else if studio.persona==Persona::Motion {
             ui.menu_button("Animation", |ui| {
                 animation_menu::menu(ui, studio);
