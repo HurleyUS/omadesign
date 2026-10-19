@@ -55,6 +55,10 @@ pub(crate) enum TypeCommand {
     Face(TypeFace),
     /// Set vertical writing when true, or horizontal writing when false.
     Orientation(bool),
+    /// Show or hide hidden-character marks. This is a view toggle, not a document edit.
+    HiddenCharacters,
+    /// Insert one symbol as a single character. None uses the selected symbol, or the first.
+    Inline(Option<u64>),
 }
 /// A Type menu font or style choice. The face has to be one the family actually ships.
 #[derive(Clone)]
@@ -340,6 +344,8 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
             | TypeCommand::Placeholder
             | TypeCommand::Face(_)
             | TypeCommand::Orientation(_)
+            | TypeCommand::HiddenCharacters
+            | TypeCommand::Inline(_)
     ) {
         return vec![];
     }
@@ -447,7 +453,9 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
             | TypeCommand::FitHeadline
             | TypeCommand::Placeholder
             | TypeCommand::Face(_)
-            | TypeCommand::Orientation(_) => {
+            | TypeCommand::Orientation(_)
+            | TypeCommand::HiddenCharacters
+            | TypeCommand::Inline(_) => {
                 unreachable!()
             }
         };
@@ -897,6 +905,15 @@ impl Studio {
         target: &TypeCommandTarget,
         command: TypeCommand,
     ) -> Result<usize, String> {
+        if matches!(command, TypeCommand::HiddenCharacters) {
+            self.hidden_characters = !self.hidden_characters;
+            self.status = if self.hidden_characters {
+                "Hidden characters shown".into()
+            } else {
+                "Hidden characters hidden".into()
+            };
+            return Ok(0);
+        }
         if !self.type_command_current(target) {
             return Err("The text destination changed. Reopen this Type command".into());
         }
@@ -932,6 +949,11 @@ impl Studio {
             TypeCommand::Face(TypeFace::Bold | TypeFace::Italic)
         )
         .then(|| self.font_catalog());
+        let inline_symbol = if let TypeCommand::Inline(id) = &command {
+            Some(self.inline_symbol(*id)?)
+        } else {
+            None
+        };
         let live = (target.scope == TextScope::Selection
             && !matches!(
                 command,
@@ -939,6 +961,7 @@ impl Studio {
                     | TypeCommand::Placeholder
                     | TypeCommand::Face(_)
                     | TypeCommand::Orientation(_)
+                    | TypeCommand::Inline(_)
             ))
         .then_some(target.edit.as_ref())
         .flatten();
@@ -951,7 +974,7 @@ impl Studio {
         let mut plans = Vec::new();
         let mut selection = None;
         for &(layer, id) in &target.hits {
-            let shape = self.doc.find_shape(layer, id).unwrap();
+            let shape = self.doc.find_shape(layer, id).unwrap().clone();
             let Geom::Text(source) = &shape.geom else {
                 return Err("The text destination changed".into());
             };
@@ -987,6 +1010,26 @@ impl Studio {
                     run.layout = None;
                     true
                 }
+            } else if let TypeCommand::Inline(_) = &command {
+                let symbol = inline_symbol.unwrap();
+                let at = target
+                    .edit
+                    .as_ref()
+                    .filter(|edit| edit.hit == (layer, id))
+                    .map(|edit| edit.caret.min(edit.anchor)..edit.caret.max(edit.anchor))
+                    .unwrap_or(count..count);
+                let start = at.start.min(count);
+                let end = at.end.min(count).max(start);
+                run.replace_text(start, end, "\u{FFFC}", None);
+                run.inlines.push(crate::geom::InlineSymbol {
+                    at: start,
+                    symbol,
+                    scale: 1.,
+                    shift: 0.,
+                });
+                run.layout = None;
+                crate::text::paint_run(&self.doc, &mut run);
+                true
             } else if let TypeCommand::Font(replacement) = &command {
                 crate::text::font_inventory::replace_at(
                     &mut run,
@@ -1026,7 +1069,7 @@ impl Studio {
                 }
             };
             if changed {
-                plans.push(((layer, id), placed_text(shape, run)));
+                plans.push(((layer, id), placed_text(&shape, run)));
             }
         }
         let changed = plans.len();
@@ -1106,12 +1149,49 @@ impl Studio {
     /// Invoke an immediate selection command using the same captured-target path as the dialog.
     /// Args: command. Returns no value; any refusal is displayed in the ordinary status line.
     pub(crate) fn type_selection_command(&mut self, command: TypeCommand) {
+        if matches!(command, TypeCommand::HiddenCharacters) {
+            self.hidden_characters = !self.hidden_characters;
+            self.status = if self.hidden_characters {
+                "Hidden characters shown".into()
+            } else {
+                "Hidden characters hidden".into()
+            };
+            return;
+        }
         let result = self
             .capture_type_command(TextScope::Selection)
             .and_then(|target| self.apply_type_command(&target, command));
         if let Err(error) = result {
             self.status = error;
         }
+    }
+
+    /// Choose the symbol an inline character will follow.
+    /// Args: requested definition, or none for the selected symbol or the first. Returns that definition, or why the document cannot supply one.
+    fn inline_symbol(&self, id: Option<u64>) -> Result<u64, String> {
+        let definitions = crate::layout_components::definitions(&self.doc);
+        if let Some(id) = id {
+            return definitions
+                .iter()
+                .any(|item| item.1 == id)
+                .then_some(id)
+                .ok_or_else(|| "That symbol is not in the document".into());
+        }
+        if let Some(id) = self.selection.iter().find_map(|&(layer, id)| {
+            self.doc.find_shape(layer, id).and_then(|shape| {
+                matches!(
+                    shape.layout.component,
+                    Some(crate::layout_components::ComponentBinding::Main { .. })
+                )
+                .then_some(id)
+            })
+        }) {
+            return Ok(id);
+        }
+        definitions
+            .first()
+            .map(|item| item.1)
+            .ok_or_else(|| "The document has no symbols".into())
     }
 }
 

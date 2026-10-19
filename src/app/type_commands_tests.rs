@@ -1652,3 +1652,244 @@ fn craft_type_orientation_refuses_locked_text_and_keeps_path_text_on_the_path() 
     near(restored.min.x, before_ink.min.x, 0.05, "undo path");
     near(restored.max.y, before_ink.max.y, 0.05, "undo path");
 }
+
+fn colored(doc: &crate::document::Document, red: bool) -> usize {
+    let pm = crate::compositor::render_export(doc, 1).unwrap();
+    let w = pm.width();
+    let data = pm.data();
+    let mut count = 0usize;
+    let right = w.min(300);
+    for y in 0..pm.height() {
+        for x in 0..right {
+            let i = ((y * w + x) * 4) as usize;
+            let (r, g, b, a) = (data[i], data[i + 1], data[i + 2], data[i + 3]);
+            let hit = if red {
+                a > 180 && r > 160 && g < 80 && b < 80
+            } else {
+                a > 180 && g > 140 && r < 80 && b < 90
+            };
+            if hit {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn symbol_story() -> (Studio, (usize, u64), u64) {
+    let (mut s, hit) = editor("Tap");
+    if let Geom::Text(run) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        run.font = SANS.into();
+        run.px = 20.;
+        run.origin = Pt::new(24., 90.);
+        run.spans.clear();
+        run.layout = None;
+    }
+    s.doc.find_shape_mut(hit.0, hit.1).unwrap().style.fill = Fill::Solid(Rgba::rgb(20, 40, 200));
+    crate::text::fill_contours(&mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom);
+    let mark = Shape::new(
+        Geom::Rect {
+            origin: Pt::new(320., 16.),
+            size: Pt::new(40., 20.),
+            radius: 0.,
+        },
+        Style {
+            fill: Fill::Solid(Rgba::rgb(220, 20, 30)),
+            stroke: None,
+        },
+    );
+    let mark_id = mark.id;
+    s.doc.layers[0].kind.shapes_mut().unwrap().push(mark);
+    s.selection = vec![(0, mark_id)];
+    s.active_layer = Some(0);
+    assert!(s.create_vector_symbol("Dot"));
+    let main = crate::layout_components::definitions(&s.doc)
+        .into_iter()
+        .find(|item| item.2 == "Dot")
+        .unwrap()
+        .1;
+    s.selection = vec![hit];
+    s.mark();
+    s.history.clear();
+    (s, hit, main)
+}
+
+#[test]
+fn craft_type_hidden_inline_marks_spaces_paragraphs_and_skips_a_path() {
+    let (mut s, hit) = editor("a b\nc");
+    s.selection.clear();
+    let before = wire(&s);
+    s.type_selection_command(TypeCommand::HiddenCharacters);
+    assert!(s.hidden_characters);
+    assert_eq!(s.status, "Hidden characters shown");
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+    s.type_selection_command(TypeCommand::HiddenCharacters);
+    assert!(!s.hidden_characters);
+    assert_eq!(s.history.len(), 0);
+    let story = run(&s, hit);
+    let marks = crate::text::hidden_marks(story);
+    let lines = crate::text::compose(story);
+    let space = lines[0].glyphs.iter().find(|glyph| glyph.is_space).unwrap();
+    let dot = marks
+        .iter()
+        .find_map(|mark| match mark {
+            crate::text::HiddenMark::Dot(at) => Some(*at),
+            _ => None,
+        })
+        .unwrap();
+    near(
+        dot.x,
+        story.origin.x + space.x + space.advance * 0.5,
+        0.5,
+        "space dot x",
+    );
+    near(dot.y, story.origin.y + space.y - 3., 0.5, "space dot y");
+    assert!(dot.y < story.origin.y + lines[0].baseline);
+    let paragraph = marks
+        .iter()
+        .find_map(|mark| match mark {
+            crate::text::HiddenMark::Paragraph(at) => Some(*at),
+            _ => None,
+        })
+        .unwrap();
+    let x1 = lines[0]
+        .glyphs
+        .iter()
+        .map(|glyph| glyph.x + glyph.advance)
+        .fold(lines[0].offset, f32::max);
+    near(paragraph.x, story.origin.x + x1 + 1., 0.5, "paragraph x");
+    near(
+        paragraph.y,
+        story.origin.y + lines[0].baseline,
+        0.5,
+        "paragraph y",
+    );
+    let end = marks
+        .iter()
+        .find_map(|mark| match mark {
+            crate::text::HiddenMark::Story(at) => Some(*at),
+            _ => None,
+        })
+        .unwrap();
+    near(end.y, story.origin.y + lines[1].baseline, 0.5, "story y");
+    assert!(end.x > paragraph.x - 80.);
+    let mut path = story.clone();
+    path.on_path = Some(crate::text_geometry::TextOnPath::default());
+    assert!(crate::text::hidden_marks(&path).is_empty());
+}
+
+#[test]
+fn craft_type_hidden_inline_inserts_symbol_paint_follows_and_undoes() {
+    let (mut s, hit, main) = symbol_story();
+    assert_eq!(colored(&s.doc, true), 0);
+    let before = wire(&s);
+    let before_width = crate::text::compose(run(&s, hit))[0].width;
+    assert_eq!(apply(&mut s, TypeCommand::Inline(None)), 1);
+    let story = run(&s, hit);
+    assert_eq!(story.content, "Tap\u{FFFC}");
+    assert_eq!(story.inlines.len(), 1);
+    assert_eq!(story.inlines[0].symbol, main);
+    assert_eq!(story.inlines[0].scale, 1.);
+    assert!(story.inlines[0].at == 3);
+    let lines = crate::text::compose(story);
+    let inline = lines[0]
+        .glyphs
+        .iter()
+        .find(|glyph| glyph.cluster == 3)
+        .unwrap();
+    assert!(inline.advance > 30., "{}", inline.advance);
+    assert!(lines[0].width > before_width + 20.);
+    assert!(crate::text::glyph_contours(story, inline).is_empty());
+    assert!(colored(&s.doc, true) > 20, "symbol ink");
+    assert_eq!(s.history.len(), 1);
+    let saved = wire(&s);
+    assert!(saved.contains(&format!("\"symbol\":{main}")));
+    let opened = crate::project::decode(&saved).unwrap();
+    let Geom::Text(loaded) = &opened.find_shape(hit.0, hit.1).unwrap().geom else {
+        panic!("lost text");
+    };
+    assert_eq!(loaded.inlines[0].symbol, main);
+    assert_eq!(loaded.inlines[0].scale, 1.);
+    assert!(loaded.inline_paint.is_empty());
+    let mut restored = Studio::new();
+    restored.show_welcome = false;
+    restored.doc = opened;
+    restored.mark();
+    assert!(colored(&restored.doc, true) > 20, "reopened symbol ink");
+    s.undo();
+    assert_eq!(wire(&s), before);
+    assert_eq!(colored(&s.doc, true), 0);
+    s.redo();
+    assert_eq!(wire(&s), saved);
+    assert!(colored(&s.doc, true) > 20);
+    let child = s.doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .find(|shape| shape.layout.parent == Some(main) && !shape.style.fill.is_none())
+        .unwrap();
+    let (child_id, style) = (child.id, child.style.clone());
+    let mut green = style.clone();
+    green.fill = Fill::Solid(Rgba::rgb(20, 180, 40));
+    let history = s.history.len();
+    s.commit(crate::document::Cmd::SetStyle {
+        layer: 0,
+        id: child_id,
+        before: style,
+        after: green,
+    });
+    assert_eq!(s.history.len(), history + 1);
+    assert_eq!(run(&s, hit).content, "Tap\u{FFFC}");
+    assert_eq!(colored(&s.doc, true), 0);
+    assert!(colored(&s.doc, false) > 20, "followed symbol ink");
+    if let Geom::Text(run) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        assert_eq!(run.inlines[0].at, 3);
+        run.replace_text(0, 1, "Z", None);
+        assert_eq!(run.content, "Zap\u{FFFC}");
+        assert_eq!(run.inlines[0].at, 3);
+        run.replace_text(2, 4, "", None);
+        assert_eq!(run.content, "Za");
+        assert!(run.inlines.is_empty());
+    }
+    s.mark();
+    assert_eq!(colored(&s.doc, false), 0);
+}
+
+#[test]
+fn craft_type_hidden_inline_refuses_locked_text_and_a_missing_symbol() {
+    let (mut locked, hit, _) = symbol_story();
+    locked.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    let before = wire(&locked);
+    locked.type_selection_command(TypeCommand::Inline(None));
+    assert!(locked.status.contains("Unlock"), "{}", locked.status);
+    assert_eq!(locked.history.len(), 0);
+    assert_eq!(wire(&locked), before);
+    locked.type_selection_command(TypeCommand::HiddenCharacters);
+    assert!(locked.hidden_characters);
+    assert_eq!(locked.history.len(), 0);
+    assert_eq!(wire(&locked), before);
+
+    let (mut plain, hit) = editor("Tap");
+    let before = wire(&plain);
+    let error = plain
+        .capture_type_command(TextScope::Selection)
+        .and_then(|target| plain.apply_type_command(&target, TypeCommand::Inline(None)))
+        .unwrap_err();
+    assert!(error.contains("no symbols"), "{error}");
+    assert_eq!(plain.history.len(), 0);
+    assert_eq!(wire(&plain), before);
+    assert_eq!(run(&plain, hit).content, "Tap");
+
+    let (mut named, hit, _) = symbol_story();
+    let before = wire(&named);
+    let error = named
+        .capture_type_command(TextScope::Selection)
+        .and_then(|target| named.apply_type_command(&target, TypeCommand::Inline(Some(u64::MAX))))
+        .unwrap_err();
+    assert!(error.contains("not in the document"), "{error}");
+    assert_eq!(named.history.len(), 0);
+    assert_eq!(wire(&named), before);
+    assert_eq!(run(&named, hit).content, "Tap");
+}

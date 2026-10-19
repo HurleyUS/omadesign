@@ -435,7 +435,8 @@ fn single_unit(run: &TypeRun, glyphs: &[LayoutGlyph], index: usize, upright: boo
     let metrics = character_metrics(run, glyph.cluster);
     let em = metrics.px.unwrap_or(run.px).max(1.);
     let tracking = metrics.tracking.unwrap_or(0.) * em / 1000.;
-    let height = if upright {
+    let object = run.inlines.iter().any(|item| item.at == glyph.cluster);
+    let height = if upright || object {
         (em + tracking).max(em * 0.05)
     } else {
         glyph.advance.max(em * 0.05)

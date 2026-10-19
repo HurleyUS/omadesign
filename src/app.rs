@@ -422,6 +422,8 @@ pub struct Studio {
     pub text_character: crate::geom::CharSpan,
     type_paste_jobs: Vec<type_clipboard::TypePasteJob>,
     pub type_edit: Option<TypeEdit>,
+    /// View marks for spaces, paragraph breaks and the end of each story. Not a document edit.
+    pub hidden_characters: bool,
     pub polygon_sides: u32,
     pub star_points: u32,
     pub star_inner: f32,
@@ -685,6 +687,7 @@ impl Studio {
             text_character: Default::default(),
             type_paste_jobs: Vec::new(),
             type_edit: None,
+            hidden_characters: false,
             polygon_sides: 6,
             star_points: 5,
             star_inner: 0.4,
@@ -982,6 +985,7 @@ impl Studio {
         if self.actions.depth == 0 { self.actions.pause("This edit cannot be recorded yet. Save or discard the recorded steps"); }
         crate::compositor::reset_effect_admission();
         self.interaction_render.clear();
+        crate::text::refresh_document(&mut self.doc);
         crate::text_geometry::reflow(&mut self.doc);
         self.mark_interaction();
     }

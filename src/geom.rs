@@ -650,6 +650,37 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// One symbol flowing as a single character in a story.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InlineSymbol {
+    /// Character index of the object-replacement character.
+    pub at: usize,
+    /// Component definition this character follows.
+    pub symbol: u64,
+    /// Art height divided by the font size. Stays inside (0, 100].
+    pub scale: f32,
+    /// Raise in pixels. Positive moves the art up.
+    #[serde(default)]
+    pub shift: f32,
+}
+
+/// Resolved symbol ink for one inline character. Rebuilt from the symbol. Not saved.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlinePaint {
+    /// Character index this ink belongs to.
+    pub at: usize,
+    /// Horizontal advance in pixels.
+    pub advance: f32,
+    /// Art height in pixels.
+    pub height: f32,
+    /// Raise in pixels. Positive moves the art up.
+    pub shift: f32,
+    /// Font size used to center the art on the cap height.
+    pub px: f32,
+    /// Filled contours in the symbol's unit box, from (0, 0) to (1, 1).
+    pub pieces: Vec<(crate::document::Fill, Vec<Vec<Pt>>)>,
+}
+
 /// Live type: the string stays editable. Contours are a shaped cache.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TypeRun {
@@ -672,6 +703,12 @@ pub struct TypeRun {
     /// Columns run down. The next column starts to the left. Absent on old documents, which stay horizontal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub vertical: bool,
+    /// A symbol standing in for one object-replacement character. Old documents have none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inlines: Vec<InlineSymbol>,
+    /// Symbol ink rebuilt when the document is marked. Not saved.
+    #[serde(skip)]
+    pub inline_paint: Vec<InlinePaint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraphs: Vec<ParagraphStyle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -718,6 +755,8 @@ impl Default for TypeRun {
             wrap_width: None,
             align: TextAlign::Start,
             vertical: false,
+            inlines: vec![],
+            inline_paint: vec![],
             paragraphs: vec![],
             spans: vec![],
             features: vec![],

@@ -68,8 +68,14 @@ pub fn compose_plain(run: &TypeRun) -> Arc<Vec<LayoutLine>> {
 pub fn compose(run: &TypeRun) -> Arc<Vec<LayoutLine>> {
     type Cache = HashMap<(String, u64), Arc<Vec<LayoutLine>>>;
     static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    let mut encoded = serde_json::to_string(run).unwrap_or_default();
+    if !run.inlines.is_empty() {
+        for paint in &run.inline_paint {
+            encoded.push_str(&format!("\n{}:{:.4}", paint.at, paint.advance));
+        }
+    }
     let key = (
-        serde_json::to_string(run).unwrap_or_default(),
+        encoded,
         FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed),
     );
     let cache = CACHE.get_or_init(Default::default);
@@ -455,7 +461,7 @@ fn shape_line(
     glyphs
 }
 
-fn shape_line_uniform(
+fn shape_font_line(
     run: &TypeRun,
     face: Option<&rustybuzz::Face<'_>>,
     text: &str,
@@ -519,9 +525,110 @@ fn shape_line_uniform(
         pen+=advance;previous_cluster=Some(cluster);
         previous_untracked_advance = untracked_advance;
     }
-    paragraph_adjustments(run,start,&mut result);
     result
 }
+
+/// Shape one line, giving each inline symbol its own advance instead of a font glyph.
+/// Args: run, face, line text, character index of the line and whether it ends in a hyphen. Returns positioned glyphs before paragraph spacing.
+fn shape_line_uniform(
+    run: &TypeRun,
+    face: Option<&rustybuzz::Face<'_>>,
+    text: &str,
+    start: usize,
+    hyphen: bool,
+) -> Vec<LayoutGlyph> {
+    let mut result = if text.chars().any(|c| c == '\u{FFFC}') {
+        shape_inline_line(run, face, text, start, hyphen)
+    } else {
+        shape_font_line(run, face, text, start, hyphen)
+    };
+    paragraph_adjustments(run, start, &mut result);
+    result
+}
+
+fn shape_inline_line(
+    run: &TypeRun,
+    face: Option<&rustybuzz::Face<'_>>,
+    text: &str,
+    start: usize,
+    hyphen: bool,
+) -> Vec<LayoutGlyph> {
+    let mut glyphs = Vec::new();
+    let mut pen = 0.;
+    let mut buf = String::new();
+    let mut buf_at = 0usize;
+    for (index, ch) in text.chars().enumerate() {
+        if ch != '\u{FFFC}' {
+            if buf.is_empty() {
+                buf_at = index;
+            }
+            buf.push(ch);
+            continue;
+        }
+        pen = flush_inline_text(run, face, &buf, start + buf_at, false, &mut glyphs, pen);
+        buf.clear();
+        let advance = inline_advance(run, start + index);
+        glyphs.push(LayoutGlyph {
+            id: 0,
+            cluster: start + index,
+            x: pen,
+            y: 0.,
+            advance,
+            is_space: false,
+            hscale: 1.,
+            vscale: 1.,
+            turn: 0,
+        });
+        pen += advance;
+    }
+    flush_inline_text(run, face, &buf, start + buf_at, hyphen, &mut glyphs, pen);
+    glyphs
+}
+
+fn flush_inline_text(
+    run: &TypeRun,
+    face: Option<&rustybuzz::Face<'_>>,
+    text: &str,
+    start: usize,
+    hyphen: bool,
+    glyphs: &mut Vec<LayoutGlyph>,
+    pen: f32,
+) -> f32 {
+    if text.is_empty() {
+        return pen;
+    }
+    let part = shape_font_line(run, face, text, start, hyphen);
+    let width = part.last().map_or(0., |glyph| glyph.x + glyph.advance);
+    for mut glyph in part {
+        glyph.x += pen;
+        glyphs.push(glyph);
+    }
+    pen + width
+}
+
+/// Width of one inline symbol. A resolved symbol uses its art. Anything else uses the font size.
+/// Args: story and character index. Returns the advance in pixels.
+fn inline_advance(run: &TypeRun, cluster: usize) -> f32 {
+    if let Some(paint) = run.inline_paint.iter().find(|paint| paint.at == cluster) {
+        if paint.advance.is_finite() && paint.advance >= 0. {
+            return paint.advance;
+        }
+    }
+    let scale = run
+        .inlines
+        .iter()
+        .find(|item| item.at == cluster)
+        .map(|item| item.scale)
+        .unwrap_or(1.);
+    let px = run.character_style(cluster).px.unwrap_or(run.px).max(1.);
+    let scale = if scale.is_finite() && scale > 0. && scale <= 100. {
+        scale
+    } else {
+        1.
+    };
+    px * scale
+}
+
 fn paragraph_adjustments(run:&TypeRun,start:usize,result:&mut [LayoutGlyph]) {
     let style = paragraph_style(run, start);
     if matches!(style.align,TextAlign::Justify{..}) && run.wrap_width.is_some() && style.break_mode!=BreakMode::KeepAll && let Some(last)=result.last_mut() {last.advance-=super::character_metrics(run,last.cluster).tracking.unwrap()*run.px/1000.;}
@@ -618,6 +725,9 @@ pub(super) fn glyph_outline(run: &TypeRun, glyph: &LayoutGlyph) -> Option<(ab_gl
 /// Trace a glyph in the run's local type space.
 /// Args: text run and positioned glyph. Returns contours before the optional run matrix.
 pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
+    if run.inlines.iter().any(|item| item.at == glyph.cluster) {
+        return Vec::new();
+    }
     let Some((outline, scale)) = glyph_outline(run, glyph) else {
         return Vec::new();
     };

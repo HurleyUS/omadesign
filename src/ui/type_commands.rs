@@ -122,7 +122,7 @@ fn selected_orientation(studio: &Studio) -> Option<bool> {
     orientation
 }
 
-/// Add the real reference content, font, style, font-size, fit-headline, placeholder, and orientation commands to the existing Type menu.
+/// Add the real reference content, font, style, font-size, fit-headline, placeholder, inline-symbol, hidden-character, and orientation commands to the existing Type menu.
 /// Args: menu UI and editor. Returns no value; accepted commands share the app-owned route.
 pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
     let owner = Id::new(("type-content-menu", &studio.swap_id, &studio.selection));
@@ -205,6 +205,28 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
             studio.type_selection_command(TypeCommand::Placeholder);
             ui.close();
         }
+        if control(
+            ui,
+            owner.with("Insert inline symbol"),
+            "Insert inline symbol",
+            |ui| ui.button("Insert inline symbol"),
+        )
+        .clicked()
+        {
+            studio.type_selection_command(TypeCommand::Inline(None));
+            ui.close();
+        }
+    });
+    let hidden = if studio.hidden_characters {
+        "Hide hidden characters"
+    } else {
+        "Show hidden characters"
+    };
+    if control(ui, owner.with(hidden), hidden, |ui| ui.button(hidden)).clicked() {
+        studio.type_selection_command(TypeCommand::HiddenCharacters);
+        ui.close();
+    }
+    ui.add_enabled_ui(selected, |ui| {
         let orientation = selected_orientation(studio);
         ui.menu_button("Type orientation", |ui| {
             for (name, vertical) in [("Horizontal", false), ("Vertical", true)] {

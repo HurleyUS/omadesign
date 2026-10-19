@@ -621,3 +621,100 @@ fn craft_type_orientation_native_menu_stays_disabled_on_locked_text() {
     assert_eq!(s.history.len(), 0);
     assert_eq!(wire(&s), before);
 }
+
+fn hidden_dot(shape: &egui::Shape) -> bool {
+    match shape {
+        egui::Shape::Circle(circle) => {
+            circle.fill == egui::Color32::from_rgb(79, 157, 255)
+                && (circle.radius - 1.2).abs() < 0.01
+        }
+        egui::Shape::Vec(shapes) => shapes.iter().any(hidden_dot),
+        _ => false,
+    }
+}
+
+fn paints_hidden_dot(shapes: &[egui::epaint::ClippedShape]) -> bool {
+    shapes.iter().any(|clipped| hidden_dot(&clipped.shape))
+}
+
+#[test]
+fn craft_type_hidden_inline_native_menu_paints_marks_and_inserts_a_symbol() {
+    let mut s = editor();
+    let text = s.selection[0];
+    let before = wire(&s);
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Type");
+    seat.invoke(&mut s, "Show hidden characters");
+    assert!(s.hidden_characters);
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+    seat.click(&mut s, "Type");
+    assert!(
+        keys::named(&seat.output, "Hide hidden characters")
+            .1
+            .bounds()
+            .is_some()
+    );
+    assert!(paints_hidden_dot(&seat.output.shapes));
+    seat.invoke(&mut s, "Hide hidden characters");
+    assert!(!s.hidden_characters);
+    seat.frame(&mut s, vec![]);
+    assert!(!paints_hidden_dot(&seat.output.shapes));
+    seat.click(&mut s, "Type");
+    seat.invoke(&mut s, "Insert inline symbol");
+    assert!(s.status.contains("no symbols"), "{}", s.status);
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(content(&s), "\"hello wORLD\" -- ...");
+    let mark = Shape::new(
+        Geom::Rect {
+            origin: Pt::new(360., 20.),
+            size: Pt::new(30., 16.),
+            radius: 0.,
+        },
+        Style {
+            fill: Fill::Solid(crate::color::Rgba::rgb(220, 20, 30)),
+            stroke: None,
+        },
+    );
+    s.doc.layers[0].kind.shapes_mut().unwrap().push(mark);
+    s.selection = vec![(0, s.doc.layers[0].kind.shapes().unwrap().last().unwrap().id)];
+    assert!(s.create_vector_symbol("Dot"));
+    s.selection = vec![text];
+    let history = s.history.len();
+    seat.click(&mut s, "Type");
+    seat.invoke(&mut s, "Insert inline symbol");
+    assert!(content(&s).ends_with('\u{FFFC}'), "{}", content(&s));
+    assert_eq!(s.selected_type().unwrap().inlines.len(), 1);
+    assert_eq!(s.selected_type().unwrap().inlines[0].scale, 1.);
+    assert_eq!(s.history.len(), history + 1);
+    let saved = wire(&s);
+    s.undo();
+    assert_eq!(content(&s).contains('\u{FFFC}'), false);
+    s.redo();
+    assert_eq!(wire(&s), saved);
+}
+
+#[test]
+fn craft_type_hidden_inline_native_menu_keeps_the_view_toggle_on_locked_text() {
+    let mut s = editor();
+    let hit = s.selection[0];
+    s.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    let before = wire(&s);
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Type");
+    assert!(
+        keys::named(&seat.output, "Insert inline symbol")
+            .1
+            .is_disabled()
+    );
+    assert!(
+        !keys::named(&seat.output, "Show hidden characters")
+            .1
+            .is_disabled()
+    );
+    seat.invoke(&mut s, "Show hidden characters");
+    assert!(s.hidden_characters);
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+    assert!(paints_hidden_dot(&seat.output.shapes));
+}

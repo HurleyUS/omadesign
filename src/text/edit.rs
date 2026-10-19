@@ -145,6 +145,7 @@ impl TypeRun {
         self.assign_character_spans(spans);
         self.paragraphs = paragraphs;
         self.manual_kern = kern;
+        super::inline::shift_rewrites(&mut self.inlines, &mapped, position);
         self.layout = None;
         Ok(true)
     }
@@ -377,6 +378,7 @@ impl TypeRun {
                 self.paragraphs.push(p);
             }
         }
+        super::inline::shift_replacement(&mut self.inlines, start, end, n);
     }
     /// Font size already follows the vertical scale. Apply the remaining
     /// horizontal ratio to glyph widths and explicit em spacing. Inherited

@@ -582,6 +582,9 @@ fn has_outline_path(run: &TypeRun) -> bool {
 /// Args: output builder, semantic text run and composed glyph. Returns nothing.
 fn append_glyph_outline(path: &mut tiny_skia::PathBuilder, run: &TypeRun, glyph: &LayoutGlyph) {
     use ab_glyph::OutlineCurve;
+    if run.inlines.iter().any(|item| item.at == glyph.cluster) {
+        return;
+    }
     let Some((outline, scale)) = composer::glyph_outline(run, glyph) else { return; };
     let center = if glyph.turn == 0 {
         Pt::ZERO
@@ -665,6 +668,8 @@ pub(crate) fn paint_paths(run: &TypeRun, inherited: &crate::document::Fill) -> V
 mod composer;
 mod vertical;
 pub(crate) use vertical::layout_vertical_frame;
+mod inline;
+pub(crate) use inline::{hidden_marks, inline_paths, paint_run, refresh_document, HiddenMark};
 pub mod svg_type;
 mod edit;
 pub(crate) use edit::CharacterRewrite;

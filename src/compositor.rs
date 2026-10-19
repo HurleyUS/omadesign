@@ -1561,6 +1561,17 @@ fn draw_shape_inner(
         }
     }
     if let Some((run,layout))=&rich{draw_svg_type(pm,shape,run,layout,t,opacity,blend,pose,mask);}
+    if let Geom::Text(run) = &shape.geom {
+        for (fill, path) in crate::text::inline_paths(run) {
+            if fill.is_none() {
+                continue;
+            }
+            let mut paint = fill_paint(&fill, &shape.geom, None);
+            paint.blend_mode = blend;
+            paint.shader.apply_opacity(op);
+            pm.fill_path(&path, &paint, FillRule::Winding, xf, mask);
+        }
+    }
     if shape.layout.image.is_some() {
         crate::layout_images::draw_with_blend(pm, shape, xf, op, blend, mask);
     }

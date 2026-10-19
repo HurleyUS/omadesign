@@ -3563,6 +3563,54 @@ fn draw_overlays(
             edit.ime.interrupt = false;
         }
     }
+    if studio.hidden_characters {
+        draw_hidden_characters(p, rect, studio);
+    }
+}
+
+fn draw_hidden_characters(p: &eframe::egui::Painter, rect: Rect, studio: &Studio) {
+    let color = Color32::from_rgb(0x4f, 0x9d, 0xff);
+    let font = eframe::egui::FontId::proportional((10. * studio.view.scale).clamp(7., 18.));
+    for (li, layer) in studio.doc.layers.iter().enumerate() {
+        if !studio.doc.layer_visible(li) {
+            continue;
+        }
+        for shape in layer.kind.shapes().unwrap_or(&[]) {
+            if !shape.visible {
+                continue;
+            }
+            let Geom::Text(run) = &shape.geom else {
+                continue;
+            };
+            let transform = shape_transform(studio, li, shape);
+            let screen = |point: Pt| win(rect, studio.view, map_point(transform, point));
+            for mark in crate::text::hidden_marks(run) {
+                match mark {
+                    crate::text::HiddenMark::Dot(at) => {
+                        p.circle_filled(screen(at), 1.2, color);
+                    }
+                    crate::text::HiddenMark::Paragraph(at) => {
+                        p.text(
+                            screen(at),
+                            eframe::egui::Align2::LEFT_BOTTOM,
+                            "¶",
+                            font.clone(),
+                            color,
+                        );
+                    }
+                    crate::text::HiddenMark::Story(at) => {
+                        p.text(
+                            screen(at),
+                            eframe::egui::Align2::LEFT_BOTTOM,
+                            "#",
+                            font.clone(),
+                            color,
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn draw_type_caret(
