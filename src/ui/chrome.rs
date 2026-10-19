@@ -8,6 +8,11 @@ mod pixel_menu_tests;
 mod type_menu_tests;
 #[path = "pixel_layers.rs"]
 mod pixel_layers;
+#[path = "animation_menu.rs"]
+mod animation_menu;
+#[cfg(test)]
+#[path = "animation_menu_tests.rs"]
+mod animation_menu_tests;
 
 use crate::app::Studio;
 use crate::geom::Pt;
@@ -157,7 +162,10 @@ fn main_menus(ui: &mut Ui, studio: &mut Studio) {
         if studio.persona==Persona::Layout {
             pane_menu(ui,studio,"Layout",&["layout","hierarchy","components","variables","prototype"]);
         } else if studio.persona==Persona::Motion {
-            pane_menu(ui,studio,"Animation",&["timeline","keyframes","compositions","scene3d"]);
+            ui.menu_button("Animation", |ui| {
+                animation_menu::menu(ui, studio);
+                pane_items(ui, studio, &["timeline","keyframes","compositions","scene3d"]);
+            });
         } else if studio.persona == Persona::Pixel {
             ui.menu_button("Filter", |ui| super::raster::command_menu(ui, studio, false));
         } else {
@@ -170,13 +178,15 @@ fn main_menus(ui: &mut Ui, studio: &mut Studio) {
 }
 
 fn pane_menu(ui: &mut Ui, studio: &mut Studio, title: &str, panels: &[&str]) {
-    ui.menu_button(title,|ui| {
-        for panel in panels {
-            if let Some((_,label))=super::panel_workspace::PANELS.iter().find(|entry|entry.0==*panel) {
-                if ui.button(*label).clicked() {super::panel_workspace::open(ui.ctx(),studio,panel);ui.close();}
-            }
+    ui.menu_button(title,|ui| pane_items(ui, studio, panels));
+}
+
+fn pane_items(ui: &mut Ui, studio: &mut Studio, panels: &[&str]) {
+    for panel in panels {
+        if let Some((_,label))=super::panel_workspace::PANELS.iter().find(|entry|entry.0==*panel) {
+            if ui.button(*label).clicked() {super::panel_workspace::open(ui.ctx(),studio,panel);ui.close();}
         }
-    });
+    }
 }
 
 fn mode_tabs_rect(row: eframe::egui::Rect) -> eframe::egui::Rect {
