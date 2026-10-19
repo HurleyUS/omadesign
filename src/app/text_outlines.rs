@@ -220,7 +220,14 @@ fn push_paint(
         push_joined(drafts, fill, stroke, winding, path);
         return Ok(());
     }
-    let fill = fill_in_bounds(&fill, bounds, geom.bbox())?;
+    let fill = if fill
+        .gradient()
+        .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
+    {
+        fill
+    } else {
+        fill_in_bounds(&fill, bounds, geom.bbox())?
+    };
     if let Some(stroke) = &mut stroke {
         if let Some(gradient) = stroke.gradient.clone() {
             stroke.gradient = Some(gradient_in_bounds(&gradient, bounds, geom.bbox())?);
@@ -370,6 +377,7 @@ fn collect_path(
     path: &usvg::Path,
     opacity: f32,
     definitions: &str,
+    inherited: Option<&InheritedDistance>,
     drafts: &mut Vec<Draft>,
     coverage: &mut tiny_skia::PathBuilder,
 ) -> Result<(), String> {
@@ -401,13 +409,22 @@ fn collect_path(
         )?;
     }
     if let Some(fill) = path.fill() {
-        let paint = svg_fill(
-            fill.paint(),
-            fill.opacity().get() * opacity,
-            transform,
-            geom.bbox(),
-            definitions,
-        )?;
+        let paint = if let Some(inherited) = inherited
+            && let usvg::Paint::Pattern(pattern) = fill.paint()
+            && pattern.id() == inherited.server
+        {
+            let mut gradient = inherited.gradient.clone();
+            gradient.silhouette = Some(inherited.silhouette.clone());
+            Fill::Gradient(gradient)
+        } else {
+            svg_fill(
+                fill.paint(),
+                fill.opacity().get() * opacity,
+                transform,
+                geom.bbox(),
+                definitions,
+            )?
+        };
         push_paint(
             drafts,
             paint,
@@ -448,6 +465,7 @@ fn collect_group(
     group: &usvg::Group,
     opacity: f32,
     definitions: &str,
+    inherited: Option<&InheritedDistance>,
     drafts: &mut Vec<Draft>,
     coverage: &mut tiny_skia::PathBuilder,
     depth: usize,
@@ -468,18 +486,27 @@ fn collect_group(
     let opacity = opacity * group.opacity().get();
     for node in group.children() {
         match node {
-            usvg::Node::Group(child) => {
-                collect_group(child, opacity, definitions, drafts, coverage, depth + 1)?
-            }
-            usvg::Node::Text(text) => collect_group(
-                text.flattened(),
+            usvg::Node::Group(child) => collect_group(
+                child,
                 opacity,
                 definitions,
+                inherited,
                 drafts,
                 coverage,
                 depth + 1,
             )?,
-            usvg::Node::Path(path) => collect_path(path, opacity, definitions, drafts, coverage)?,
+            usvg::Node::Text(text) => collect_group(
+                text.flattened(),
+                opacity,
+                definitions,
+                inherited,
+                drafts,
+                coverage,
+                depth + 1,
+            )?,
+            usvg::Node::Path(path) => {
+                collect_path(path, opacity, definitions, inherited, drafts, coverage)?
+            }
             usvg::Node::Image(_) => {
                 return Err(
                     "Imported SVG text images need an outline appearance adapter; it was not converted"
@@ -519,28 +546,54 @@ fn seal(drafts: Vec<Draft>) -> Result<Vec<Painted>, String> {
     Ok(painted)
 }
 
+/// Contours the imported distance field measures.
+/// Args: the imported run. Returns those contours, or nothing when the story has no outline.
+fn story_silhouette(run: &TypeRun) -> Option<crate::gradient::DistanceSilhouette> {
+    if run.contours.is_empty() {
+        return None;
+    }
+    crate::gradient::DistanceSilhouette::from_geom(
+        &Geom::Poly {
+            contours: run.contours.clone(),
+            winding: true,
+        }
+        .to_path(),
+    )
+}
+
+/// Object shape-distance fill inherited by imported glyphs.
+struct InheritedDistance {
+    server: String,
+    gradient: Gradient,
+    silhouette: crate::gradient::DistanceSilhouette,
+}
+
+/// Capture an imported object's shape-distance fill when the story can share it.
+/// Args: the text and its run. Returns that fill, nothing when the object fill is not shape-distance, or the named refusal.
+fn inherited_distance(shape: &Shape, run: &TypeRun) -> Result<Option<InheritedDistance>, String> {
+    let Some(gradient) = shape
+        .style
+        .fill
+        .gradient()
+        .filter(|gradient| gradient.kind == GradientKind::Shape)
+    else {
+        return Ok(None);
+    };
+    let silhouette = story_silhouette(run).ok_or(
+        "Shape-distance text paint needs a shared outline paint space; it was not converted",
+    )?;
+    Ok(Some(InheritedDistance {
+        server: crate::text::svg_type::paint_server_id(&shape.style.fill),
+        gradient,
+        silhouette,
+    }))
+}
+
 /// Convert imported SVG text into editable paint paths.
 /// Args: the selected text shape and its run. Returns replacement shapes, or the named refusal.
 fn svg_outlines(shape: &Shape, run: &TypeRun) -> Result<Vec<Shape>, String> {
     if !shape.text_wrap.is_none() || shape.layout.image.is_some() || shape.layout.frame {
         return Err("Text with contour wrapping, image fill or existing frame children needs an outline appearance adapter; it was not converted".into());
-    }
-    if shape
-        .style
-        .fill
-        .gradient()
-        .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
-        || shape
-            .style
-            .stroke
-            .as_ref()
-            .and_then(|stroke| stroke.gradient.as_ref())
-            .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
-    {
-        return Err(
-            "Shape-distance text paint needs a shared outline paint space; it was not converted"
-                .into(),
-        );
     }
     let painted_run;
     let run = if run
@@ -561,12 +614,14 @@ fn svg_outlines(shape: &Shape, run: &TypeRun) -> Result<Vec<Shape>, String> {
         .as_ref()
         .map(|svg| svg.definitions.as_str())
         .unwrap_or("");
+    let inherited = inherited_distance(shape, run)?;
     let mut drafts = Vec::new();
     let mut coverage = tiny_skia::PathBuilder::new();
     collect_group(
         layout.tree.root(),
         1.,
         definitions,
+        inherited.as_ref(),
         &mut drafts,
         &mut coverage,
         0,
@@ -583,7 +638,9 @@ fn svg_outlines(shape: &Shape, run: &TypeRun) -> Result<Vec<Shape>, String> {
             .ok_or("This text has no visible outlines to convert")?;
         let geom = crate::geom::path_geom(&path, true)
             .ok_or("This text has no visible outlines to convert")?;
-        if let Some(gradient) = stroke.gradient.clone() {
+        if let Some(gradient) = stroke.gradient.clone()
+            && gradient.kind != GradientKind::Shape
+        {
             stroke.gradient = Some(gradient_in_bounds(
                 &gradient,
                 shape.geom.bbox(),

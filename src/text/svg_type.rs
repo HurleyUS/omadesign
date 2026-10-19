@@ -685,6 +685,12 @@ fn paint_id(fill: &crate::document::Fill) -> String {
     )
 }
 
+/// SVG paint-server id for a native fill.
+/// Args: the fill written into the type source. Returns the definition id.
+pub(crate) fn paint_server_id(fill: &crate::document::Fill) -> String {
+    paint_id(fill)
+}
+
 /// Isolate source text paint from the surrounding object wrapper.
 /// Args: captured root attributes and SVG output. Returns no value; emits only absent SVG defaults.
 fn paint_defaults(attributes:&BTreeMap<String,String>, out:&mut String) {

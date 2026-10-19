@@ -721,7 +721,7 @@ fn craft_svg_text_outlines_keep_rotation_and_object_stroke() {
 }
 
 #[test]
-fn craft_svg_text_outlines_refuse_wrapping_and_shape_paint_without_history() {
+fn craft_svg_text_outlines_refuse_wrapping_without_history() {
     let (mut studio, hit) = imported_svg_text();
     studio
         .doc
@@ -738,14 +738,133 @@ fn craft_svg_text_outlines_refuse_wrapping_and_shape_paint_without_history() {
         Geom::Text(_)
     ));
     assert_eq!(wire(&studio), before);
+}
 
+#[test]
+fn craft_svg_outline_shape_distance_keeps_the_shared_field_and_one_undo() {
     let (mut studio, hit) = imported_svg_text();
     studio.doc.find_shape_mut(hit.0, hit.1).unwrap().style.fill =
         Fill::Gradient(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE));
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let children: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.parent == Some(hit.1))
+        .collect();
+    let painted = children
+        .iter()
+        .find(|shape| {
+            shape
+                .style
+                .fill
+                .gradient()
+                .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
+        })
+        .expect("imported shape-distance path");
+    let silhouette = painted
+        .style
+        .fill
+        .gradient()
+        .and_then(|gradient| gradient.silhouette)
+        .expect("shared silhouette");
+    assert!(silhouette.geom().bbox().width() > painted.geom.bbox().width() + 8.);
+    let (body_mean, body_max, body_count, edge_mean, edge_max) =
+        paint_delta(&picture, &image(&studio.doc));
+    assert!(
+        body_count > 0 && body_mean <= 3. && body_max <= 96,
+        "imported shape-distance bodies changed: mean={body_mean}, max={body_max}, components={body_count}"
+    );
+    assert!(
+        edge_mean <= 8. && edge_max <= 96,
+        "imported shape-distance edges changed: mean={edge_mean}, max={edge_max}"
+    );
+    reopen(&studio);
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_svg_outline_shape_distance_keeps_the_object_stroke_and_one_undo() {
+    let (mut studio, hit) = imported_svg_text();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .style
+        .stroke = Some(Stroke {
+        width: 1.25,
+        gradient: Some(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE)),
+        color: Rgba::rgb(30, 20, 60),
+        ..Default::default()
+    });
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let children: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.parent == Some(hit.1))
+        .collect();
+    let stroke = children
+        .iter()
+        .find(|shape| {
+            shape
+                .style
+                .stroke
+                .as_ref()
+                .and_then(|stroke| stroke.gradient.as_ref())
+                .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
+        })
+        .expect("imported shape-distance stroke");
+    assert!(stroke.style.stroke.as_ref().unwrap().width > 0.);
+    let (body_mean, body_max, body_count, edge_mean, edge_max) =
+        paint_delta(&picture, &image(&studio.doc));
+    assert!(
+        body_count > 0 && body_mean <= 3. && body_max <= 96,
+        "imported shape-distance stroke bodies changed: mean={body_mean}, max={body_max}, components={body_count}"
+    );
+    assert!(
+        edge_mean <= 8. && edge_max <= 96,
+        "imported shape-distance stroke edges changed: mean={edge_mean}, max={edge_max}"
+    );
+    reopen(&studio);
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_svg_outline_shape_distance_refuses_locked_text_without_history() {
+    let (mut studio, hit) = imported_svg_text();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.style.fill =
+            Fill::Gradient(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE));
+        shape.locked = true;
+    }
+    studio.mark();
+    studio.history.clear();
     let before = wire(&studio);
     studio.create_text_outlines();
     assert_eq!(studio.history.len(), 0);
-    assert!(studio.status.contains("not converted"), "{}", studio.status);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
     assert!(matches!(
         studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
         Geom::Text(_)
