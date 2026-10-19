@@ -715,7 +715,7 @@ fn craft_svg_text_outlines_keep_rotation_and_object_stroke() {
 }
 
 #[test]
-fn craft_svg_text_outlines_refuse_wrapping_without_history() {
+fn craft_outline_contour_wrap_keeps_imported_bounding_box() {
     let (mut studio, hit) = imported_svg_text();
     studio
         .doc
@@ -724,14 +724,31 @@ fn craft_svg_text_outlines_refuse_wrapping_without_history() {
         .text_wrap
         .mode = crate::text_geometry::WrapMode::BoundingBox;
     let before = wire(&studio);
+    let bounds = studio.doc.find_shape(hit.0, hit.1).unwrap().world_bbox();
     studio.create_text_outlines();
-    assert_eq!(studio.history.len(), 0);
-    assert!(studio.status.contains("not converted"), "{}", studio.status);
-    assert!(matches!(
-        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
-        Geom::Text(_)
-    ));
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(!matches!(root.geom, Geom::Text(_)));
+    assert_eq!(
+        root.text_wrap.mode,
+        crate::text_geometry::WrapMode::BoundingBox
+    );
+    assert_eq!(root.world_bbox().min, bounds.min);
+    assert_eq!(root.world_bbox().max, bounds.max);
+    assert!(
+        studio.doc.layers[hit.0]
+            .kind
+            .shapes()
+            .unwrap()
+            .iter()
+            .filter(|shape| shape.id != hit.1)
+            .all(|shape| shape.text_wrap.is_none())
+    );
+    let after = wire(&studio);
+    studio.undo();
     assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
 }
 
 #[test]
@@ -1168,6 +1185,277 @@ fn craft_outline_animated_paint_refuses_locked_text_before_history() {
         draft
     );
     assert!(studio.history.can_redo());
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+}
+
+fn story(studio: &Studio, hit: (usize, u64)) -> TypeRun {
+    let Geom::Text(run) = &studio.doc.find_shape(hit.0, hit.1).unwrap().geom else {
+        panic!("flowing story missing");
+    };
+    run.clone()
+}
+
+fn wrapping_stories() -> (Studio, (usize, u64), (usize, u64)) {
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = Document::new("Contour wrap", 480., 240., 96.);
+    studio.doc.transparent = true;
+    studio.doc.workspace = Some(Persona::Layout);
+    studio.doc.layers = vec![Layer::vector("Editable lettering")];
+    let font = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/assets/fonts/EBGaramond.ttf"
+    );
+    let mut flow = TypeRun {
+        origin: Pt::new(24., 48.),
+        content:
+            "Words flow around the obstacle and keep every line after the letters become paths. "
+                .repeat(4),
+        px: 18.,
+        font: font.into(),
+        frame: Some(crate::text_geometry::TextFrame {
+            size: Pt::new(360., 150.),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    flow.wrap_width = Some(360.);
+    let mut flow_shape = Shape::new(Geom::Text(flow), Style::default());
+    flow_shape.name = "Flow".into();
+    let flow_hit = (0, flow_shape.id);
+    let obstacle = TypeRun {
+        origin: Pt::new(150., 100.),
+        content: "WRAP".into(),
+        px: 42.,
+        font: font.into(),
+        ..Default::default()
+    };
+    let mut obstacle_shape = Shape::new(
+        Geom::Text(obstacle),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(20, 40, 80)),
+            stroke: None,
+        },
+    );
+    obstacle_shape.name = "Obstacle".into();
+    obstacle_shape.text_wrap = crate::text_geometry::TextWrap {
+        mode: crate::text_geometry::WrapMode::ObjectShape,
+        offset: [4., 6., 8., 2.],
+        ignore_locked: true,
+        ..Default::default()
+    };
+    crate::text::fill_contours(&mut obstacle_shape.geom);
+    let obstacle_hit = (0, obstacle_shape.id);
+    studio.doc.layers[0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .extend([flow_shape, obstacle_shape]);
+    studio.active_layer = Some(0);
+    studio.selection = vec![obstacle_hit];
+    studio.mark();
+    studio.history.clear();
+    (studio, flow_hit, obstacle_hit)
+}
+
+#[test]
+fn craft_outline_contour_wrap_keeps_object_shape_flow() {
+    let (mut studio, flow_hit, obstacle_hit) = wrapping_stories();
+    let wrapped = story(&studio, flow_hit);
+    assert!(!wrapped.contours.is_empty());
+    let mut bare = studio.doc.clone();
+    bare.find_shape_mut(obstacle_hit.0, obstacle_hit.1)
+        .unwrap()
+        .text_wrap
+        .mode = crate::text_geometry::WrapMode::None;
+    crate::text_geometry::reflow(&mut bare);
+    let Geom::Text(open) = &bare.find_shape(flow_hit.0, flow_hit.1).unwrap().geom else {
+        panic!("open flow missing");
+    };
+    assert_ne!(open.contours, wrapped.contours);
+    let contours = studio
+        .doc
+        .find_shape(obstacle_hit.0, obstacle_hit.1)
+        .unwrap()
+        .world_contours(96);
+    assert!(!contours.is_empty());
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    assert_eq!(story(&studio, flow_hit), wrapped);
+    let carriers: Vec<_> = studio.doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.text_wrap.mode == crate::text_geometry::WrapMode::ObjectShape)
+        .collect();
+    assert_eq!(carriers.len(), 1);
+    let carrier = carriers[0];
+    assert_eq!(carrier.world_contours(96), contours);
+    assert_eq!(carrier.text_wrap.offset, [4., 6., 8., 2.]);
+    assert!(carrier.text_wrap.ignore_locked);
+    assert!(carrier.style.fill.is_none());
+    assert!(carrier.style.stroke.is_none());
+    assert!(carrier.layout.parent.is_none());
+    assert!(
+        studio.doc.layers[0]
+            .kind
+            .shapes()
+            .unwrap()
+            .iter()
+            .filter(|shape| shape.id != carrier.id)
+            .all(|shape| shape.text_wrap.is_none())
+    );
+    assert!(!matches!(
+        studio
+            .doc
+            .find_shape(obstacle_hit.0, obstacle_hit.1)
+            .unwrap()
+            .geom,
+        Geom::Text(_)
+    ));
+    let saved = wire(&studio);
+    let reopened = crate::project::decode(&saved).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), saved);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), saved);
+
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .text_wrap
+        .mode = crate::text_geometry::WrapMode::ObjectShape;
+    studio.mark();
+    studio.history.clear();
+    let contours = studio
+        .doc
+        .find_shape(hit.0, hit.1)
+        .unwrap()
+        .world_contours(96);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let carrier = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .find(|shape| shape.text_wrap.mode == crate::text_geometry::WrapMode::ObjectShape)
+        .expect("framed object shape carrier");
+    assert_eq!(carrier.layout.parent, Some(hit.1));
+    assert!(studio.doc.find_shape(hit.0, hit.1).unwrap().layout.frame);
+    assert_eq!(carrier.world_contours(96), contours);
+    assert!(carrier.style.fill.is_none());
+    let saved = wire(&studio);
+    let reopened = crate::project::decode(&saved).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), saved);
+}
+
+#[test]
+fn craft_outline_contour_wrap_keeps_box_and_jump_on_the_frame() {
+    for mode in [
+        crate::text_geometry::WrapMode::BoundingBox,
+        crate::text_geometry::WrapMode::JumpObject,
+    ] {
+        let (mut studio, hit) = fixture();
+        studio.doc.find_shape_mut(hit.0, hit.1).unwrap().text_wrap =
+            crate::text_geometry::TextWrap {
+                mode,
+                offset: [3., 5., 7., 1.],
+                invert: true,
+                ..Default::default()
+            };
+        studio.mark();
+        studio.history.clear();
+        let bounds = studio.doc.find_shape(hit.0, hit.1).unwrap().world_bbox();
+        let before = wire(&studio);
+        studio.create_text_outlines();
+        assert_eq!(studio.history.len(), 1, "{}", studio.status);
+        let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+        assert!(root.layout.frame);
+        assert_eq!(root.text_wrap.mode, mode);
+        assert_eq!(root.text_wrap.offset, [3., 5., 7., 1.]);
+        assert!(root.text_wrap.invert);
+        assert_eq!(root.world_bbox().min, bounds.min);
+        assert_eq!(root.world_bbox().max, bounds.max);
+        assert!(
+            studio.doc.layers[hit.0]
+                .kind
+                .shapes()
+                .unwrap()
+                .iter()
+                .filter(|shape| shape.id != hit.1)
+                .all(|shape| shape.text_wrap.is_none())
+        );
+        let after = wire(&studio);
+        studio.undo();
+        assert_eq!(wire(&studio), before);
+        studio.redo();
+        assert_eq!(wire(&studio), after);
+    }
+}
+
+#[test]
+fn craft_outline_contour_wrap_refuses_locked_image_and_layout_frames() {
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .text_wrap
+        .mode = crate::text_geometry::WrapMode::ObjectShape;
+    studio.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(wire(&studio), before);
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.text_wrap.mode = crate::text_geometry::WrapMode::BoundingBox;
+        shape.layout.frame = true;
+    }
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(wire(&studio), before);
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("not converted"), "{}", studio.status);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.text_wrap.mode = crate::text_geometry::WrapMode::JumpObject;
+        shape.layout.image = Some(crate::layout_images::ImageFill {
+            data: std::sync::Arc::<str>::from("abc"),
+            fit: crate::layout_images::ImageFit::Cover,
+            focal: Pt::splat(0.5),
+        });
+    }
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(wire(&studio), before);
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("not converted"), "{}", studio.status);
     assert!(matches!(
         studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
         Geom::Text(_)

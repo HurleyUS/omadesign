@@ -589,11 +589,58 @@ fn inherited_distance(shape: &Shape, run: &TypeRun) -> Result<Option<InheritedDi
     }))
 }
 
+/// Image fills and layout frames still need their own outline adapter.
+/// Args: the text shape. Returns the named refusal when one of those is present.
+fn outline_adapter_block(shape: &Shape) -> Option<String> {
+    if shape.layout.image.is_some() || shape.layout.frame {
+        Some(
+            "Text with image fill or existing frame children needs an outline appearance adapter; it was not converted"
+                .into(),
+        )
+    } else {
+        None
+    }
+}
+
+/// Keep object-shape wrap on the original letter contours.
+/// Args: outlined shapes, the text id, its wrap and its world contours. Box and jump wrap stay on the outlined owner. Returns nothing.
+fn place_object_shape_wrap(
+    shapes: &mut Vec<Shape>,
+    source: u64,
+    wrap: &crate::text_geometry::TextWrap,
+    contours: Vec<Vec<Pt>>,
+) {
+    for shape in shapes.iter_mut() {
+        shape.text_wrap = crate::text_geometry::TextWrap::default();
+    }
+    let Some(owner) = shapes.iter().find(|shape| shape.id == source).cloned() else {
+        return;
+    };
+    let framed = owner.layout.frame;
+    let mut carrier = path_child(
+        &owner,
+        Geom::Poly {
+            contours,
+            winding: false,
+        },
+        Style {
+            fill: Fill::None,
+            stroke: None,
+        },
+        "wrap",
+    );
+    if !framed {
+        carrier.layout.parent = None;
+    }
+    carrier.text_wrap = wrap.clone();
+    shapes.push(carrier);
+}
+
 /// Convert imported SVG text into editable paint paths.
 /// Args: the selected text shape and its run. Returns replacement shapes, or the named refusal.
 fn svg_outlines(shape: &Shape, run: &TypeRun) -> Result<Vec<Shape>, String> {
-    if !shape.text_wrap.is_none() || shape.layout.image.is_some() || shape.layout.frame {
-        return Err("Text with contour wrapping, image fill or existing frame children needs an outline appearance adapter; it was not converted".into());
+    if let Some(error) = outline_adapter_block(shape) {
+        return Err(error);
     }
     let painted_run;
     let run = if run
@@ -706,8 +753,8 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
     if run.contours.is_empty() {
         return Err("This text has no visible outlines to convert".into());
     }
-    if !shape.text_wrap.is_none() || shape.layout.image.is_some() || shape.layout.frame {
-        return Err("Text with contour wrapping, image fill or existing frame children needs an outline appearance adapter; it was not converted".into());
+    if let Some(error) = outline_adapter_block(shape) {
+        return Err(error);
     }
     let geometry = crate::text::outline_path(run)
         .and_then(|path| crate::geom::path_geom(&path, false))
@@ -1190,6 +1237,13 @@ impl Studio {
                     object_stroke.as_ref(),
                     &shapes,
                 );
+                if let Some(shape) = studio.doc.find_shape(hit.0, hit.1)
+                    && shape.text_wrap.mode == crate::text_geometry::WrapMode::ObjectShape
+                {
+                    let wrap = shape.text_wrap.clone();
+                    let contours = shape.world_contours(96);
+                    place_object_shape_wrap(&mut shapes, hit.1, &wrap, contours);
+                }
                 studio.with_action_step(crate::actions::Step::Outline { selected }, |studio| {
                     let previous =
                         studio

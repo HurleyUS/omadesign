@@ -753,3 +753,105 @@ fn craft_outline_animated_paint_native_menu_retargets_fill() {
     studio.redo();
     assert_eq!(saved(&studio), after);
 }
+
+#[test]
+fn craft_outline_contour_wrap_native_menu_keeps_object_shape() {
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = Document::new("Contour wrap menu", 480., 240., 96.);
+    studio.doc.transparent = true;
+    studio.doc.workspace = Some(Persona::Layout);
+    studio.doc.layers = vec![Layer::vector("Editable lettering")];
+    let font = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/assets/fonts/EBGaramond.ttf"
+    );
+    let mut flow = TypeRun {
+        origin: Pt::new(24., 48.),
+        content:
+            "Words flow around the obstacle and keep every line after the letters become paths. "
+                .repeat(4),
+        px: 18.,
+        font: font.into(),
+        frame: Some(TextFrame {
+            size: Pt::new(360., 150.),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    flow.wrap_width = Some(360.);
+    let flow_shape = Shape::new(Geom::Text(flow), Style::default());
+    let flow_hit = (0, flow_shape.id);
+    let obstacle_run = TypeRun {
+        origin: Pt::new(150., 100.),
+        content: "WRAP".into(),
+        px: 42.,
+        font: font.into(),
+        ..Default::default()
+    };
+    let mut obstacle = Shape::new(
+        Geom::Text(obstacle_run),
+        Style {
+            fill: Fill::Solid(crate::color::Rgba::rgb(20, 40, 80)),
+            stroke: None,
+        },
+    );
+    obstacle.text_wrap = crate::text_geometry::TextWrap {
+        mode: crate::text_geometry::WrapMode::ObjectShape,
+        offset: [4., 6., 8., 2.],
+        ..Default::default()
+    };
+    crate::text::fill_contours(&mut obstacle.geom);
+    let obstacle_hit = (0, obstacle.id);
+    let contours = obstacle.world_contours(96);
+    studio.doc.layers[0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .extend([flow_shape, obstacle]);
+    studio.active_layer = Some(0);
+    studio.selection = vec![obstacle_hit];
+    studio.mark();
+    studio.history.clear();
+    let Geom::Text(wrapped) = studio
+        .doc
+        .find_shape(flow_hit.0, flow_hit.1)
+        .unwrap()
+        .geom
+        .clone()
+    else {
+        panic!("flowing story missing");
+    };
+    let before = saved(&studio);
+    let mut seat = Seat::new();
+    seat.frame(&mut studio, vec![]);
+    seat.click(&mut studio, "Type");
+    seat.invoke(&mut studio, "Create outlines");
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let Geom::Text(after_flow) = &studio.doc.find_shape(flow_hit.0, flow_hit.1).unwrap().geom
+    else {
+        panic!("flowing story missing");
+    };
+    assert_eq!(after_flow, &wrapped);
+    let carrier = studio.doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .find(|shape| shape.text_wrap.mode == crate::text_geometry::WrapMode::ObjectShape)
+        .expect("object shape carrier");
+    assert_eq!(carrier.world_contours(96), contours);
+    assert!(carrier.style.fill.is_none());
+    assert!(carrier.style.stroke.is_none());
+    assert!(carrier.layout.parent.is_none());
+    let reopened = crate::project::decode(&before).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), before);
+    let after = saved(&studio);
+    let reopened = crate::project::decode(&after).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), after);
+    studio.undo();
+    assert_eq!(saved(&studio), before);
+    studio.redo();
+    assert_eq!(saved(&studio), after);
+}
