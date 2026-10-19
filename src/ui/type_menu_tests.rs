@@ -193,14 +193,18 @@ fn craft_type_command_menus_top_menu_converts_and_reopens_linked_text_without_ob
     let mut seat = Seat::new();
     seat.frame(&mut studio, vec![]);
     seat.click(&mut studio, "Type");
-    seat.invoke(&mut studio, "Convert to point text");
+    // Pointer route: native Tab would walk the installed font list under Font ⏵,
+    // which varies by machine and can exceed the traversal budget.
+    seat.click(&mut studio, "Convert to point text");
     assert!(run(&studio, ids[1]).frame.is_none());
     assert_eq!(studio.history.len(), 1);
     let point = saved(&studio);
     emit("thread-point.oma", &studio);
     reopen(&studio);
     seat.click(&mut studio, "Type");
-    seat.invoke(&mut studio, "Convert to area text");
+    // Pointer route: native Tab would walk the installed font list under Font ⏵,
+    // which varies by machine and can exceed the traversal budget.
+    seat.click(&mut studio, "Convert to area text");
     assert!(run(&studio, ids[1]).frame.is_some());
     assert_eq!(studio.history.len(), 2);
     reopen(&studio);
