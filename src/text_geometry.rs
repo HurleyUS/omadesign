@@ -233,7 +233,7 @@ pub fn layout_on_path(run: &TypeRun) -> TextGeometryLayout {
     let Some((_,span))=path_interval(on) else {return TextGeometryLayout::default()};
     let mut plain=run.clone();
     plain.frame=None; plain.thread=None;
-    plain.origin=Pt::ZERO; plain.on_path=None; plain.layout=None; plain.wrap_width=None;
+    plain.origin=Pt::ZERO; plain.on_path=None; plain.layout=None; plain.wrap_width=None; plain.vertical=false;
     plain.content=plain.content.replace('\n'," ");
     plain.tracking+=on.spacing;
     for span in &mut plain.spans{if let Some(tracking)=&mut span.tracking{*tracking+=on.spacing/plain.px.max(1.)*1000.;}}

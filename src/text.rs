@@ -583,10 +583,25 @@ fn has_outline_path(run: &TypeRun) -> bool {
 fn append_glyph_outline(path: &mut tiny_skia::PathBuilder, run: &TypeRun, glyph: &LayoutGlyph) {
     use ab_glyph::OutlineCurve;
     let Some((outline, scale)) = composer::glyph_outline(run, glyph) else { return; };
-    let map = |p: ab_glyph::Point| run.map_point(Pt::new(
-        run.origin.x + glyph.x + p.x * scale * glyph.hscale,
-        run.origin.y + glyph.y - p.y * scale * glyph.vscale,
-    ));
+    let center = if glyph.turn == 0 {
+        Pt::ZERO
+    } else {
+        composer::upright_center(run, glyph)
+    };
+    let map = |p: ab_glyph::Point| {
+        let local = Pt::new(p.x * scale * glyph.hscale, -p.y * scale * glyph.vscale);
+        let turned = if glyph.turn == 2 {
+            composer::turn_clockwise(local, center)
+        } else {
+            local
+        };
+        let placed = if glyph.turn == 0 {
+            Pt::new(glyph.x + local.x, glyph.y + local.y)
+        } else {
+            turned + (Pt::new(glyph.x, glyph.y) - center)
+        };
+        run.map_point(Pt::new(run.origin.x + placed.x, run.origin.y + placed.y))
+    };
     let mut last = None;
     for curve in &outline.curves {
         let start = match *curve {
@@ -648,6 +663,8 @@ pub(crate) fn paint_paths(run: &TypeRun, inherited: &crate::document::Fill) -> V
 }
 
 mod composer;
+mod vertical;
+pub(crate) use vertical::layout_vertical_frame;
 pub mod svg_type;
 mod edit;
 pub(crate) use edit::CharacterRewrite;
@@ -676,12 +693,30 @@ pub(crate) fn paint_groups(run:&TypeRun,inherited:&crate::document::Fill)->Vec<(
     }}
     groups
 }
+/// Point type written in a column. Area type, path type and SVG text keep their own layout.
+/// Args: text run. Returns whether carets, hits and measure use the column.
+fn vertical_point(run: &TypeRun) -> bool {
+    run.vertical && run.on_path.is_none() && run.frame.is_none() && run.svg_text.is_none()
+}
 pub fn measure(run:&TypeRun)->(f32,f32) {
-    let lines=compose(run);(run.wrap_width.unwrap_or_else(||lines.iter().map(|l|l.width).fold(0.,f32::max)),lines.iter().map(|l|l.height).sum())
+    let lines=compose(run);
+    if vertical_point(run) {
+        let pitch = run.px.max(1.);
+        let width = pitch * lines.len().max(1) as f32;
+        let height = lines.iter().map(|line| line.height).fold(0., f32::max);
+        return (width, height);
+    }
+    (run.wrap_width.unwrap_or_else(||lines.iter().map(|l|l.width).fold(0.,f32::max)),lines.iter().map(|l|l.height).sum())
 }
 pub fn caret_pt(run:&TypeRun,char_idx:usize)->Pt {
     if run.svg_text.is_some() && let Some(layout)=svg_type::layout(run) && let Some(caret)=layout.carets.iter().min_by_key(|c|c.0.abs_diff(char_idx)){return caret.1;}
     if let Some((point,_)) = crate::text_geometry::caret_frame(run,char_idx) { return point; }
+    if vertical_point(run) {
+        let lines = compose(run);
+        let idx = char_idx.min(run.content.chars().count());
+        let line = &lines[lines.iter().rposition(|line| line.start <= idx).unwrap_or(0)];
+        return run.map_point(Pt::new(run.origin.x + line.offset, run.origin.y + line.caret_x(idx)));
+    }
     let lines=compose(run);let idx=char_idx.min(run.content.chars().count());
     let line=&lines[lines.iter().rposition(|l|l.start<=idx).unwrap_or(0)];
     run.map_point(Pt::new(run.origin.x+line.caret_x(idx),run.origin.y+line.baseline-character_metrics(run,idx.min(run.content.chars().count().saturating_sub(1))).baseline_shift.unwrap()))
@@ -693,7 +728,7 @@ pub fn caret_segment(run:&TypeRun,index:usize)->(Pt,Pt) {
     if run.svg_text.is_some(){return svg_type::caret_segment(run,index);}
     let point=caret_pt(run,index);let height=caret_height(run,index);
     let geometry=crate::text_geometry::caret_frame(run,index);
-    let tangent=geometry.map_or(Pt::new(1.,0.),|(_,t)|t);
+    let tangent=if vertical_point(run){Pt::new(0.,1.)}else{geometry.map_or(Pt::new(1.,0.),|(_,t)|t)};
     if run.transform.is_some(){let local=run.unmap_point(point);let tangent=geometry.map_or(Pt::new(1.,0.),|(_,t)|(run.unmap_point(point+t)-local).normalized());return (run.map_point(local-tangent.perp()*height*0.9),run.map_point(local+tangent.perp()*height*0.2));}
     (point-tangent.perp()*height*0.9,point+tangent.perp()*height*0.2)
 }
@@ -701,6 +736,19 @@ pub fn hit_char(run:&TypeRun,p:Pt)->usize {
     if run.svg_text.is_some() && let Some(layout)=svg_type::layout(run){return layout.carets.iter().min_by(|a,b|(a.1-p).length_sq().total_cmp(&(b.1-p).length_sq())).map_or(0,|c|c.0);}
     if let Some(index) = crate::text_geometry::hit_char(run,p) { return index; }
     let p=run.unmap_point(p);
+    if vertical_point(run) {
+        let mut best = (0usize, f32::MAX);
+        for line in compose(run).iter() {
+            for glyph in &line.glyphs {
+                let center = Pt::new(run.origin.x + glyph.x, run.origin.y + glyph.y);
+                let distance = (center - p).length_sq();
+                if distance < best.1 {
+                    best = (glyph.cluster, distance);
+                }
+            }
+        }
+        return best.0;
+    }
     let lines=compose(run);
     lines.iter().flat_map(|line|line.carets.iter().map(move |(index,x)| {
         let style=character_metrics(run,(*index).min(run.content.chars().count().saturating_sub(1)));
@@ -711,6 +759,24 @@ pub fn hit_char(run:&TypeRun,p:Pt)->usize {
 }
 pub fn selection_rects(run:&TypeRun,a:usize,b:usize)->Vec<(Pt,Pt)> {
     let lo=a.min(b);let hi=a.max(b);let mut rects=Vec::new();
+    if vertical_point(run) {
+        let half = run.px.max(1.) * 0.5;
+        for line in compose(run).iter() {
+            let from = lo.max(line.start);
+            let end = hi.min(line.end);
+            if from >= end {
+                continue;
+            }
+            let y0 = line.caret_x(from);
+            let y1 = line.caret_x(end);
+            let x = run.origin.x + line.offset;
+            rects.push((
+                Pt::new(x - half, run.origin.y + y0.min(y1)),
+                Pt::new(x + half, run.origin.y + y0.max(y1)),
+            ));
+        }
+        return rects;
+    }
     for line in compose(run).iter() {
         let mut from=lo.max(line.start);let end=hi.min(line.end);
         while from<end {

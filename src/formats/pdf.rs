@@ -1014,6 +1014,7 @@ impl Reader<'_> {
                     is_space: false,
                     hscale: 1.,
                     vscale: 1.,
+                    turn: 0,
                 },
             );
             self.warn("A PDF CID glyph cannot be reproduced from its Unicode mapping; its exact embedded glyph is retained as editable outlines.");

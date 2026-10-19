@@ -53,6 +53,8 @@ pub(crate) enum TypeCommand {
     Placeholder,
     /// Apply an installed family, a remembered file, or that family's own bold or italic face.
     Face(TypeFace),
+    /// Set vertical writing when true, or horizontal writing when false.
+    Orientation(bool),
 }
 /// A Type menu font or style choice. The face has to be one the family actually ships.
 #[derive(Clone)]
@@ -337,6 +339,7 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
             | TypeCommand::FitHeadline
             | TypeCommand::Placeholder
             | TypeCommand::Face(_)
+            | TypeCommand::Orientation(_)
     ) {
         return vec![];
     }
@@ -443,7 +446,8 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
             | TypeCommand::Size(_)
             | TypeCommand::FitHeadline
             | TypeCommand::Placeholder
-            | TypeCommand::Face(_) => {
+            | TypeCommand::Face(_)
+            | TypeCommand::Orientation(_) => {
                 unreachable!()
             }
         };
@@ -931,7 +935,10 @@ impl Studio {
         let live = (target.scope == TextScope::Selection
             && !matches!(
                 command,
-                TypeCommand::FitHeadline | TypeCommand::Placeholder | TypeCommand::Face(_)
+                TypeCommand::FitHeadline
+                    | TypeCommand::Placeholder
+                    | TypeCommand::Face(_)
+                    | TypeCommand::Orientation(_)
             ))
         .then_some(target.edit.as_ref())
         .flatten();
@@ -972,6 +979,14 @@ impl Studio {
                     style_reference(menu_catalog.as_ref().unwrap(), &run.font, face)?
                 };
                 replace_story_font(&mut run, &to)?
+            } else if let TypeCommand::Orientation(vertical) = &command {
+                if run.vertical == *vertical {
+                    false
+                } else {
+                    run.vertical = *vertical;
+                    run.layout = None;
+                    true
+                }
             } else if let TypeCommand::Font(replacement) = &command {
                 crate::text::font_inventory::replace_at(
                     &mut run,

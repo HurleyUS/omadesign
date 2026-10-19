@@ -13,6 +13,8 @@ pub struct LayoutGlyph {
     pub is_space: bool,
     pub hscale: f32,
     pub vscale: f32,
+    /// 0 keeps the horizontal pen. 1 stands upright in a column. 2 lies on its side.
+    pub turn: u8,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutLine {
@@ -78,6 +80,20 @@ pub fn compose(run: &TypeRun) -> Arc<Vec<LayoutLine>> {
         .cloned()
     {
         return lines;
+    }
+    if run.vertical && run.frame.is_none() && run.on_path.is_none() {
+        let mut flat = run.clone();
+        flat.vertical = false;
+        flat.wrap_width = None;
+        let horizontal = compose(&flat);
+        let stacked = super::vertical::stack_point(run, &horizontal);
+        let result = Arc::new(stacked);
+        let mut stored = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if stored.len() >= 256 {
+            stored.clear();
+        }
+        stored.insert(key, result.clone());
+        return result;
     }
     let bytes = resolve_path(run).and_then(|p| font_bytes(&p));
     let face = bytes
@@ -475,6 +491,7 @@ fn shape_line_uniform(
                 is_space: *c == ' ',
                 hscale: 1.,
                 vscale: 1.,
+                turn: 0,
             })
             .collect();
     };
@@ -498,7 +515,7 @@ fn shape_line_uniform(
         }
         let untracked_advance = pos.x_advance as f32 * scale * hscale;
         let advance=untracked_advance+metrics.tracking.unwrap()*run.px/1000.;
-        result.push(LayoutGlyph{id:info.glyph_id as u16,cluster,x:pen+pos.x_offset as f32*scale*hscale,y:-pos.y_offset as f32*scale*vscale-metrics.baseline_shift.unwrap(),advance,is_space:c==' '||c=='\t',hscale,vscale});
+        result.push(LayoutGlyph{id:info.glyph_id as u16,cluster,x:pen+pos.x_offset as f32*scale*hscale,y:-pos.y_offset as f32*scale*vscale-metrics.baseline_shift.unwrap(),advance,is_space:c==' '||c=='\t',hscale,vscale,turn:0});
         pen+=advance;previous_cluster=Some(cluster);
         previous_untracked_advance = untracked_advance;
     }
@@ -608,20 +625,95 @@ pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
     let [a, b, c, d, _, _] = run.transform.unwrap_or([1., 0., 0., 1., 0., 0.]);
     let stretch = ((a * glyph.hscale).powi(2) + (b * glyph.hscale).powi(2)
         + (c * glyph.vscale).powi(2) + (d * glyph.vscale).powi(2)).sqrt().max(1.);
-    flatten_outline(&curves, 1. / (64. * stretch))
+    let flat = flatten_outline(&curves, 1. / (64. * stretch));
+    if glyph.turn == 0 {
+        return flat
+            .into_iter()
+            .map(|contour| {
+                contour
+                    .into_iter()
+                    .map(|p| {
+                        Pt::new(
+                            run.origin.x + glyph.x + p.x * glyph.hscale,
+                            run.origin.y + glyph.y + p.y * glyph.vscale,
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+    }
+    let mut contours: Vec<Vec<Pt>> = flat
         .into_iter()
         .map(|contour| {
             contour
                 .into_iter()
-                .map(|p| {
-                    Pt::new(
-                        run.origin.x + glyph.x + p.x * glyph.hscale,
-                        run.origin.y + glyph.y + p.y * glyph.vscale,
-                    )
-                })
+                .map(|p| Pt::new(p.x * glyph.hscale, p.y * glyph.vscale))
                 .collect()
         })
-        .collect()
+        .collect();
+    let center = outline_center(&contours);
+    if glyph.turn == 2 {
+        for point in contours.iter_mut().flatten() {
+            *point = turn_clockwise(*point, center);
+        }
+    }
+    let center = outline_center(&contours);
+    let delta = Pt::new(run.origin.x + glyph.x, run.origin.y + glyph.y) - center;
+    for point in contours.iter_mut().flatten() {
+        *point += delta;
+    }
+    contours
+}
+
+/// Centre of flattened ink. An empty outline stays at the origin.
+/// Args: contours. Returns the midpoint of their bounds.
+fn outline_center(contours: &[Vec<Pt>]) -> Pt {
+    let mut min = Pt::new(f32::MAX, f32::MAX);
+    let mut max = Pt::new(f32::MIN, f32::MIN);
+    let mut count = 0usize;
+    for point in contours.iter().flatten() {
+        min.x = min.x.min(point.x);
+        min.y = min.y.min(point.y);
+        max.x = max.x.max(point.x);
+        max.y = max.y.max(point.y);
+        count += 1;
+    }
+    if count == 0 {
+        return Pt::ZERO;
+    }
+    Pt::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5)
+}
+
+/// Centre of a glyph's upright ink, before a vertical column moves it.
+/// Args: text run and positioned glyph. Returns that centre in glyph space, or the origin when the glyph has no ink.
+pub(super) fn upright_center(run: &TypeRun, glyph: &LayoutGlyph) -> Pt {
+    let Some((outline, scale)) = glyph_outline(run, glyph) else {
+        return Pt::ZERO;
+    };
+    let curves = map_curves(&outline.curves, 0., 0., scale);
+    let [a, b, c, d, _, _] = run.transform.unwrap_or([1., 0., 0., 1., 0., 0.]);
+    let stretch = ((a * glyph.hscale).powi(2) + (b * glyph.hscale).powi(2)
+        + (c * glyph.vscale).powi(2)
+        + (d * glyph.vscale).powi(2))
+    .sqrt()
+    .max(1.);
+    let contours: Vec<Vec<Pt>> = flatten_outline(&curves, 1. / (64. * stretch))
+        .into_iter()
+        .map(|contour| {
+            contour
+                .into_iter()
+                .map(|point| Pt::new(point.x * glyph.hscale, point.y * glyph.vscale))
+                .collect()
+        })
+        .collect();
+    outline_center(&contours)
+}
+
+/// Turn one document point a quarter turn clockwise around `center`.
+/// Args: point and pivot. Returns the turned point. Y grows downward.
+pub(super) fn turn_clockwise(point: Pt, center: Pt) -> Pt {
+    let delta = point - center;
+    Pt::new(center.x - delta.y, center.y + delta.x)
 }
 
 #[cfg(test)]

@@ -527,3 +527,97 @@ fn craft_type_font_menu_native_menu_stays_disabled_on_locked_text() {
     assert_eq!(s.history.len(), 0);
     assert_eq!(wire(&s), before);
 }
+
+fn ink_union(run: &TypeRun) -> crate::geom::Bounds {
+    let mut bounds: Option<crate::geom::Bounds> = None;
+    for point in crate::text::shape(run).into_iter().flatten() {
+        match &mut bounds {
+            Some(bounds) => bounds.union_pt(point),
+            None => bounds = Some(crate::geom::Bounds::from_pt(point)),
+        }
+    }
+    bounds.expect("text ink")
+}
+
+#[test]
+fn craft_type_orientation_native_menu_applies_one_undo() {
+    let mut s = editor();
+    assert_eq!(super::selected_orientation(&s), Some(false));
+    let before = wire(&s);
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Type");
+    seat.click(&mut s, "Type orientation ⏵");
+    let horizontal = keys::named(&seat.output, "Horizontal").1;
+    let vertical = keys::named(&seat.output, "Vertical").1;
+    assert_eq!(horizontal.toggled(), Some(egui::accesskit::Toggled::True));
+    assert_eq!(vertical.toggled(), Some(egui::accesskit::Toggled::False));
+    seat.invoke(&mut s, "Vertical");
+    let text = s.selected_type().unwrap();
+    assert!(text.vertical);
+    assert_eq!(
+        text.character_style(0).fill,
+        Some(Fill::Solid(crate::color::Rgba::rgb(220, 35, 70)))
+    );
+    let tall = ink_union(&text);
+    assert!(
+        tall.height() > tall.width(),
+        "{} x {}",
+        tall.width(),
+        tall.height()
+    );
+    assert_eq!(s.history.len(), 1);
+    assert_eq!(super::selected_orientation(&s), Some(true));
+    let saved = wire(&s);
+    let doc = crate::project::decode(&saved).unwrap();
+    assert_eq!(crate::project::encode(&doc).unwrap(), saved);
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    assert_eq!(wire(&s), saved);
+    seat.click(&mut s, "Type");
+    seat.click(&mut s, "Type orientation ⏵");
+    assert_eq!(
+        keys::named(&seat.output, "Vertical").1.toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+    seat.invoke(&mut s, "Horizontal");
+    assert!(!s.selected_type().unwrap().vertical);
+    let wide = ink_union(&s.selected_type().unwrap());
+    assert!(wide.width() > wide.height());
+    assert_eq!(s.history.len(), 2);
+    assert_eq!(super::selected_orientation(&s), Some(false));
+
+    let mut other = TypeRun {
+        content: "Side".into(),
+        origin: Pt::new(240., 40.),
+        px: 20.,
+        vertical: true,
+        font: s.selected_type().unwrap().font.clone(),
+        ..Default::default()
+    };
+    other.layout = None;
+    let shape = Shape::new(Geom::Text(other), Style::default());
+    let other_id = shape.id;
+    s.doc.layers[0].kind.shapes_mut().unwrap().push(shape);
+    s.selection = vec![s.selection[0], (0, other_id)];
+    assert_eq!(super::selected_orientation(&s), None);
+    s.selection.clear();
+    assert_eq!(super::selected_orientation(&s), None);
+}
+
+#[test]
+fn craft_type_orientation_native_menu_stays_disabled_on_locked_text() {
+    let mut s = editor();
+    let hit = s.selection[0];
+    s.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    let before = wire(&s);
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Type");
+    assert!(
+        keys::named(&seat.output, "Type orientation ⏵")
+            .1
+            .is_disabled()
+    );
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+}

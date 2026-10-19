@@ -646,6 +646,10 @@ fn default_true() -> bool {
     true
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Live type: the string stays editable. Contours are a shaped cache.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TypeRun {
@@ -665,6 +669,9 @@ pub struct TypeRun {
     pub wrap_width: Option<f32>,
     #[serde(default)]
     pub align: TextAlign,
+    /// Columns run down. The next column starts to the left. Absent on old documents, which stay horizontal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub vertical: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraphs: Vec<ParagraphStyle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -710,6 +717,7 @@ impl Default for TypeRun {
             leading: 0.0,
             wrap_width: None,
             align: TextAlign::Start,
+            vertical: false,
             paragraphs: vec![],
             spans: vec![],
             features: vec![],

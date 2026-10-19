@@ -102,7 +102,27 @@ fn open(ctx: &egui::Context, studio: &Studio) {
     ctx.data_mut(|d| d.insert_temp(Id::new(ID), draft));
 }
 
-/// Add the real reference content, font, style, font-size, fit-headline, and placeholder commands to the existing Type menu.
+/// Read the writing direction when every selected story agrees.
+/// Args: editor. Returns vertical, horizontal, or neither when the selection is mixed or empty.
+fn selected_orientation(studio: &Studio) -> Option<bool> {
+    let mut orientation = None;
+    for &(layer, id) in &studio.selection {
+        let Some(shape) = studio.doc.find_shape(layer, id) else {
+            continue;
+        };
+        let crate::geom::Geom::Text(run) = &shape.geom else {
+            continue;
+        };
+        match orientation {
+            None => orientation = Some(run.vertical),
+            Some(current) if current != run.vertical => return None,
+            _ => {}
+        }
+    }
+    orientation
+}
+
+/// Add the real reference content, font, style, font-size, fit-headline, placeholder, and orientation commands to the existing Type menu.
 /// Args: menu UI and editor. Returns no value; accepted commands share the app-owned route.
 pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
     let owner = Id::new(("type-content-menu", &studio.swap_id, &studio.selection));
@@ -185,6 +205,19 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
             studio.type_selection_command(TypeCommand::Placeholder);
             ui.close();
         }
+        let orientation = selected_orientation(studio);
+        ui.menu_button("Type orientation", |ui| {
+            for (name, vertical) in [("Horizontal", false), ("Vertical", true)] {
+                if control(ui, owner.with(name), name, |ui| {
+                    ui.selectable_label(orientation == Some(vertical), name)
+                })
+                .clicked()
+                {
+                    studio.type_selection_command(TypeCommand::Orientation(vertical));
+                    ui.close();
+                }
+            }
+        });
         for (name, entries) in [
             ("Insert special character", commands::SPECIAL_CHARACTERS),
             (

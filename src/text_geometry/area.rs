@@ -234,6 +234,7 @@ fn sliced_run(story: &TypeRun, start: usize) -> TypeRun {
     run.frame = None;
     run.thread = None;
     run.on_path = None;
+    run.vertical = false;
     run.layout = None;
     run.contours.clear();
     run.content = story.content.chars().skip(start).collect();
@@ -435,6 +436,9 @@ fn layout_frame_pass(
     let Some(frame) = frame_run.frame.as_ref() else {
         return TextGeometryLayout::default();
     };
+    if story.vertical {
+        return crate::text::layout_vertical_frame(frame_run, story, start);
+    }
     let bounds = frame_bounds(frame_run).unwrap();
     let inner = Bounds {
         min: bounds.min + Pt::new(frame.inset[3], frame.inset[0]),

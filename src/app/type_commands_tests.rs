@@ -1306,3 +1306,349 @@ fn craft_type_font_menu_recent_bold_and_italic_use_the_familys_own_faces() {
     s.redo();
     assert_eq!(wire(&s), saved);
 }
+
+fn orient(text: &str) -> (Studio, (usize, u64)) {
+    let (mut s, hit) = editor(text);
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.origin = Pt::new(40., 50.);
+        r.px = 20.;
+        r.font = SANS.into();
+        r.layout = None;
+    }
+    crate::text::fill_contours(&mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom);
+    s.mark();
+    s.history.clear();
+    (s, hit)
+}
+
+fn ink_union(run: &TypeRun) -> crate::geom::Bounds {
+    let mut bounds: Option<crate::geom::Bounds> = None;
+    for point in crate::text::shape(run).into_iter().flatten() {
+        match &mut bounds {
+            Some(bounds) => bounds.union_pt(point),
+            None => bounds = Some(crate::geom::Bounds::from_pt(point)),
+        }
+    }
+    bounds.expect("text ink")
+}
+
+fn glyph_bounds(run: &TypeRun, glyph: &crate::text::LayoutGlyph) -> Option<crate::geom::Bounds> {
+    let mut bounds: Option<crate::geom::Bounds> = None;
+    for point in crate::text::glyph_contours(run, glyph)
+        .into_iter()
+        .flatten()
+    {
+        match &mut bounds {
+            Some(bounds) => bounds.union_pt(point),
+            None => bounds = Some(crate::geom::Bounds::from_pt(point)),
+        }
+    }
+    bounds
+}
+
+fn ink_glyphs(run: &TypeRun) -> Vec<(usize, crate::geom::Bounds)> {
+    crate::text::compose(run)
+        .iter()
+        .flat_map(|line| {
+            line.glyphs
+                .iter()
+                .filter_map(|glyph| glyph_bounds(run, glyph).map(|bounds| (glyph.cluster, bounds)))
+        })
+        .collect()
+}
+
+fn near(actual: f32, expected: f32, tolerance: f32, what: &str) {
+    assert!(
+        (actual - expected).abs() <= tolerance,
+        "{what}: {actual} vs {expected}"
+    );
+}
+
+#[test]
+fn craft_type_orientation_turns_a_line_into_a_column_and_undoes() {
+    let (mut s, hit) = orient("Hello");
+    let before = wire(&s);
+    assert!(!before.contains("\"vertical\""));
+    let opened = crate::project::decode(&before).unwrap();
+    match &opened.layers[0].kind.shapes().unwrap()[0].geom {
+        Geom::Text(run) => assert!(!run.vertical),
+        _ => panic!("lost text"),
+    }
+    assert_eq!(apply(&mut s, TypeCommand::Orientation(false)), 0);
+    assert_eq!(s.history.len(), 0);
+    let wide = ink_union(run(&s, hit));
+    assert!(
+        wide.width() > wide.height(),
+        "{} x {}",
+        wide.width(),
+        wide.height()
+    );
+    assert_eq!(apply(&mut s, TypeCommand::Orientation(true)), 1);
+    assert_eq!(s.history.len(), 1);
+    let text = run(&s, hit);
+    assert_eq!(text.content, "Hello");
+    assert!(text.vertical);
+    assert_eq!(
+        text.character_style(0).fill,
+        Some(Fill::Solid(Rgba::rgb(210, 30, 70)))
+    );
+    let tall = ink_union(text);
+    assert!(
+        tall.height() > tall.width(),
+        "{} x {}",
+        tall.width(),
+        tall.height()
+    );
+    assert!(
+        (tall.center().x - 40.).abs() < 4.,
+        "column {}",
+        tall.center().x
+    );
+    let saved = wire(&s);
+    assert!(saved.contains("\"vertical\""));
+    let doc = crate::project::decode(&saved).unwrap();
+    assert_eq!(crate::project::encode(&doc).unwrap(), saved);
+    match &doc.layers[0].kind.shapes().unwrap()[0].geom {
+        Geom::Text(run) => assert!(run.vertical),
+        _ => panic!("lost text"),
+    }
+    s.undo();
+    assert_eq!(wire(&s), before);
+    let restored = ink_union(run(&s, hit));
+    assert!(restored.width() > restored.height());
+    s.redo();
+    assert_eq!(wire(&s), saved);
+    assert_eq!(apply(&mut s, TypeCommand::Orientation(true)), 0);
+    assert_eq!(s.history.len(), 1);
+    assert_eq!(apply(&mut s, TypeCommand::Orientation(false)), 1);
+    assert_eq!(s.history.len(), 2);
+    assert!(!run(&s, hit).vertical);
+    assert!(ink_union(run(&s, hit)).width() > ink_union(run(&s, hit)).height());
+    s.begin_type_edit(hit, Pt::new(40., 50.));
+    assert!(s.type_edit.is_some());
+    assert_eq!(apply(&mut s, TypeCommand::Orientation(true)), 1);
+    assert!(s.type_edit.is_none());
+    assert_eq!(s.history.len(), 3);
+    assert!(run(&s, hit).vertical);
+}
+
+#[test]
+fn craft_type_orientation_keeps_upright_marks_tate_digits_and_area_columns() {
+    let (mut s, hit) = orient("§l");
+    let horizontal = ink_glyphs(run(&s, hit));
+    assert_eq!(apply(&mut s, TypeCommand::Orientation(true)), 1);
+    let vertical = ink_glyphs(run(&s, hit));
+    assert_eq!(horizontal.len(), 2, "{horizontal:?}");
+    assert_eq!(vertical.len(), 2, "{vertical:?}");
+    let section = |glyphs: &[(usize, crate::geom::Bounds)]| {
+        glyphs.iter().find(|(cluster, _)| *cluster == 0).unwrap().1
+    };
+    let letter = |glyphs: &[(usize, crate::geom::Bounds)]| {
+        glyphs.iter().find(|(cluster, _)| *cluster == 1).unwrap().1
+    };
+    near(
+        section(&vertical).width(),
+        section(&horizontal).width(),
+        0.05,
+        "section width",
+    );
+    near(
+        section(&vertical).height(),
+        section(&horizontal).height(),
+        0.05,
+        "section height",
+    );
+    near(
+        letter(&vertical).width(),
+        letter(&horizontal).height(),
+        0.05,
+        "l width",
+    );
+    near(
+        letter(&vertical).height(),
+        letter(&horizontal).width(),
+        0.05,
+        "l height",
+    );
+    assert!(letter(&vertical).width() > letter(&vertical).height());
+    near(
+        section(&vertical).center().x,
+        letter(&vertical).center().x,
+        0.5,
+        "column",
+    );
+    assert!(letter(&vertical).center().y > section(&vertical).center().y + 1.);
+
+    let (mut s, hit) = orient("§§\n§");
+    assert_eq!(apply(&mut s, TypeCommand::Orientation(true)), 1);
+    let marks = ink_glyphs(run(&s, hit));
+    assert_eq!(marks.len(), 3, "{marks:?}");
+    near(
+        marks[0].1.center().x,
+        marks[1].1.center().x,
+        0.5,
+        "same column",
+    );
+    assert!(marks[1].1.center().y > marks[0].1.center().y + 10.);
+    assert!(marks[2].1.center().x < marks[0].1.center().x - 10.);
+    let (top, bottom) = crate::text::caret_segment(run(&s, hit), 1);
+    near(top.y, bottom.y, 0.01, "caret y");
+    assert!((top.x - bottom.x).abs() > 10.);
+
+    let (mut plain, hit) = orient("§§");
+    assert_eq!(apply(&mut plain, TypeCommand::Orientation(true)), 1);
+    let plain_step =
+        ink_glyphs(run(&plain, hit))[1].1.center().y - ink_glyphs(run(&plain, hit))[0].1.center().y;
+    let (mut tracked, hit) = orient("§§");
+    if let Geom::Text(r) = &mut tracked.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.tracking = 4.;
+        r.layout = None;
+    }
+    crate::text::fill_contours(&mut tracked.doc.find_shape_mut(hit.0, hit.1).unwrap().geom);
+    tracked.mark();
+    tracked.history.clear();
+    assert_eq!(apply(&mut tracked, TypeCommand::Orientation(true)), 1);
+    let tracked_glyphs = ink_glyphs(run(&tracked, hit));
+    let tracked_step = tracked_glyphs[1].1.center().y - tracked_glyphs[0].1.center().y;
+    near(tracked_step - plain_step, 4., 0.5, "upright tracking");
+    near(
+        tracked_glyphs[0].1.center().x,
+        tracked_glyphs[1].1.center().x,
+        0.5,
+        "tracked column",
+    );
+
+    let (mut s, hit) = orient("§12§2026");
+    assert_eq!(apply(&mut s, TypeCommand::Orientation(true)), 1);
+    let digits = ink_glyphs(run(&s, hit));
+    assert_eq!(digits.len(), 8, "{digits:?}");
+    let pair: Vec<_> = digits
+        .iter()
+        .filter(|(cluster, _)| *cluster == 1 || *cluster == 2)
+        .collect();
+    assert_eq!(pair.len(), 2);
+    near(pair[0].1.center().y, pair[1].1.center().y, 1., "tate row");
+    assert!(pair[1].1.center().x > pair[0].1.center().x + 2.);
+    for (_, box_) in &pair {
+        assert!(box_.height() > box_.width());
+    }
+    let group = pair[0].1.union(pair[1].1);
+    assert!(group.width() <= 21.);
+    let down: Vec<_> = digits
+        .iter()
+        .filter(|(cluster, _)| *cluster >= 4)
+        .map(|(_, box_)| box_.center().y)
+        .collect();
+    assert_eq!(down.len(), 4);
+    for window in down.windows(2) {
+        assert!(window[1] > window[0] + 4., "{down:?}");
+    }
+
+    let (mut s, hit) = orient(&"§".repeat(12));
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.origin = Pt::new(0., 17.);
+        r.frame = Some(crate::text_geometry::TextFrame {
+            size: Pt::new(100., 105.),
+            auto_height: false,
+            ..Default::default()
+        });
+        r.layout = None;
+    }
+    crate::text::fill_contours(&mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom);
+    s.mark();
+    s.history.clear();
+    assert_eq!(apply(&mut s, TypeCommand::Orientation(true)), 1);
+    let story = run(&s, hit);
+    let frame = crate::text_geometry::frame_bounds(story).unwrap();
+    let layout = crate::text_geometry::layout_frame(story, story, 0, &[], false);
+    assert!(
+        layout.export_lines.len() >= 2,
+        "{}",
+        layout.export_lines.len()
+    );
+    let mut centers = Vec::new();
+    let mut first = None;
+    for line in &layout.export_lines {
+        assert!(line.run.wrap_width.is_none());
+        let mut column = None;
+        for glyph in &line.line.glyphs {
+            let Some(box_) = glyph_bounds(story, glyph) else {
+                continue;
+            };
+            assert!(box_.max.y <= frame.max.y + 0.5, "{}", box_.max.y);
+            column.get_or_insert(box_.center().x);
+            if first.is_none() {
+                first = Some(box_);
+            }
+        }
+        if let Some(center) = column {
+            centers.push(center);
+        }
+    }
+    let first = first.expect("area ink");
+    assert!(first.max.x > frame.max.x - 20.);
+    assert!(first.max.x <= frame.max.x + 0.5);
+    assert!(first.min.y >= frame.min.y - 0.5);
+    assert!(centers.len() >= 2);
+    for window in centers.windows(2) {
+        assert!(window[1] < window[0] - 1., "{centers:?}");
+    }
+}
+
+#[test]
+fn craft_type_orientation_refuses_locked_text_and_keeps_path_text_on_the_path() {
+    let (mut locked, hit) = editor("Locked");
+    locked.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    let before = wire(&locked);
+    locked.type_selection_command(TypeCommand::Orientation(true));
+    assert!(locked.status.contains("Unlock"), "{}", locked.status);
+    assert_eq!(locked.history.len(), 0);
+    assert_eq!(wire(&locked), before);
+    assert!(!run(&locked, hit).vertical);
+
+    let (mut s, hit) = orient("Hello");
+    let guide = Shape::new(
+        Geom::Line {
+            a: Pt::new(0., 80.),
+            b: Pt::new(220., 80.),
+        },
+        Style::default(),
+    );
+    let path_id = guide.id;
+    let cache = crate::text_geometry::guide_path(&guide);
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.on_path = Some(crate::text_geometry::TextOnPath {
+            path_id,
+            cache,
+            ..Default::default()
+        });
+        r.layout = None;
+    }
+    s.doc.layers[0].kind.shapes_mut().unwrap().push(guide);
+    crate::text::fill_contours(&mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom);
+    s.mark();
+    s.history.clear();
+    let before = wire(&s);
+    let before_ink = ink_union(run(&s, hit));
+    assert!(!crate::text::shape(run(&s, hit)).is_empty());
+    assert!(before_ink.width() > before_ink.height());
+    assert!((before_ink.center().y - 80.).abs() < 24.);
+    assert_eq!(apply(&mut s, TypeCommand::Orientation(true)), 1);
+    assert!(run(&s, hit).vertical);
+    let after_ink = ink_union(run(&s, hit));
+    assert!(!crate::text::shape(run(&s, hit)).is_empty());
+    assert!(after_ink.width() > after_ink.height());
+    assert!((after_ink.center().y - 80.).abs() < 24.);
+    near(after_ink.min.x, before_ink.min.x, 0.05, "path min x");
+    near(after_ink.min.y, before_ink.min.y, 0.05, "path min y");
+    near(after_ink.max.x, before_ink.max.x, 0.05, "path max x");
+    near(after_ink.max.y, before_ink.max.y, 0.05, "path max y");
+    assert_eq!(apply(&mut s, TypeCommand::Orientation(true)), 0);
+    assert_eq!(s.history.len(), 1);
+    s.undo();
+    assert!(!run(&s, hit).vertical);
+    assert_eq!(wire(&s), before);
+    let restored = ink_union(run(&s, hit));
+    near(restored.min.x, before_ink.min.x, 0.05, "undo path");
+    near(restored.max.y, before_ink.max.y, 0.05, "undo path");
+}
