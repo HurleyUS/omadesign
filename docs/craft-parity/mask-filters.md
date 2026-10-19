@@ -4,4 +4,6 @@ A layer's mask menu now has **Filter mask ⏵** with Gaussian blur 2 px, Gaussia
 
 Each filter is one ordinary `SetLayerMask` Undo step and saves with the existing mask format. Missing masks, locked, hidden or busy layers and no-op results change nothing. The full parameter dialog remains the Channels route for saved alpha and Quick Mask.
 
+At `a5db9d6647b308a3b0ee5b8fb01068b2b58cf915` that route passed 10 tests. Receipt `f1ef4b2ceb5a8082c664381921f233fdf05f7f5f1e1588d356f6d3a106bbf428`.
+
 Color/spot targets, calculations and interchange remain open.
