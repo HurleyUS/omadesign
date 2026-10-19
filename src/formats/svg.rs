@@ -1319,6 +1319,7 @@ pub(crate) fn paint(p: &usvg::Paint, alpha: f32, t: Transform, b: crate::geom::B
                     spread: spread(g.spread_method()),
                     focal: [0., 0.],
                     inner_radius: 0.,
+                    silhouette: None,
                 }))
             }
         }
@@ -1346,6 +1347,7 @@ pub(crate) fn paint(p: &usvg::Paint, alpha: f32, t: Transform, b: crate::geom::B
                 inner_radius: g.fr().get() / r,
                 from: point(center),
                 to: point(radius),
+                silhouette: None,
                 stops: g
                     .stops()
                     .iter()

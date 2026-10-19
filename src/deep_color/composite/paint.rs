@@ -68,6 +68,7 @@ impl Paint {
                 spread: Spread::Pad,
                 focal: [0., 0.],
                 inner_radius: 0.,
+                silhouette: None,
             },
             &[
                 GradientStop {
@@ -105,6 +106,7 @@ impl Paint {
                 spread: source.spread,
                 focal: source.focal,
                 inner_radius: source.inner_radius,
+                silhouette: source.silhouette.clone(),
             },
             &source.stops,
             bounds,

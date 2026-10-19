@@ -333,7 +333,7 @@ fn craft_painted_outlines_split_linked_story_without_changing_other_frames() {
 
 #[test]
 fn craft_painted_outlines_reject_unsupported_or_locked_owners_before_draft_and_redo() {
-    for mode in [0, 1, 2, 3] {
+    for mode in [0, 2, 3] {
         let (mut studio, hit) = fixture();
         studio.commit(Cmd::SetOpacity {
             layer: hit.0,
@@ -353,18 +353,6 @@ fn craft_painted_outlines_reject_unsupported_or_locked_owners_before_draft_and_r
         let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
         if mode == 0 {
             shape.locked = true;
-        }
-        if mode == 1 {
-            let Geom::Text(run) = &mut shape.geom else {
-                unreachable!()
-            };
-            run.set_character_style(0, 6, |s| {
-                s.fill = Some(Fill::Gradient(Gradient::new(
-                    GradientKind::Shape,
-                    Rgba::BLACK,
-                    Rgba::WHITE,
-                )))
-            });
         }
         if mode == 2 {
             studio.updates.freezing = true;
@@ -795,4 +783,89 @@ fn craft_outline_shape_distance_keeps_the_shared_fill_and_one_undo() {
     assert_eq!(wire(&studio), before);
     studio.redo();
     assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_shape_distance_character_keeps_the_shared_field_and_one_undo() {
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        let Geom::Text(run) = &mut shape.geom else {
+            unreachable!()
+        };
+        run.set_character_style(0, 6, |span| {
+            span.fill = Some(Fill::Gradient(Gradient::new(
+                GradientKind::Shape,
+                Rgba::BLACK,
+                Rgba::WHITE,
+            )))
+        });
+    }
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let children: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.parent == Some(hit.1))
+        .collect();
+    let painted = children
+        .iter()
+        .find(|shape| {
+            shape
+                .style
+                .fill
+                .gradient()
+                .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
+        })
+        .expect("character shape-distance path");
+    let silhouette = painted
+        .style
+        .fill
+        .gradient()
+        .and_then(|gradient| gradient.silhouette)
+        .expect("shared silhouette");
+    assert!(silhouette.geom().bbox().width() > painted.geom.bbox().width() + 8.);
+    same_paint(&picture, &image(&studio.doc));
+    reopen(&studio);
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_shape_distance_character_refuses_locked_text_without_history() {
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        let Geom::Text(run) = &mut shape.geom else {
+            unreachable!()
+        };
+        run.set_character_style(0, 6, |span| {
+            span.fill = Some(Fill::Gradient(Gradient::new(
+                GradientKind::Shape,
+                Rgba::BLACK,
+                Rgba::WHITE,
+            )))
+        });
+        shape.locked = true;
+    }
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+    assert_eq!(wire(&studio), before);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
 }

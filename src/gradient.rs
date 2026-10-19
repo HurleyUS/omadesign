@@ -1,7 +1,7 @@
 //! Editable multi-stop gradients shared by fills, strokes and portable exports.
 use crate::color::Rgba;
 use crate::document::Shape;
-use crate::geom::{Bounds, Geom, Pt};
+use crate::geom::{Bounds, Geom, PathContour, Pt};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::VecDeque, sync::Arc};
 
@@ -70,6 +70,60 @@ pub struct Gradient {
     pub focal: [f32; 2],
     #[serde(default)]
     pub inner_radius: f32,
+    /// Distance-field silhouette when it is not this object's own path.
+    /// Absent means the filled object supplies the silhouette.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silhouette: Option<DistanceSilhouette>,
+}
+
+/// Contours a shape-distance fill measures when they are not the filled object.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DistanceSilhouette {
+    pub paths: Vec<PathContour>,
+    pub winding: bool,
+}
+
+impl DistanceSilhouette {
+    /// Capture the outline a shape-distance fill measures.
+    /// Args: the full story outline. Returns those contours, or nothing when the outline is empty.
+    pub fn from_geom(geom: &Geom) -> Option<Self> {
+        let silhouette = match geom {
+            Geom::Paths { paths, winding } => Self {
+                paths: paths.clone(),
+                winding: *winding,
+            },
+            Geom::Path { anchors, closed } => Self {
+                paths: vec![PathContour {
+                    anchors: anchors.clone(),
+                    closed: *closed,
+                }],
+                winding: false,
+            },
+            _ => return None,
+        };
+        if silhouette.paths.is_empty() {
+            None
+        } else {
+            Some(silhouette)
+        }
+    }
+
+    /// Rebuild the measured outline as editable geometry.
+    /// Args: none. Returns the stored contours.
+    pub fn geom(&self) -> Geom {
+        if self.paths.len() == 1 && !self.winding {
+            let path = &self.paths[0];
+            Geom::Path {
+                anchors: path.anchors.clone(),
+                closed: path.closed,
+            }
+        } else {
+            Geom::Paths {
+                paths: self.paths.clone(),
+                winding: self.winding,
+            }
+        }
+    }
 }
 impl Gradient {
     pub fn new(kind: GradientKind, first: Rgba, last: Rgba) -> Self {
@@ -85,6 +139,7 @@ impl Gradient {
             spread: Spread::Pad,
             focal: [0., 0.],
             inner_radius: 0.,
+            silhouette: None,
             stops: vec![
                 GradientStop {
                     offset: 0.,
@@ -296,7 +351,13 @@ pub fn texture(gradient: &Gradient, shape: &Shape, padding: f32, scale: f32) -> 
     if !matches!(gradient.kind, GradientKind::Conic | GradientKind::Shape) {
         return None;
     }
-    let geom = &shape.geom;
+    let owned;
+    let geom = if let Some(silhouette) = &gradient.silhouette {
+        owned = silhouette.geom();
+        &owned
+    } else {
+        &shape.geom
+    };
     let bounds = geom.bbox();
     let tile = bounds.inflate(padding.max(1.));
     // Resolution follows the actual canvas/export transform, with bounded memory.
@@ -335,6 +396,7 @@ pub fn texture(gradient: &Gradient, shape: &Shape, padding: f32, scale: f32) -> 
         if let Some(path) = {
             let mut local = shape.clone();
             local.rotation = 0.;
+            local.geom = geom.clone();
             local.get_cached_path(96)
         } {
             let xf = tiny_skia::Transform::from_row(

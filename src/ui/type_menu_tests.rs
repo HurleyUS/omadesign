@@ -491,3 +491,80 @@ fn craft_outline_shape_distance_native_menu_keeps_the_shared_fill() {
     studio.redo();
     assert_eq!(saved(&studio), after);
 }
+
+#[test]
+fn craft_outline_shape_distance_character_native_menu_keeps_the_shared_field() {
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = Document::new("Character shape distance", 480., 200., 96.);
+    studio.doc.transparent = true;
+    studio.doc.workspace = Some(Persona::Layout);
+    studio.doc.layers = vec![Layer::vector("Editable lettering")];
+    let mut run = TypeRun {
+        origin: Pt::new(40., 90.),
+        content: "Distance field".into(),
+        px: 36.,
+        font: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/assets/fonts/EBGaramond.ttf"
+        )
+        .into(),
+        ..Default::default()
+    };
+    run.set_character_style(0, 8, |span| {
+        span.fill = Some(Fill::Gradient(crate::gradient::Gradient::new(
+            crate::gradient::GradientKind::Shape,
+            crate::color::Rgba::BLACK,
+            crate::color::Rgba::WHITE,
+        )))
+    });
+    run.set_character_style(9, 14, |span| {
+        span.fill = Some(Fill::Solid(crate::color::Rgba::rgb(20, 140, 210)))
+    });
+    let mut shape = Shape::new(
+        Geom::Text(run),
+        Style {
+            fill: Fill::Solid(crate::color::Rgba::rgb(30, 80, 40)),
+            stroke: None,
+        },
+    );
+    crate::text::fill_contours(&mut shape.geom);
+    let hit = (0, shape.id);
+    studio.doc.layers[0].kind.shapes_mut().unwrap().push(shape);
+    studio.active_layer = Some(0);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    let before = saved(&studio);
+    let mut seat = Seat::new();
+    seat.frame(&mut studio, vec![]);
+    seat.click(&mut studio, "Type");
+    seat.invoke(&mut studio, "Create outlines");
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let painted = studio.doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .find(|shape| {
+            shape
+                .style
+                .fill
+                .gradient()
+                .is_some_and(|gradient| gradient.kind == crate::gradient::GradientKind::Shape)
+        })
+        .expect("character shape-distance path");
+    let silhouette = painted
+        .style
+        .fill
+        .gradient()
+        .and_then(|gradient| gradient.silhouette)
+        .expect("shared silhouette");
+    assert!(silhouette.geom().bbox().width() > painted.geom.bbox().width() + 8.);
+    let after = saved(&studio);
+    studio.undo();
+    assert_eq!(saved(&studio), before);
+    studio.redo();
+    assert_eq!(saved(&studio), after);
+}

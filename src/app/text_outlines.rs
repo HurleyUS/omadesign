@@ -664,23 +664,6 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
         result.geom = geometry;
         return Ok(vec![result]);
     }
-    if shape
-        .style
-        .fill
-        .gradient()
-        .is_some_and(|g| g.kind == GradientKind::Shape)
-        || shape
-            .style
-            .stroke
-            .as_ref()
-            .and_then(|s| s.gradient.as_ref())
-            .is_some_and(|g| g.kind == GradientKind::Shape)
-    {
-        return Err(
-            "Shape-distance text paint needs a shared outline paint space; it was not converted"
-                .into(),
-        );
-    }
     let bounds = shape.geom.bbox();
     let mut root = shape.clone();
     root.geom = Geom::Rect {
@@ -704,7 +687,24 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
         vec![(shape.style.fill.clone(), geometry.clone())]
     };
     for (index, (fill, geom)) in fills.into_iter().enumerate() {
-        let fill = fill_in_bounds(&fill, bounds, geom.bbox())?;
+        let fill = if fill
+            .gradient()
+            .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
+        {
+            if run.frame.is_some() || run.on_path.is_some() {
+                return Err(
+                    "Shape-distance text paint needs a shared outline paint space; it was not converted"
+                        .into(),
+                );
+            }
+            let mut gradient = fill.gradient().unwrap();
+            gradient.silhouette = Some(crate::gradient::DistanceSilhouette::from_geom(&geometry).ok_or(
+                "Shape-distance text paint needs a shared outline paint space; it was not converted",
+            )?);
+            Fill::Gradient(gradient)
+        } else {
+            fill_in_bounds(&fill, bounds, geom.bbox())?
+        };
         result.push(path_child(
             shape,
             geom,
@@ -719,7 +719,16 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
         .filter(|stroke| stroke.width > 0.)
     {
         if let Some(gradient) = &stroke.gradient {
-            stroke.gradient = Some(gradient_in_bounds(gradient, bounds, geometry.bbox())?);
+            if gradient.kind == GradientKind::Shape {
+                if run.frame.is_some() || run.on_path.is_some() {
+                    return Err(
+                        "Shape-distance text paint needs a shared outline paint space; it was not converted"
+                            .into(),
+                    );
+                }
+            } else {
+                stroke.gradient = Some(gradient_in_bounds(gradient, bounds, geometry.bbox())?);
+            }
         }
         result.push(path_child(
             shape,
