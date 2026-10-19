@@ -10,4 +10,6 @@ The Layout menu now runs the real frame and component commands. Wrap in frame pu
 
 At `83b6e6ef9bd2b64ee6b2689de2fb62ea829c99d6` that route passed 6 tests. Receipt `ec4e4481c2e0ffea89f0c25e6ad90d3f37e856ffe0d3645fc59d34ec8e0f2ea3`.
 
-Develop and Effect remain panel shortcuts. No model, schema, dependency or version change.
+The Photo Develop menu now runs real develop commands on the selected photo. Auto light balances exposure and contrast with the existing auto tone. Clear crop removes the crop and keeps every other setting. Reset all adjustments returns the photo to its default develop settings. Each of these is one photo history step: Undo restores the exact previous settings, Redo restores the edit, and the settings round-trip through their saved form. Show original only changes the view and records no history. With no selected photo, or while a batch or save is running, the commands are disabled and nothing changes; Clear crop and Reset are also disabled when there is nothing to clear. The develop, histogram, preset and history panel shortcuts stay below a separator.
+
+Effect remains panel shortcuts. No model, schema, dependency or version change.

@@ -12,6 +12,11 @@ mod pixel_layers;
 mod animation_menu;
 #[path = "layout_menu.rs"]
 mod layout_menu;
+#[path = "develop_menu.rs"]
+mod develop_menu;
+#[cfg(test)]
+#[path = "develop_menu_tests.rs"]
+mod develop_menu_tests;
 #[cfg(test)]
 #[path = "layout_menu_tests.rs"]
 mod layout_menu_tests;
@@ -142,7 +147,10 @@ fn main_menus(ui: &mut Ui, studio: &mut Studio) {
             if ui.button("Shape library…").clicked(){studio.show_shape_browser=true;ui.close();}
             if ui.button("Free photos…").clicked(){studio.show_asset_browser=true;ui.close();}
         });
-        pane_menu(ui,studio,"Develop",&["photo-develop","histogram","presets","history"]);
+        ui.menu_button("Develop", |ui| {
+            develop_menu::menu(ui, studio);
+            pane_items(ui, studio, &["photo-develop","histogram","presets","history"]);
+        });
     } else {
         if studio.persona == Persona::Pixel {
             ui.menu_button("Image", |ui| {
