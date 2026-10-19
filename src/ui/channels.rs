@@ -472,6 +472,25 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                 Err(e) => state.error = e,
             }
         }
+        ui.add_enabled_ui(editable && saved.is_some(), |ui| {
+            ui.menu_button("⟲", |ui| {
+                for edit in crate::app::mask_affine::MaskAffine::ALL {
+                    if ui.button(edit.label()).clicked() {
+                        if let Err(e) = studio
+                            .capture_channels()
+                            .and_then(|target| studio.transform_channel(&target, saved.unwrap(), edit))
+                        {
+                            state.error = e;
+                        } else {
+                            state.error.clear();
+                        }
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Flip or rotate saved channel");
+        });
         if icon(
             ui,
             key.with("invert"),

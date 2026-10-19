@@ -127,6 +127,16 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
             }
         })
     });
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.menu_button("Flip or rotate selection", |ui| {
+            for edit in crate::app::mask_affine::MaskAffine::ALL {
+                if ui.button(edit.label()).clicked() {
+                    studio.transform_pixel_selection(edit);
+                    ui.close();
+                }
+            }
+        })
+    });
     for (label, settings) in [
         ("Grow…", Edit::Grow { radius: 1 }),
         ("Shrink…", Edit::Shrink { radius: 1 }),
