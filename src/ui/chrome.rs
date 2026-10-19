@@ -14,6 +14,11 @@ mod animation_menu;
 mod layout_menu;
 #[path = "develop_menu.rs"]
 mod develop_menu;
+#[path = "effect_menu.rs"]
+mod effect_menu;
+#[cfg(test)]
+#[path = "effect_menu_tests.rs"]
+mod effect_menu_tests;
 #[cfg(test)]
 #[path = "develop_menu_tests.rs"]
 mod develop_menu_tests;
@@ -185,7 +190,10 @@ fn main_menus(ui: &mut Ui, studio: &mut Studio) {
         } else if studio.persona == Persona::Pixel {
             ui.menu_button("Filter", |ui| super::raster::command_menu(ui, studio, false));
         } else {
-            pane_menu(ui,studio,"Effect",&["effects","adjustments","appearance","transparency"]);
+            ui.menu_button("Effect", |ui| {
+                effect_menu::menu(ui, studio);
+                pane_items(ui, studio, &["effects","adjustments","appearance","transparency"]);
+            });
         }
     }
     view_menu(ui, studio);
