@@ -121,3 +121,53 @@ fn craft_develop_menu_keeps_panel_shortcuts() {
         keys::named(&seat.output, label);
     }
 }
+
+fn panel_frame(ctx: &eframe::egui::Context, studio: &mut Studio, events: Vec<eframe::egui::Event>) -> eframe::egui::FullOutput {
+    let mut output = ctx.run_ui(
+        eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(eframe::egui::Pos2::ZERO, eframe::egui::vec2(420., 1000.))),
+            events,
+            ..Default::default()
+        },
+        |ui| crate::ui::photo::develop_content(ui, studio),
+    );
+    output.textures_delta.clear();
+    output
+}
+
+fn click_panel(ctx: &eframe::egui::Context, studio: &mut Studio, name: &str) {
+    use eframe::egui::{Event, Modifiers, PointerButton};
+    let output = panel_frame(ctx, studio, vec![]);
+    let output = if output.platform_output.accesskit_update.is_some() { output } else { panel_frame(ctx, studio, vec![]) };
+    let bounds = keys::named(&output, name).1.bounds().unwrap();
+    let pos = eframe::egui::pos2(((bounds.x0 + bounds.x1) / 2.) as f32, ((bounds.y0 + bounds.y1) / 2.) as f32);
+    panel_frame(ctx, studio, vec![Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        panel_frame(ctx, studio, vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }]);
+    }
+    panel_frame(ctx, studio, vec![]);
+}
+
+#[test]
+fn craft_develop_auto_light_panel_button_is_one_photo_undo() {
+    let mut studio = editor();
+    let before = develop(&studio);
+    let mut expected = before.clone();
+    crate::photo::auto_tone(&mut expected, &studio.photo.selected().unwrap().preview);
+    assert_ne!(expected, before);
+    let ctx = eframe::egui::Context::default();
+    ctx.enable_accesskit();
+    crate::ui::theme::apply(&ctx);
+    click_panel(&ctx, &mut studio, "Auto light");
+    assert_eq!(develop(&studio), expected);
+    assert_eq!(studio.photo.history_steps(), vec![1]);
+    reopen(&studio);
+    undo_redo(&mut studio, &before);
+    // A second press is a separate step, never merged into the first.
+    studio.photo.selected_mut().unwrap().develop.exposure = -1.0;
+    let changed = develop(&studio);
+    click_panel(&ctx, &mut studio, "Auto light");
+    assert_eq!(studio.photo.history_steps().len(), 2);
+    studio.undo();
+    assert_eq!(develop(&studio), changed);
+}

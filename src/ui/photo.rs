@@ -541,9 +541,12 @@ fn develop_controls(ui: &mut Ui, studio: &mut Studio) {
             .clicked()
             && let Some(img) = studio.photo.selected_mut()
         {
+            // One photo history step, the same as the Develop menu route.
+            let before = img.develop.clone();
             photo::auto_tone(&mut img.develop, &img.preview);
-            studio.photo.dirty = true;
-            studio.photo.sel_version += 1;
+            studio.photo.finish_edit();
+            studio.photo.record_edit(before, false);
+            studio.photo.finish_edit();
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.toggle_value(&mut studio.photo.show_original, "Before");

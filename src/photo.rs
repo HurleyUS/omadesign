@@ -836,8 +836,10 @@ pub fn auto_tone(p: &mut DevelopParams, img: &RgbaImage) {
     let lo = percentile(0.01);
     let hi = percentile(0.99);
     p.exposure = (0.5 / ((lo + hi) * 0.5).max(0.01)).log2();
-    p.blacks = -lo * 4.0;
-    p.whites = (1.0 - hi) * 4.0;
+    // Keep the stored values inside the slider, sidecar and render range
+    // (-1..=1) so the panel never rewrites them outside history.
+    p.blacks = (-lo * 4.0).clamp(-1.0, 1.0);
+    p.whites = ((1.0 - hi) * 4.0).clamp(-1.0, 1.0);
 }
 
 fn hash01(x: u32, y: u32) -> f32 {
@@ -1265,8 +1267,9 @@ mod tests {
         let img = gray_rgba(64, 1, 1);
         auto_tone(&mut params, &img);
         assert!((params.exposure - (127.5_f32 / 64.0).log2()).abs() < 0.0001);
-        assert!((params.blacks + 64.0 / 255.0 * 4.0).abs() < 0.0001);
-        assert!((params.whites - 191.0 / 255.0 * 4.0).abs() < 0.0001);
+        assert!((params.blacks + (64.0_f32 / 255.0 * 4.0).min(1.0)).abs() < 0.0001);
+        assert!((params.whites - (191.0_f32 / 255.0 * 4.0).min(1.0)).abs() < 0.0001);
+        assert!(crate::photo::edits::validate(&params).is_ok());
     }
 
     #[test]

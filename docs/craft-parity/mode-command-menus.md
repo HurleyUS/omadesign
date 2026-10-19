@@ -18,4 +18,6 @@ The Design Effect menu now edits object effects on the selection. Add effect off
 
 At `52c0cc5374d8eaab12468670ec3007bd140f08db` that route passed 5 tests. Receipt `2209a1393cc7ae93a77cb303607fa74a3c87cd7c92bf1bbabb0089f74bb40e2b`.
 
+The Develop panel's Auto light button now records one photo history step, the same as the menu route; a second press is a separate step. Auto light also keeps whites and blacks inside the -1 to 1 range used by the sliders, the renderer and saved settings. Before, it could store values outside that range, and the panel sliders then rewrote them outside history. Rendered output is unchanged, because rendering already clamps to that range.
+
 All four mode menus (Animation, Layout, Develop, Effect) now run real commands. No model, schema, dependency or version change.
