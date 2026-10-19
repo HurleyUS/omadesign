@@ -49,6 +49,8 @@ pub(crate) enum TypeCommand {
     Size(f32),
     /// Track the first paragraph of area type so it fills the frame width.
     FitHeadline,
+    /// Replace the story with stand-in copy. Area type fills its frame. Other type gets one sentence.
+    Placeholder,
 }
 pub(crate) const SPECIAL_CHARACTERS: &[(&str, &str)] = &[
     ("Bullet •", "•"),
@@ -143,7 +145,10 @@ fn rewritten_caret(at: usize, edits: &[CharacterRewrite]) -> usize {
 fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<CharacterRewrite> {
     if matches!(
         command,
-        TypeCommand::Font(_) | TypeCommand::Size(_) | TypeCommand::FitHeadline
+        TypeCommand::Font(_)
+            | TypeCommand::Size(_)
+            | TypeCommand::FitHeadline
+            | TypeCommand::Placeholder
     ) {
         return vec![];
     }
@@ -248,7 +253,8 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
             | TypeCommand::Replace(_)
             | TypeCommand::Font(_)
             | TypeCommand::Size(_)
-            | TypeCommand::FitHeadline => {
+            | TypeCommand::FitHeadline
+            | TypeCommand::Placeholder => {
                 unreachable!()
             }
         };
@@ -404,6 +410,92 @@ fn fit_authored_headline(run: &mut TypeRun) -> Result<bool, String> {
     }
     run.set_character_style(0, end, |span| span.tracking = Some(tracking));
     run.layout = None;
+    Ok(true)
+}
+
+/// Stand-in copy for Type > Fill with placeholder text.
+/// Point type uses the first sentence. Area type repeats these words until the frame budget is full.
+const PLACEHOLDER: &str = "Placeholder text sits here while the frame is still open. Replace it when the real words are ready. The stand-in shows size, spacing and color without pretending to be the finished line. Headlines and captions start the same way. Add words until the frame is full and the page feels settled.";
+
+/// The one sentence used for point type and path type.
+/// Args: none. Returns that sentence, including its period.
+fn placeholder_sentence() -> String {
+    let sentence = PLACEHOLDER.split(". ").next().unwrap_or(PLACEHOLDER);
+    format!("{sentence}.")
+}
+
+/// Stored style of the first character, without a resolved font fallback.
+/// Args: text run. Returns that style, or the empty style when the story has no characters.
+fn first_stored_style(run: &TypeRun) -> crate::geom::CharSpan {
+    let mut style = if run.content.is_empty() {
+        crate::geom::CharSpan::default()
+    } else {
+        run.spans
+            .iter()
+            .find(|span| span.start == 0 && span.end > 0)
+            .cloned()
+            .unwrap_or_default()
+    };
+    style.start = 0;
+    style.end = 0;
+    style
+}
+
+/// Build the stand-in string for one story.
+/// Args: text run. Returns the replacement. A non-finite area frame is an error and does not choose a string.
+fn placeholder_copy(run: &TypeRun) -> Result<String, String> {
+    if !area_text(run) {
+        return Ok(placeholder_sentence());
+    }
+    let frame = run.frame.as_ref().expect("area text has a frame");
+    if !frame.size.x.is_finite()
+        || !frame.size.y.is_finite()
+        || frame.inset.iter().any(|value| !value.is_finite())
+    {
+        return Err("The type frame has no finite size".into());
+    }
+    let metrics = crate::text::character_metrics(run, 0);
+    let px = metrics.px.unwrap_or(run.px).max(0.1);
+    let leading = metrics
+        .leading
+        .map(|mode| mode.pixels(px))
+        .unwrap_or_else(|| run.line_height())
+        .max(0.1);
+    let per_line = (f64::from(frame.size.x) / (f64::from(px) * 0.5)).max(1.);
+    let lines = (f64::from(frame.size.y) / f64::from(leading)).max(1.);
+    let want = (per_line * lines).floor().max(1.) as usize;
+    let mut out = String::new();
+    for (index, word) in PLACEHOLDER.split(' ').cycle().enumerate() {
+        if out.len() >= want || index >= 10_000 {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    Ok(out)
+}
+
+/// Replace a story with stand-in copy in the first character's style.
+/// Args: text run. Returns whether the story text or its styles changed.
+/// Area type repeats the copy up to the frame budget. Point type and path type get one sentence.
+/// The same text and styles a second time do not count as a change.
+fn fill_authored_placeholder(run: &mut TypeRun) -> Result<bool, String> {
+    let text = placeholder_copy(run)?;
+    let mut next = run.clone();
+    let count = next.content.chars().count();
+    next.replace_text(0, count, &text, Some(first_stored_style(run)));
+    next.layout = None;
+    if next.content == run.content
+        && next.spans == run.spans
+        && next.paragraphs == run.paragraphs
+        && next.manual_kern == run.manual_kern
+        && next.svg_text == run.svg_text
+    {
+        return Ok(false);
+    }
+    *run = next;
     Ok(true)
 }
 
@@ -633,7 +725,7 @@ impl Studio {
             return Err("Select area type".into());
         }
         let live = (target.scope == TextScope::Selection
-            && !matches!(command, TypeCommand::FitHeadline))
+            && !matches!(command, TypeCommand::FitHeadline | TypeCommand::Placeholder))
         .then_some(target.edit.as_ref())
         .flatten();
         if let TypeCommand::Size(_) = &command
@@ -664,6 +756,8 @@ impl Studio {
                 step_authored_size(&mut run, range.unwrap_or(0..count), *delta)?
             } else if let TypeCommand::FitHeadline = &command {
                 fit_authored_headline(&mut run)?
+            } else if let TypeCommand::Placeholder = &command {
+                fill_authored_placeholder(&mut run)?
             } else if let TypeCommand::Font(replacement) = &command {
                 crate::text::font_inventory::replace_at(
                     &mut run,

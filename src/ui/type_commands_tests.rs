@@ -405,3 +405,46 @@ fn craft_type_fit_headline_native_menu_refuses_point_type_and_locked_text() {
     assert_eq!(s.history.len(), 0);
     assert_eq!(wire(&s), before);
 }
+
+#[test]
+fn craft_type_placeholder_native_type_menu_replaces_one_undo_and_reopens() {
+    let mut s = editor();
+    let before = wire(&s);
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Type");
+    seat.invoke(&mut s, "Fill with placeholder text");
+    let text = s.selected_type().unwrap();
+    assert_eq!(
+        text.content,
+        "Placeholder text sits here while the frame is still open."
+    );
+    assert_eq!(
+        text.character_style(0).fill,
+        Some(Fill::Solid(crate::color::Rgba::rgb(220, 35, 70)))
+    );
+    assert_eq!(s.history.len(), 1);
+    let filled = wire(&s);
+    let doc = crate::project::decode(&filled).unwrap();
+    assert_eq!(crate::project::encode(&doc).unwrap(), filled);
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    assert_eq!(wire(&s), filled);
+}
+
+#[test]
+fn craft_type_placeholder_native_menu_stays_disabled_on_locked_text() {
+    let mut s = editor();
+    let hit = s.selection[0];
+    s.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    let before = wire(&s);
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Type");
+    assert!(
+        keys::named(&seat.output, "Fill with placeholder text")
+            .1
+            .is_disabled()
+    );
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+}

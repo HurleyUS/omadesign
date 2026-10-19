@@ -101,7 +101,7 @@ fn open(ctx: &egui::Context, studio: &Studio) {
     ctx.data_mut(|d| d.insert_temp(Id::new(ID), draft));
 }
 
-/// Add the real reference content, font-size, and fit-headline commands to the existing Type menu.
+/// Add the real reference content, font-size, fit-headline, and placeholder commands to the existing Type menu.
 /// Args: menu UI and editor. Returns no value; accepted commands share the app-owned route.
 pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
     let owner = Id::new(("type-content-menu", &studio.swap_id, &studio.selection));
@@ -132,6 +132,17 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
         .clicked()
         {
             studio.type_selection_command(TypeCommand::FitHeadline);
+            ui.close();
+        }
+        if control(
+            ui,
+            owner.with("Fill with placeholder text"),
+            "Fill with placeholder text",
+            |ui| ui.button("Fill with placeholder text"),
+        )
+        .clicked()
+        {
+            studio.type_selection_command(TypeCommand::Placeholder);
             ui.close();
         }
         for (name, entries) in [

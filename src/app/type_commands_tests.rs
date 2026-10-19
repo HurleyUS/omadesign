@@ -900,3 +900,144 @@ fn craft_type_fit_headline_refuses_point_path_empty_and_locked_text() {
     assert_eq!(locked.history.len(), 0);
     assert_eq!(wire(&locked), before);
 }
+
+const POINT_PLACEHOLDER: &str = "Placeholder text sits here while the frame is still open.";
+
+#[test]
+fn craft_type_placeholder_replaces_point_text_keeps_the_first_style_and_one_undo() {
+    let (mut s, hit) = editor("Old words stay");
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        let count = r.content.chars().count();
+        r.set_character_style(6, count, |span| {
+            span.fill = Some(Fill::Solid(Rgba::rgb(20, 140, 90)));
+        });
+        r.manual_kern.insert(2, -3.);
+        r.layout = None;
+    }
+    s.mark();
+    s.history.clear();
+    let before = wire(&s);
+    assert_eq!(apply(&mut s, TypeCommand::Placeholder), 1);
+    let text = run(&s, hit);
+    assert_eq!(text.content, POINT_PLACEHOLDER);
+    assert!(text.manual_kern.is_empty());
+    assert_eq!(text.tracking, 0.);
+    let count = text.content.chars().count();
+    for index in 0..count {
+        assert_eq!(
+            text.character_style(index).fill,
+            Some(Fill::Solid(Rgba::rgb(210, 30, 70))),
+            "character {index}"
+        );
+    }
+    assert_eq!(s.history.len(), 1);
+    reopen(&s);
+    let after = wire(&s);
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    assert_eq!(wire(&s), after);
+    assert_eq!(apply(&mut s, TypeCommand::Placeholder), 0);
+    assert_eq!(s.history.len(), 1);
+    assert_eq!(wire(&s), after);
+    s.undo();
+    s.begin_type_edit(hit, Pt::new(40., 65.));
+    assert!(s.type_edit.is_some());
+    assert_eq!(apply(&mut s, TypeCommand::Placeholder), 1);
+    assert!(s.type_edit.is_none());
+    assert_eq!(run(&s, hit).content, POINT_PLACEHOLDER);
+    assert_eq!(s.history.len(), 1);
+}
+
+#[test]
+fn craft_type_placeholder_fills_an_area_frame_and_leaves_point_type_as_a_sentence() {
+    let (mut s, hit) = area("Short\nBody", Pt::new(420., 180.));
+    let mut point = Shape::new(
+        Geom::Text(TypeRun {
+            content: "point".into(),
+            origin: Pt::new(40., 220.),
+            px: 18.,
+            font: run(&s, hit).font.clone(),
+            ..Default::default()
+        }),
+        Style::default(),
+    );
+    crate::text::fill_contours(&mut point.geom);
+    let point_hit = (0, point.id);
+    s.doc.layers[0].kind.shapes_mut().unwrap().push(point);
+    s.selection = vec![hit, point_hit];
+    s.mark();
+    s.history.clear();
+    let before = wire(&s);
+    let frame = run(&s, hit).frame.clone();
+    assert_eq!(apply(&mut s, TypeCommand::Placeholder), 2);
+    let area_text = run(&s, hit);
+    assert!(area_text.content.len() > POINT_PLACEHOLDER.len());
+    assert!(area_text.content.starts_with("Placeholder text sits here"));
+    assert_eq!(area_text.frame, frame);
+    assert_eq!(area_text.tracking, 1.5);
+    assert!(area_text.content.chars().all(|c| c.is_ascii()));
+    for index in 0..area_text.content.chars().count() {
+        assert_eq!(
+            area_text.character_style(index).fill,
+            Some(Fill::Solid(Rgba::rgb(210, 30, 70)))
+        );
+        assert!(area_text.character_style(index).tracking.is_none());
+    }
+    assert_eq!(run(&s, point_hit).content, POINT_PLACEHOLDER);
+    assert!(run(&s, point_hit).frame.is_none());
+    assert_eq!(s.history.len(), 1);
+    reopen(&s);
+    let after = wire(&s);
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    assert_eq!(wire(&s), after);
+    assert_eq!(apply(&mut s, TypeCommand::Placeholder), 0);
+    assert_eq!(s.history.len(), 1);
+}
+
+#[test]
+fn craft_type_placeholder_refuses_a_non_finite_frame_and_locked_text() {
+    let (mut broken, hit) = area("Headline", Pt::new(240., 80.));
+    if let Geom::Text(r) = &mut broken.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.frame.as_mut().unwrap().size.y = f32::NAN;
+    }
+    broken.history.clear();
+    let content = run(&broken, hit).content.clone();
+    let target = broken.capture_type_command(TextScope::Selection).unwrap();
+    assert_eq!(
+        broken
+            .apply_type_command(&target, TypeCommand::Placeholder)
+            .unwrap_err(),
+        "The type frame has no finite size"
+    );
+    assert_eq!(broken.history.len(), 0);
+    assert_eq!(run(&broken, hit).content, content);
+
+    let (mut empty, hit) = editor("");
+    assert_eq!(apply(&mut empty, TypeCommand::Placeholder), 1);
+    assert_eq!(run(&empty, hit).content, POINT_PLACEHOLDER);
+    assert_eq!(empty.history.len(), 1);
+
+    let (mut path, hit) = area("On a path", Pt::new(300., 100.));
+    if let Geom::Text(r) = &mut path.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.on_path = Some(crate::text_geometry::TextOnPath::default());
+        r.layout = None;
+    }
+    path.mark();
+    path.history.clear();
+    assert_eq!(apply(&mut path, TypeCommand::Placeholder), 1);
+    assert_eq!(run(&path, hit).content, POINT_PLACEHOLDER);
+    assert!(run(&path, hit).frame.is_some());
+    assert_eq!(path.history.len(), 1);
+
+    let (mut locked, _) = editor("Locked");
+    let id = locked.selection[0];
+    locked.doc.find_shape_mut(id.0, id.1).unwrap().locked = true;
+    let before = wire(&locked);
+    locked.type_selection_command(TypeCommand::Placeholder);
+    assert!(locked.status.contains("Unlock"));
+    assert_eq!(locked.history.len(), 0);
+    assert_eq!(wire(&locked), before);
+}
