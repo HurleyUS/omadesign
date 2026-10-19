@@ -12,4 +12,6 @@ At `83b6e6ef9bd2b64ee6b2689de2fb62ea829c99d6` that route passed 6 tests. Receipt
 
 The Photo Develop menu now runs real develop commands on the selected photo. Auto light balances exposure and contrast with the existing auto tone. Clear crop removes the crop and keeps every other setting. Reset all adjustments returns the photo to its default develop settings. Each of these is one photo history step: Undo restores the exact previous settings, Redo restores the edit, and the settings round-trip through their saved form. Show original only changes the view and records no history. With no selected photo, or while a batch or save is running, the commands are disabled and nothing changes; Clear crop and Reset are also disabled when there is nothing to clear. The develop, histogram, preset and history panel shortcuts stay below a separator.
 
+At `1ba6b440a221476745156842e473895f4be8de69` that route passed 5 tests. Receipt `33af580461f2dde803a6aa3eb8d0dd7ee1336db21568f94e9c06eeb709615a86`.
+
 Effect remains panel shortcuts. No model, schema, dependency or version change.
