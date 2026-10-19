@@ -589,16 +589,51 @@ fn inherited_distance(shape: &Shape, run: &TypeRun) -> Result<Option<InheritedDi
     }))
 }
 
-/// Image fills and layout frames still need their own outline adapter.
-/// Args: the text shape. Returns the named refusal when one of those is present.
+/// Layout frames still need their own outline adapter.
+/// Args: the text shape. Returns the named refusal when the text is already a layout frame.
 fn outline_adapter_block(shape: &Shape) -> Option<String> {
-    if shape.layout.image.is_some() || shape.layout.frame {
+    if shape.layout.frame {
         Some(
-            "Text with image fill or existing frame children needs an outline appearance adapter; it was not converted"
+            "Text that already serves as a layout frame needs an outline appearance adapter; it was not converted"
                 .into(),
         )
     } else {
         None
+    }
+}
+
+/// Keep a placed image clipped to the outlined letters.
+/// Args: the text, its replacement shapes and the letter outlines. One image path keeps the original placement. Returns nothing.
+fn place_text_image(source: &Shape, shapes: &mut Vec<Shape>, letters: Geom) {
+    let Some(image) = source.layout.image.clone() else {
+        return;
+    };
+    if shapes.len() == 1 {
+        shapes[0].layout.image = Some(image);
+        return;
+    }
+    for shape in shapes.iter_mut() {
+        shape.layout.image = None;
+    }
+    let owner = shapes[0].clone();
+    let mut carrier = path_child(
+        &owner,
+        letters,
+        Style {
+            fill: Fill::None,
+            stroke: None,
+        },
+        "image",
+    );
+    extend_fill_bounds(&mut carrier.geom, source.geom.bbox());
+    carrier.layout.image = Some(image);
+    let stroke_at = shapes
+        .iter()
+        .rposition(|shape| shape.style.stroke.is_some() && shape.style.fill.is_none());
+    if let Some(index) = stroke_at {
+        shapes.insert(index, carrier);
+    } else {
+        shapes.push(carrier);
     }
 }
 
@@ -674,16 +709,17 @@ fn svg_outlines(shape: &Shape, run: &TypeRun) -> Result<Vec<Shape>, String> {
         0,
     )?;
     let mut painted = seal(drafts)?;
+    let covered = coverage
+        .finish()
+        .and_then(|path| crate::geom::path_geom(&path, true));
     if let Some(mut stroke) = shape
         .style
         .stroke
         .clone()
         .filter(|stroke| stroke.width > 0.)
     {
-        let path = coverage
-            .finish()
-            .ok_or("This text has no visible outlines to convert")?;
-        let geom = crate::geom::path_geom(&path, true)
+        let geom = covered
+            .clone()
             .ok_or("This text has no visible outlines to convert")?;
         if let Some(gradient) = stroke.gradient.clone()
             && gradient.kind != GradientKind::Shape
@@ -708,7 +744,11 @@ fn svg_outlines(shape: &Shape, run: &TypeRun) -> Result<Vec<Shape>, String> {
         result.geom = painted[0].geom.clone();
         result.style.fill = painted[0].fill.clone();
         result.style.stroke = painted[0].stroke.clone();
-        return Ok(vec![result]);
+        let mut shapes = vec![result];
+        if let Some(letters) = covered.clone() {
+            place_text_image(shape, &mut shapes, letters);
+        }
+        return Ok(shapes);
     }
     let bounds = shape.geom.bbox();
     let mut root = shape.clone();
@@ -740,6 +780,9 @@ fn svg_outlines(shape: &Shape, run: &TypeRun) -> Result<Vec<Shape>, String> {
             &label,
         ));
     }
+    if let Some(letters) = covered {
+        place_text_image(shape, &mut result, letters);
+    }
     Ok(result)
 }
 
@@ -765,8 +808,10 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
     let painted = crate::text::has_character_paint(run);
     if !painted && run.frame.is_none() && run.on_path.is_none() {
         let mut result = shape.clone();
-        result.geom = geometry;
-        return Ok(vec![result]);
+        result.geom = geometry.clone();
+        let mut shapes = vec![result];
+        place_text_image(shape, &mut shapes, geometry);
+        return Ok(shapes);
     }
     let bounds = shape.geom.bbox();
     let mut root = shape.clone();
@@ -836,7 +881,7 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
         }
         result.push(path_child(
             shape,
-            geometry,
+            geometry.clone(),
             Style {
                 fill: Fill::None,
                 stroke: Some(stroke),
@@ -844,6 +889,7 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
             "stroke",
         ));
     }
+    place_text_image(shape, &mut result, geometry);
     Ok(result)
 }
 

@@ -1404,7 +1404,7 @@ fn craft_outline_contour_wrap_keeps_box_and_jump_on_the_frame() {
 }
 
 #[test]
-fn craft_outline_contour_wrap_refuses_locked_image_and_layout_frames() {
+fn craft_outline_contour_wrap_refuses_locked_and_layout_frames() {
     let (mut studio, hit) = fixture();
     studio
         .doc
@@ -1438,17 +1438,137 @@ fn craft_outline_contour_wrap_refuses_locked_image_and_layout_frames() {
         studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
         Geom::Text(_)
     ));
+}
 
-    let (mut studio, hit) = fixture();
-    {
-        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
-        shape.text_wrap.mode = crate::text_geometry::WrapMode::JumpObject;
-        shape.layout.image = Some(crate::layout_images::ImageFill {
-            data: std::sync::Arc::<str>::from("abc"),
-            fit: crate::layout_images::ImageFit::Cover,
-            focal: Pt::splat(0.5),
-        });
+fn placed_image() -> crate::layout_images::ImageFill {
+    let mut pixmap = tiny_skia::Pixmap::new(8, 4).unwrap();
+    for (index, pixel) in pixmap.pixels_mut().iter_mut().enumerate() {
+        *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
+            if index % 2 == 0 { 220 } else { 20 },
+            40,
+            if index % 2 == 0 { 30 } else { 200 },
+            255,
+        )
+        .unwrap();
     }
+    crate::layout_images::from_bytes(&pixmap.encode_png().unwrap()).unwrap()
+}
+
+fn point_image() -> (Studio, (usize, u64)) {
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = Document::new("Image outlines", 320., 180., 96.);
+    studio.doc.transparent = true;
+    studio.doc.workspace = Some(Persona::Layout);
+    studio.doc.layers = vec![Layer::vector("Editable lettering")];
+    let mut shape = Shape::new(
+        Geom::Text(TypeRun {
+            origin: Pt::new(36., 110.),
+            content: "Image".into(),
+            px: 64.,
+            font: concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/assets/fonts/EBGaramond.ttf"
+            )
+            .into(),
+            ..Default::default()
+        }),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(10, 20, 30)),
+            stroke: None,
+        },
+    );
+    crate::text::fill_contours(&mut shape.geom);
+    shape.layout.image = Some(placed_image());
+    let hit = (0, shape.id);
+    studio.doc.layers[0].kind.shapes_mut().unwrap().push(shape);
+    studio.active_layer = Some(0);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    (studio, hit)
+}
+
+#[test]
+fn craft_outline_text_image_keeps_the_picture_on_point_type() {
+    let (mut studio, hit) = point_image();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let outlined = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(!matches!(outlined.geom, Geom::Text(_)));
+    assert!(outlined.layout.image.is_some());
+    same_paint(&picture, &image(&studio.doc));
+    let saved = wire(&studio);
+    let reopened = crate::project::decode(&saved).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), saved);
+    assert_eq!(image(&reopened).data(), image(&studio.doc).data());
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), saved);
+}
+
+#[test]
+fn craft_outline_text_image_keeps_one_picture_on_painted_letters() {
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .layout
+        .image = Some(placed_image());
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame);
+    assert!(root.layout.image.is_none());
+    let images: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.image.is_some())
+        .collect();
+    assert_eq!(images.len(), 1);
+    assert!(images[0].style.fill.is_none());
+    assert!(images[0].style.stroke.is_none());
+    assert_eq!(images[0].layout.parent, Some(hit.1));
+    same_paint(&picture, &image(&studio.doc));
+    let saved = wire(&studio);
+    let reopened = crate::project::decode(&saved).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), saved);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), saved);
+}
+
+#[test]
+fn craft_outline_text_image_refuses_locked_text_and_layout_frames() {
+    let (mut studio, hit) = point_image();
+    studio.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(wire(&studio), before);
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+
+    let (mut studio, hit) = point_image();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .layout
+        .frame = true;
     studio.mark();
     studio.history.clear();
     let before = wire(&studio);

@@ -855,3 +855,70 @@ fn craft_outline_contour_wrap_native_menu_keeps_object_shape() {
     studio.redo();
     assert_eq!(saved(&studio), after);
 }
+
+#[test]
+fn craft_outline_text_image_native_menu_keeps_the_picture() {
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = Document::new("Image outline menu", 320., 180., 96.);
+    studio.doc.transparent = true;
+    studio.doc.workspace = Some(Persona::Layout);
+    studio.doc.layers = vec![Layer::vector("Editable lettering")];
+    let mut shape = Shape::new(
+        Geom::Text(TypeRun {
+            origin: Pt::new(36., 110.),
+            content: "Image".into(),
+            px: 64.,
+            font: concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/assets/fonts/EBGaramond.ttf"
+            )
+            .into(),
+            ..Default::default()
+        }),
+        Style {
+            fill: Fill::Solid(crate::color::Rgba::rgb(10, 20, 30)),
+            stroke: None,
+        },
+    );
+    crate::text::fill_contours(&mut shape.geom);
+    let mut pixmap = tiny_skia::Pixmap::new(8, 4).unwrap();
+    for (index, pixel) in pixmap.pixels_mut().iter_mut().enumerate() {
+        *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
+            if index % 2 == 0 { 220 } else { 20 },
+            40,
+            if index % 2 == 0 { 30 } else { 200 },
+            255,
+        )
+        .unwrap();
+    }
+    shape.layout.image =
+        Some(crate::layout_images::from_bytes(&pixmap.encode_png().unwrap()).unwrap());
+    let hit = (0, shape.id);
+    studio.doc.layers[0].kind.shapes_mut().unwrap().push(shape);
+    studio.active_layer = Some(0);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    let before_doc = studio.doc.clone();
+    let before = saved(&studio);
+    let mut seat = Seat::new();
+    seat.frame(&mut studio, vec![]);
+    seat.click(&mut studio, "Type");
+    seat.invoke(&mut studio, "Create outlines");
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let outlined = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(!matches!(outlined.geom, Geom::Text(_)));
+    assert!(outlined.layout.image.is_some());
+    let left = crate::compositor::render_export(&before_doc, 1).unwrap();
+    let right = crate::compositor::render_export(&studio.doc, 1).unwrap();
+    assert_eq!(left.data(), right.data());
+    let after = saved(&studio);
+    let reopened = crate::project::decode(&after).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), after);
+    studio.undo();
+    assert_eq!(saved(&studio), before);
+    studio.redo();
+    assert_eq!(saved(&studio), after);
+}
