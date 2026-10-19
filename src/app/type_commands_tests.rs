@@ -497,3 +497,217 @@ fn craft_type_content_rotated_point_area_path_and_affine_type_keep_the_original_
         assert_eq!(wire(&s), before);
     }
 }
+
+#[test]
+fn craft_type_size_steps_mixed_stories_in_one_undo() {
+    let (mut s, hit) = editor("Colour size");
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.px = 16.;
+        r.set_character_style(0, 4, |span| span.px = Some(20.));
+        r.set_character_style(4, r.content.chars().count(), |span| span.px = Some(40.));
+        r.manual_kern.insert(3, -1.25);
+        r.layout = None;
+    }
+    crate::text::fill_contours(&mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom);
+    let mut second_run = TypeRun {
+        content: "Second".into(),
+        origin: Pt::new(35., 140.),
+        px: 12.,
+        font: run(&s, hit).font.clone(),
+        ..Default::default()
+    };
+    second_run.layout = None;
+    let mut second = Shape::new(Geom::Text(second_run), Style::default());
+    crate::text::fill_contours(&mut second.geom);
+    let second_hit = (0, second.id);
+    s.doc.layers[0].kind.shapes_mut().unwrap().push(second);
+    s.selection = vec![hit, second_hit];
+    s.mark();
+    s.history.clear();
+    let before = wire(&s);
+    let before_width = s.doc.find_shape(hit.0, hit.1).unwrap().geom.bbox().width();
+    assert_eq!(apply(&mut s, TypeCommand::Size(2.)), 2);
+    assert_eq!(run(&s, hit).content, "Colour size");
+    assert_eq!(run(&s, hit).character_style(0).px, Some(22.));
+    assert_eq!(
+        run(&s, hit).character_style(0).fill,
+        Some(Fill::Solid(Rgba::rgb(210, 30, 70)))
+    );
+    assert_eq!(run(&s, hit).character_style(5).px, Some(42.));
+    assert_eq!(
+        run(&s, hit).character_style(5).fill,
+        Some(Fill::Solid(Rgba::rgb(210, 30, 70)))
+    );
+    assert_eq!(run(&s, hit).character_style(8).px, Some(42.));
+    assert_eq!(run(&s, hit).character_style(8).fill, None);
+    assert_eq!(run(&s, hit).manual_kern.get(&3), Some(&-1.25));
+    assert_eq!(run(&s, second_hit).content, "Second");
+    assert_eq!(run(&s, second_hit).character_style(0).px, Some(14.));
+    assert!(s.doc.find_shape(hit.0, hit.1).unwrap().geom.bbox().width() > before_width + 0.5);
+    assert_eq!(s.history.len(), 1);
+    reopen(&s);
+    let after = wire(&s);
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    assert_eq!(wire(&s), after);
+}
+
+#[test]
+fn craft_type_size_live_range_keeps_the_rest_and_a_collapsed_caret_stays_pending() {
+    let (mut s, hit) = editor("Colour size");
+    s.begin_type_edit(hit, Pt::new(35., 65.));
+    let before = wire(&s);
+    assert_eq!(apply(&mut s, TypeCommand::Size(2.)), 0);
+    assert_eq!(wire(&s), before);
+    assert_eq!(s.history.len(), 0);
+    assert!(s.type_edit.as_ref().unwrap().pending_style.is_none());
+    {
+        let edit = s.type_edit.as_mut().unwrap();
+        edit.pending_style = None;
+        edit.anchor = 0;
+        edit.caret = 4;
+    }
+    assert_eq!(apply(&mut s, TypeCommand::Size(2.)), 1);
+    assert_eq!(run(&s, hit).character_style(0).px, Some(30.));
+    assert!(run(&s, hit).character_style(5).px.is_none());
+    assert_eq!(run(&s, hit).px, 28.);
+    assert_eq!(
+        run(&s, hit).character_style(0).fill,
+        Some(Fill::Solid(Rgba::rgb(210, 30, 70)))
+    );
+    assert_eq!(s.history.len(), 0);
+    s.commit_type_edit();
+    assert_eq!(s.history.len(), 1);
+    let after = wire(&s);
+    reopen(&s);
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    assert_eq!(wire(&s), after);
+}
+
+#[test]
+fn craft_type_size_refuses_locked_text_and_a_size_already_at_the_limit() {
+    let (mut s, hit) = editor("Colour size");
+    s.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    let before = wire(&s);
+    s.type_selection_command(TypeCommand::Size(2.));
+    assert!(s.status.contains("Unlock"), "{}", s.status);
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+
+    let (mut s, hit) = editor("Colour size");
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.px = 1296.;
+        r.spans.clear();
+        r.layout = None;
+    }
+    s.mark();
+    s.history.clear();
+    let before = wire(&s);
+    assert_eq!(apply(&mut s, TypeCommand::Size(2.)), 0);
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+    assert_eq!(run(&s, hit).px, 1296.);
+    assert!(run(&s, hit).spans.iter().all(|span| span.px.is_none()));
+
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.px = 0.1;
+    }
+    s.mark();
+    s.history.clear();
+    let before = wire(&s);
+    assert_eq!(apply(&mut s, TypeCommand::Size(-2.)), 0);
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+    assert_eq!(run(&s, hit).px, 0.1);
+
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.px = 1.;
+    }
+    s.mark();
+    s.history.clear();
+    assert_eq!(apply(&mut s, TypeCommand::Size(-2.)), 1);
+    assert_eq!(run(&s, hit).character_style(0).px, Some(0.1));
+    assert_eq!(s.history.len(), 1);
+}
+
+#[test]
+fn craft_type_size_steps_imported_svg_sizes_without_replacing_the_face() {
+    let (mut s, hit) = editor("Colour & curves");
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.px = 38.;
+        r.spans.clear();
+        r.set_character_style(0, 6, |span| {
+            span.fill = Some(Fill::Solid(Rgba::rgb(220, 40, 75)));
+        });
+        r.set_character_style(9, 15, |span| {
+            span.fill = Some(Fill::Solid(Rgba::rgb(20, 140, 210)));
+            span.px = Some(42.);
+        });
+        r.layout = None;
+    }
+    s.mark();
+    let svg = crate::svg::export_embedded(&s.doc).unwrap();
+    let (doc, notes) = crate::formats::svg::read(&svg, "Sized SVG text").unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let mut s = Studio::new();
+    s.show_welcome = false;
+    s.persona = Persona::Layout;
+    s.doc = doc;
+    s.doc.workspace = Some(Persona::Layout);
+    let hit = s
+        .doc
+        .layers
+        .iter()
+        .enumerate()
+        .find_map(|(layer, item)| {
+            item.kind
+                .shapes()
+                .unwrap_or(&[])
+                .iter()
+                .find_map(|shape| match &shape.geom {
+                    Geom::Text(text) if text.svg_text.is_some() => Some((layer, shape.id)),
+                    _ => None,
+                })
+        })
+        .expect("imported SVG text");
+    s.active_layer = Some(hit.0);
+    s.selection = vec![hit];
+    s.mark();
+    s.history.clear();
+    let count = run(&s, hit).content.chars().count();
+    let base = run(&s, hit).px;
+    let before_styles: Vec<_> = (0..count)
+        .map(|index| run(&s, hit).character_style(index))
+        .collect();
+    let before_width = s.doc.find_shape(hit.0, hit.1).unwrap().geom.bbox().width();
+    assert!(
+        (before_styles[9].px.unwrap_or(base) - before_styles[0].px.unwrap_or(base)).abs() > 1.,
+        "imported sizes collapsed"
+    );
+    let before = wire(&s);
+    assert_eq!(apply(&mut s, TypeCommand::Size(2.)), 1);
+    assert!(run(&s, hit).svg_text.is_some());
+    assert_eq!(run(&s, hit).content.chars().count(), count);
+    for (index, style) in before_styles.iter().enumerate() {
+        let after = run(&s, hit).character_style(index);
+        assert_eq!(after.font, style.font, "character {index} face changed");
+        assert_eq!(after.fill, style.fill, "character {index} fill changed");
+        let expected = style.px.unwrap_or(base) + 2.;
+        let actual = after.px.expect("stepped size");
+        assert!(
+            (actual - expected).abs() < 0.001,
+            "{index}: {expected} -> {actual}"
+        );
+    }
+    assert!(s.doc.find_shape(hit.0, hit.1).unwrap().geom.bbox().width() > before_width + 0.5);
+    assert_eq!(s.history.len(), 1);
+    reopen(&s);
+    let after = wire(&s);
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    assert_eq!(wire(&s), after);
+}

@@ -2,10 +2,10 @@
 use super::*;
 use crate::{geom::CharSpan, text::CharacterRewrite};
 use std::ops::Range;
-#[path = "type_search.rs"]
-pub(crate) mod search;
 #[path = "type_fonts.rs"]
 pub(crate) mod fonts;
+#[path = "type_search.rs"]
+pub(crate) mod search;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextScope {
@@ -45,6 +45,8 @@ pub(crate) enum TypeCommand {
     Insert(String),
     Replace(search::Replacement),
     Font(fonts::Replacement),
+    /// Signed pixel change applied to each authored font size in the target.
+    Size(f32),
 }
 pub(crate) const SPECIAL_CHARACTERS: &[(&str, &str)] = &[
     ("Bullet •", "•"),
@@ -137,7 +139,9 @@ fn rewritten_caret(at: usize, edits: &[CharacterRewrite]) -> usize {
 /// Rewrite content while carrying word/sentence/quote context across styled intervals.
 /// Args: source run, original range and command. Returns only actual character replacements.
 fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<CharacterRewrite> {
-    if matches!(command, TypeCommand::Font(_)) { return vec![]; }
+    if matches!(command, TypeCommand::Font(_) | TypeCommand::Size(_)) {
+        return vec![];
+    }
     if let TypeCommand::Replace(replacement) = command {
         return search::rewrites(run, range, replacement);
     }
@@ -235,7 +239,12 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
                     c.to_string()
                 }
             }
-            TypeCommand::Insert(_) | TypeCommand::Replace(_) | TypeCommand::Font(_) => unreachable!(),
+            TypeCommand::Insert(_)
+            | TypeCommand::Replace(_)
+            | TypeCommand::Font(_)
+            | TypeCommand::Size(_) => {
+                unreachable!()
+            }
         };
         previous = text.chars().last().or(previous);
         if !chars[index..end].iter().copied().eq(text.chars()) {
@@ -248,6 +257,48 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
         index = end;
     }
     result
+}
+
+/// Step the authored font size of each character in a range.
+/// Args: text run, character range, and signed pixel step. Returns whether a stored size changed.
+/// A size already at 0.1 or 1296 pixels stays there. A non-finite size refuses before any character changes.
+fn step_authored_size(run: &mut TypeRun, range: Range<usize>, delta: f32) -> Result<bool, String> {
+    const MIN_PX: f32 = 0.1;
+    const MAX_PX: f32 = 1296.;
+    if !delta.is_finite() {
+        return Err("Font size step must be a finite number of pixels".into());
+    }
+    let count = run.content.chars().count();
+    let start = range.start.min(count);
+    let end = range.end.min(count).max(start);
+    if start == end {
+        return Ok(false);
+    }
+    let sizes: Vec<f32> = (start..end)
+        .map(|index| run.character_style(index).px.unwrap_or(run.px))
+        .collect();
+    if sizes.iter().any(|px| !px.is_finite()) {
+        return Err("This text has no finite font size to change".into());
+    }
+    let mut changed = false;
+    let mut index = 0;
+    while index < sizes.len() {
+        let px = sizes[index];
+        let mut group = index + 1;
+        while group < sizes.len() && (sizes[group] - px).abs() < 0.001 {
+            group += 1;
+        }
+        let next = (px + delta).clamp(MIN_PX, MAX_PX);
+        if (next - px).abs() >= 0.001 {
+            run.set_character_style(start + index, start + group, |span| span.px = Some(next));
+            changed = true;
+        }
+        index = group;
+    }
+    if changed {
+        run.layout = None;
+    }
+    Ok(changed)
 }
 
 /// Keep a rewritten text object's existing rotation frame instead of moving its baseline.
@@ -336,11 +387,21 @@ impl Studio {
         self.capture_type_target(scope, scope == TextScope::Document, false)
     }
 
-    fn capture_type_target(&self, scope: TextScope, hidden: bool, skip_locked: bool) -> Result<TypeCommandTarget, String> {
+    fn capture_type_target(
+        &self,
+        scope: TextScope,
+        hidden: bool,
+        skip_locked: bool,
+    ) -> Result<TypeCommandTarget, String> {
         self.capture_type_target_filtered(scope, hidden, skip_locked, |_| Ok(true))
     }
-    fn capture_type_target_filtered(&self, scope: TextScope, hidden: bool, skip_locked: bool,
-        include: impl Fn(&TypeRun) -> Result<bool, String>) -> Result<TypeCommandTarget, String> {
+    fn capture_type_target_filtered(
+        &self,
+        scope: TextScope,
+        hidden: bool,
+        skip_locked: bool,
+        include: impl Fn(&TypeRun) -> Result<bool, String>,
+    ) -> Result<TypeCommandTarget, String> {
         if !self.type_commands_available() {
             return Err("Finish the current operation before editing text".into());
         }
@@ -377,10 +438,18 @@ impl Studio {
                 continue;
             }
             let head = self.story_head(hit);
-            let Some(Geom::Text(run)) = self.doc.find_shape(head.0,head.1).map(|shape| &shape.geom) else {continue};
-            if !include(run)? {continue;}
+            let Some(Geom::Text(run)) =
+                self.doc.find_shape(head.0, head.1).map(|shape| &shape.geom)
+            else {
+                continue;
+            };
+            if !include(run)? {
+                continue;
+            }
             if !self.type_command_writable(hit, hidden) {
-                if skip_locked { continue; }
+                if skip_locked {
+                    continue;
+                }
                 return Err(
                     "Unlock the text, its parent layers and every frame in its story".into(),
                 );
@@ -392,11 +461,15 @@ impl Studio {
         if hits.is_empty() {
             return Err("Select editable text".into());
         }
-        Ok(self.type_command_snapshot(scope,hits))
+        Ok(self.type_command_snapshot(scope, hits))
     }
     /// Capture the common document, selection and live-draft owner of a Type action.
     /// Args: scope and actual story identities. Returns their immutable owner snapshot.
-    fn type_command_snapshot(&self, scope: TextScope, hits: Vec<(usize,u64)>) -> TypeCommandTarget {
+    fn type_command_snapshot(
+        &self,
+        scope: TextScope,
+        hits: Vec<(usize, u64)>,
+    ) -> TypeCommandTarget {
         TypeCommandTarget {
             document: self.swap_id.clone(),
             generation: self.canvas_gen,
@@ -411,7 +484,10 @@ impl Studio {
     /// Args: target. Returns false after any stale document/edit owner or lock change.
     pub(crate) fn type_command_current(&self, target: &TypeCommandTarget) -> bool {
         self.type_command_owner_current(target)
-            && target.hits.iter().all(|&hit| self.type_command_writable(hit, target.scope == TextScope::Document))
+            && target
+                .hits
+                .iter()
+                .all(|&hit| self.type_command_writable(hit, target.scope == TextScope::Document))
     }
     /// Read the captured owner without granting permission to mutate its stories.
     /// Args: target snapshot. Returns whether the same document, selection and live draft still own it.
@@ -433,7 +509,9 @@ impl Studio {
         if !self.type_command_current(target) {
             return Err("The text destination changed. Reopen this Type command".into());
         }
-        if let TypeCommand::Replace(replacement) = &command { replacement.query.validate()?; }
+        if let TypeCommand::Replace(replacement) = &command {
+            replacement.query.validate()?;
+        }
         if let TypeCommand::Punctuation(p) = command
             && p.double.into_iter().chain(p.single).any(char::is_control)
         {
@@ -442,6 +520,12 @@ impl Studio {
         let live = (target.scope == TextScope::Selection)
             .then_some(target.edit.as_ref())
             .flatten();
+        if let TypeCommand::Size(_) = &command
+            && let Some(edit) = live
+            && edit.caret == edit.anchor
+        {
+            return Ok(0);
+        }
         let mut plans = Vec::new();
         let mut selection = None;
         for &(layer, id) in &target.hits {
@@ -457,8 +541,15 @@ impl Studio {
             if range.as_ref().is_some_and(|r| r.end > count) {
                 return Err("The text selection changed".into());
             }
-            let changed = if let TypeCommand::Font(replacement) = &command {
-                crate::text::font_inventory::replace_at(&mut run, &replacement.from, &replacement.to, &replacement.variations)?
+            let changed = if let TypeCommand::Size(delta) = &command {
+                step_authored_size(&mut run, range.unwrap_or(0..count), *delta)?
+            } else if let TypeCommand::Font(replacement) = &command {
+                crate::text::font_inventory::replace_at(
+                    &mut run,
+                    &replacement.from,
+                    &replacement.to,
+                    &replacement.variations,
+                )?
             } else if let TypeCommand::Insert(text) = &command {
                 if text.is_empty() {
                     false
@@ -484,8 +575,11 @@ impl Studio {
                         rewritten_caret(e.anchor, &edits),
                     ));
                 }
-                if matches!(command, TypeCommand::Replace(_)) { run.rewrite_text_ranges(&edits)? }
-                else { run.rewrite_characters(&edits)? }
+                if matches!(command, TypeCommand::Replace(_)) {
+                    run.rewrite_text_ranges(&edits)?
+                } else {
+                    run.rewrite_characters(&edits)?
+                }
             };
             if changed {
                 plans.push(((layer, id), placed_text(shape, run)));
@@ -553,7 +647,11 @@ impl Studio {
             }
             self.commit(Cmd::Batch(commands));
         }
-        self.status = if changed == 1 { "Text updated".into() } else { format!("Updated {changed} text stories") };
+        self.status = if changed == 1 {
+            "Text updated".into()
+        } else {
+            format!("Updated {changed} text stories")
+        };
         Ok(changed)
     }
     /// Invoke an immediate selection command using the same captured-target path as the dialog.

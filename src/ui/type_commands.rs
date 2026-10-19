@@ -40,7 +40,9 @@ pub(super) fn is_open(ctx: &egui::Context) -> bool {
 /// Return a closed punctuation dialog to its actual enabled canvas response.
 /// Args: current canvas UI, editor and native response. Returns no value; other modal/document owners retire the request.
 pub(super) fn restore_canvas_focus(ui: &Ui, studio: &Studio, canvas: &Response) {
-    for dialog in [ID, super::find_replace::ID, super::find_font::ID] { restore_text_dialog_focus(ui, studio, canvas, dialog); }
+    for dialog in [ID, super::find_replace::ID, super::find_font::ID] {
+        restore_text_dialog_focus(ui, studio, canvas, dialog);
+    }
 }
 fn restore_text_dialog_focus(ui: &Ui, studio: &Studio, canvas: &Response, dialog: &str) {
     let key = Id::new((dialog, "return-focus"));
@@ -99,7 +101,7 @@ fn open(ctx: &egui::Context, studio: &Studio) {
     ctx.data_mut(|d| d.insert_temp(Id::new(ID), draft));
 }
 
-/// Add the real reference content commands to the existing Type menu.
+/// Add the real reference content and font-size commands to the existing Type menu.
 /// Args: menu UI and editor. Returns no value; accepted commands share the app-owned route.
 pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
     let owner = Id::new(("type-content-menu", &studio.swap_id, &studio.selection));
@@ -118,6 +120,12 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
                 }
             }
         });
+        for (name, delta) in [("Increase font size", 2.), ("Decrease font size", -2.)] {
+            if control(ui, owner.with(name), name, |ui| ui.button(name)).clicked() {
+                studio.type_selection_command(TypeCommand::Size(delta));
+                ui.close();
+            }
+        }
         for (name, entries) in [
             ("Insert special character", commands::SPECIAL_CHARACTERS),
             (
@@ -156,126 +164,128 @@ pub(super) fn show(ctx: &egui::Context, studio: &mut Studio) {
     let owner = Id::new((ID, &draft.owner, draft.instance));
     let mut apply = false;
     let mut cancel = false;
-    let modal = egui::Modal::new(Id::new(ID)).backdrop_color(super::theme::bg_window().gamma_multiply(0.55)).show(ctx, |ui| {
-        ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 350.));
-        ui.heading("Smart punctuation");
-        ui.horizontal_wrapped(|ui| {
-            for (scope, name) in [
-                (TextScope::Selection, "Selected text"),
-                (TextScope::Document, "Entire document"),
-            ] {
-                let enabled = if scope == TextScope::Selection {
-                    draft.selection.is_some()
-                } else {
-                    draft.document.is_some()
-                };
-                if control(ui, owner.with(name), name, |ui| {
-                    ui.add_enabled(enabled, egui::RadioButton::new(draft.scope == scope, name))
-                })
-                .clicked()
-                {
-                    draft.scope = scope;
-                }
-            }
-        });
-        let (target, error) = if draft.scope == TextScope::Selection {
-            (&draft.selection, &draft.selection_error)
-        } else {
-            (&draft.document, &draft.document_error)
-        };
-        let current = target
-            .as_ref()
-            .is_some_and(|t| studio.type_command_current(t));
-        if !current {
-            ui.colored_label(
-                ui.visuals().error_fg_color,
-                error.as_deref().unwrap_or(
-                    "The text destination changed. Cancel and reopen Smart punctuation.",
-                ),
-            );
-        }
-        ui.add_enabled_ui(current, |ui| {
-            let quotes = control(ui, owner.with("quotes"), "Typographic quotes", |ui| {
-                ui.checkbox(&mut draft.options.quotes, "Typographic quotes")
-            });
-            if draft.focus {
-                quotes.request_focus();
-                draft.focus = false;
-            }
-            ui.add_enabled_ui(draft.options.quotes, |ui| {
-                for (name, pairs, value) in [
-                    (
-                        "Double quotation marks",
-                        [
-                            ['“', '”'],
-                            ['„', '“'],
-                            ['„', '”'],
-                            ['”', '”'],
-                            ['«', '»'],
-                            ['»', '«'],
-                            ['「', '」'],
-                            ['"', '"'],
-                        ],
-                        &mut draft.options.double,
-                    ),
-                    (
-                        "Single quotation marks",
-                        [
-                            ['‘', '’'],
-                            ['‚', '‘'],
-                            ['‚', '’'],
-                            ['’', '’'],
-                            ['‹', '›'],
-                            ['›', '‹'],
-                            ['『', '』'],
-                            ['\'', '\''],
-                        ],
-                        &mut draft.options.single,
-                    ),
+    let modal = egui::Modal::new(Id::new(ID))
+        .backdrop_color(super::theme::bg_window().gamma_multiply(0.55))
+        .show(ctx, |ui| {
+            ui.set_width((ctx.content_rect().width() - 48.).clamp(160., 350.));
+            ui.heading("Smart punctuation");
+            ui.horizontal_wrapped(|ui| {
+                for (scope, name) in [
+                    (TextScope::Selection, "Selected text"),
+                    (TextScope::Document, "Entire document"),
                 ] {
-                    let label = ui.label(name);
-                    control(ui, owner.with(name), name, |ui| {
-                        egui::ComboBox::from_id_salt(owner.with((name, "choices")))
-                            .selected_text(format!("{} … {}", value[0], value[1]))
-                            .show_ui(ui, |ui| {
-                                for pair in pairs {
-                                    ui.selectable_value(
-                                        value,
-                                        pair,
-                                        format!("{} … {}", pair[0], pair[1]),
-                                    );
-                                }
-                            })
-                            .response
-                            .labelled_by(label.id)
-                    });
+                    let enabled = if scope == TextScope::Selection {
+                        draft.selection.is_some()
+                    } else {
+                        draft.document.is_some()
+                    };
+                    if control(ui, owner.with(name), name, |ui| {
+                        ui.add_enabled(enabled, egui::RadioButton::new(draft.scope == scope, name))
+                    })
+                    .clicked()
+                    {
+                        draft.scope = scope;
+                    }
                 }
             });
-            control(
-                ui,
-                owner.with("dashes"),
-                "Convert double and triple hyphens",
-                |ui| ui.checkbox(&mut draft.options.dashes, "Convert -- and --- to dashes"),
-            );
-            control(
-                ui,
-                owner.with("ellipsis"),
-                "Convert three dots to ellipsis",
-                |ui| ui.checkbox(&mut draft.options.ellipsis, "Convert ... to ellipsis"),
-            );
+            let (target, error) = if draft.scope == TextScope::Selection {
+                (&draft.selection, &draft.selection_error)
+            } else {
+                (&draft.document, &draft.document_error)
+            };
+            let current = target
+                .as_ref()
+                .is_some_and(|t| studio.type_command_current(t));
+            if !current {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    error.as_deref().unwrap_or(
+                        "The text destination changed. Cancel and reopen Smart punctuation.",
+                    ),
+                );
+            }
+            ui.add_enabled_ui(current, |ui| {
+                let quotes = control(ui, owner.with("quotes"), "Typographic quotes", |ui| {
+                    ui.checkbox(&mut draft.options.quotes, "Typographic quotes")
+                });
+                if draft.focus {
+                    quotes.request_focus();
+                    draft.focus = false;
+                }
+                ui.add_enabled_ui(draft.options.quotes, |ui| {
+                    for (name, pairs, value) in [
+                        (
+                            "Double quotation marks",
+                            [
+                                ['“', '”'],
+                                ['„', '“'],
+                                ['„', '”'],
+                                ['”', '”'],
+                                ['«', '»'],
+                                ['»', '«'],
+                                ['「', '」'],
+                                ['"', '"'],
+                            ],
+                            &mut draft.options.double,
+                        ),
+                        (
+                            "Single quotation marks",
+                            [
+                                ['‘', '’'],
+                                ['‚', '‘'],
+                                ['‚', '’'],
+                                ['’', '’'],
+                                ['‹', '›'],
+                                ['›', '‹'],
+                                ['『', '』'],
+                                ['\'', '\''],
+                            ],
+                            &mut draft.options.single,
+                        ),
+                    ] {
+                        let label = ui.label(name);
+                        control(ui, owner.with(name), name, |ui| {
+                            egui::ComboBox::from_id_salt(owner.with((name, "choices")))
+                                .selected_text(format!("{} … {}", value[0], value[1]))
+                                .show_ui(ui, |ui| {
+                                    for pair in pairs {
+                                        ui.selectable_value(
+                                            value,
+                                            pair,
+                                            format!("{} … {}", pair[0], pair[1]),
+                                        );
+                                    }
+                                })
+                                .response
+                                .labelled_by(label.id)
+                        });
+                    }
+                });
+                control(
+                    ui,
+                    owner.with("dashes"),
+                    "Convert double and triple hyphens",
+                    |ui| ui.checkbox(&mut draft.options.dashes, "Convert -- and --- to dashes"),
+                );
+                control(
+                    ui,
+                    owner.with("ellipsis"),
+                    "Convert three dots to ellipsis",
+                    |ui| ui.checkbox(&mut draft.options.ellipsis, "Convert ... to ellipsis"),
+                );
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                apply = control(ui, owner.with("apply"), "Apply smart punctuation", |ui| {
+                    ui.add_enabled(current, egui::Button::new("Apply"))
+                })
+                .clicked();
+                cancel = control(ui, owner.with("cancel"), "Cancel smart punctuation", |ui| {
+                    ui.button("Cancel")
+                })
+                .clicked();
+            });
         });
-        ui.separator();
-        ui.horizontal(|ui| {
-            apply = control(ui, owner.with("apply"), "Apply smart punctuation", |ui| {
-                ui.add_enabled(current, egui::Button::new("Apply"))
-            })
-            .clicked();
-            cancel = control(ui, owner.with("cancel"), "Cancel smart punctuation", |ui| {
-                ui.button("Cancel")
-            })
-            .clicked();
-        });
-    });
     cancel |= modal.should_close();
     if apply && !cancel {
         let target = if draft.scope == TextScope::Selection {
