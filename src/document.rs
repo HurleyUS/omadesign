@@ -1263,6 +1263,10 @@ fn deserialize_artboards<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Artboard
 pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quick_mask: Option<crate::channels::quick_mask::QuickMask>,
+    /// The ordinary active pixel selection, written only while saving and
+    /// moved back into the editor on open. Never part of history or Live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_selection: Option<crate::channels::Plane>,
     #[serde(default, rename = "saved_channels", skip_serializing_if = "Vec::is_empty")]
     pub channels: Vec<crate::channels::Channel>,
     #[serde(default, skip_serializing_if = "crate::screen_export::Catalog::is_empty")]
@@ -1509,6 +1513,7 @@ impl Document {
         }
         let mut doc = Self {
             quick_mask: None,
+            active_selection: None,
             channels: vec![],
             publishing: Default::default(),
             color: Default::default(),

@@ -49,7 +49,7 @@ fn craft_quick_mask_native33_preserves_scalar_bits_aliases_and_refuses_old_reade
             .contains("requires version 33")
     );
     let mut future: serde_json::Value = serde_json::from_str(&legacy).unwrap();
-    future["version"] = 35.into();
+    future["version"] = (crate::project::VERSION + 1).into();
     assert!(
         crate::project::decode(&future.to_string())
             .unwrap_err()

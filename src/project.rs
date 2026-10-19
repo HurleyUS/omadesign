@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 mod features;
 
-pub(crate) const VERSION: u32 = features::LAYER_CLIPPING;
+pub(crate) const VERSION: u32 = features::ACTIVE_SELECTION;
 
 /// Check whether this build implements a project version.
 /// Args: envelope version. Returns false for unimplemented reserved formats.
@@ -50,6 +50,7 @@ pub(crate) fn encode_envelope_admitted<T: Serialize>(
         document.screen_export.validate()?;
         crate::channels::validate(&document.channels)?;
         if let Some(mask) = &document.quick_mask { mask.validate(&document.channels)?; }
+        if let Some(selection) = &document.active_selection { selection.validate()?; }
         document.validate_sources()?;
         if let Some(replica) = &document.collaboration {
             crate::collaboration::resources::validate(replica)?;
@@ -356,6 +357,7 @@ pub(crate) fn normalize_decoded_document(
         }
         crate::channels::validate(&doc.channels)?;
         if let Some(mask) = &doc.quick_mask { mask.validate(&doc.channels)?; }
+        if let Some(selection) = &doc.active_selection { selection.validate()?; }
         crate::layout_components::validate_properties(doc)?;
         for layer in &mut doc.layers {
             if version < 7 {

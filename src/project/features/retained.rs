@@ -1,5 +1,5 @@
 use super::{
-    ADVANCED_LAYOUT, LAYER_CLIPPING, VARIABLE_FONTS, QUICK_MASK, CHANNELS, COLOR, COMPOSITIONS, EXPORT_FOLDERS, EXPORT_RESOLUTION, EXPRESSIONS, NATIVE,
+    ACTIVE_SELECTION, ADVANCED_LAYOUT, LAYER_CLIPPING, VARIABLE_FONTS, QUICK_MASK, CHANNELS, COLOR, COMPOSITIONS, EXPORT_FOLDERS, EXPORT_RESOLUTION, EXPRESSIONS, NATIVE,
     PSD_TYPE, SCENE3D, SCREEN_EXPORT, SMART, SOURCE,
 };
 use serde::Deserialize;
@@ -65,6 +65,7 @@ fn composition_bounds<E: serde::de::Error>(value: &Seen) -> Result<(usize, usize
 fn field_version(key: &str, value: &Seen) -> u32 {
     if key.split('/').any(|k| k == "font_variations") && (value.exists || key.rsplit('/').next() != Some("font_variations")) { return VARIABLE_FONTS; }
     if key.split('/').any(|field| field == "quick_mask") { return QUICK_MASK; }
+    if key.split('/').any(|field| field == "active_selection") { return ACTIVE_SELECTION; }
     if key.split('/').any(|field| field == "saved_channels") { return CHANNELS; }
     if key
         .split('/')

@@ -46,6 +46,7 @@ pub(crate) mod channels;
 pub(crate) mod channel_paint;
 pub(crate) mod channel_adjustment;
 pub(crate) mod quick_mask;
+mod active_selection;
 mod restart;
 pub(crate) mod selection;
 mod alignment;
@@ -3934,6 +3935,7 @@ impl Studio {
             Persona::Photo => Tool::Hand,
             _ => Tool::Select,
         };
+        self.restore_active_selection();
         if let Some(p) = path {
             self.remember_path(&p);
             self.status = format!("opened {}", p.display());
@@ -4053,8 +4055,11 @@ impl Studio {
 
     fn save_document(&mut self, path: &std::path::Path) -> Result<(), String> {
         self.doc.workspace = Some(self.persona);
-        crate::project::save_to(&self.doc, path)
-            .inspect_err(|_| crate::telemetry::count("error.save"))?;
+        // The active selection is written with the file only; it is not history.
+        self.doc.active_selection = self.active_selection_plane();
+        let saved = crate::project::save_to(&self.doc, path);
+        self.doc.active_selection = None;
+        saved.inspect_err(|_| crate::telemetry::count("error.save"))?;
         crate::telemetry::count("feature.save");
         self.path = Some(path.to_owned());
         self.dirty = false;
