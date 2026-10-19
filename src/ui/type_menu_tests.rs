@@ -922,3 +922,103 @@ fn craft_outline_text_image_native_menu_keeps_the_picture() {
     studio.redo();
     assert_eq!(saved(&studio), after);
 }
+
+#[test]
+fn craft_outline_layout_frame_native_menu_keeps_the_frame() {
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = Document::new("Layout frame outlines", 480., 220., 96.);
+    studio.doc.transparent = true;
+    studio.doc.workspace = Some(Persona::Layout);
+    studio.doc.layers = vec![Layer::vector("Editable lettering")];
+    let mut run = TypeRun {
+        origin: Pt::new(40., 105.),
+        content: "Colour & curves".into(),
+        px: 38.,
+        font: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/assets/fonts/EBGaramond.ttf"
+        )
+        .into(),
+        ..Default::default()
+    };
+    run.set_character_style(0, 6, |span| {
+        span.fill = Some(Fill::Solid(crate::color::Rgba::rgb(220, 40, 75)));
+        span.tracking = Some(25.);
+    });
+    let mut shape = Shape::new(
+        Geom::Text(run),
+        Style {
+            fill: Fill::Solid(crate::color::Rgba::rgb(30, 80, 40)),
+            stroke: None,
+        },
+    );
+    crate::text::fill_contours(&mut shape.geom);
+    shape.layout.frame = true;
+    shape.layout.clip = true;
+    shape.layout.stack = Some(crate::layout::AutoStack {
+        gap: 0.,
+        padding: [0.; 4],
+        ..Default::default()
+    });
+    let hit = (0, shape.id);
+    let mut child = Shape::new(
+        Geom::Rect {
+            origin: Pt::new(48., 70.),
+            size: Pt::new(16., 10.),
+            radius: 0.,
+        },
+        Style {
+            fill: Fill::None,
+            stroke: None,
+        },
+    );
+    child.layout.parent = Some(hit.1);
+    child.layout.absolute = true;
+    let child_id = child.id;
+    studio.doc.layers[0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .extend([shape, child]);
+    studio.active_layer = Some(0);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    let child_geom = studio.doc.find_shape(hit.0, child_id).unwrap().geom.clone();
+    let before_doc = studio.doc.clone();
+    let before = saved(&studio);
+    let mut seat = Seat::new();
+    seat.frame(&mut studio, vec![]);
+    seat.click(&mut studio, "Type");
+    seat.invoke(&mut studio, "Create outlines");
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame);
+    assert!(root.layout.clip);
+    assert!(!matches!(root.geom, Geom::Text(_)));
+    assert_eq!(
+        studio.doc.find_shape(hit.0, child_id).unwrap().geom,
+        child_geom
+    );
+    assert_eq!(
+        studio
+            .doc
+            .find_shape(hit.0, child_id)
+            .unwrap()
+            .layout
+            .parent,
+        Some(hit.1)
+    );
+    let left = crate::compositor::render_export(&before_doc, 1).unwrap();
+    let right = crate::compositor::render_export(&studio.doc, 1).unwrap();
+    assert_eq!(left.data(), right.data());
+    let after = saved(&studio);
+    let reopened = crate::project::decode(&after).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), after);
+    studio.undo();
+    assert_eq!(saved(&studio), before);
+    studio.redo();
+    assert_eq!(saved(&studio), after);
+}

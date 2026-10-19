@@ -1404,7 +1404,7 @@ fn craft_outline_contour_wrap_keeps_box_and_jump_on_the_frame() {
 }
 
 #[test]
-fn craft_outline_contour_wrap_refuses_locked_and_layout_frames() {
+fn craft_outline_contour_wrap_refuses_locked_text() {
     let (mut studio, hit) = fixture();
     studio
         .doc
@@ -1420,24 +1420,6 @@ fn craft_outline_contour_wrap_refuses_locked_and_layout_frames() {
     assert_eq!(wire(&studio), before);
     assert_eq!(studio.history.len(), 0);
     assert!(studio.status.contains("Unlock"), "{}", studio.status);
-
-    let (mut studio, hit) = fixture();
-    {
-        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
-        shape.text_wrap.mode = crate::text_geometry::WrapMode::BoundingBox;
-        shape.layout.frame = true;
-    }
-    studio.mark();
-    studio.history.clear();
-    let before = wire(&studio);
-    studio.create_text_outlines();
-    assert_eq!(wire(&studio), before);
-    assert_eq!(studio.history.len(), 0);
-    assert!(studio.status.contains("not converted"), "{}", studio.status);
-    assert!(matches!(
-        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
-        Geom::Text(_)
-    ));
 }
 
 fn placed_image() -> crate::layout_images::ImageFill {
@@ -1551,7 +1533,7 @@ fn craft_outline_text_image_keeps_one_picture_on_painted_letters() {
 }
 
 #[test]
-fn craft_outline_text_image_refuses_locked_text_and_layout_frames() {
+fn craft_outline_text_image_refuses_locked_text() {
     let (mut studio, hit) = point_image();
     studio.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
     studio.mark();
@@ -1561,23 +1543,270 @@ fn craft_outline_text_image_refuses_locked_text_and_layout_frames() {
     assert_eq!(wire(&studio), before);
     assert_eq!(studio.history.len(), 0);
     assert!(studio.status.contains("Unlock"), "{}", studio.status);
+}
 
-    let (mut studio, hit) = point_image();
-    studio
-        .doc
-        .find_shape_mut(hit.0, hit.1)
+fn child_rect(parent: u64, origin: Pt, size: Pt, absolute: bool) -> Shape {
+    let mut child = Shape::new(
+        Geom::Rect {
+            origin,
+            size,
+            radius: 0.,
+        },
+        Style {
+            fill: Fill::None,
+            stroke: None,
+        },
+    );
+    child.layout.parent = Some(parent);
+    child.layout.absolute = absolute;
+    child
+}
+
+#[test]
+fn craft_outline_layout_frame_keeps_clip_stack_and_children() {
+    let (mut studio, hit) = fixture();
+    let bounds = studio.doc.find_shape(hit.0, hit.1).unwrap().geom.bbox();
+    let absolute = child_rect(hit.1, bounds.min + Pt::new(6., 4.), Pt::new(12., 8.), true);
+    let flow = child_rect(
+        hit.1,
+        bounds.min + Pt::new(24., 10.),
+        Pt::new(10., 6.),
+        false,
+    );
+    let absolute_id = absolute.id;
+    let flow_id = flow.id;
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.layout.frame = true;
+        shape.layout.clip = true;
+        shape.layout.stack = Some(crate::layout::AutoStack {
+            gap: 0.,
+            padding: [0.; 4],
+            ..Default::default()
+        });
+    }
+    studio.doc.layers[hit.0]
+        .kind
+        .shapes_mut()
         .unwrap()
-        .layout
-        .frame = true;
+        .extend([absolute, flow]);
+    crate::layout::reflow_roots(&mut studio.doc, hit.0);
+    studio.mark();
+    studio.history.clear();
+    let absolute_geom = studio
+        .doc
+        .find_shape(hit.0, absolute_id)
+        .unwrap()
+        .geom
+        .clone();
+    let flow_geom = studio.doc.find_shape(hit.0, flow_id).unwrap().geom.clone();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame);
+    assert!(root.layout.clip);
+    assert_eq!(root.layout.stack.as_ref().map(|stack| stack.gap), Some(0.));
+    assert_eq!(
+        root.layout.stack.as_ref().map(|stack| stack.padding),
+        Some([1.; 4])
+    );
+    assert!(matches!(root.geom, Geom::Rect { .. }));
+    assert!(!matches!(root.geom, Geom::Text(_)));
+    assert_eq!(
+        studio.doc.find_shape(hit.0, absolute_id).unwrap().geom,
+        absolute_geom
+    );
+    assert_eq!(
+        studio.doc.find_shape(hit.0, flow_id).unwrap().geom,
+        flow_geom
+    );
+    assert_eq!(
+        studio
+            .doc
+            .find_shape(hit.0, absolute_id)
+            .unwrap()
+            .layout
+            .parent,
+        Some(hit.1)
+    );
+    assert_eq!(
+        studio.doc.find_shape(hit.0, flow_id).unwrap().layout.parent,
+        Some(hit.1)
+    );
+    let letters: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| {
+            shape.layout.parent == Some(hit.1) && shape.id != absolute_id && shape.id != flow_id
+        })
+        .collect();
+    assert!(letters.len() >= 2, "{}", studio.status);
+    assert!(
+        letters
+            .iter()
+            .all(|shape| !matches!(shape.geom, Geom::Text(_)))
+    );
+    same_paint(&picture, &image(&studio.doc));
+    let after = wire(&studio);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_layout_frame_outlines_nested_text_in_one_step() {
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.layout.frame = true;
+        shape.layout.clip = false;
+    }
+    let mut nested = Shape::new(
+        Geom::Text(TypeRun {
+            origin: Pt::new(48., 150.),
+            content: "Nest".into(),
+            px: 18.,
+            font: concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/assets/fonts/EBGaramond.ttf"
+            )
+            .into(),
+            ..Default::default()
+        }),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(12, 18, 28)),
+            stroke: None,
+        },
+    );
+    crate::text::fill_contours(&mut nested.geom);
+    nested.layout.parent = Some(hit.1);
+    let nested_id = nested.id;
+    studio.doc.layers[hit.0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .push(nested);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame);
+    assert!(!root.layout.clip);
+    assert!(!matches!(root.geom, Geom::Text(_)));
+    let nested = studio.doc.find_shape(hit.0, nested_id).unwrap();
+    assert_eq!(nested.layout.parent, Some(hit.1));
+    assert!(!matches!(nested.geom, Geom::Text(_)));
+    same_paint(&picture, &image(&studio.doc));
+    let after = wire(&studio);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, nested_id).unwrap().geom,
+        Geom::Text(_)
+    ));
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_layout_frame_refuses_locked_text() {
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.layout.frame = true;
+        shape.layout.clip = true;
+        shape.locked = true;
+    }
+    let child = child_rect(hit.1, Pt::new(50., 80.), Pt::new(14., 8.), true);
+    let child_id = child.id;
+    studio.doc.layers[hit.0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .push(child);
     studio.mark();
     studio.history.clear();
     let before = wire(&studio);
     studio.create_text_outlines();
     assert_eq!(wire(&studio), before);
     assert_eq!(studio.history.len(), 0);
-    assert!(studio.status.contains("not converted"), "{}", studio.status);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
     assert!(matches!(
         studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+    assert_eq!(
+        studio
+            .doc
+            .find_shape(hit.0, child_id)
+            .unwrap()
+            .layout
+            .parent,
+        Some(hit.1)
+    );
+
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .layout
+        .frame = true;
+    let mut nested = Shape::new(
+        Geom::Text(TypeRun {
+            origin: Pt::new(48., 150.),
+            content: "Nest".into(),
+            px: 18.,
+            font: concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/assets/fonts/EBGaramond.ttf"
+            )
+            .into(),
+            ..Default::default()
+        }),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(12, 18, 28)),
+            stroke: None,
+        },
+    );
+    crate::text::fill_contours(&mut nested.geom);
+    nested.layout.parent = Some(hit.1);
+    nested.locked = true;
+    let nested_id = nested.id;
+    studio.doc.layers[hit.0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .push(nested);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(wire(&studio), before);
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, nested_id).unwrap().geom,
         Geom::Text(_)
     ));
 }

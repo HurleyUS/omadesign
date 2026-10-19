@@ -589,16 +589,26 @@ fn inherited_distance(shape: &Shape, run: &TypeRun) -> Result<Option<InheritedDi
     }))
 }
 
-/// Layout frames still need their own outline adapter.
-/// Args: the text shape. Returns the named refusal when the text is already a layout frame.
-fn outline_adapter_block(shape: &Shape) -> Option<String> {
-    if shape.layout.frame {
-        Some(
-            "Text that already serves as a layout frame needs an outline appearance adapter; it was not converted"
-                .into(),
-        )
-    } else {
-        None
+/// Keep an authored frame clip when the text is already a layout frame.
+/// Args: the text and the outlined root. A new outline group stays unclipped. A kept clip grows one pixel on every side, and stack padding grows by that same pixel, so the letter edge stays inside the clip and flow children stay put. Returns nothing.
+fn keep_authored_frame_clip(source: &Shape, root: &mut Shape) {
+    root.layout.frame = true;
+    if !source.layout.frame {
+        root.layout.clip = false;
+        return;
+    }
+    if !source.layout.clip {
+        return;
+    }
+    let pad = 1.;
+    if let Geom::Rect { origin, size, .. } = &mut root.geom {
+        *origin = Pt::new(origin.x - pad, origin.y - pad);
+        *size = Pt::new(size.x + pad * 2., size.y + pad * 2.);
+    }
+    if let Some(stack) = root.layout.stack.as_mut() {
+        for side in &mut stack.padding {
+            *side += pad;
+        }
     }
 }
 
@@ -674,9 +684,6 @@ fn place_object_shape_wrap(
 /// Convert imported SVG text into editable paint paths.
 /// Args: the selected text shape and its run. Returns replacement shapes, or the named refusal.
 fn svg_outlines(shape: &Shape, run: &TypeRun) -> Result<Vec<Shape>, String> {
-    if let Some(error) = outline_adapter_block(shape) {
-        return Err(error);
-    }
     let painted_run;
     let run = if run
         .svg_text
@@ -739,7 +746,7 @@ fn svg_outlines(shape: &Shape, run: &TypeRun) -> Result<Vec<Shape>, String> {
     if painted.is_empty() {
         return Err("This text has no visible outlines to convert".into());
     }
-    if painted.len() == 1 {
+    if painted.len() == 1 && !shape.layout.frame {
         let mut result = shape.clone();
         result.geom = painted[0].geom.clone();
         result.style.fill = painted[0].fill.clone();
@@ -761,8 +768,7 @@ fn svg_outlines(shape: &Shape, run: &TypeRun) -> Result<Vec<Shape>, String> {
         fill: Fill::None,
         stroke: None,
     };
-    root.layout.frame = true;
-    root.layout.clip = false;
+    keep_authored_frame_clip(shape, &mut root);
     let mut result = vec![root];
     for (index, piece) in painted.iter().enumerate() {
         let label = if piece.stroke.is_some() && piece.fill.is_none() {
@@ -796,9 +802,6 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
     if run.contours.is_empty() {
         return Err("This text has no visible outlines to convert".into());
     }
-    if let Some(error) = outline_adapter_block(shape) {
-        return Err(error);
-    }
     let geometry = crate::text::outline_path(run)
         .and_then(|path| crate::geom::path_geom(&path, false))
         .unwrap_or_else(|| Geom::Poly {
@@ -806,7 +809,7 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
             winding: false,
         });
     let painted = crate::text::has_character_paint(run);
-    if !painted && run.frame.is_none() && run.on_path.is_none() {
+    if !shape.layout.frame && !painted && run.frame.is_none() && run.on_path.is_none() {
         let mut result = shape.clone();
         result.geom = geometry.clone();
         let mut shapes = vec![result];
@@ -824,8 +827,7 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
         fill: Fill::None,
         stroke: None,
     };
-    root.layout.frame = true;
-    root.layout.clip = false;
+    keep_authored_frame_clip(shape, &mut root);
     let mut result = vec![root];
     let fills = if painted {
         crate::text::paint_paths(run, &shape.style.fill)
