@@ -3,6 +3,7 @@ use crate::app::{
     Studio,
     type_commands::{
         self as commands, SmartPunctuation, TextCase, TextScope, TypeCommand, TypeCommandTarget,
+        TypeFace,
     },
 };
 use eframe::egui::{self, Id, Response, Ui};
@@ -101,12 +102,51 @@ fn open(ctx: &egui::Context, studio: &Studio) {
     ctx.data_mut(|d| d.insert_temp(Id::new(ID), draft));
 }
 
-/// Add the real reference content, font-size, fit-headline, and placeholder commands to the existing Type menu.
+/// Add the real reference content, font, style, font-size, fit-headline, and placeholder commands to the existing Type menu.
 /// Args: menu UI and editor. Returns no value; accepted commands share the app-owned route.
 pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
     let owner = Id::new(("type-content-menu", &studio.swap_id, &studio.selection));
     let selected = studio.capture_type_command(TextScope::Selection).is_ok();
     ui.add_enabled_ui(selected, |ui| {
+        ui.menu_button("Font", |ui| {
+            let families = studio.font_catalog().families();
+            if families.is_empty() {
+                ui.add_enabled(false, egui::Button::new("No installed fonts"));
+            }
+            for family in families {
+                if control(ui, owner.with(("font", &family)), &family, |ui| {
+                    ui.button(&family)
+                })
+                .clicked()
+                {
+                    studio.type_selection_command(TypeCommand::Face(TypeFace::Family(family)));
+                    ui.close();
+                }
+            }
+        });
+        ui.menu_button("Recent fonts", |ui| {
+            let recents = studio.font_recents.clone();
+            if recents.is_empty() {
+                ui.add_enabled(false, egui::Button::new("No recent fonts"));
+            }
+            for path in recents {
+                let name = crate::text::label_for(&path);
+                if control(ui, owner.with(("recent", &path)), &name, |ui| {
+                    ui.button(&name)
+                })
+                .clicked()
+                {
+                    studio.type_selection_command(TypeCommand::Face(TypeFace::Recent(path)));
+                    ui.close();
+                }
+            }
+        });
+        for (name, face) in [("Bold", TypeFace::Bold), ("Italic", TypeFace::Italic)] {
+            if control(ui, owner.with(name), name, |ui| ui.button(name)).clicked() {
+                studio.type_selection_command(TypeCommand::Face(face));
+                ui.close();
+            }
+        }
         ui.menu_button("Change case", |ui| {
             for (case, name) in [
                 (TextCase::Upper, "UPPERCASE"),

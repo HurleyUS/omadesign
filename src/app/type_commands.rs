@@ -51,6 +51,20 @@ pub(crate) enum TypeCommand {
     FitHeadline,
     /// Replace the story with stand-in copy. Area type fills its frame. Other type gets one sentence.
     Placeholder,
+    /// Apply an installed family, a remembered file, or that family's own bold or italic face.
+    Face(TypeFace),
+}
+/// A Type menu font or style choice. The face has to be one the family actually ships.
+#[derive(Clone)]
+pub(crate) enum TypeFace {
+    /// The family's own regular face.
+    Family(String),
+    /// A remembered font file. A missing file stays missing.
+    Recent(String),
+    /// The family's own bold face, or back to its regular weight.
+    Bold,
+    /// The family's own italic face, or back upright.
+    Italic,
 }
 pub(crate) const SPECIAL_CHARACTERS: &[(&str, &str)] = &[
     ("Bullet •", "•"),
@@ -140,6 +154,179 @@ fn rewritten_caret(at: usize, edits: &[CharacterRewrite]) -> usize {
     new + at - old
 }
 
+/// Split a style name into bold, regular weight, italic, and the other words.
+/// Args: OpenType style name. Returns those four parts. A narrow face keeps the word "narrow".
+fn style_parts(style: &str) -> (bool, bool, bool, Vec<String>) {
+    const WEIGHTS: &[&str] = &[
+        "thin",
+        "hairline",
+        "extralight",
+        "ultralight",
+        "light",
+        "book",
+        "medium",
+        "semibold",
+        "demibold",
+        "demi",
+        "bold",
+        "extrabold",
+        "ultrabold",
+        "heavy",
+        "black",
+        "ultra",
+    ];
+    const PLAIN: &[&str] = &["regular", "normal", "roman", "plain", "upright"];
+    let words: Vec<String> = style
+        .split([' ', '-', '_'])
+        .filter(|word| !word.is_empty())
+        .map(|word| word.to_ascii_lowercase())
+        .collect();
+    let italic = words
+        .iter()
+        .any(|word| word == "italic" || word == "oblique");
+    let bold = words.iter().any(|word| word == "bold");
+    let regular = !words.iter().any(|word| WEIGHTS.contains(&word.as_str()));
+    let mut rest: Vec<String> = words
+        .into_iter()
+        .filter(|word| {
+            !WEIGHTS.contains(&word.as_str())
+                && !PLAIN.contains(&word.as_str())
+                && word != "italic"
+                && word != "oblique"
+        })
+        .collect();
+    rest.sort();
+    (bold, regular, italic, rest)
+}
+
+/// Pick the family's own style name for a bold and italic choice.
+/// Args: style names the family ships, whether bold is wanted, whether italic is wanted, and the style to keep width words from.
+/// Returns the shortest matching name. A family without that face returns none.
+fn pick_style<'a>(styles: &'a [String], bold: bool, italic: bool, like: &str) -> Option<&'a str> {
+    let (.., keep) = style_parts(like);
+    styles
+        .iter()
+        .map(String::as_str)
+        .filter(|style| {
+            let (is_bold, regular, is_italic, rest) = style_parts(style);
+            is_italic == italic && (if bold { is_bold } else { regular }) && rest == keep
+        })
+        .min_by_key(|style| style.len())
+}
+
+/// Name the face Bold or Italic asked for.
+/// Args: whether bold is wanted and whether italic is wanted. Returns the style words used in the refusal.
+fn wanted_style(bold: bool, italic: bool) -> &'static str {
+    match (bold, italic) {
+        (true, true) => "Bold Italic",
+        (true, false) => "Bold",
+        (false, true) => "Italic",
+        (false, false) => "Regular",
+    }
+}
+
+/// Read the family and style stored on a font reference.
+/// Args: font file or project font id. Returns those names, or an error when the file is missing.
+fn authored_face(reference: &str) -> Result<(String, String), String> {
+    if reference.is_empty() {
+        return Err("Choose an available font".into());
+    }
+    let info = crate::text::font_inventory::describe(
+        &crate::text::font_inventory::Request::Stored(reference.into()),
+        reference,
+        &std::collections::BTreeSet::new(),
+    );
+    if info.status != crate::text::font_inventory::Status::Exact {
+        return Err("Choose an available font".into());
+    }
+    Ok((info.family, info.style))
+}
+
+/// Bind one named style of a family to the portable font used by typed text.
+/// Args: catalog, family and exact style name. Returns that face's project font id.
+fn bind_style(
+    catalog: &crate::text::font_catalog::Catalog,
+    family: &str,
+    style: &str,
+) -> Result<String, String> {
+    let choice = catalog.choice(
+        family,
+        Some(style),
+        &crate::text::font_inventory::Request::Named {
+            family: family.into(),
+            weight: 400,
+            slant: 0,
+        },
+    )?;
+    catalog.reference(&choice)
+}
+
+/// Resolve Type > Font to the family's own regular face.
+/// Args: catalog and family name. Returns the portable font id, or an error when that face is absent.
+fn regular_reference(
+    catalog: &crate::text::font_catalog::Catalog,
+    family: &str,
+) -> Result<String, String> {
+    if family.is_empty()
+        || !catalog
+            .families()
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(family))
+    {
+        return Err("Choose an available font family".into());
+    }
+    let names: Vec<_> = catalog
+        .styles(family)
+        .into_iter()
+        .map(|choice| choice.style)
+        .collect();
+    let style = pick_style(&names, false, false, "Regular")
+        .ok_or_else(|| format!("{family} has no Regular style"))?;
+    bind_style(catalog, family, style)
+}
+
+/// Resolve Type > Bold or Type > Italic from the story's own face.
+/// Args: catalog, the story font, and bold or italic. Returns the portable font id.
+fn style_reference(
+    catalog: &crate::text::font_catalog::Catalog,
+    reference: &str,
+    face: &TypeFace,
+) -> Result<String, String> {
+    let (family, style) = authored_face(reference)?;
+    let (bold, _, italic, _) = style_parts(&style);
+    let (want_bold, want_italic) = match face {
+        TypeFace::Bold => (!bold, italic),
+        TypeFace::Italic => (bold, !italic),
+        TypeFace::Family(_) | TypeFace::Recent(_) => {
+            return Err("Choose an available font".into());
+        }
+    };
+    let names: Vec<_> = catalog
+        .styles(&family)
+        .into_iter()
+        .map(|choice| choice.style)
+        .collect();
+    let picked = pick_style(&names, want_bold, want_italic, &style).ok_or_else(|| {
+        format!(
+            "{family} has no {} style",
+            wanted_style(want_bold, want_italic)
+        )
+    })?;
+    bind_style(catalog, &family, picked)
+}
+
+/// Replace every authored face in a story with one available font.
+/// Args: story and portable font id or file path. Returns whether the story changed.
+fn replace_story_font(run: &mut TypeRun, to: &str) -> Result<bool, String> {
+    let mut from = Vec::new();
+    for usage in crate::text::font_inventory::uses(run)? {
+        if !from.contains(&usage.request) {
+            from.push(usage.request);
+        }
+    }
+    crate::text::font_inventory::replace_at(run, &from, to, &Default::default())
+}
+
 /// Rewrite content while carrying word/sentence/quote context across styled intervals.
 /// Args: source run, original range and command. Returns only actual character replacements.
 fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<CharacterRewrite> {
@@ -149,6 +336,7 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
             | TypeCommand::Size(_)
             | TypeCommand::FitHeadline
             | TypeCommand::Placeholder
+            | TypeCommand::Face(_)
     ) {
         return vec![];
     }
@@ -254,7 +442,8 @@ fn rewrites(run: &TypeRun, range: Range<usize>, command: &TypeCommand) -> Vec<Ch
             | TypeCommand::Font(_)
             | TypeCommand::Size(_)
             | TypeCommand::FitHeadline
-            | TypeCommand::Placeholder => {
+            | TypeCommand::Placeholder
+            | TypeCommand::Face(_) => {
                 unreachable!()
             }
         };
@@ -724,8 +913,26 @@ impl Studio {
         {
             return Err("Select area type".into());
         }
+        let menu_face = match &command {
+            TypeCommand::Face(TypeFace::Family(family)) => {
+                Some(regular_reference(&self.font_catalog(), family)?)
+            }
+            TypeCommand::Face(TypeFace::Recent(path)) => {
+                authored_face(path)?;
+                Some(path.clone())
+            }
+            _ => None,
+        };
+        let menu_catalog = matches!(
+            command,
+            TypeCommand::Face(TypeFace::Bold | TypeFace::Italic)
+        )
+        .then(|| self.font_catalog());
         let live = (target.scope == TextScope::Selection
-            && !matches!(command, TypeCommand::FitHeadline | TypeCommand::Placeholder))
+            && !matches!(
+                command,
+                TypeCommand::FitHeadline | TypeCommand::Placeholder | TypeCommand::Face(_)
+            ))
         .then_some(target.edit.as_ref())
         .flatten();
         if let TypeCommand::Size(_) = &command
@@ -758,6 +965,13 @@ impl Studio {
                 fit_authored_headline(&mut run)?
             } else if let TypeCommand::Placeholder = &command {
                 fill_authored_placeholder(&mut run)?
+            } else if let TypeCommand::Face(face) = &command {
+                let to = if let Some(to) = &menu_face {
+                    to.clone()
+                } else {
+                    style_reference(menu_catalog.as_ref().unwrap(), &run.font, face)?
+                };
+                replace_story_font(&mut run, &to)?
             } else if let TypeCommand::Font(replacement) = &command {
                 crate::text::font_inventory::replace_at(
                     &mut run,
@@ -867,6 +1081,11 @@ impl Studio {
         } else {
             format!("Updated {changed} text stories")
         };
+        if let TypeCommand::Face(TypeFace::Recent(path)) = &command {
+            self.font_recents.retain(|item| item != path);
+            self.font_recents.insert(0, path.clone());
+            self.font_recents.truncate(15);
+        }
         Ok(changed)
     }
     /// Invoke an immediate selection command using the same captured-target path as the dialog.

@@ -1041,3 +1041,268 @@ fn craft_type_placeholder_refuses_a_non_finite_frame_and_locked_text() {
     assert_eq!(locked.history.len(), 0);
     assert_eq!(wire(&locked), before);
 }
+
+const SANS: &str = "/usr/share/fonts/liberation/LiberationSans-Regular.ttf";
+const SANS_ITALIC: &str = "/usr/share/fonts/liberation/LiberationSans-Italic.ttf";
+const ONE_FACE: &str = "/usr/share/fonts/noto/NotoSansBuhid-Regular.ttf";
+
+fn shown_face(reference: &str) -> (String, String) {
+    let info = crate::text::font_inventory::describe(
+        &crate::text::font_inventory::Request::Stored(reference.into()),
+        reference,
+        &std::collections::BTreeSet::new(),
+    );
+    assert_eq!(
+        info.status,
+        crate::text::font_inventory::Status::Exact,
+        "{reference}"
+    );
+    (info.family, info.style)
+}
+
+#[test]
+fn craft_type_font_menu_applies_a_family_keeps_the_authored_style_and_one_undo() {
+    let styles = [
+        "Light",
+        "Narrow",
+        "Regular",
+        "Italic",
+        "Narrow Italic",
+        "SemiBold",
+        "Bold",
+        "Bold Condensed",
+        "Narrow Bold",
+        "Bold Italic",
+        "Black",
+    ]
+    .map(str::to_string);
+    assert_eq!(
+        super::pick_style(&styles, true, false, "Regular"),
+        Some("Bold")
+    );
+    assert_eq!(
+        super::pick_style(&styles, true, false, "Narrow"),
+        Some("Narrow Bold")
+    );
+    assert_eq!(
+        super::pick_style(&styles, false, true, "Regular"),
+        Some("Italic")
+    );
+    assert_eq!(
+        super::pick_style(&styles, true, true, "Italic"),
+        Some("Bold Italic")
+    );
+    assert_ne!(
+        super::pick_style(&styles, true, false, "Regular"),
+        Some("SemiBold")
+    );
+    assert_ne!(
+        super::pick_style(&styles, true, false, "Regular"),
+        Some("Bold Condensed")
+    );
+    let (bold, regular, italic, rest) = super::style_parts("SemiBold");
+    assert!(!bold && !regular && !italic && rest.is_empty());
+
+    let (mut s, hit) = editor("Old words stay");
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.set_character_style(3, 6, |span| span.font = Some(SANS_ITALIC.into()));
+        r.manual_kern.insert(2, -3.);
+        r.layout = None;
+    }
+    s.mark();
+    s.history.clear();
+    let before = wire(&s);
+    assert_eq!(
+        apply(
+            &mut s,
+            TypeCommand::Face(TypeFace::Family("Liberation Sans".into()))
+        ),
+        1
+    );
+    let text = run(&s, hit);
+    assert_eq!(text.content, "Old words stay");
+    assert_eq!(text.manual_kern.get(&2), Some(&-3.));
+    assert_eq!(
+        text.character_style(0).fill,
+        Some(Fill::Solid(Rgba::rgb(210, 30, 70)))
+    );
+    assert_eq!(
+        shown_face(&text.font),
+        ("Liberation Sans".into(), "Regular".into())
+    );
+    assert!(text.font.starts_with("omatype:"));
+    assert_eq!(
+        shown_face(
+            text.spans
+                .iter()
+                .find(|span| span.font.is_some())
+                .unwrap()
+                .font
+                .as_deref()
+                .unwrap()
+        ),
+        ("Liberation Sans".into(), "Regular".into())
+    );
+    assert_eq!(s.selection, vec![hit]);
+    assert_eq!(s.history.len(), 1);
+    let changed = wire(&s);
+    let doc = crate::project::decode(&changed).unwrap();
+    assert_eq!(crate::project::encode(&doc).unwrap(), changed);
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    assert_eq!(wire(&s), changed);
+    assert_eq!(
+        apply(
+            &mut s,
+            TypeCommand::Face(TypeFace::Family("Liberation Sans".into()))
+        ),
+        0
+    );
+    assert_eq!(s.history.len(), 1);
+
+    s.begin_type_edit(hit, Pt::new(35., 65.));
+    assert!(s.type_edit.is_some());
+    assert_eq!(
+        apply(&mut s, TypeCommand::Face(TypeFace::Recent(SANS.into()))),
+        1
+    );
+    assert!(s.type_edit.is_none());
+    assert_eq!(run(&s, hit).font, SANS);
+    assert_eq!(s.history.len(), 2);
+    assert_eq!(s.font_recents.first().map(String::as_str), Some(SANS));
+    s.undo();
+    assert_eq!(wire(&s), changed);
+}
+
+#[test]
+fn craft_type_font_menu_refuses_missing_faces_locked_text_and_a_family_without_bold() {
+    let (mut s, hit) = editor("Stay put");
+    let before = wire(&s);
+    let target = s.capture_type_command(TextScope::Selection).unwrap();
+    assert_eq!(
+        s.apply_type_command(
+            &target,
+            TypeCommand::Face(TypeFace::Family("Oma Missing Menu Family".into()))
+        )
+        .unwrap_err(),
+        "Choose an available font family"
+    );
+    assert_eq!(
+        s.apply_type_command(
+            &target,
+            TypeCommand::Face(TypeFace::Recent("/no/such/omadesign-font.ttf".into()))
+        )
+        .unwrap_err(),
+        "Choose an available font"
+    );
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+    if let Geom::Text(r) = &mut s.doc.find_shape_mut(hit.0, hit.1).unwrap().geom {
+        r.font = ONE_FACE.into();
+        r.layout = None;
+    }
+    s.mark();
+    s.history.clear();
+    let alone = wire(&s);
+    let err = s
+        .capture_type_command(TextScope::Selection)
+        .and_then(|target| s.apply_type_command(&target, TypeCommand::Face(TypeFace::Bold)))
+        .unwrap_err();
+    assert!(err.contains("has no Bold style"), "{err}");
+    assert_eq!(run(&s, hit).font, ONE_FACE);
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), alone);
+
+    let mut sibling = TypeRun {
+        content: "Other".into(),
+        origin: Pt::new(35., 140.),
+        px: 28.,
+        font: SANS.into(),
+        ..Default::default()
+    };
+    sibling.layout = None;
+    let mut shape = Shape::new(Geom::Text(sibling), Style::default());
+    crate::text::fill_contours(&mut shape.geom);
+    let other = (0, shape.id);
+    s.doc.layers[0].kind.shapes_mut().unwrap().push(shape);
+    s.selection = vec![hit, other];
+    s.mark();
+    s.history.clear();
+    let before = wire(&s);
+    let err = s
+        .capture_type_command(TextScope::Selection)
+        .and_then(|target| s.apply_type_command(&target, TypeCommand::Face(TypeFace::Bold)))
+        .unwrap_err();
+    assert!(err.contains("has no Bold style"), "{err}");
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+    assert_eq!(run(&s, other).font, SANS);
+
+    let (mut locked, _) = editor("Locked");
+    let id = locked.selection[0];
+    locked.doc.find_shape_mut(id.0, id.1).unwrap().locked = true;
+    let before = wire(&locked);
+    locked.type_selection_command(TypeCommand::Face(TypeFace::Family(
+        "Liberation Sans".into(),
+    )));
+    assert!(locked.status.contains("Unlock"));
+    assert_eq!(locked.history.len(), 0);
+    assert_eq!(wire(&locked), before);
+}
+
+#[test]
+fn craft_type_font_menu_recent_bold_and_italic_use_the_familys_own_faces() {
+    let (mut s, hit) = editor("Styled");
+    let original = run(&s, hit).font.clone();
+    s.font_recents = vec![SANS_ITALIC.into(), SANS.into()];
+    assert_eq!(
+        apply(&mut s, TypeCommand::Face(TypeFace::Recent(SANS.into()))),
+        1
+    );
+    assert_eq!(run(&s, hit).font, SANS);
+    assert_eq!(s.font_recents[0], SANS);
+    assert_eq!(shown_face(&run(&s, hit).font).0, "Liberation Sans");
+    assert_eq!(apply(&mut s, TypeCommand::Face(TypeFace::Bold)), 1);
+    assert_eq!(
+        shown_face(&run(&s, hit).font),
+        ("Liberation Sans".into(), "Bold".into())
+    );
+    assert!(run(&s, hit).font.starts_with("omatype:"));
+    assert_ne!(shown_face(&run(&s, hit).font).0, "Noto Sans");
+    assert_eq!(apply(&mut s, TypeCommand::Face(TypeFace::Italic)), 1);
+    assert_eq!(
+        shown_face(&run(&s, hit).font),
+        ("Liberation Sans".into(), "Bold Italic".into())
+    );
+    assert_eq!(apply(&mut s, TypeCommand::Face(TypeFace::Bold)), 1);
+    assert_eq!(
+        shown_face(&run(&s, hit).font),
+        ("Liberation Sans".into(), "Italic".into())
+    );
+    assert_eq!(apply(&mut s, TypeCommand::Face(TypeFace::Italic)), 1);
+    assert_eq!(
+        shown_face(&run(&s, hit).font),
+        ("Liberation Sans".into(), "Regular".into())
+    );
+    assert_eq!(s.history.len(), 5);
+    assert_eq!(run(&s, hit).content, "Styled");
+    assert_eq!(
+        run(&s, hit).character_style(0).fill,
+        Some(Fill::Solid(Rgba::rgb(210, 30, 70)))
+    );
+    let saved = wire(&s);
+    s.undo();
+    s.undo();
+    s.undo();
+    s.undo();
+    s.undo();
+    assert_eq!(run(&s, hit).font, original);
+    assert_eq!(s.history.len(), 0);
+    s.redo();
+    s.redo();
+    s.redo();
+    s.redo();
+    s.redo();
+    assert_eq!(wire(&s), saved);
+}

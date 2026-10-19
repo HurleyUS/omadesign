@@ -448,3 +448,82 @@ fn craft_type_placeholder_native_menu_stays_disabled_on_locked_text() {
     assert_eq!(s.history.len(), 0);
     assert_eq!(wire(&s), before);
 }
+
+fn shown_face(reference: &str) -> (String, String) {
+    let info = crate::text::font_inventory::describe(
+        &crate::text::font_inventory::Request::Stored(reference.into()),
+        reference,
+        &std::collections::BTreeSet::new(),
+    );
+    assert_eq!(info.status, crate::text::font_inventory::Status::Exact);
+    (info.family, info.style)
+}
+
+#[test]
+fn craft_type_font_menu_native_type_menu_applies_one_undo_and_reopens() {
+    let mut s = editor();
+    s.font_recents = vec!["/usr/share/fonts/liberation/LiberationSans-Regular.ttf".into()];
+    let before = wire(&s);
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Type");
+    seat.click(&mut s, "Recent fonts ⏵");
+    seat.invoke(&mut s, "Liberation Sans");
+    let text = s.selected_type().unwrap();
+    assert_eq!(
+        text.font,
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"
+    );
+    assert_eq!(
+        text.character_style(0).fill,
+        Some(Fill::Solid(crate::color::Rgba::rgb(220, 35, 70)))
+    );
+    assert_eq!(s.history.len(), 1);
+    let recent = wire(&s);
+    let doc = crate::project::decode(&recent).unwrap();
+    assert_eq!(crate::project::encode(&doc).unwrap(), recent);
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    assert_eq!(wire(&s), recent);
+
+    seat.click(&mut s, "Type");
+    seat.invoke(&mut s, "Bold");
+    assert_eq!(
+        shown_face(&s.selected_type().unwrap().font),
+        ("Liberation Sans".into(), "Bold".into())
+    );
+    assert_eq!(s.history.len(), 2);
+    seat.click(&mut s, "Type");
+    seat.click(&mut s, "Font ⏵");
+    seat.invoke(&mut s, "Liberation Sans");
+    assert_eq!(
+        shown_face(&s.selected_type().unwrap().font),
+        ("Liberation Sans".into(), "Regular".into())
+    );
+    assert!(s.selected_type().unwrap().font.starts_with("omatype:"));
+    assert_eq!(s.history.len(), 3);
+    let family = wire(&s);
+    s.undo();
+    s.undo();
+    s.undo();
+    assert_eq!(wire(&s), before);
+    s.redo();
+    s.redo();
+    s.redo();
+    assert_eq!(wire(&s), family);
+}
+
+#[test]
+fn craft_type_font_menu_native_menu_stays_disabled_on_locked_text() {
+    let mut s = editor();
+    let hit = s.selection[0];
+    s.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    let before = wire(&s);
+    let mut seat = Seat::new();
+    seat.click(&mut s, "Type");
+    for name in ["Font ⏵", "Recent fonts ⏵", "Bold", "Italic"] {
+        assert!(keys::named(&seat.output, name).1.is_disabled(), "{name}");
+    }
+    assert_eq!(s.history.len(), 0);
+    assert_eq!(wire(&s), before);
+}
