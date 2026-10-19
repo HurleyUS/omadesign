@@ -16,4 +16,6 @@ At `1ba6b440a221476745156842e473895f4be8de69` that route passed 5 tests. Receipt
 
 The Design Effect menu now edits object effects on the selection. Add effect offers every entry in the existing effect catalog and appends it to each selected object. Clear effects removes the object effects from each selected object and is disabled when there are none. Each choice is one history step for the whole selection: Undo restores the exact saved bytes, Redo restores the edit, and the document reopens with the same effects. Locked, hidden and guide objects, pixel layers and objects on locked layers are skipped; when nothing remains, or a file dialog is open or updates are frozen, the choices are disabled and nothing changes. Layer effects stay in the Effects panel. The effects, adjustments, appearance and transparency panel shortcuts stay below a separator.
 
+At `52c0cc5374d8eaab12468670ec3007bd140f08db` that route passed 5 tests. Receipt `2209a1393cc7ae93a77cb303607fa74a3c87cd7c92bf1bbabb0089f74bb40e2b`.
+
 All four mode menus (Animation, Layout, Develop, Effect) now run real commands. No model, schema, dependency or version change.
