@@ -333,7 +333,7 @@ fn craft_painted_outlines_split_linked_story_without_changing_other_frames() {
 
 #[test]
 fn craft_painted_outlines_reject_unsupported_or_locked_owners_before_draft_and_redo() {
-    for mode in 0..5 {
+    for mode in [0, 1, 2, 3] {
         let (mut studio, hit) = fixture();
         studio.commit(Cmd::SetOpacity {
             layer: hit.0,
@@ -368,14 +368,6 @@ fn craft_painted_outlines_reject_unsupported_or_locked_owners_before_draft_and_r
         }
         if mode == 2 {
             studio.updates.freezing = true;
-        }
-        if mode == 4 {
-            let Geom::Text(run) = &mut shape.geom else {
-                unreachable!()
-            };
-            run.spans.clear();
-            shape.style.fill =
-                Fill::Gradient(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE));
         }
         if mode == 3 {
             studio
@@ -771,4 +763,36 @@ fn craft_svg_text_outlines_refuse_wrapping_and_shape_paint_without_history() {
         Geom::Text(_)
     ));
     assert_eq!(wire(&studio), before);
+}
+
+#[test]
+fn craft_outline_shape_distance_keeps_the_shared_fill_and_one_undo() {
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        let Geom::Text(run) = &mut shape.geom else {
+            unreachable!()
+        };
+        run.spans.clear();
+        shape.style.fill =
+            Fill::Gradient(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE));
+    }
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let shape = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(!matches!(shape.geom, Geom::Text(_)));
+    assert_eq!(
+        shape.style.fill.gradient().map(|gradient| gradient.kind),
+        Some(GradientKind::Shape)
+    );
+    same_paint(&picture, &image(&studio.doc));
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
 }

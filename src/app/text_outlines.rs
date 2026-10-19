@@ -652,6 +652,18 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
     if !shape.text_wrap.is_none() || shape.layout.image.is_some() || shape.layout.frame {
         return Err("Text with contour wrapping, image fill or existing frame children needs an outline appearance adapter; it was not converted".into());
     }
+    let geometry = crate::text::outline_path(run)
+        .and_then(|path| crate::geom::path_geom(&path, false))
+        .unwrap_or_else(|| Geom::Poly {
+            contours: run.contours.clone(),
+            winding: false,
+        });
+    let painted = crate::text::has_character_paint(run);
+    if !painted && run.frame.is_none() && run.on_path.is_none() {
+        let mut result = shape.clone();
+        result.geom = geometry;
+        return Ok(vec![result]);
+    }
     if shape
         .style
         .fill
@@ -668,18 +680,6 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
             "Shape-distance text paint needs a shared outline paint space; it was not converted"
                 .into(),
         );
-    }
-    let geometry = crate::text::outline_path(run)
-        .and_then(|path| crate::geom::path_geom(&path, false))
-        .unwrap_or_else(|| Geom::Poly {
-            contours: run.contours.clone(),
-            winding: false,
-        });
-    let painted = crate::text::has_character_paint(run);
-    if !painted && run.frame.is_none() && run.on_path.is_none() {
-        let mut result = shape.clone();
-        result.geom = geometry;
-        return Ok(vec![result]);
     }
     let bounds = shape.geom.bbox();
     let mut root = shape.clone();
