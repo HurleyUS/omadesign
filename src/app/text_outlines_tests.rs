@@ -333,7 +333,7 @@ fn craft_painted_outlines_split_linked_story_without_changing_other_frames() {
 
 #[test]
 fn craft_painted_outlines_reject_unsupported_or_locked_owners_before_draft_and_redo() {
-    for mode in [0, 2, 3] {
+    for mode in [0, 2] {
         let (mut studio, hit) = fixture();
         studio.commit(Cmd::SetOpacity {
             layer: hit.0,
@@ -356,12 +356,6 @@ fn craft_painted_outlines_reject_unsupported_or_locked_owners_before_draft_and_r
         }
         if mode == 2 {
             studio.updates.freezing = true;
-        }
-        if mode == 3 {
-            studio
-                .doc
-                .motion
-                .set_color_key(hit.1, 0., Rgba::BLACK, crate::motion::Ease::Linear);
         }
         studio.mark();
         let before = wire(&studio);
@@ -983,6 +977,197 @@ fn craft_outline_shape_distance_character_refuses_locked_text_without_history() 
     assert_eq!(studio.history.len(), 0);
     assert!(studio.status.contains("Unlock"), "{}", studio.status);
     assert_eq!(wire(&studio), before);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+}
+
+fn at(doc: &Document, time: f32) -> tiny_skia::Pixmap {
+    crate::compositor::render_export_at(doc, 1., time, true).unwrap()
+}
+
+fn track_ids(doc: &Document, prop: crate::motion::Prop) -> Vec<u64> {
+    doc.motion
+        .tracks
+        .iter()
+        .filter(|track| track.prop == prop && !track.keys.is_empty())
+        .map(|track| track.shape)
+        .collect()
+}
+
+#[test]
+fn craft_outline_animated_paint_keeps_fill_color_across_undo() {
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .motion
+        .set_color_key(hit.1, 0., Rgba::BLACK, crate::motion::Ease::Linear);
+    studio.doc.motion.set_color_key(
+        hit.1,
+        1.,
+        Rgba::rgb(240, 220, 40),
+        crate::motion::Ease::Linear,
+    );
+    studio.mark();
+    let before = studio.doc.clone();
+    let before_wire = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    assert!(studio.doc.find_shape(hit.0, hit.1).unwrap().layout.frame);
+    assert!(!track_ids(&studio.doc, crate::motion::Prop::Fill).contains(&hit.1));
+    let inherited = Fill::Solid(Rgba::rgb(30, 80, 40));
+    let carriers: Vec<u64> = studio.doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.style.fill == inherited)
+        .map(|shape| shape.id)
+        .collect();
+    assert_eq!(carriers.len(), 1);
+    assert_eq!(track_ids(&studio.doc, crate::motion::Prop::Fill), carriers);
+    same_paint(&image(&before), &image(&studio.doc));
+    for time in [0., 0.5, 1.] {
+        same_paint(&at(&before, time), &at(&studio.doc, time));
+    }
+    let after = wire(&studio);
+    let saved = crate::project::decode(&after).unwrap();
+    for time in [0., 0.5, 1.] {
+        same_paint(&at(&studio.doc, time), &at(&saved, time));
+    }
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before_wire);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_animated_paint_keeps_reveal_stroke_and_expression() {
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .style
+        .stroke = Some(crate::document::Stroke {
+        color: Rgba::rgb(16, 16, 16),
+        width: 3.,
+        dash: Some((5., 3.)),
+        ..crate::document::Stroke::default()
+    });
+    studio.doc.motion.set_key(
+        hit.1,
+        crate::motion::Prop::FillReveal,
+        0.,
+        0.42,
+        crate::motion::Ease::Linear,
+    );
+    studio.doc.motion.set_key(
+        hit.1,
+        crate::motion::Prop::FillReveal,
+        1.,
+        1.,
+        crate::motion::Ease::Linear,
+    );
+    studio.doc.motion.set_key(
+        hit.1,
+        crate::motion::Prop::StrokeWidth,
+        1.,
+        7.,
+        crate::motion::Ease::Linear,
+    );
+    studio
+        .doc
+        .motion
+        .set_expression(hit.1, crate::motion::Prop::Gap, Some("10".into()))
+        .unwrap();
+    studio.mark();
+    let before = studio.doc.clone();
+    let before_wire = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    assert!(!track_ids(&studio.doc, crate::motion::Prop::FillReveal).contains(&hit.1));
+    assert!(!track_ids(&studio.doc, crate::motion::Prop::StrokeWidth).contains(&hit.1));
+    let shapes = studio.doc.layers[0].kind.shapes().unwrap();
+    let fills: Vec<u64> = shapes
+        .iter()
+        .filter(|shape| !shape.style.fill.is_none())
+        .map(|shape| shape.id)
+        .collect();
+    let strokes: Vec<u64> = shapes
+        .iter()
+        .filter(|shape| shape.style.stroke.is_some())
+        .map(|shape| shape.id)
+        .collect();
+    assert!(fills.len() > 1);
+    assert_eq!(strokes.len(), 1);
+    assert_eq!(
+        track_ids(&studio.doc, crate::motion::Prop::FillReveal),
+        fills
+    );
+    assert_eq!(
+        track_ids(&studio.doc, crate::motion::Prop::StrokeWidth),
+        strokes
+    );
+    assert!(studio.doc.motion.expressions.iter().any(|expression| {
+        expression.prop == crate::motion::Prop::Gap
+            && expression.enabled
+            && strokes.contains(&expression.shape)
+    }));
+    assert!(studio.doc.motion.expressions.iter().all(|expression| {
+        expression.prop != crate::motion::Prop::Gap || expression.shape != hit.1
+    }));
+    same_paint(&image(&before), &image(&studio.doc));
+    for time in [0., 0.5, 1.] {
+        same_paint(&at(&before, time), &at(&studio.doc, time));
+    }
+    let after = wire(&studio);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before_wire);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_animated_paint_refuses_locked_text_before_history() {
+    let (mut studio, hit) = fixture();
+    studio.commit(Cmd::SetOpacity {
+        layer: hit.0,
+        id: hit.1,
+        before: 1.,
+        after: 0.7,
+    });
+    studio.undo();
+    studio.begin_type_edit(hit, Pt::new(60., 105.));
+    studio.type_insert("draft");
+    let draft = studio
+        .type_edit
+        .as_ref()
+        .map(|edit| (edit.caret, edit.anchor));
+    assert!(draft.is_some());
+    assert!(studio.history.can_redo());
+    studio.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    studio
+        .doc
+        .motion
+        .set_color_key(hit.1, 0., Rgba::BLACK, crate::motion::Ease::Linear);
+    studio.mark();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(wire(&studio), before);
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+    assert_eq!(
+        studio
+            .type_edit
+            .as_ref()
+            .map(|edit| (edit.caret, edit.anchor)),
+        draft
+    );
+    assert!(studio.history.can_redo());
     assert!(matches!(
         studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
         Geom::Text(_)

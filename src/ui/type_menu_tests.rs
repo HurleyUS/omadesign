@@ -670,3 +670,86 @@ fn craft_svg_outline_shape_distance_native_menu_keeps_the_shared_field() {
     studio.redo();
     assert_eq!(saved(&studio), after);
 }
+
+#[test]
+fn craft_outline_animated_paint_native_menu_retargets_fill() {
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = Document::new("Animated outlines", 480., 220., 96.);
+    studio.doc.transparent = true;
+    studio.doc.workspace = Some(Persona::Layout);
+    studio.doc.layers = vec![Layer::vector("Editable lettering")];
+    let mut run = TypeRun {
+        origin: Pt::new(40., 105.),
+        content: "Colour & curves".into(),
+        px: 38.,
+        font: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/assets/fonts/EBGaramond.ttf"
+        )
+        .into(),
+        ..Default::default()
+    };
+    run.set_character_style(0, 6, |span| {
+        span.fill = Some(Fill::Solid(crate::color::Rgba::rgb(220, 40, 75)));
+    });
+    run.set_character_style(9, 15, |span| {
+        span.fill = Some(Fill::Solid(crate::color::Rgba::rgb(20, 140, 210)));
+    });
+    let mut shape = Shape::new(
+        Geom::Text(run),
+        Style {
+            fill: Fill::Solid(crate::color::Rgba::rgb(30, 80, 40)),
+            stroke: None,
+        },
+    );
+    crate::text::fill_contours(&mut shape.geom);
+    let hit = (0, shape.id);
+    studio.doc.layers[0].kind.shapes_mut().unwrap().push(shape);
+    studio.doc.motion.set_color_key(
+        hit.1,
+        0.,
+        crate::color::Rgba::BLACK,
+        crate::motion::Ease::Linear,
+    );
+    studio.doc.motion.set_color_key(
+        hit.1,
+        1.,
+        crate::color::Rgba::rgb(240, 220, 40),
+        crate::motion::Ease::Linear,
+    );
+    studio.active_layer = Some(0);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    let before_doc = studio.doc.clone();
+    let before = saved(&studio);
+    let mut seat = Seat::new();
+    seat.frame(&mut studio, vec![]);
+    seat.click(&mut studio, "Type");
+    seat.invoke(&mut studio, "Create outlines");
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    assert!(studio.doc.find_shape(hit.0, hit.1).unwrap().layout.frame);
+    assert!(
+        studio
+            .doc
+            .motion
+            .tracks
+            .iter()
+            .all(|track| { track.prop != crate::motion::Prop::Fill || track.shape != hit.1 })
+    );
+    assert!(studio.doc.motion.tracks.iter().any(|track| {
+        track.prop == crate::motion::Prop::Fill && track.shape != hit.1 && track.keys.len() == 2
+    }));
+    for time in [0., 1.] {
+        let left = crate::compositor::render_export_at(&before_doc, 1., time, true).unwrap();
+        let right = crate::compositor::render_export_at(&studio.doc, 1., time, true).unwrap();
+        assert_eq!(left.data(), right.data());
+    }
+    let after = saved(&studio);
+    studio.undo();
+    assert_eq!(saved(&studio), before);
+    studio.redo();
+    assert_eq!(saved(&studio), after);
+}

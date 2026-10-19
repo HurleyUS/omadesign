@@ -800,6 +800,289 @@ fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
     Ok(result)
 }
 
+/// Tell a paint channel from a transform or opacity channel.
+/// Args: motion property. Returns true when outlining must move that channel onto the paint that draws it.
+fn paint_channel(prop: crate::motion::Prop) -> bool {
+    use crate::motion::Prop;
+    matches!(
+        prop,
+        Prop::StrokeReveal
+            | Prop::FillReveal
+            | Prop::GradientAngle
+            | Prop::StrokeWidth
+            | Prop::Fill
+            | Prop::Dash
+            | Prop::Gap
+            | Prop::DashLength
+    )
+}
+
+/// Authored fill identity after outline rebases gradient endpoints.
+/// Args: outlined fill and the text object's fill. Returns true when they are the same paint.
+fn same_authored_fill(child: &Fill, object: &Fill) -> bool {
+    match (child.gradient(), object.gradient()) {
+        (Some(child_gradient), Some(object_gradient)) => {
+            child_gradient.kind == object_gradient.kind
+                && child_gradient.stops == object_gradient.stops
+        }
+        (None, None) => match (child, object) {
+            (Fill::Solid(child), Fill::Solid(object)) => child == object,
+            (Fill::None, Fill::None) => true,
+            (Fill::Pattern(child), Fill::Pattern(object)) => {
+                child.id == object.id && child.definitions == object.definitions
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Choose the outlined paths that still draw one paint channel.
+/// Args: channel, authored fill and stroke, and the paths that replaced the text. Returns their ids.
+fn paint_targets(
+    prop: crate::motion::Prop,
+    object_fill: &Fill,
+    object_stroke: Option<&Stroke>,
+    children: &[&Shape],
+) -> Vec<u64> {
+    use crate::motion::Prop;
+    match prop {
+        Prop::Fill => children
+            .iter()
+            .filter(|child| same_authored_fill(&child.style.fill, object_fill))
+            .map(|child| child.id)
+            .collect(),
+        Prop::FillReveal => children
+            .iter()
+            .filter(|child| {
+                !child.style.fill.is_none() || same_authored_fill(&child.style.fill, object_fill)
+            })
+            .map(|child| child.id)
+            .collect(),
+        Prop::GradientAngle => {
+            let mut ids: Vec<u64> = children
+                .iter()
+                .filter(|child| {
+                    object_fill.gradient().is_some()
+                        && same_authored_fill(&child.style.fill, object_fill)
+                })
+                .map(|child| child.id)
+                .collect();
+            if object_stroke
+                .and_then(|stroke| stroke.gradient.as_ref())
+                .is_some()
+            {
+                ids.extend(
+                    children
+                        .iter()
+                        .filter(|child| {
+                            child
+                                .style
+                                .stroke
+                                .as_ref()
+                                .and_then(|stroke| stroke.gradient.as_ref())
+                                .is_some()
+                        })
+                        .map(|child| child.id),
+                );
+            }
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        }
+        Prop::StrokeReveal | Prop::StrokeWidth | Prop::Dash | Prop::Gap | Prop::DashLength => {
+            if object_stroke.is_none() {
+                return Vec::new();
+            }
+            children
+                .iter()
+                .filter(|child| child.style.stroke.is_some())
+                .map(|child| child.id)
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Whether this text animates a fill reveal.
+/// Args: motion and the text id. Returns true when a reveal track or an enabled reveal expression is present.
+fn fill_reveal_animated(motion: &crate::motion::Motion, source: u64) -> bool {
+    motion.tracks.iter().any(|track| {
+        track.shape == source
+            && track.prop == crate::motion::Prop::FillReveal
+            && !track.keys.is_empty()
+    }) || motion.expressions.iter().any(|expression| {
+        expression.shape == source
+            && expression.enabled
+            && expression.prop == crate::motion::Prop::FillReveal
+    })
+}
+
+/// Closed rectangle used only to share one fill-reveal bound.
+/// Args: bounds and whether to walk the corners backwards. Returns one closed contour.
+fn bounds_contour(bounds: Bounds, reverse: bool) -> crate::geom::PathContour {
+    let mut corners = [
+        bounds.min,
+        Pt::new(bounds.max.x, bounds.min.y),
+        bounds.max,
+        Pt::new(bounds.min.x, bounds.max.y),
+    ];
+    if reverse {
+        corners.reverse();
+    }
+    crate::geom::PathContour {
+        anchors: corners
+            .into_iter()
+            .map(crate::geom::Anchor::corner)
+            .collect(),
+        closed: true,
+    }
+}
+
+/// Whether `inner` already reaches `outer`.
+/// Args: candidate bounds and the text block. Returns true when no extra contour is needed.
+fn bounds_cover(inner: Bounds, outer: Bounds) -> bool {
+    inner.min.x <= outer.min.x + 0.05
+        && inner.min.y <= outer.min.y + 0.05
+        && inner.max.x >= outer.max.x - 0.05
+        && inner.max.y >= outer.max.y - 0.05
+}
+
+/// Give a filled outline the text block's bounds without painting that rectangle.
+/// Args: outline geometry and the text bounds. Opposite copies cancel, so the ink stays put.
+fn extend_fill_bounds(geom: &mut Geom, bounds: Bounds) {
+    if bounds_cover(geom.bbox(), bounds) {
+        return;
+    }
+    match geom {
+        Geom::Paths { paths, winding } => {
+            if *winding {
+                paths.push(bounds_contour(bounds, false));
+                paths.push(bounds_contour(bounds, true));
+            } else {
+                let contour = bounds_contour(bounds, false);
+                paths.push(contour.clone());
+                paths.push(contour);
+            }
+        }
+        Geom::Path { anchors, closed } => {
+            let existing = crate::geom::PathContour {
+                anchors: std::mem::take(anchors),
+                closed: *closed,
+            };
+            let contour = bounds_contour(bounds, false);
+            *geom = Geom::Paths {
+                winding: false,
+                paths: vec![existing, contour.clone(), contour],
+            };
+        }
+        Geom::Poly { contours, winding } => {
+            let points = |reverse: bool| {
+                let mut corners = vec![
+                    bounds.min,
+                    Pt::new(bounds.max.x, bounds.min.y),
+                    bounds.max,
+                    Pt::new(bounds.min.x, bounds.max.y),
+                ];
+                if reverse {
+                    corners.reverse();
+                }
+                corners
+            };
+            if *winding {
+                contours.push(points(false));
+                contours.push(points(true));
+            } else {
+                let contour = points(false);
+                contours.push(contour.clone());
+                contours.push(contour);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Share the text block's reveal bounds across solid fills.
+/// Args: replacement shapes, frame first, and the authored fill. Solid fills grow to the frame; strokes do not.
+fn pin_shared_fill_reveal(shapes: &mut [Shape], object_fill: &Fill) {
+    if shapes.len() < 2 {
+        return;
+    }
+    let bounds = shapes[0].geom.bbox();
+    if bounds.width() < 1e-3 || bounds.height() < 1e-3 {
+        return;
+    }
+    for child in shapes.iter_mut().skip(1) {
+        let pin = match &child.style.fill {
+            Fill::Solid(_) => true,
+            Fill::None => same_authored_fill(&child.style.fill, object_fill),
+            _ => false,
+        };
+        if pin {
+            extend_fill_bounds(&mut child.geom, bounds);
+        }
+    }
+}
+
+/// Move paint tracks onto the outlines that still draw them.
+/// Args: motion, text id, authored fill and stroke, and the replacement shapes. Transform tracks stay on the text id.
+fn retarget_outline_motion(
+    motion: &crate::motion::Motion,
+    source: u64,
+    object_fill: &Fill,
+    object_stroke: Option<&Stroke>,
+    outlined: &[Shape],
+) -> crate::motion::Motion {
+    let animated =
+        motion.tracks.iter().any(|track| {
+            track.shape == source && !track.keys.is_empty() && paint_channel(track.prop)
+        }) || motion.expressions.iter().any(|expression| {
+            expression.shape == source && expression.enabled && paint_channel(expression.prop)
+        });
+    if !animated || (outlined.len() == 1 && outlined[0].id == source) {
+        return motion.clone();
+    }
+    let children: Vec<&Shape> = outlined.iter().filter(|shape| shape.id != source).collect();
+    let mut after = motion.clone();
+    let tracks: Vec<_> = after
+        .tracks
+        .iter()
+        .filter(|track| {
+            track.shape == source && !track.keys.is_empty() && paint_channel(track.prop)
+        })
+        .cloned()
+        .collect();
+    let expressions: Vec<_> = after
+        .expressions
+        .iter()
+        .filter(|expression| {
+            expression.shape == source && expression.enabled && paint_channel(expression.prop)
+        })
+        .cloned()
+        .collect();
+    after.tracks.retain(|track| {
+        !(track.shape == source && !track.keys.is_empty() && paint_channel(track.prop))
+    });
+    after.expressions.retain(|expression| {
+        !(expression.shape == source && expression.enabled && paint_channel(expression.prop))
+    });
+    for track in &tracks {
+        for id in paint_targets(track.prop, object_fill, object_stroke, &children) {
+            let mut moved = track.clone();
+            moved.shape = id;
+            after.tracks.push(moved);
+        }
+    }
+    for expression in &expressions {
+        for id in paint_targets(expression.prop, object_fill, object_stroke, &children) {
+            let mut moved = expression.clone();
+            moved.shape = id;
+            after.expressions.push(moved);
+        }
+    }
+    after
+}
+
 impl Studio {
     fn outline_text_hits(&self) -> Vec<(usize, u64)> {
         let mut hits = Vec::new();
@@ -870,33 +1153,6 @@ impl Studio {
                     "Unlock the text, its parents and its whole story before outlining".into();
                 return;
             }
-            let paint = |prop| {
-                !matches!(
-                    prop,
-                    crate::motion::Prop::X
-                        | crate::motion::Prop::Y
-                        | crate::motion::Prop::Rotation
-                        | crate::motion::Prop::Scale
-                        | crate::motion::Prop::Width
-                        | crate::motion::Prop::Height
-                        | crate::motion::Prop::Opacity
-                )
-            };
-            if self
-                .doc
-                .motion
-                .tracks
-                .iter()
-                .any(|track| track.shape == hit.1 && !track.keys.is_empty() && paint(track.prop))
-                || self.doc.motion.expressions.iter().any(|expression| {
-                    expression.shape == hit.1 && expression.enabled && paint(expression.prop)
-                })
-            {
-                self.status =
-                    "Animated text paint needs an outline animation adapter; it was not converted"
-                        .into();
-                return;
-            }
             let shape = self.doc.find_shape(hit.0, hit.1).unwrap();
             match prepare(shape) {
                 Ok(shapes) => plans.push(Outline { hit, shapes }),
@@ -908,6 +1164,8 @@ impl Studio {
         }
         self.commit_type_edit();
         self.text_structure_transaction(|studio| {
+            let motion_before = studio.doc.motion.clone();
+            let mut motion_after = motion_before.clone();
             for plan in plans {
                 let selected = studio.selection.iter().position(|hit| *hit == plan.hit);
                 if selected.is_none() && studio.actions.depth == 0 {
@@ -915,13 +1173,34 @@ impl Studio {
                         .actions
                         .pause("Nested text outlining is outside the recorded selection");
                 }
+                let hit = plan.hit;
+                let (object_fill, object_stroke) = studio
+                    .doc
+                    .find_shape(hit.0, hit.1)
+                    .map(|shape| (shape.style.fill.clone(), shape.style.stroke.clone()))
+                    .unwrap_or((Fill::None, None));
+                let mut shapes = plan.shapes;
+                if fill_reveal_animated(&motion_before, hit.1) {
+                    pin_shared_fill_reveal(&mut shapes, &object_fill);
+                }
+                motion_after = retarget_outline_motion(
+                    &motion_after,
+                    hit.1,
+                    &object_fill,
+                    object_stroke.as_ref(),
+                    &shapes,
+                );
                 studio.with_action_step(crate::actions::Step::Outline { selected }, |studio| {
-                    let previous = studio.doc.find_shape(plan.hit.0, plan.hit.1).and_then(
-                        |shape| match &shape.geom {
-                            Geom::Text(run) => run.thread.as_ref().and_then(|thread| thread.prev),
-                            _ => None,
-                        },
-                    );
+                    let previous =
+                        studio
+                            .doc
+                            .find_shape(hit.0, hit.1)
+                            .and_then(|shape| match &shape.geom {
+                                Geom::Text(run) => {
+                                    run.thread.as_ref().and_then(|thread| thread.prev)
+                                }
+                                _ => None,
+                            });
                     if let Some(previous) = previous {
                         if let Some(layer) = studio.doc.layers.iter().position(|layer| {
                             layer
@@ -934,25 +1213,27 @@ impl Studio {
                             studio.break_text_thread((layer, previous));
                         }
                     }
-                    studio.break_text_thread(plan.hit);
-                    let before = studio.doc.layers[plan.hit.0]
-                        .kind
-                        .shapes()
-                        .unwrap()
-                        .to_vec();
-                    let mut after = Vec::with_capacity(before.len() + plan.shapes.len() - 1);
+                    studio.break_text_thread(hit);
+                    let before = studio.doc.layers[hit.0].kind.shapes().unwrap().to_vec();
+                    let mut after = Vec::with_capacity(before.len() + shapes.len() - 1);
                     for shape in &before {
-                        if shape.id == plan.hit.1 {
-                            after.extend(plan.shapes.iter().cloned());
+                        if shape.id == hit.1 {
+                            after.extend(shapes.iter().cloned());
                         } else {
                             after.push(shape.clone());
                         }
                     }
                     studio.commit(Cmd::SetVectorShapes {
-                        layer: plan.hit.0,
+                        layer: hit.0,
                         before,
                         after,
                     });
+                });
+            }
+            if motion_after != motion_before {
+                studio.commit(Cmd::SetMotion {
+                    before: motion_before,
+                    after: motion_after,
                 });
             }
         });
