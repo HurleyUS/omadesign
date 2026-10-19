@@ -336,3 +336,97 @@ fn craft_painted_outlines_native_type_menu_disables_locked_story_members() {
     assert_eq!(saved(&studio), before);
     assert_eq!(studio.history.len(), 0);
 }
+
+#[test]
+fn craft_svg_text_outlines_native_type_menu_creates_editable_paths_and_reopens() {
+    let mut source = Studio::new();
+    source.show_welcome = false;
+    source.persona = Persona::Layout;
+    source.doc = Document::new("Imported outlines", 480., 220., 96.);
+    source.doc.transparent = true;
+    source.doc.workspace = Some(Persona::Layout);
+    source.doc.layers = vec![Layer::vector("Editable lettering")];
+    let mut run = TypeRun {
+        origin: Pt::new(40., 105.),
+        content: "Colour & curves".into(),
+        px: 38.,
+        font: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/assets/fonts/EBGaramond.ttf"
+        )
+        .into(),
+        ..Default::default()
+    };
+    run.set_character_style(0, 6, |span| {
+        span.fill = Some(Fill::Solid(crate::color::Rgba::rgb(220, 40, 75)));
+    });
+    run.set_character_style(9, 15, |span| {
+        span.fill = Some(Fill::Solid(crate::color::Rgba::rgb(20, 140, 210)));
+    });
+    let mut shape = Shape::new(
+        Geom::Text(run),
+        Style {
+            fill: Fill::Solid(crate::color::Rgba::rgb(30, 80, 40)),
+            stroke: None,
+        },
+    );
+    crate::text::fill_contours(&mut shape.geom);
+    source.doc.layers[0].kind.shapes_mut().unwrap().push(shape);
+    let svg = crate::svg::export_embedded(&source.doc).unwrap();
+    let (doc, notes) = crate::formats::svg::read(&svg, "Menu outlines").unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = doc;
+    studio.doc.workspace = Some(Persona::Layout);
+    let hit = studio
+        .doc
+        .layers
+        .iter()
+        .enumerate()
+        .find_map(|(layer, item)| {
+            item.kind
+                .shapes()
+                .unwrap_or(&[])
+                .iter()
+                .find_map(|shape| match &shape.geom {
+                    Geom::Text(run) if run.svg_text.is_some() => Some((layer, shape.id)),
+                    _ => None,
+                })
+        })
+        .expect("imported SVG text");
+    studio.active_layer = Some(hit.0);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    let before = saved(&studio);
+    let mut seat = Seat::new();
+    seat.frame(&mut studio, vec![]);
+    seat.click(&mut studio, "Type");
+    seat.invoke(&mut studio, "Create outlines");
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    assert!(studio.doc.find_shape(hit.0, hit.1).unwrap().layout.frame);
+    assert!(
+        studio.doc.layers[hit.0]
+            .kind
+            .shapes()
+            .unwrap()
+            .iter()
+            .all(|shape| !matches!(shape.geom, Geom::Text(_)))
+    );
+    assert!(
+        studio.doc.layers[hit.0]
+            .kind
+            .shapes()
+            .unwrap()
+            .iter()
+            .any(|shape| { shape.style.fill == Fill::Solid(crate::color::Rgba::rgb(220, 40, 75)) })
+    );
+    let after = saved(&studio);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(saved(&studio), before);
+    studio.redo();
+    assert_eq!(saved(&studio), after);
+}

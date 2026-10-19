@@ -563,3 +563,212 @@ fn craft_painted_outlines_native_path_text_keeps_visible_curves_and_paint() {
     assert_eq!(wire(&studio), after);
     emit("path-outlined.oma", after.as_bytes());
 }
+
+fn imported_svg_text() -> (Studio, (usize, u64)) {
+    let (studio, _) = fixture();
+    let svg = crate::svg::export_embedded(&studio.doc).unwrap();
+    let (doc, notes) = crate::formats::svg::read(&svg, "Painted SVG text").unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = doc;
+    studio.doc.workspace = Some(Persona::Layout);
+    let hit = studio
+        .doc
+        .layers
+        .iter()
+        .enumerate()
+        .find_map(|(layer, item)| {
+            item.kind
+                .shapes()
+                .unwrap_or(&[])
+                .iter()
+                .find_map(|shape| match &shape.geom {
+                    Geom::Text(run) if run.svg_text.is_some() => Some((layer, shape.id)),
+                    _ => None,
+                })
+        })
+        .expect("imported SVG text");
+    studio.active_layer = Some(hit.0);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    (studio, hit)
+}
+
+fn paint_delta(before: &tiny_skia::Pixmap, after: &tiny_skia::Pixmap) -> (f64, u8, usize, f64, u8) {
+    let mut edge_sum = 0usize;
+    let mut edge_count = 0usize;
+    let mut edge_max = 0u8;
+    let mut body_sum = 0usize;
+    let mut body_count = 0usize;
+    let mut body_max = 0u8;
+    for (a, b) in before
+        .data()
+        .chunks_exact(4)
+        .zip(after.data().chunks_exact(4))
+    {
+        if a[3] == 0 && b[3] == 0 {
+            continue;
+        }
+        let body = a[3] >= 200 && b[3] >= 200;
+        for (a, b) in a.iter().zip(b) {
+            let d = a.abs_diff(*b);
+            if body {
+                body_sum += usize::from(d);
+                body_max = body_max.max(d);
+                body_count += 1;
+            } else {
+                edge_sum += usize::from(d);
+                edge_max = edge_max.max(d);
+                edge_count += 1;
+            }
+        }
+    }
+    (
+        body_sum as f64 / body_count.max(1) as f64,
+        body_max,
+        body_count,
+        edge_sum as f64 / edge_count.max(1) as f64,
+        edge_max,
+    )
+}
+
+#[test]
+fn craft_svg_text_outlines_keep_authored_fills_and_one_undo() {
+    let (mut studio, hit) = imported_svg_text();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame, "{}", studio.status);
+    assert!(matches!(root.geom, Geom::Rect { .. }));
+    let children: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.parent == Some(hit.1))
+        .collect();
+    assert!(children.len() >= 3, "{:?}", children.len());
+    assert!(
+        children
+            .iter()
+            .all(|shape| !matches!(shape.geom, Geom::Text(_)))
+    );
+    let solids: Vec<_> = children
+        .iter()
+        .filter_map(|shape| match shape.style.fill {
+            Fill::Solid(color) => Some(color),
+            _ => None,
+        })
+        .collect();
+    assert!(solids.contains(&Rgba::rgb(220, 40, 75)), "{solids:?}");
+    assert!(solids.contains(&Rgba::rgb(20, 140, 210)), "{solids:?}");
+    assert!(solids.contains(&Rgba::rgb(30, 80, 40)), "{solids:?}");
+    assert!(children.iter().all(|shape| shape.style.stroke.is_none()));
+    let (body_mean, body_max, body_count, edge_mean, edge_max) =
+        paint_delta(&picture, &image(&studio.doc));
+    assert!(
+        body_count > 0 && body_mean <= 0.5 && body_max <= 16,
+        "letter bodies changed: mean={body_mean}, max={body_max}, components={body_count}"
+    );
+    assert!(
+        edge_mean <= 8. && edge_max <= 96,
+        "outline edges changed: mean={edge_mean}, max={edge_max}"
+    );
+    let after = wire(&studio);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_svg_text_outlines_keep_rotation_and_object_stroke() {
+    let (mut studio, hit) = imported_svg_text();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.rotation = 0.2;
+        shape.style.stroke = Some(Stroke {
+            width: 1.25,
+            color: Rgba::rgb(30, 20, 60),
+            ..Default::default()
+        });
+    }
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame);
+    assert_eq!(root.rotation, 0.2);
+    let children: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.parent == Some(hit.1))
+        .collect();
+    assert_eq!(
+        children
+            .iter()
+            .filter(|shape| shape.style.stroke.is_some())
+            .count(),
+        1
+    );
+    assert!(children.last().unwrap().style.stroke.is_some());
+    let (body_mean, body_max, body_count, edge_mean, edge_max) =
+        paint_delta(&picture, &image(&studio.doc));
+    assert!(
+        body_count > 0 && body_mean <= 1.2 && body_max <= 48,
+        "rotated stroke bodies changed: mean={body_mean}, max={body_max}, components={body_count}"
+    );
+    assert!(
+        edge_mean <= 8. && edge_max <= 96,
+        "rotated stroke edges changed: mean={edge_mean}, max={edge_max}"
+    );
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_svg_text_outlines_refuse_wrapping_and_shape_paint_without_history() {
+    let (mut studio, hit) = imported_svg_text();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .text_wrap
+        .mode = crate::text_geometry::WrapMode::BoundingBox;
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("not converted"), "{}", studio.status);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+    assert_eq!(wire(&studio), before);
+
+    let (mut studio, hit) = imported_svg_text();
+    studio.doc.find_shape_mut(hit.0, hit.1).unwrap().style.fill =
+        Fill::Gradient(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE));
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("not converted"), "{}", studio.status);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+    assert_eq!(wire(&studio), before);
+}

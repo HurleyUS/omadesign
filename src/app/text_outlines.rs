@@ -101,14 +101,550 @@ fn path_child(root: &Shape, geom: Geom, style: Style, label: &str) -> Shape {
     child
 }
 
+struct Painted {
+    fill: Fill,
+    stroke: Option<Stroke>,
+    geom: Geom,
+}
+
+enum Draft {
+    Join {
+        fill: Fill,
+        stroke: Option<Stroke>,
+        winding: bool,
+        builder: tiny_skia::PathBuilder,
+    },
+    Painted(Painted),
+}
+
+fn close_fill(mut geom: Geom) -> Geom {
+    match &mut geom {
+        Geom::Path { closed, .. } => *closed = true,
+        Geom::Paths { paths, .. } => paths.iter_mut().for_each(|path| path.closed = true),
+        _ => {}
+    }
+    geom
+}
+
+fn joinable(fill: &Fill, stroke: &Option<Stroke>) -> bool {
+    matches!(fill, Fill::None | Fill::Solid(_))
+        && stroke
+            .as_ref()
+            .is_none_or(|stroke| stroke.gradient.is_none())
+}
+
+/// Convert one SVG paint server into the fill stored on an outline path.
+/// Args: paint, combined opacity, path transform, path bounds and retained definitions.
+/// Returns the document fill, or the named refusal when the paint cannot be kept.
+fn svg_fill(
+    paint: &usvg::Paint,
+    alpha: f32,
+    transform: tiny_skia::Transform,
+    bounds: Bounds,
+    definitions: &str,
+) -> Result<Fill, String> {
+    if let usvg::Paint::Pattern(pattern) = paint {
+        let id = pattern.id().to_string();
+        let kept = crate::svg_source::subset(definitions, &[id.clone()]);
+        if !kept.contains(&format!("id=\"{id}\"")) && !kept.contains(&format!("id='{id}'")) {
+            return Err(
+                "Imported SVG text pattern paint needs its source definition; it was not converted"
+                    .into(),
+            );
+        }
+        let placement = tiny_skia::Transform::from_scale(
+            1. / bounds.width().max(0.001),
+            1. / bounds.height().max(0.001),
+        )
+        .pre_translate(-bounds.min.x, -bounds.min.y)
+        .pre_concat(transform)
+        .pre_concat(pattern.transform());
+        return Ok(Fill::Pattern(crate::svg_source::SvgPattern {
+            definitions: kept.into(),
+            id,
+            transform: [
+                placement.sx,
+                placement.ky,
+                placement.kx,
+                placement.sy,
+                placement.tx,
+                placement.ty,
+            ],
+            opacity: alpha,
+        }));
+    }
+    crate::formats::svg::paint(paint, alpha, transform, bounds).ok_or_else(|| {
+        "Imported SVG text paint needs a shared outline paint space; it was not converted".into()
+    })
+}
+
+fn push_joined(
+    drafts: &mut Vec<Draft>,
+    fill: Fill,
+    stroke: Option<Stroke>,
+    winding: bool,
+    path: &tiny_skia::Path,
+) {
+    if let Some(Draft::Join {
+        fill: old_fill,
+        stroke: old_stroke,
+        winding: old_winding,
+        builder,
+    }) = drafts.last_mut()
+    {
+        if *old_fill == fill && *old_stroke == stroke && *old_winding == winding {
+            builder.push_path(path);
+            return;
+        }
+    }
+    let mut builder = tiny_skia::PathBuilder::new();
+    builder.push_path(path);
+    drafts.push(Draft::Join {
+        fill,
+        stroke,
+        winding,
+        builder,
+    });
+}
+
+fn push_paint(
+    drafts: &mut Vec<Draft>,
+    fill: Fill,
+    mut stroke: Option<Stroke>,
+    winding: bool,
+    path: &tiny_skia::Path,
+    geom: Geom,
+    bounds: Bounds,
+) -> Result<(), String> {
+    if joinable(&fill, &stroke) && winding {
+        push_joined(drafts, fill, stroke, winding, path);
+        return Ok(());
+    }
+    let fill = fill_in_bounds(&fill, bounds, geom.bbox())?;
+    if let Some(stroke) = &mut stroke {
+        if let Some(gradient) = stroke.gradient.clone() {
+            stroke.gradient = Some(gradient_in_bounds(&gradient, bounds, geom.bbox())?);
+        }
+    }
+    let geom = if fill.is_none() {
+        geom
+    } else {
+        close_fill(geom)
+    };
+    drafts.push(Draft::Painted(Painted { fill, stroke, geom }));
+    Ok(())
+}
+
+fn outlined_stroke(
+    path: &usvg::Path,
+    stroke: &usvg::Stroke,
+    opacity: f32,
+    transform: tiny_skia::Transform,
+    definitions: &str,
+) -> Result<Draft, String> {
+    let scale = tiny_skia::PathStroker::compute_resolution_scale(&transform);
+    let settings = stroke.to_tiny_skia();
+    let dashed = settings
+        .dash
+        .as_ref()
+        .map(|dash| path.data().dash(dash, scale));
+    let source = match &dashed {
+        Some(Some(path)) => path,
+        Some(None) => {
+            return Err("Imported SVG text stroke could not be converted".into());
+        }
+        None => path.data(),
+    };
+    let Some(outline) = source
+        .stroke(&settings, scale)
+        .and_then(|outline| outline.transform(transform))
+    else {
+        return Err("Imported SVG text stroke could not be converted".into());
+    };
+    let Some(geom) = crate::geom::path_geom(&outline, true) else {
+        return Err("Imported SVG text stroke could not be converted".into());
+    };
+    let geom = close_fill(geom);
+    let paint = svg_fill(
+        stroke.paint(),
+        stroke.opacity().get() * opacity,
+        transform,
+        geom.bbox(),
+        definitions,
+    )?;
+    Ok(Draft::Painted(Painted {
+        fill: paint,
+        stroke: None,
+        geom,
+    }))
+}
+
+fn stroke_style(
+    stroke: &usvg::Stroke,
+    opacity: f32,
+    transform: tiny_skia::Transform,
+    bounds: Bounds,
+    definitions: &str,
+) -> Result<Stroke, String> {
+    let (sx, _) = transform.get_scale();
+    let paint = svg_fill(
+        stroke.paint(),
+        stroke.opacity().get() * opacity,
+        transform,
+        bounds,
+        definitions,
+    )?;
+    Ok(Stroke {
+        gradient: paint.gradient(),
+        color: paint.solid_or(Rgba::BLACK),
+        width: stroke.width().get() * sx,
+        cap: match stroke.linecap() {
+            usvg::LineCap::Butt => Cap::Butt,
+            usvg::LineCap::Round => Cap::Round,
+            usvg::LineCap::Square => Cap::Square,
+        },
+        join: match stroke.linejoin() {
+            usvg::LineJoin::Round => Join::Round,
+            usvg::LineJoin::Bevel => Join::Bevel,
+            _ => Join::Miter,
+        },
+        dash: stroke
+            .dasharray()
+            .filter(|dash| dash.len() == 2)
+            .map(|dash| (dash[0] * sx, dash[1] * sx)),
+        dash_offset: stroke.dashoffset() * sx,
+        ..Default::default()
+    })
+}
+
+fn add_svg_stroke(
+    path: &usvg::Path,
+    opacity: f32,
+    transform: tiny_skia::Transform,
+    transformed: &tiny_skia::Path,
+    geom: &Geom,
+    winding: bool,
+    definitions: &str,
+    drafts: &mut Vec<Draft>,
+) -> Result<(), String> {
+    let Some(stroke) = path.stroke() else {
+        return Ok(());
+    };
+    let (sx, sy) = transform.get_scale();
+    let axes = transform.sx * transform.kx + transform.ky * transform.sy;
+    let complex = matches!(stroke.paint(), usvg::Paint::Pattern(_))
+        || (sx - sy).abs() > 0.01
+        || axes.abs() > 0.0001 * (sx * sy).max(1.)
+        || stroke.linejoin() == usvg::LineJoin::MiterClip
+        || stroke.linejoin() == usvg::LineJoin::Miter
+            && (stroke.miterlimit().get() - 4.).abs() > 0.001
+        || stroke.dasharray().is_some_and(|dash| dash.len() != 2);
+    if complex {
+        drafts.push(outlined_stroke(
+            path,
+            stroke,
+            opacity,
+            transform,
+            definitions,
+        )?);
+        return Ok(());
+    }
+    push_paint(
+        drafts,
+        Fill::None,
+        Some(stroke_style(
+            stroke,
+            opacity,
+            transform,
+            geom.bbox(),
+            definitions,
+        )?),
+        winding,
+        transformed,
+        geom.clone(),
+        geom.bbox(),
+    )
+}
+
+fn collect_path(
+    path: &usvg::Path,
+    opacity: f32,
+    definitions: &str,
+    drafts: &mut Vec<Draft>,
+    coverage: &mut tiny_skia::PathBuilder,
+) -> Result<(), String> {
+    if !path.is_visible() {
+        return Ok(());
+    }
+    let transform = path.abs_transform();
+    let Some(transformed) = path.data().clone().transform(transform) else {
+        return Err("Imported SVG text has a path that was not converted".into());
+    };
+    let winding = path
+        .fill()
+        .is_none_or(|fill| fill.rule() == usvg::FillRule::NonZero);
+    let Some(geom) = crate::geom::path_geom(&transformed, winding) else {
+        return Ok(());
+    };
+    coverage.push_path(&transformed);
+    let stroke_first = path.paint_order() == usvg::PaintOrder::StrokeAndFill;
+    if stroke_first {
+        add_svg_stroke(
+            path,
+            opacity,
+            transform,
+            &transformed,
+            &geom,
+            winding,
+            definitions,
+            drafts,
+        )?;
+    }
+    if let Some(fill) = path.fill() {
+        let paint = svg_fill(
+            fill.paint(),
+            fill.opacity().get() * opacity,
+            transform,
+            geom.bbox(),
+            definitions,
+        )?;
+        push_paint(
+            drafts,
+            paint,
+            None,
+            winding,
+            &transformed,
+            geom.clone(),
+            geom.bbox(),
+        )?;
+    }
+    if !stroke_first {
+        add_svg_stroke(
+            path,
+            opacity,
+            transform,
+            &transformed,
+            &geom,
+            winding,
+            definitions,
+            drafts,
+        )?;
+    }
+    if path.fill().is_none() && path.stroke().is_none() {
+        push_paint(
+            drafts,
+            Fill::None,
+            None,
+            winding,
+            &transformed,
+            geom,
+            Bounds::from_pt(Pt::ZERO),
+        )?;
+    }
+    Ok(())
+}
+
+fn collect_group(
+    group: &usvg::Group,
+    opacity: f32,
+    definitions: &str,
+    drafts: &mut Vec<Draft>,
+    coverage: &mut tiny_skia::PathBuilder,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > 64 {
+        return Err("Imported SVG text nesting exceeds 64 levels; it was not converted".into());
+    }
+    if group.clip_path().is_some()
+        || group.mask().is_some()
+        || !group.filters().is_empty()
+        || group.blend_mode() != usvg::BlendMode::Normal
+    {
+        return Err(
+            "Imported SVG text clips, masks, filters or blends need an outline appearance adapter; it was not converted"
+                .into(),
+        );
+    }
+    let opacity = opacity * group.opacity().get();
+    for node in group.children() {
+        match node {
+            usvg::Node::Group(child) => {
+                collect_group(child, opacity, definitions, drafts, coverage, depth + 1)?
+            }
+            usvg::Node::Text(text) => collect_group(
+                text.flattened(),
+                opacity,
+                definitions,
+                drafts,
+                coverage,
+                depth + 1,
+            )?,
+            usvg::Node::Path(path) => collect_path(path, opacity, definitions, drafts, coverage)?,
+            usvg::Node::Image(_) => {
+                return Err(
+                    "Imported SVG text images need an outline appearance adapter; it was not converted"
+                        .into(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn seal(drafts: Vec<Draft>) -> Result<Vec<Painted>, String> {
+    let mut painted = Vec::new();
+    for draft in drafts {
+        match draft {
+            Draft::Painted(piece) => painted.push(piece),
+            Draft::Join {
+                fill,
+                stroke,
+                winding,
+                builder,
+            } => {
+                let path = builder
+                    .finish()
+                    .ok_or("This text has no visible outlines to convert")?;
+                let geom = crate::geom::path_geom(&path, winding)
+                    .ok_or("This text has no visible outlines to convert")?;
+                let geom = if fill.is_none() {
+                    geom
+                } else {
+                    close_fill(geom)
+                };
+                painted.push(Painted { fill, stroke, geom });
+            }
+        }
+    }
+    Ok(painted)
+}
+
+/// Convert imported SVG text into editable paint paths.
+/// Args: the selected text shape and its run. Returns replacement shapes, or the named refusal.
+fn svg_outlines(shape: &Shape, run: &TypeRun) -> Result<Vec<Shape>, String> {
+    if !shape.text_wrap.is_none() || shape.layout.image.is_some() || shape.layout.frame {
+        return Err("Text with contour wrapping, image fill or existing frame children needs an outline appearance adapter; it was not converted".into());
+    }
+    if shape
+        .style
+        .fill
+        .gradient()
+        .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
+        || shape
+            .style
+            .stroke
+            .as_ref()
+            .and_then(|stroke| stroke.gradient.as_ref())
+            .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
+    {
+        return Err(
+            "Shape-distance text paint needs a shared outline paint space; it was not converted"
+                .into(),
+        );
+    }
+    let painted_run;
+    let run = if run
+        .svg_text
+        .as_ref()
+        .is_some_and(|svg| shape.style.fill != svg.base_fill)
+    {
+        painted_run = crate::text::svg_type::object_paint(run, &shape.style.fill);
+        &painted_run
+    } else {
+        run
+    };
+    let layout = crate::text::svg_type::layout(run).ok_or_else(|| {
+        "Imported SVG text needs its full styled outline tree; it was not converted".to_string()
+    })?;
+    let definitions = run
+        .svg_text
+        .as_ref()
+        .map(|svg| svg.definitions.as_str())
+        .unwrap_or("");
+    let mut drafts = Vec::new();
+    let mut coverage = tiny_skia::PathBuilder::new();
+    collect_group(
+        layout.tree.root(),
+        1.,
+        definitions,
+        &mut drafts,
+        &mut coverage,
+        0,
+    )?;
+    let mut painted = seal(drafts)?;
+    if let Some(mut stroke) = shape
+        .style
+        .stroke
+        .clone()
+        .filter(|stroke| stroke.width > 0.)
+    {
+        let path = coverage
+            .finish()
+            .ok_or("This text has no visible outlines to convert")?;
+        let geom = crate::geom::path_geom(&path, true)
+            .ok_or("This text has no visible outlines to convert")?;
+        if let Some(gradient) = stroke.gradient.clone() {
+            stroke.gradient = Some(gradient_in_bounds(
+                &gradient,
+                shape.geom.bbox(),
+                geom.bbox(),
+            )?);
+        }
+        painted.push(Painted {
+            fill: Fill::None,
+            stroke: Some(stroke),
+            geom,
+        });
+    }
+    if painted.is_empty() {
+        return Err("This text has no visible outlines to convert".into());
+    }
+    if painted.len() == 1 {
+        let mut result = shape.clone();
+        result.geom = painted[0].geom.clone();
+        result.style.fill = painted[0].fill.clone();
+        result.style.stroke = painted[0].stroke.clone();
+        return Ok(vec![result]);
+    }
+    let bounds = shape.geom.bbox();
+    let mut root = shape.clone();
+    root.geom = Geom::Rect {
+        origin: bounds.min,
+        size: bounds.size(),
+        radius: 0.,
+    };
+    root.style = Style {
+        fill: Fill::None,
+        stroke: None,
+    };
+    root.layout.frame = true;
+    root.layout.clip = false;
+    let mut result = vec![root];
+    for (index, piece) in painted.iter().enumerate() {
+        let label = if piece.stroke.is_some() && piece.fill.is_none() {
+            "stroke".to_string()
+        } else {
+            format!("paint {}", index + 1)
+        };
+        result.push(path_child(
+            shape,
+            piece.geom.clone(),
+            Style {
+                fill: piece.fill.clone(),
+                stroke: piece.stroke.clone(),
+            },
+            &label,
+        ));
+    }
+    Ok(result)
+}
+
 fn prepare(shape: &Shape) -> Result<Vec<Shape>, String> {
     let Geom::Text(run) = &shape.geom else {
         return Err("Select editable text to outline".into());
     };
     if run.svg_text.is_some() {
-        return Err(
-            "Imported SVG text needs its full styled outline tree; it was not converted".into(),
-        );
+        return svg_outlines(shape, run);
     }
     if run.contours.is_empty() {
         return Err("This text has no visible outlines to convert".into());

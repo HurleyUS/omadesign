@@ -1252,7 +1252,7 @@ fn color(c: usvg::Color, a: f32) -> Rgba {
         (a.clamp(0., 1.) * 255.).round() as u8,
     )
 }
-fn paint(p: &usvg::Paint, alpha: f32, t: Transform, b: crate::geom::Bounds) -> Option<Fill> {
+pub(crate) fn paint(p: &usvg::Paint, alpha: f32, t: Transform, b: crate::geom::Bounds) -> Option<Fill> {
     match p {
         usvg::Paint::Color(c) => Some(Fill::Solid(color(*c, alpha))),
         usvg::Paint::LinearGradient(g) => {
