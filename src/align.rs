@@ -3,7 +3,7 @@
 use crate::document::Document;
 use crate::geom::{Bounds, Pt};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Align {
     Left,
     CenterX,

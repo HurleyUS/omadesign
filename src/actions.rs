@@ -14,6 +14,8 @@ pub(crate) enum Step {
     Front,
     Back,
     Appearance(Box<Appearance>),
+    Move { delta: Pt },
+    Align(crate::align::Align),
 }
 impl Step {
     /// List commands that can also be added without recording.
@@ -50,13 +52,15 @@ impl Step {
             Self::Front => "Bring to front".into(),
             Self::Back => "Send to back".into(),
             Self::Appearance(_) => "Apply appearance".into(),
+            Self::Move { delta } => format!("Move ({}, {})", delta.x, delta.y),
+            Self::Align(how) => format!("Align {how:?}"),
         }
     }
     /// Validate portable command parameters before any edit.
     /// Args: none. Returns an error for non-finite positions or damaged appearance resources.
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Duplicate { delta } if !delta.x.is_finite() || !delta.y.is_finite() => {
+            Self::Duplicate { delta } | Self::Move { delta } if !delta.x.is_finite() || !delta.y.is_finite() => {
                 Err("Action offsets must be finite".into())
             }
             Self::Appearance(value) => crate::graphic_styles::validate_appearance(value),
@@ -154,6 +158,37 @@ impl Library {
         after.validate()?;
         *self = after;
         Ok(id)
+    }
+    /// Write chosen actions to a standalone exchange file.
+    /// Args: action IDs (empty for all), destination. Returns how many were written.
+    pub fn export(&self, ids: &[u64], path: &Path) -> Result<usize, String> {
+        let mut out = Library::default();
+        for entry in self.entries.iter().filter(|e| ids.is_empty() || ids.contains(&e.id)) {
+            out.add(&entry.name, entry.steps.clone())?;
+        }
+        if out.entries.is_empty() {
+            return Err("Choose actions to export".into());
+        }
+        let bytes = serde_json::to_vec_pretty(&File { version: 1, library: out.clone() }).map_err(|e| e.to_string())?;
+        std::fs::write(path, bytes).map_err(|e| format!("Cannot write actions: {e}"))?;
+        Ok(out.entries.len())
+    }
+    /// Append every action from an exchange file, renaming on collision.
+    /// Args: source path. Returns how many were added; nothing changes on error.
+    pub fn import(&mut self, path: &Path) -> Result<usize, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("Cannot read actions: {e}"))?;
+        let file: File = serde_json::from_slice(&bytes).map_err(|e| format!("Cannot read actions: {e}"))?;
+        if file.version != 1 {
+            return Err("Unsupported action file version".into());
+        }
+        file.library.validate()?;
+        let mut after = self.clone();
+        for entry in &file.library.entries {
+            after.add(&entry.name, entry.steps.clone())?;
+        }
+        let count = after.entries.len() - self.entries.len();
+        *self = after;
+        Ok(count)
     }
     fn validate(&self) -> Result<(), String> {
         if self.entries.len() > 256 || self.next == u64::MAX {

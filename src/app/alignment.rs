@@ -52,7 +52,7 @@ impl Studio {
     }
 
     pub fn align_sel(&mut self, how: Align) {
-        self.align_sel_to(how, align::AlignTo::Auto);
+        self.with_action_step(crate::actions::Step::Align(how), |studio| studio.align_sel_to(how, align::AlignTo::Auto));
     }
 
     pub fn align_sel_to(&mut self, how: Align, reference: align::AlignTo) {

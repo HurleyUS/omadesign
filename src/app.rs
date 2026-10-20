@@ -2174,6 +2174,13 @@ impl Studio {
     }
 
     pub fn nudge(&mut self, dx: f32, dy: f32) {
+        if !self.is_motion() {
+            return self.with_action_step(crate::actions::Step::Move { delta: Pt::new(dx, dy) }, |studio| studio.nudge_command(dx, dy));
+        }
+        self.nudge_command(dx, dy)
+    }
+
+    fn nudge_command(&mut self, dx: f32, dy: f32) {
         if self.is_motion() {
             let sel = self.selection.clone();
             let t = self.playhead;

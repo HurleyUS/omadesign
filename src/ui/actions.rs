@@ -326,6 +326,29 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
             state = load(path.clone());
             state.target = target;
         }
+        if icon(ui, owner.with("export"), ph::ARROW_UP, "Export actions (selected, or all) to a file", !recording && !entries.is_empty())
+            && let Some(book) = state.book.as_ref()
+            && let Some(file) = rfd::FileDialog::new().add_filter("Actions", &["json"]).set_file_name("actions.json").save_file()
+        {
+            let ids: Vec<u64> = state.selected.into_iter().collect();
+            match book.export(&ids, &file) {
+                Ok(n) => studio.status = format!("Exported {n} actions"),
+                Err(error) => state.error = error,
+            }
+        }
+        if icon(ui, owner.with("import"), ph::FOLDER_OPEN, "Import actions from a file", !recording && state.book.is_some())
+            && let Some(file) = rfd::FileDialog::new().add_filter("Actions", &["json"]).pick_file()
+            && let Some(mut after) = state.book.clone()
+        {
+            match after.import(&file) {
+                Ok(n) => {
+                    if save(&mut state, after) {
+                        studio.status = format!("Imported {n} actions");
+                    }
+                }
+                Err(error) => state.error = error,
+            }
+        }
     });
     if let Some(action) = selected {
         let mut rename = false;

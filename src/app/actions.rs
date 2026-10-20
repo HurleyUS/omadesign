@@ -40,6 +40,36 @@ mod tests {
     }
 
     #[test]
+    fn craft_actions_record_move_and_align_and_exchange_files() {
+        let mut source = fixture();
+        source.start_action_recording(32).unwrap();
+        source.nudge(5., -3.);
+        source.align_sel(crate::align::Align::Left);
+        let steps = source.actions.recording.take().unwrap().steps;
+        assert_eq!(steps, vec![Step::Move { delta: Pt::new(5., -3.) }, Step::Align(crate::align::Align::Left)]);
+        let expected = pixels(&source);
+        let mut destination = fixture();
+        let history = destination.history.len();
+        assert!(destination.play_action(&steps).unwrap());
+        assert_eq!(destination.history.len(), history + 1);
+        assert_eq!(pixels(&destination), expected);
+        let file = std::env::temp_dir().join(format!("omadesign-actions-{}.json", std::process::id()));
+        let mut book = crate::actions::Library::default();
+        book.add("Tidy", steps.clone()).unwrap();
+        book.add("Other", vec![Step::Group]).unwrap();
+        assert_eq!(book.export(&[1], &file).unwrap(), 1);
+        let mut target = crate::actions::Library::default();
+        target.add("Tidy", vec![Step::Front]).unwrap();
+        assert_eq!(target.import(&file).unwrap(), 1);
+        assert_eq!(target.entries[1].name, "Tidy (2)");
+        assert_eq!(target.entries[1].steps, steps);
+        std::fs::write(&file, b"{").unwrap();
+        assert!(target.import(&file).is_err());
+        assert_eq!(target.entries.len(), 2);
+        assert!(Step::Move { delta: Pt::new(f32::NAN, 0.) }.validate().is_err());
+    }
+
+    #[test]
     fn craft_actions_record_actual_commands_and_play_one_undo_with_native_reopen() {
         let mut source = fixture();
         source.start_action_recording(32).unwrap();
@@ -397,7 +427,13 @@ impl Studio {
                     )
                 }));
             }
-            Step::Front | Step::Back | Step::Appearance(_) => return Ok(true),
+            Step::Front | Step::Back | Step::Appearance(_) | Step::Align(_) => return Ok(true),
+            Step::Move { delta } => {
+                if self.is_motion() {
+                    return Err("Move steps record artwork, not motion keys".into());
+                }
+                return Ok(*delta == Pt::ZERO);
+            }
             Step::Group | Step::GroupNamed(_) | Step::Ungroup => {}
         }
         Ok(false)
@@ -423,6 +459,8 @@ impl Studio {
             Step::Appearance(value) => {
                 self.apply_graphic_style(value)?;
             }
+            Step::Move { delta } => self.nudge(delta.x, delta.y),
+            Step::Align(how) => self.align_sel(*how),
         }
         Ok(())
     }
