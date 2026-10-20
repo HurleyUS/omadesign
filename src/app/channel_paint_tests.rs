@@ -15,6 +15,7 @@ fn studio() -> Studio {
         id: crate::document::next_id(),
         name: "Paint alpha".into(),
         plane,
+        spot: None,
     }];
     s.active_layer = Some(0);
     s.brushes.selected = None;

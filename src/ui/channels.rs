@@ -472,6 +472,45 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                 Err(e) => state.error = e,
             }
         }
+        ui.add_enabled_ui(editable, |ui| {
+            ui.menu_button("Spot", |ui| {
+                let current = saved.and_then(|id| studio.doc.channels.iter().find(|c| c.id == id)).and_then(|c| c.spot);
+                let draft_id = key.with(("spot-draft", saved));
+                let mut draft = ui.data(|d| d.get_temp::<crate::channels::spot::Spot>(draft_id)).or(current).unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label("Ink");
+                    ui.color_edit_button_rgb(&mut draft.ink);
+                });
+                ui.add(egui::Slider::new(&mut draft.solidity, 0.0..=1.0).text("Solidity"));
+                ui.data_mut(|d| d.insert_temp(draft_id, draft));
+                let mut result = None;
+                if ui.button("New spot channel").clicked() {
+                    result = Some(studio.capture_channels().and_then(|target| studio.add_spot_channel(&target, "", draft).map(Some)));
+                }
+                if let Some(id) = saved {
+                    let label = if current.is_some() { "Apply ink to channel" } else { "Make spot channel" };
+                    if ui.button(label).clicked() {
+                        result = Some(studio.capture_channels().and_then(|target| studio.set_channel_spot(&target, id, Some(draft)).map(|_| None)));
+                    }
+                    if current.is_some() && ui.button("Convert to alpha channel").clicked() {
+                        result = Some(studio.capture_channels().and_then(|target| studio.set_channel_spot(&target, id, None).map(|_| None)));
+                    }
+                }
+                match result {
+                    Some(Ok(new)) => {
+                        if let Some(id) = new {
+                            if let Err(error) = studio.select_channel_target(Some(id)) { state.error = error; } else { state.selected = Target::Saved(id); state.error.clear(); }
+                        } else { state.error.clear(); }
+                        ui.data_mut(|d| d.remove::<crate::channels::spot::Spot>(draft_id));
+                        ui.close();
+                    }
+                    Some(Err(error)) => state.error = error,
+                    None => {}
+                }
+            })
+            .response
+            .on_hover_text("Spot ink channels");
+        });
         ui.add_enabled_ui(editable && saved.is_some(), |ui| {
             ui.menu_button("⟲", |ui| {
                 for edit in crate::app::mask_affine::MaskAffine::ALL {

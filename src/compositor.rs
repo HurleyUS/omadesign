@@ -262,6 +262,7 @@ pub fn render_view_posed(
         &mut motion_scene::Budget::default(),
     );
     MOTION_ERROR.with(|e| *e.borrow_mut() = scene_result.err());
+    crate::channels::spot::overlay(&mut pm, &doc.channels, t);
     Some(pm)
 }
 
@@ -286,6 +287,7 @@ pub(crate) fn render_export_sized(
     draw_export_plates(&mut pm, doc, s as f32);
     let t = Transform::from_scale(s as f32, s as f32);
     groups::draw(&mut pm, doc, t, &Draft::none(), None, None)?;
+    let spot_view = t;
     motion_scene::draw(
         &mut pm,
         doc,
@@ -296,6 +298,7 @@ pub(crate) fn render_export_sized(
         &mut || true,
         &mut motion_scene::Budget::default(),
     )?;
+    crate::channels::spot::overlay(&mut pm, &doc.channels, spot_view);
     Ok(pm)
 }
 
@@ -333,6 +336,7 @@ pub(crate) fn render_export_preview(doc: &Document, max_edge: u32) -> Result<Pix
         &mut || true,
         &mut motion_scene::Budget::default(),
     )?;
+    crate::channels::spot::overlay(&mut pm, &doc.channels, Transform::from_scale(s, s));
     Ok(pm)
 }
 
@@ -402,6 +406,7 @@ pub fn render_export_at_cancellable(
     if !keep() {
         return Err("Cancelled: render cancelled".into());
     }
+    crate::channels::spot::overlay(&mut pm, &doc.channels, t);
     Ok(pm)
 }
 

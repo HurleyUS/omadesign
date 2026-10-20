@@ -31,6 +31,7 @@ fn craft_channels_scalar_native32_preserves_exact_samples_aliases_and_legacy_def
         id: crate::document::next_id(),
         name: "Alpha Δ".into(),
         plane: plane(&samples),
+        spot: None,
     });
     let lease = Arc::downgrade(doc.channels[0].plane.samples.lease());
     let clone = doc.channels[0].clone();
@@ -87,6 +88,7 @@ fn craft_channels_current_embedded_retained_deleted_and_underdeclared_readers_re
         id: crate::document::next_id(),
         name: "Alpha 1".into(),
         plane: plane(&[0., 0.5, 1.]),
+        spot: None,
     });
     let mut parent = Document::new("Embedded channels", 32., 16., 96.);
     parent
@@ -155,7 +157,8 @@ fn craft_channels_invalid_scalar_payloads_names_and_transforms_preserve_source_a
             validate(&[Channel {
                 id: 1,
                 name: name.into(),
-                plane: original.clone()
+                plane: original.clone(),
+                spot: None,
             }])
             .is_err()
         );
@@ -165,12 +168,14 @@ fn craft_channels_invalid_scalar_payloads_names_and_transforms_preserve_source_a
             Channel {
                 id: 1,
                 name: "Alpha".into(),
-                plane: original.clone()
+                plane: original.clone(),
+                spot: None,
             },
             Channel {
                 id: 1,
                 name: "Copy".into(),
-                plane: original.clone()
+                plane: original.clone(),
+                spot: None,
             }
         ])
         .is_err()
@@ -259,6 +264,7 @@ fn craft_channels_native_reader_validates_unit_coverage_before_normalization() {
         id: crate::document::next_id(),
         name: "Alpha".into(),
         plane: plane(&[0., 0.5, 1.]),
+        spot: None,
     });
     let encoded = crate::project::encode(&doc).unwrap();
     let mut wire: serde_json::Value = serde_json::from_str(&encoded).unwrap();

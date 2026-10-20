@@ -5111,7 +5111,7 @@ mod tests {
         use eframe::egui::{Event, Modifiers};
         let (ctx, mut s)=pen_input_studio();
         s.doc.width=400.;s.doc.height=300.;s.view.offset=Pt::ZERO;
-        s.doc.channels.push(crate::channels::Channel{id:crate::document::next_id(),name:"Pointer alpha".into(),plane:crate::channels::Plane{width:400,height:300,transform:[1.,0.,0.,1.,0.,0.],samples:crate::deep_color::storage::collect(std::iter::repeat_n(0.25,400*300)).unwrap()}});
+        s.doc.channels.push(crate::channels::Channel{id:crate::document::next_id(),name:"Pointer alpha".into(),spot:None,plane:crate::channels::Plane{width:400,height:300,transform:[1.,0.,0.,1.,0.,0.],samples:crate::deep_color::storage::collect(std::iter::repeat_n(0.25,400*300)).unwrap()}});
         s.brushes.selected=None;s.brush.size=12.;s.brush.color=crate::color::Rgba::WHITE;s.brush.opacity=0.8;
         s.select_channel_target(Some(s.doc.channels[0].id)).unwrap();
         canvas_frame(&ctx,&mut s,vec![]);

@@ -166,6 +166,7 @@ impl Studio {
                     id: crate::document::next_id(),
                     name: "Quick Mask".into(),
                     plane,
+                    spot: None,
                 },
                 unselected: old_selection.is_none(),
                 options,

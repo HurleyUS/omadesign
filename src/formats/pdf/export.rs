@@ -22,7 +22,12 @@ pub fn write(document: &Document) -> Result<(Vec<u8>, Vec<String>), String> {
     crate::compositor::admit_precise_export(document)?;
     document.validate_hierarchy()?;
     document.require_no_layer_clipping("PDF")?;
-    let (prepared, warnings) = fallback::prepare(document)?;
+    let flattened = spot_flattened(document)?;
+    let document = flattened.as_ref().unwrap_or(document);
+    let (prepared, mut warnings) = fallback::prepare(document)?;
+    if flattened.is_some() {
+        warnings.insert("Spot channels were flattened to process color: this PDF path has no Separation color spaces. Export PSD to keep spot channels.".into());
+    }
     let document = prepared.as_ref();
     let mut writer = Writer {
         pdf: Pdf::with_version("1.7"),
@@ -1082,4 +1087,32 @@ fn path(operations: &mut Vec<Operation>, shape: &Shape) {
             }
         }
     }
+}
+
+/// Add the spot ink overlay as a top process-color image, since this writer has no Separation spaces.
+/// Args: source. Returns None when the document has no spot channels.
+fn spot_flattened(document: &Document) -> Result<Option<Document>, String> {
+    if !crate::channels::spot::any(&document.channels) {
+        return Ok(None);
+    }
+    let (w, h) = (document.width.ceil().max(1.) as u32, document.height.ceil().max(1.) as u32);
+    let mut pm = tiny_skia::Pixmap::new(w, h).ok_or("Could not allocate the spot ink overlay")?;
+    crate::channels::spot::overlay(&mut pm, &document.channels, tiny_skia::Transform::identity());
+    let mut layer = crate::document::Layer::raster("Spot inks (flattened)", w, h)?;
+    let image = image::RgbaImage::from_raw(w, h, pm.data().to_vec()).ok_or("Invalid spot ink overlay")?;
+    let straight: Vec<u8> = image
+        .pixels()
+        .flat_map(|p| {
+            let a = p[3];
+            let un = |c: u8| if a == 0 { 0 } else { ((u16::from(c) * 255 + u16::from(a) / 2) / u16::from(a)).min(255) as u8 };
+            [un(p[0]), un(p[1]), un(p[2]), a]
+        })
+        .collect();
+    let pixels = layer.kind.pixels_mut().ok_or("Spot overlay layer has no pixels")?;
+    pixels.replace_bytes(straight)?;
+    pixels.touch();
+    let mut flat = document.clone();
+    flat.channels.iter_mut().for_each(|c| c.spot = None);
+    flat.layers.push(layer);
+    Ok(Some(flat))
 }

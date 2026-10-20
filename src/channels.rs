@@ -3,6 +3,7 @@ pub(crate) mod curve;
 pub(crate) mod filter;
 pub(crate) mod fill;
 pub mod quick_mask;
+pub mod spot;
 use crate::{
     deep_color::storage,
     document::Document,
@@ -136,6 +137,9 @@ pub struct Channel {
     pub id: u64,
     pub name: String,
     pub plane: Plane,
+    /// Present for spot ink channels; absent for ordinary alpha channels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spot: Option<spot::Spot>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
@@ -195,6 +199,9 @@ pub(crate) fn validate_metadata(channels: &[Channel]) -> Result<(), String> {
             return Err("Channel names need 1–64 printable characters".into());
         }
         channel.plane.validate_grid()?;
+        if let Some(spot) = &channel.spot {
+            spot.validate()?;
+        }
     }
     Ok(())
 }

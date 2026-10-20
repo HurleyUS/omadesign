@@ -89,7 +89,7 @@ impl Studio {
         };
         let id = document::next_id();
         let mut after = self.doc.channels.clone();
-        after.push(Channel { id, name, plane });
+        after.push(Channel { id, name, plane, spot: None });
         self.set_channels(target, after, "Selection saved as an alpha channel")?;
         Ok(id)
     }
@@ -231,3 +231,39 @@ pub(crate) fn selection(
 #[cfg(test)]
 #[path = "channels_tests.rs"]
 mod tests;
+
+impl Studio {
+    /// Add a spot ink channel from the pixel selection, or an empty one at canvas size.
+    /// Args: captured owner, optional name and ink. Returns the new channel ID after one Undo step.
+    pub(crate) fn add_spot_channel(&mut self, target: &Target, name: &str, spot: crate::channels::spot::Spot) -> Result<u64, String> {
+        spot.validate()?;
+        let plane = match self.pixel_selection_space() {
+            Some(space) => {
+                let values = self.pixel_sel.as_ref().ok_or("The selection changed")?;
+                Plane { width: space.w, height: space.h, transform: [space.transform.sx, space.transform.ky, space.transform.kx, space.transform.sy, space.transform.tx, space.transform.ty], samples: values.clone() }
+            }
+            None => {
+                let (w, h) = (self.doc.width.ceil().max(1.) as u32, self.doc.height.ceil().max(1.) as u32);
+                let samples = crate::deep_color::storage::collect(std::iter::repeat_n(0f32, w as usize * h as usize))?;
+                Plane { width: w, height: h, transform: [1., 0., 0., 1., 0., 0.], samples }
+            }
+        };
+        plane.validate()?;
+        let name = if name.trim().is_empty() { channels::next_name(&self.doc.channels, "Spot") } else { name.trim().into() };
+        let id = document::next_id();
+        let mut after = self.doc.channels.clone();
+        after.push(Channel { id, name, plane, spot: Some(spot) });
+        self.set_channels(target, after, "Spot channel added")?;
+        Ok(id)
+    }
+    /// Change a channel's ink, or turn it into an ordinary alpha channel with None.
+    /// Args: captured owner, channel ID and ink. Returns whether one Undo step was recorded.
+    pub(crate) fn set_channel_spot(&mut self, target: &Target, id: u64, spot: Option<crate::channels::spot::Spot>) -> Result<bool, String> {
+        if let Some(spot) = &spot { spot.validate()?; }
+        let mut after = self.doc.channels.clone();
+        let channel = after.iter_mut().find(|c| c.id == id).ok_or("That channel no longer exists")?;
+        if channel.spot == spot { return Ok(false); }
+        channel.spot = spot;
+        self.set_channels(target, after, if spot.is_some() { "Spot ink changed" } else { "Spot channel converted to alpha" })
+    }
+}

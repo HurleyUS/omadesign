@@ -14,6 +14,7 @@ fn mask() -> QuickMask {
                 )
                 .unwrap(),
             },
+            spot: None,
         },
         unselected: false,
         options: Options::default(),
