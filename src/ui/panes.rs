@@ -256,6 +256,7 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::SetLayout { .. } => "Layout",
         Cmd::SetLayoutTokens { .. } => "Variable",
         Cmd::SetScreenExport { .. } => "Export assets",
+        Cmd::SetLinkedStyles { .. } => "Linked style",
         Cmd::SetFilters { .. } | Cmd::SetShapeFilters { .. } | Cmd::SetSvgFilter { .. } => {
             "Effects"
         }

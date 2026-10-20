@@ -1271,6 +1271,8 @@ pub struct Document {
     pub channels: Vec<crate::channels::Channel>,
     #[serde(default, skip_serializing_if = "crate::screen_export::Catalog::is_empty")]
     pub screen_export: crate::screen_export::Catalog,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linked_styles: Vec<crate::linked_styles::LinkedStyle>,
     #[serde(default, skip_serializing_if = "crate::publishing::Publishing::is_empty")]
     pub publishing: crate::publishing::Publishing,
     #[serde(default)]
@@ -1541,6 +1543,7 @@ impl Document {
             comments: vec![],
             layout_tokens: vec![],
             screen_export: Default::default(),
+            linked_styles: vec![],
         };
         if show_bleed {
             // Outer bleed rect guides
@@ -2139,6 +2142,10 @@ pub enum Cmd {
     SetScreenExport {
         before: crate::screen_export::Catalog,
         after: crate::screen_export::Catalog,
+    },
+    SetLinkedStyles {
+        before: Vec<crate::linked_styles::LinkedStyle>,
+        after: Vec<crate::linked_styles::LinkedStyle>,
     },
     SetCloud {
         before: Option<CloudLink>,
@@ -2762,6 +2769,10 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
             before: after,
             after: before,
         },
+        Cmd::SetLinkedStyles { before, after } => Cmd::SetLinkedStyles {
+            before: after,
+            after: before,
+        },
         Cmd::SetVectorShapes {
             layer,
             before,
@@ -3172,6 +3183,7 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
         }
         Cmd::SetLayoutTokens { after, .. } => doc.layout_tokens.clone_from(after),
         Cmd::SetScreenExport { after, .. } => doc.screen_export.clone_from(after),
+        Cmd::SetLinkedStyles { after, .. } => doc.linked_styles.clone_from(after),
         Cmd::SetQuickMask {after,..} => doc.quick_mask.clone_from(after),
         Cmd::SetChannels {after,..} => doc.channels.clone_from(after),
         Cmd::SetVectorShapes { layer, after, .. } => {

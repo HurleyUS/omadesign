@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 mod features;
 
-pub(crate) const VERSION: u32 = features::EXPORT_OPTIONS;
+pub(crate) const VERSION: u32 = features::LINKED_STYLES;
 
 /// Check whether this build implements a project version.
 /// Args: envelope version. Returns false for unimplemented reserved formats.
@@ -49,6 +49,7 @@ pub(crate) fn encode_envelope_admitted<T: Serialize>(
     for document in crate::motion::compositions::documents(doc)? {
         document.screen_export.validate()?;
         crate::channels::validate(&document.channels)?;
+        crate::linked_styles::validate(&document.linked_styles)?;
         if let Some(mask) = &document.quick_mask { mask.validate(&document.channels)?; }
         if let Some(selection) = &document.active_selection { selection.validate()?; }
         document.validate_sources()?;
@@ -356,6 +357,7 @@ pub(crate) fn normalize_decoded_document(
             crate::collaboration::resources::validate(replica)?;
         }
         crate::channels::validate(&doc.channels)?;
+        crate::linked_styles::validate(&doc.linked_styles)?;
         if let Some(mask) = &doc.quick_mask { mask.validate(&doc.channels)?; }
         if let Some(selection) = &doc.active_selection { selection.validate()?; }
         crate::layout_components::validate_properties(doc)?;

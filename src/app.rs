@@ -51,6 +51,7 @@ pub(crate) mod mask_affine;
 pub(crate) mod mask_filter;
 pub(crate) mod calculations;
 mod symbol_library;
+mod linked_styles;
 mod restart;
 pub(crate) mod selection;
 mod alignment;

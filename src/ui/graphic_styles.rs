@@ -341,6 +341,32 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
             Err(error) => state.error = error,
         }
     }
+    ui.separator();
+    ui.label("Document styles (linked)");
+    let mut outcome: Option<Result<(), String>> = None;
+    if ui.add_enabled(studio.primary().is_some(), egui::Button::new("Link new style from selection")).clicked() {
+        let name = format!("Style {}", studio.doc.linked_styles.len() + 1);
+        outcome = Some(studio.create_linked_style(&name).map(|_| ()));
+    }
+    for style in studio.doc.linked_styles.clone() {
+        ui.horizontal(|ui| {
+            if ui.button(&style.name).on_hover_text(format!("Apply and link ({} objects)", style.members.len())).clicked() {
+                outcome = Some(studio.apply_linked_style(style.id));
+            }
+            if icon(ui, owner.with(("redefine", style.id)), ph::ARROW_UP, "Redefine from selection and update linked objects", studio.primary().is_some()) {
+                outcome = Some(studio.redefine_linked_style(style.id));
+            }
+            if icon(ui, owner.with(("drop", style.id)), ph::TRASH, "Delete linked style (objects keep their look)", true) {
+                outcome = Some(studio.delete_linked_style(style.id));
+            }
+        });
+    }
+    if !studio.doc.linked_styles.is_empty() && ui.add_enabled(!studio.selection.is_empty(), egui::Button::new("Unlink selection")).clicked() {
+        outcome = Some(studio.unlink_linked_style());
+    }
+    if let Some(Err(error)) = outcome {
+        state.error = error;
+    }
     if !state.error.is_empty() {
         ui.colored_label(ui.visuals().error_fg_color, &state.error);
     }
