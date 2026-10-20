@@ -23,4 +23,6 @@ The Symbols panel's replace button swaps every selected instance for an instance
 - Replacement anchors on the old instance's bounding-box top-left, not its centre, as Craft's "Replace" does for different-sized symbols.
 - Overrides on the old instance are not carried over, because the two definitions share no slots. The new instance shows the chosen symbol's own artwork.
 
+At `f02e52f274aaa770ba7dd2adc7a10e30dc11c412` that route passed 11 tests. Receipt `634119fb69a27a6c338c7000e1181f91d8e52aa3b1dfe9b1e8364cde362f9e05`.
+
 External libraries remain open.
