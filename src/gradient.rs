@@ -386,12 +386,52 @@ pub fn texture(gradient: &Gradient, shape: &Shape, padding: f32, scale: f32) -> 
         return Some(cached);
     }
     let mut pm = tiny_skia::Pixmap::new(w, h)?;
-    let mut field = if gradient.kind == GradientKind::Shape {
-        vec![0.; (w * h) as usize]
+    let field = if gradient.kind == GradientKind::Shape {
+        distance_field(shape, geom, w, h, tile)?
     } else {
         Vec::new()
     };
-    if gradient.kind == GradientKind::Shape {
+    let mut normalized = gradient.clone();
+    normalized.normalize();
+    for (i, pixel) in pm.pixels_mut().iter_mut().enumerate() {
+        let p = Pt::new(
+            tile.min.x + ((i % w as usize) as f32 + 0.5) / w as f32 * tile.width(),
+            tile.min.y + ((i / w as usize) as f32 + 0.5) / h as f32 * tile.height(),
+        );
+        let c = normalized.sample(if gradient.kind == GradientKind::Shape {
+            field[i]
+        } else {
+            gradient.position(bounds, p)
+        });
+        *pixel = tiny_skia::ColorU8::from_rgba(c.r, c.g, c.b, c.a).premultiply();
+    }
+    let texture = (Arc::new(pm), tile);
+    TEXTURES.with(|entries| {
+        let mut entries = entries.borrow_mut();
+        entries.push_front(TextureEntry {
+            gradient: gradient.clone(),
+            geom: geom.clone(),
+            corners: shape.corners,
+            w,
+            h,
+            tile,
+            texture: texture.clone(),
+        });
+        let mut bytes = 0;
+        entries.retain(|entry| {
+            bytes += entry.w as usize * entry.h as usize * 4;
+            bytes <= 64 * 1024 * 1024
+        });
+        entries.truncate(24);
+    });
+    Some(texture)
+}
+
+/// Normalized inside-distance field (0 at the deepest point, 1 at the edge) of
+/// a shape-gradient silhouette over `tile` at `w`×`h` samples.
+fn distance_field(shape: &Shape, geom: &Geom, w: u32, h: u32, tile: Bounds) -> Option<Vec<f32>> {
+    let mut field = vec![0.; (w * h) as usize];
+    {
         let mut mask = tiny_skia::Mask::new(w, h)?;
         if let Some(path) = {
             let mut local = shape.clone();
@@ -447,40 +487,48 @@ pub fn texture(gradient: &Gradient, shape: &Shape, padding: f32, scale: f32) -> 
             *distance = 1. - *distance / maximum;
         }
     }
-    let mut normalized = gradient.clone();
-    normalized.normalize();
-    for (i, pixel) in pm.pixels_mut().iter_mut().enumerate() {
-        let p = Pt::new(
-            tile.min.x + ((i % w as usize) as f32 + 0.5) / w as f32 * tile.width(),
-            tile.min.y + ((i / w as usize) as f32 + 0.5) / h as f32 * tile.height(),
-        );
-        let c = normalized.sample(if gradient.kind == GradientKind::Shape {
-            field[i]
+    Some(field)
+}
+
+/// Float shape-distance field for the precise compositor.
+pub struct ShapeField {
+    data: Vec<f32>,
+    w: u32,
+    h: u32,
+    tile: Bounds,
+}
+impl ShapeField {
+    /// Build the field at the 8-bit texture's resolution. Args: gradient, shape, render scale.
+    pub fn new(gradient: &Gradient, shape: &Shape, scale: f32) -> Option<Self> {
+        let owned;
+        let geom = if let Some(silhouette) = &gradient.silhouette {
+            owned = silhouette.geom();
+            &owned
         } else {
-            gradient.position(bounds, p)
-        });
-        *pixel = tiny_skia::ColorU8::from_rgba(c.r, c.g, c.b, c.a).premultiply();
+            &shape.geom
+        };
+        let tile = geom.bbox().inflate(1.);
+        let longest = tile.width().max(tile.height()).max(1.);
+        let resolution = ((longest * scale.max(0.1)).ceil().clamp(16., 4096.) as u32).next_power_of_two().min(4096);
+        let k = resolution as f32 / longest;
+        let w = (tile.width() * k).ceil().max(2.) as u32;
+        let h = (tile.height() * k).ceil().max(2.) as u32;
+        Some(Self { data: distance_field(shape, geom, w, h, tile)?, w, h, tile })
     }
-    let texture = (Arc::new(pm), tile);
-    TEXTURES.with(|entries| {
-        let mut entries = entries.borrow_mut();
-        entries.push_front(TextureEntry {
-            gradient: gradient.clone(),
-            geom: geom.clone(),
-            corners: shape.corners,
-            w,
-            h,
-            tile,
-            texture: texture.clone(),
-        });
-        let mut bytes = 0;
-        entries.retain(|entry| {
-            bytes += entry.w as usize * entry.h as usize * 4;
-            bytes <= 64 * 1024 * 1024
-        });
-        entries.truncate(24);
-    });
-    Some(texture)
+    /// Bilinear field value at an object-space point (0 outside).
+    pub fn sample(&self, p: Pt) -> f32 {
+        let fx = (p.x - self.tile.min.x) / self.tile.width() * self.w as f32 - 0.5;
+        let fy = (p.y - self.tile.min.y) / self.tile.height() * self.h as f32 - 0.5;
+        let x0 = fx.floor().clamp(0., (self.w - 1) as f32) as usize;
+        let y0 = fy.floor().clamp(0., (self.h - 1) as f32) as usize;
+        let x1 = (x0 + 1).min(self.w as usize - 1);
+        let y1 = (y0 + 1).min(self.h as usize - 1);
+        let (tx, ty) = ((fx - x0 as f32).clamp(0., 1.), (fy - y0 as f32).clamp(0., 1.));
+        let v = |x: usize, y: usize| self.data[y * self.w as usize + x];
+        let top = v(x0, y0) * (1. - tx) + v(x1, y0) * tx;
+        let bottom = v(x0, y1) * (1. - tx) + v(x1, y1) * tx;
+        top * (1. - ty) + bottom * ty
+    }
 }
 
 pub fn texture_shader<'a>(texture: &'a (Arc<tiny_skia::Pixmap>, Bounds)) -> tiny_skia::Shader<'a> {

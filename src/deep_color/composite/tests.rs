@@ -524,9 +524,6 @@ fn float_vector_unsupported_paths_refuse_without_touching_source_or_byte_routes(
     });
     cases.push((shape, "float clip renderer"));
     let mut shape = base.clone();
-    shape.style.fill = Fill::Gradient(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE));
-    cases.push((shape, "float paint renderer"));
-    let mut shape = base.clone();
     let mut gradient = Gradient::new(GradientKind::Linear, Rgba::BLACK, Rgba::WHITE);
     gradient.to = gradient.from;
     shape.style.fill = Fill::Gradient(gradient);
@@ -643,5 +640,30 @@ fn craft_native_conic_gradient_samples_match_the_eight_bit_field() {
     degenerate.to = degenerate.from;
     assert!(paint::Paint::new(&Fill::Gradient(degenerate), bounds, 0., &color, &|| Ok(())).is_err());
     let shape = Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE);
-    assert!(paint::Paint::new(&Fill::Gradient(shape), bounds, 0., &color, &|| Ok(())).is_err());
+    let bare = paint::Paint::new(&Fill::Gradient(shape), bounds, 0., &color, &|| Ok(())).unwrap();
+    assert!(bare.sample(Pt::new(5., 5.)).is_err(), "span paint without a field refuses at sampling");
+}
+
+#[test]
+fn craft_native_shape_gradient_matches_the_eight_bit_texture() {
+    let gradient = Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE);
+    let mut owner = Shape::new(
+        Geom::Rect { origin: Pt::new(0., 0.), size: Pt::new(40., 20.), radius: 0. },
+        crate::document::Style::default(),
+    );
+    owner.style.fill = Fill::Gradient(gradient.clone());
+    let color = crate::deep_color::cms::DocumentColor::default();
+    let paint = paint::Paint::new(&owner.style.fill, owner.geom.bbox(), 0., &color, &|| Ok(()))
+        .unwrap()
+        .with_shape(&owner, 1.)
+        .unwrap();
+    let (texture, tile) = crate::gradient::texture(&gradient, &owner, 0., 1.).unwrap();
+    for point in [Pt::new(20., 10.), Pt::new(2., 10.), Pt::new(20., 2.), Pt::new(35., 15.)] {
+        let float = paint.sample(point).unwrap()[0];
+        let x = ((point.x - tile.min.x) / tile.width() * texture.width() as f32) as u32;
+        let y = ((point.y - tile.min.y) / tile.height() * texture.height() as f32) as u32;
+        let eight = texture.pixel(x, y).unwrap().demultiply().red() as f32 / 255.;
+        assert!((float - eight).abs() < 0.05, "{point:?} {float} {eight}");
+    }
+    assert!(paint.sample(Pt::new(20., 10.)).unwrap()[0] < paint.sample(Pt::new(2., 10.)).unwrap()[0], "deepest point takes the first stop");
 }

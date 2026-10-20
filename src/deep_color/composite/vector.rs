@@ -14,27 +14,8 @@ fn supported(shape: &Shape, cancel: &dyn CancellationCheck) -> Result<(), String
             "Native vector gradients, patterns and effects require a float paint renderer".into(),
         );
     }
-    let unsupported = |fill: &Fill| {
-        matches!(
-            fill,
-            Fill::Pattern(_)
-                | Fill::Gradient(crate::gradient::Gradient {
-                    kind: crate::gradient::GradientKind::Shape,
-                    ..
-                })
-        )
-    };
-    if unsupported(&shape.style.fill)
-        || shape.style.stroke.as_ref().is_some_and(|stroke| {
-            stroke.gradient.as_ref().is_some_and(|g| {
-                matches!(
-                    g.kind,
-                    crate::gradient::GradientKind::Shape
-                )
-            })
-        })
-    {
-        return Err("Native vector patterns and shape-distance gradients require a float paint renderer".into());
+    if matches!(shape.style.fill, Fill::Pattern(_)) {
+        return Err("Native vector patterns require a float paint renderer".into());
     }
     if !shape.artwork_masks.is_empty() {
         return Err("Native live artwork masks require a precise coverage renderer".into());
@@ -411,7 +392,8 @@ fn paint_shape(
             shape.rotation,
             &doc.color,
             cancel,
-        )?;
+        )?
+        .with_shape(shape, scale as f32)?;
         draw(&path, &paint, shape.geom.nonzero_winding(), transform)?;
     }
     if let Some(stroke) = &shape.style.stroke
@@ -447,6 +429,7 @@ fn paint_shape(
                 &doc.color,
                 cancel,
             )?
+            .with_shape(shape, scale as f32)?
         } else {
             Paint::new(
                 &Fill::Solid(stroke.color),

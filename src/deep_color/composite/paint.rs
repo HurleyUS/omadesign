@@ -13,6 +13,7 @@ pub(super) enum Paint {
         gradient: Gradient,
         bounds: Bounds,
         inverse_rotation: tiny_skia::Transform,
+        field: Option<Arc<crate::gradient::ShapeField>>,
         _memory: Arc<Lease>,
     },
 }
@@ -139,7 +140,7 @@ impl Paint {
             .try_reserve_exact(stops.len().max(2))
             .map_err(|_| "Not enough memory for native gradient stops")?;
         gradient.stops.extend_from_slice(stops);
-        if !matches!(gradient.kind, GradientKind::Linear | GradientKind::Radial | GradientKind::Conic) {
+        if !matches!(gradient.kind, GradientKind::Linear | GradientKind::Radial | GradientKind::Conic | GradientKind::Shape) {
             return Err(
                 "Native vector shape-distance gradients require a float paint renderer"
                     .into(),
@@ -187,8 +188,21 @@ impl Paint {
             gradient,
             bounds,
             inverse_rotation,
+            field: None,
             _memory: memory,
         })
+    }
+    /// Attach the shape-distance field a Shape gradient needs.
+    /// Args: owning shape and render scale. Returns the paint, or a refusal when the field cannot be built.
+    pub(super) fn with_shape(mut self, shape: &crate::document::Shape, scale: f32) -> Result<Self, String> {
+        if let Self::Gradient { gradient, field, .. } = &mut self
+            && gradient.kind == GradientKind::Shape
+        {
+            *field = Some(Arc::new(
+                crate::gradient::ShapeField::new(gradient, shape, scale).ok_or("Native shape gradient field could not be prepared")?,
+            ));
+        }
+        Ok(self)
     }
     /// Sample normalized premultiplied stop interpolation without integer rounding.
     /// Args: world point. Returns straight authored RGBA or an invalid-field error.
@@ -199,11 +213,16 @@ impl Paint {
                 gradient,
                 bounds,
                 inverse_rotation,
+                field,
                 ..
             } => {
                 let mut p = tiny_skia::Point::from_xy(point.x, point.y);
                 inverse_rotation.map_point(&mut p);
-                let t = gradient.position(*bounds, Pt::new(p.x, p.y));
+                let t = match (gradient.kind, field) {
+                    (GradientKind::Shape, Some(field)) => field.sample(Pt::new(p.x, p.y)),
+                    (GradientKind::Shape, None) => return Err("Native shape-distance gradients on type spans require the whole-object field".into()),
+                    _ => gradient.position(*bounds, Pt::new(p.x, p.y)),
+                };
                 if !t.is_finite() {
                     return Err("Native gradient field is undefined at the sample point".into());
                 }
