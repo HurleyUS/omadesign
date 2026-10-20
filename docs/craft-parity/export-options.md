@@ -8,6 +8,8 @@ Each Asset Export row now has three new options:
 
 Rows can be reordered with ▲/▼. Variants and quality are encoded from the same rendered PNG, inside the existing staging and no-replace publication, and staging files never leak. Files gain native feature 38 only when a row uses one of these options. Older readers refuse it, and invalid values are refused.
 
+At `1696dcd7272cebbbbecf9880e223932470b71d81` that route passed 61 tests. Receipt `7e44daad9c1861aa25f5739b6be0285718ee03a003c030be99f77a2bae079437`.
+
 ## Decisions to review
 
 - WebP is lossless only, because the bundled codec has no lossy encoder. GIF uses the codec's built-in quantizer, with binary transparency.
