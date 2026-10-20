@@ -142,3 +142,28 @@ fn craft_effect_menu_keeps_panel_shortcuts() {
         keys::named(&seat.output, label);
     }
 }
+
+#[test]
+fn craft_effect_menu_layer_effects_add_and_clear_in_one_undo_each() {
+    use super::effect_menu::{add_layer_effect, clear_layer_effects, layer_target};
+    use crate::filter::Fx;
+    let (mut studio, _) = editor();
+    let before = saved(&studio);
+    let (name, make) = Fx::catalog()[0];
+    assert!(add_layer_effect(&mut studio, make), "{name}");
+    assert_eq!(studio.doc.layers[0].filters.items.len(), 1);
+    assert_eq!(studio.history.len(), 1);
+    let output = saved(&studio);
+    assert_eq!(crate::project::encode(&crate::project::decode(&output).unwrap()).unwrap(), output);
+    assert!(clear_layer_effects(&mut studio));
+    assert!(studio.doc.layers[0].filters.items.is_empty());
+    assert!(!clear_layer_effects(&mut studio));
+    studio.undo();
+    studio.undo();
+    assert_eq!(saved(&studio), before);
+    studio.doc.layers[0].locked = true;
+    assert!(!add_layer_effect(&mut studio, make));
+    studio.doc.layers[0].locked = false;
+    studio.active_layer = None;
+    assert!(layer_target(&studio).is_none());
+}

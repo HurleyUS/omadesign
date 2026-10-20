@@ -54,6 +54,34 @@ pub(super) fn clear_effects(studio: &mut Studio) -> usize {
     edit_filters(studio, |stack| stack.items.clear())
 }
 
+/// The active layer when it is visible and unlocked. Returns its index.
+pub(super) fn layer_target(studio: &Studio) -> Option<usize> {
+    if !available(studio) {
+        return None;
+    }
+    let index = studio.active_layer?;
+    (index < studio.doc.layers.len() && studio.doc.layer_editable(index) && studio.doc.layer_visible(index)).then_some(index)
+}
+
+pub(super) fn add_layer_effect(studio: &mut Studio, make: fn() -> Fx) -> bool {
+    let Some(index) = layer_target(studio) else { return false };
+    let mut after = studio.doc.layers[index].filters.clone();
+    after.items.push(make());
+    studio.commit_filters(index, after);
+    true
+}
+
+pub(super) fn clear_layer_effects(studio: &mut Studio) -> bool {
+    let Some(index) = layer_target(studio) else { return false };
+    if studio.doc.layers[index].filters.items.is_empty() {
+        return false;
+    }
+    let mut after = studio.doc.layers[index].filters.clone();
+    after.items.clear();
+    studio.commit_filters(index, after);
+    true
+}
+
 pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
     let targets = targets(studio);
     ui.add_enabled_ui(!targets.is_empty(), |ui| {
@@ -73,6 +101,24 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
     if ui.add_enabled(has_effects, Button::new("Clear effects")).clicked() {
         let count = clear_effects(studio);
         studio.status = format!("effects cleared · {count} objects");
+        ui.close();
+    }
+    let layer = layer_target(studio);
+    ui.add_enabled_ui(layer.is_some(), |ui| {
+        ui.menu_button("Add layer effect", |ui| {
+            for (name, make) in Fx::catalog() {
+                if ui.button(*name).clicked() {
+                    add_layer_effect(studio, *make);
+                    studio.status = format!("{name} · layer");
+                    ui.close();
+                }
+            }
+        });
+    });
+    let layer_has = layer.is_some_and(|i| !studio.doc.layers[i].filters.items.is_empty());
+    if ui.add_enabled(layer_has, Button::new("Clear layer effects")).clicked() {
+        clear_layer_effects(studio);
+        studio.status = "layer effects cleared".into();
         ui.close();
     }
     ui.separator();
