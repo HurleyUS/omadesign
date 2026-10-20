@@ -4,6 +4,8 @@
 
 A new channel is one Undo step. A selection result is not history, matching the other selection edits. Stale owners and missing sources are refused.
 
+At `8025677c972297bed04486eb0d1893c11ce7aa6b` that route passed 20 tests. Receipt `f4acd0fca569608193dfd1059262bf02d637a632b2069a3edd5a4c3537407cff`.
+
 ## Decisions to review
 
 - Source 1 is the top layer and source 2 the bottom, as in Photoshop. Subtract is bottom − top with no scale/offset, and Add has no scale/offset either.
