@@ -214,6 +214,16 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
         }
         if icon(
             ui,
+            owner.with("replace"),
+            ph::PATH,
+            "Replace selected instances with the chosen symbol",
+            instance && state.selected.is_some(),
+        ) && let Some(main) = state.selected
+        {
+            studio.replace_vector_symbol_instances(main);
+        }
+        if icon(
+            ui,
             owner.with("break"),
             ph::VECTOR_TWO,
             "Break selected instance links",

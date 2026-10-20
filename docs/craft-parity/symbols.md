@@ -13,3 +13,14 @@ Duplicate makes a separate definition beside the source artwork. It remaps the d
 Select All Instances selects visible, unlocked instance roots of the chosen definition without changing the document or history, and reports skipped hidden or locked roots. Reset and Break Link act on the whole concrete instance selection in one transaction. Selecting both an instance and one of its children does not apply the command twice. Locked, hidden or missing members reject the complete mutation instead of partially editing the remaining instances.
 
 Cross-definition replacement, redefinition from alternate artwork, hidden library-only definitions, external libraries and symbolism tools remain open. Existing automatic definition-to-instance updates continue through the shared component synchronizer.
+
+## Replace symbol
+
+The Symbols panel's replace button swaps every selected instance for an instance of the chosen symbol in one Undo step. Each replacement keeps the old instance's top-left position, parent frame and stacking order, and the new instances stay selected. Locked, hidden or missing members refuse the whole command, and so do a missing symbol and a selection that already uses it.
+
+### Decisions to review
+
+- Replacement anchors on the old instance's bounding-box top-left, not its centre, as Craft's "Replace" does for different-sized symbols.
+- Overrides on the old instance are not carried over, because the two definitions share no slots. The new instance shows the chosen symbol's own artwork.
+
+External libraries remain open.

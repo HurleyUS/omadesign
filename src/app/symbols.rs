@@ -168,6 +168,41 @@ pub(crate) mod tests {
         assert_eq!(crate::project::encode(&s.doc).unwrap(), detached);
     }
     #[test]
+    fn craft_symbol_replace_swaps_instances_in_place_in_one_undo() {
+        let mut s = fixture();
+        assert!(s.create_vector_symbol("Badge"));
+        let a = s.primary().unwrap().1;
+        let b = s.duplicate_vector_symbol(a).unwrap();
+        assert!(s.place_vector_symbol(a, Pt::new(110., 30.)));
+        let first = s.primary().unwrap().1;
+        assert!(s.place_vector_symbol(a, Pt::new(110., 100.)));
+        let second = s.primary().unwrap().1;
+        let origin = |s: &Studio, id| s.doc.find_shape(0, id).unwrap().geom.bbox().min;
+        let index = |s: &Studio, id| s.doc.layers[0].kind.shapes().unwrap().iter().position(|x| x.id == id).unwrap();
+        let (o1, o2, i1) = (origin(&s, first), origin(&s, second), index(&s, first));
+        let before = crate::project::encode(&s.doc).unwrap();
+        let history = s.history.len();
+        s.selection = vec![(0, first), (0, crate::layout::descendants(&s.doc, 0, second)[0])];
+        assert!(s.replace_vector_symbol_instances(b));
+        assert_eq!(s.history.len(), history + 1);
+        assert_eq!(s.selection.len(), 2);
+        for (&(_, root), want) in s.selection.clone().iter().zip([o1, o2]) {
+            assert!(matches!(s.doc.find_shape(0, root).unwrap().layout.component, Some(ComponentBinding::Instance { main, .. }) if main == b));
+            assert_eq!(origin(&s, root), want);
+        }
+        assert_eq!(index(&s, s.selection[0].1), i1, "stacking order kept");
+        assert!(s.doc.find_shape(0, first).is_none() && s.doc.find_shape(0, second).is_none());
+        let after = crate::project::encode(&s.doc).unwrap();
+        assert_eq!(crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(), after);
+        assert!(!s.replace_vector_symbol_instances(b), "already that symbol");
+        assert!(!s.replace_vector_symbol_instances(999_999));
+        assert_eq!(s.history.len(), history + 1);
+        s.undo();
+        assert_eq!(crate::project::encode(&s.doc).unwrap(), before);
+        s.selection.clear();
+        assert!(!s.replace_vector_symbol_instances(b), "nothing selected");
+    }
+    #[test]
     fn craft_symbol_instance_commands_reject_locked_or_missing_members_without_partial_edits() {
         let mut s = fixture();
         assert!(s.create_vector_symbol("Badge"));
@@ -440,6 +475,57 @@ impl Studio {
             },
         );
         accepted
+    }
+
+    /// Swap every selected instance for an instance of another symbol, in one Undo step.
+    /// Each replacement keeps the old instance's position, parent frame and stacking order.
+    /// Args: replacement definition ID. Returns whether all selected instances were replaced.
+    pub(crate) fn replace_vector_symbol_instances(&mut self, main: u64) -> bool {
+        let roots = match selected_instances(self) {
+            Ok(roots) => roots,
+            Err(error) => {
+                self.status = error;
+                return false;
+            }
+        };
+        if !components::definitions(&self.doc).iter().any(|p| p.1 == main) {
+            self.status = "That symbol no longer exists".into();
+            return false;
+        }
+        if roots.iter().all(|&(layer, root)| {
+            matches!(self.doc.find_shape(layer, root).and_then(|s| s.layout.component.as_ref()), Some(ComponentBinding::Instance { main: m, .. }) if *m == main)
+        }) {
+            self.status = "The selection already uses that symbol".into();
+            return false;
+        }
+        let mut replaced = Vec::new();
+        self.component_edit(
+            |doc| {
+                for &(layer, root) in &roots {
+                    let shape = doc.find_shape(layer, root).ok_or("Instance is missing")?;
+                    let (origin, parent) = (shape.geom.bbox().min, shape.layout.parent);
+                    let mut old: std::collections::HashSet<u64> = crate::layout::descendants(doc, layer, root).into_iter().collect();
+                    old.insert(root);
+                    let position = doc.layers[layer].kind.shapes().unwrap_or_default().iter().position(|s| s.id == root).ok_or("Instance is missing")?;
+                    let new_root = components::insert_instance(doc, main, layer, origin, parent)?;
+                    let mut new: std::collections::HashSet<u64> = crate::layout::descendants(doc, layer, new_root).into_iter().collect();
+                    new.insert(new_root);
+                    let shapes = doc.layers[layer].kind.shapes_mut().ok_or("Choose a vector layer")?;
+                    let moved: Vec<_> = shapes.iter().filter(|s| new.contains(&s.id)).cloned().collect();
+                    shapes.retain(|s| !new.contains(&s.id) && !old.contains(&s.id));
+                    let at = position.min(shapes.len());
+                    shapes.splice(at..at, moved);
+                    replaced.push((layer, new_root));
+                }
+                Ok(None)
+            },
+            "Symbol instances replaced",
+        );
+        if replaced.is_empty() {
+            return false;
+        }
+        self.selected_objects(replaced);
+        true
     }
 
     /// Select editable visible instances of one definition without creating a document edit.
