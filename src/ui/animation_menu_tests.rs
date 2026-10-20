@@ -158,3 +158,30 @@ fn craft_animation_menu_keeps_panel_shortcuts() {
     }
 }
 
+
+#[test]
+fn craft_animation_menu_reverse_and_clear_are_single_undo_steps() {
+    use super::animation_menu::{clear_animation, reverse_animation};
+    let (mut studio, (_, id)) = editor();
+    assert_eq!(reverse_animation(&mut studio), 0);
+    studio.playhead = 0.;
+    studio.key_selection(Ease::Linear);
+    studio.playhead = 0.5;
+    studio.key_selection(Ease::EaseIn);
+    let before = saved(&studio);
+    let history = studio.history.len();
+    let duration = studio.doc.motion.duration;
+    assert_eq!(reverse_animation(&mut studio), 1);
+    assert_eq!(studio.history.len(), history + 1);
+    let track = studio.doc.motion.tracks.iter().find(|t| t.shape == id).unwrap();
+    assert!(track.keys.windows(2).all(|w| w[0].t <= w[1].t));
+    assert_eq!(track.keys.first().unwrap().t, duration - 0.5);
+    assert_eq!(track.keys.last().unwrap().t, duration);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(saved(&studio), before);
+    assert_eq!(clear_animation(&mut studio), 1);
+    assert!(!studio.doc.motion.tracks.iter().any(|t| t.shape == id));
+    studio.undo();
+    assert_eq!(saved(&studio), before);
+}

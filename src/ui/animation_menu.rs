@@ -37,6 +37,53 @@ pub(super) fn toggle_loop(studio: &mut Studio) {
     studio.status = if studio.doc.motion.looped { "loop playback on" } else { "loop playback off" }.into();
 }
 
+fn animated_targets(studio: &Studio) -> Vec<u64> {
+    if !available(studio) {
+        return vec![];
+    }
+    let mut ids: Vec<u64> = studio
+        .selection
+        .iter()
+        .filter_map(|&(layer, id)| crate::motion::target(&studio.doc, layer, id).map(|t| t.id))
+        .filter(|id| studio.doc.motion.tracks.iter().any(|t| t.shape == *id && !t.keys.is_empty()))
+        .collect();
+    ids.dedup();
+    ids
+}
+
+/// Mirror the selection's keys in time (t → duration − t) as one history step.
+/// Returns how many objects changed.
+pub(super) fn reverse_animation(studio: &mut Studio) -> usize {
+    let ids = animated_targets(studio);
+    if ids.is_empty() {
+        return 0;
+    }
+    let mut after = studio.doc.motion.clone();
+    let duration = after.duration;
+    for track in after.tracks.iter_mut().filter(|t| ids.contains(&t.shape)) {
+        for key in &mut track.keys {
+            key.t = (duration - key.t).clamp(0., duration);
+        }
+        track.keys.reverse();
+    }
+    studio.commit_motion_step(after);
+    studio.status = format!("animation reversed · {} objects", ids.len());
+    ids.len()
+}
+
+/// Remove every key track of the selection as one history step. Returns objects cleared.
+pub(super) fn clear_animation(studio: &mut Studio) -> usize {
+    let ids = animated_targets(studio);
+    if ids.is_empty() {
+        return 0;
+    }
+    let mut after = studio.doc.motion.clone();
+    after.tracks.retain(|t| !ids.contains(&t.shape));
+    studio.commit_motion_step(after);
+    studio.status = format!("animation cleared · {} objects", ids.len());
+    ids.len()
+}
+
 pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
     let keyable = can_key(studio);
     if ui
@@ -73,6 +120,15 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
             }
         });
     });
+    let animated = !animated_targets(studio).is_empty();
+    if ui.add_enabled(animated, Button::new("Reverse animation")).on_hover_text("Play the selection's keys backwards").clicked() {
+        reverse_animation(studio);
+        ui.close();
+    }
+    if ui.add_enabled(animated, Button::new("Clear animation")).clicked() {
+        clear_animation(studio);
+        ui.close();
+    }
     let mut looped = studio.doc.motion.looped;
     if ui
         .add_enabled(available(studio), eframe::egui::Checkbox::new(&mut looped, "Loop playback"))
