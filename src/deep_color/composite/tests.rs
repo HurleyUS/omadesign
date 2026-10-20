@@ -624,3 +624,24 @@ fn float_vector_hairline_butt_stroke_and_dash_keep_sub_byte_area() {
         assert!(p[3] > 0. && p[3] < 1. / 255.);
     }
 }
+
+#[test]
+fn craft_native_conic_gradient_samples_match_the_eight_bit_field() {
+    let bounds = crate::geom::Bounds::from_min_size(Pt::new(0., 0.), Pt::new(10., 10.));
+    let color = crate::deep_color::cms::DocumentColor::default();
+    let gradient = Gradient::new(GradientKind::Conic, Rgba::BLACK, Rgba::WHITE);
+    let paint = paint::Paint::new(&Fill::Gradient(gradient.clone()), bounds, 0., &color, &|| Ok(())).unwrap();
+    let mut normalized = gradient.clone();
+    normalized.normalize();
+    for point in [Pt::new(9., 5.2), Pt::new(5., 9.), Pt::new(1., 5.), Pt::new(5., 1.), Pt::new(8., 2.)] {
+        let float = paint.sample(point).unwrap();
+        let eight = normalized.sample(gradient.position(bounds, point));
+        assert!((float[0] - eight.r as f32 / 255.).abs() <= 1. / 255. + 1e-6, "{point:?} {float:?} {eight:?}");
+        assert_eq!(float[3], 1.);
+    }
+    let mut degenerate = gradient.clone();
+    degenerate.to = degenerate.from;
+    assert!(paint::Paint::new(&Fill::Gradient(degenerate), bounds, 0., &color, &|| Ok(())).is_err());
+    let shape = Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE);
+    assert!(paint::Paint::new(&Fill::Gradient(shape), bounds, 0., &color, &|| Ok(())).is_err());
+}

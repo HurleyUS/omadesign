@@ -139,12 +139,17 @@ impl Paint {
             .try_reserve_exact(stops.len().max(2))
             .map_err(|_| "Not enough memory for native gradient stops")?;
         gradient.stops.extend_from_slice(stops);
-        if !matches!(gradient.kind, GradientKind::Linear | GradientKind::Radial) {
+        if !matches!(gradient.kind, GradientKind::Linear | GradientKind::Radial | GradientKind::Conic) {
             return Err(
-                "Native vector shape-distance and conic gradients require a float paint renderer"
+                "Native vector shape-distance gradients require a float paint renderer"
                     .into(),
             );
         }
+        // Conic angles follow the 8-bit route: silhouettes supply the field bounds.
+        let bounds = match (&gradient.kind, &gradient.silhouette) {
+            (GradientKind::Conic, Some(silhouette)) => silhouette.geom().bbox(),
+            _ => bounds,
+        };
         if !color.icc_profile.is_empty() {
             return Err("Profiled native vector gradients require a float paint renderer with batched ICC sampling".into());
         }
@@ -161,7 +166,7 @@ impl Paint {
             return Err("Native gradient has nonfinite field or stop coordinates".into());
         }
         let (a, b) = gradient.endpoints(bounds);
-        if gradient.kind == GradientKind::Linear && (b - a).length_sq() == 0.
+        if matches!(gradient.kind, GradientKind::Linear | GradientKind::Conic) && (b - a).length_sq() == 0.
             || gradient.kind == GradientKind::Radial
                 && gradient.radial_transform(bounds).invert().is_none()
         {

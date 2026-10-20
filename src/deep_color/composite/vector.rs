@@ -19,8 +19,7 @@ fn supported(shape: &Shape, cancel: &dyn CancellationCheck) -> Result<(), String
             fill,
             Fill::Pattern(_)
                 | Fill::Gradient(crate::gradient::Gradient {
-                    kind: crate::gradient::GradientKind::Shape
-                        | crate::gradient::GradientKind::Conic,
+                    kind: crate::gradient::GradientKind::Shape,
                     ..
                 })
         )
@@ -30,12 +29,12 @@ fn supported(shape: &Shape, cancel: &dyn CancellationCheck) -> Result<(), String
             stroke.gradient.as_ref().is_some_and(|g| {
                 matches!(
                     g.kind,
-                    crate::gradient::GradientKind::Shape | crate::gradient::GradientKind::Conic
+                    crate::gradient::GradientKind::Shape
                 )
             })
         })
     {
-        return Err("Native vector patterns and shape-distance/conic gradients require a float paint renderer".into());
+        return Err("Native vector patterns and shape-distance gradients require a float paint renderer".into());
     }
     if !shape.artwork_masks.is_empty() {
         return Err("Native live artwork masks require a precise coverage renderer".into());
