@@ -11,6 +11,7 @@ use std::{
 };
 #[cfg(unix)]
 mod publish;
+pub mod transcode;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Object {
@@ -37,6 +38,18 @@ pub struct Row {
         skip_serializing_if = "String::is_empty"
     )]
     pub folder: String,
+    /// Extra area around the exported scope, in document units.
+    #[serde(default, rename = "export_bleed", skip_serializing_if = "is_zero")]
+    pub bleed: f32,
+    /// JPEG quality 1–100; None keeps the shared writer's 95.
+    #[serde(default, rename = "export_quality", skip_serializing_if = "Option::is_none")]
+    pub quality: Option<u8>,
+    /// Re-encode a PNG row as PNG-8, WebP or GIF.
+    #[serde(default, rename = "export_variant", skip_serializing_if = "Option::is_none")]
+    pub variant: Option<transcode::Variant>,
+}
+fn is_zero(value: &f32) -> bool {
+    *value == 0.
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -117,6 +130,14 @@ impl std::fmt::Display for Resolution {
     }
 }
 impl Row {
+    /// Output extension, following a PNG variant when one is chosen.
+    pub fn extension(&self) -> &'static str {
+        self.variant.map_or(self.format.extension(), transcode::Variant::extension)
+    }
+    /// Whether nondefault options need native feature 38.
+    pub fn has_options(&self) -> bool {
+        self.bleed != 0. || self.quality.is_some() || self.variant.is_some()
+    }
     pub fn folder_valid(&self) -> bool {
         filename_part(&self.folder, true)
     }
@@ -172,6 +193,9 @@ impl Default for Row {
             suffix: String::new(),
             export_resolution: None,
             folder: String::new(),
+            bleed: 0.,
+            quality: None,
+            variant: None,
         }
     }
 }
@@ -273,6 +297,15 @@ impl Catalog {
                     "Layered and vector export rows use 1×; PNG, JPEG and TIFF support 1×–8×"
                         .into(),
                 );
+            }
+            if !row.bleed.is_finite() || !(0. ..=1000.).contains(&row.bleed) {
+                return Err("Export bleed must be between 0 and 1000".into());
+            }
+            if row.quality.is_some_and(|q| !(1..=100).contains(&q)) || (row.quality.is_some() && row.format != Format::Jpeg) {
+                return Err("Export quality is 1–100 and applies to JPEG rows".into());
+            }
+            if row.variant.is_some() && row.format != Format::Png {
+                return Err("PNG-8, WebP and GIF variants apply to PNG rows".into());
             }
             if let Some(resolution) = row.export_resolution {
                 resolution.validate()?;
@@ -453,7 +486,7 @@ impl Plan {
                     doc.screen_export.prefix,
                     name,
                     row.suffix,
-                    row.format.extension()
+                    row.extension()
                 );
                 if name.len() > 240 || !names.insert(format!("{directory}/{name}").to_lowercase()) {
                     return Err("Export rows produce duplicate or oversized filenames. Give each format/scale a distinct suffix".into());
@@ -471,7 +504,7 @@ impl Plan {
             files,
         };
         for file in &plan.files {
-            let source = plan.source(&file.scope)?;
+            let source = plan.file_source(file)?;
             if let (Some(resolution), Source::Document(doc)) = (file.row.export_resolution, &source)
             {
                 export::dimensions_scaled(&source, file.row.settings(), resolution.options(doc)?)?;
@@ -480,6 +513,14 @@ impl Plan {
             }
         }
         Ok(plan)
+    }
+    fn file_source(&self, file: &File) -> Result<Source, String> {
+        let source = self.source(&file.scope)?;
+        if file.row.bleed == 0. {
+            return Ok(source);
+        }
+        let Source::Document(doc) = source else { return Ok(source) };
+        Ok(Source::Document(export::target::bleed(&doc, file.row.bleed)?))
     }
     fn source(&self, scope: &Scope) -> Result<Source, String> {
         let mut doc = match scope {
@@ -547,25 +588,34 @@ impl Plan {
             for (index, file) in self.files.iter().enumerate() {
                 progress.check()?;
                 progress.report("Exporting assets", index, self.files.len());
-                let source = self.source(&file.scope)?;
+                let source = self.file_source(file)?;
+                let transcoded = file.row.variant.is_some() || file.row.quality.is_some();
+                let mut settings = file.row.settings();
+                let target = if transcoded {
+                    settings.format = Format::Png;
+                    stage.join(format!("{}.render.png", file.relative().display()))
+                } else {
+                    stage.join(file.relative())
+                };
+                let mut dpi = None;
                 let notes = if let (Some(resolution), Source::Document(doc)) =
                     (file.row.export_resolution, &source)
                 {
-                    export::save_scaled(
-                        &source,
-                        file.row.settings(),
-                        resolution.options(doc)?,
-                        &stage.join(file.relative()),
-                        progress,
-                    )?
+                    let options = resolution.options(doc)?;
+                    dpi = options.dpi;
+                    export::save_scaled(&source, settings, options, &target, progress)?
                 } else {
-                    export::save(
-                        &source,
-                        file.row.settings(),
-                        &stage.join(file.relative()),
-                        progress,
-                    )?
+                    export::save(&source, settings, &target, progress)?
                 };
+                if transcoded {
+                    let png = std::fs::read(&target).map_err(|e| e.to_string())?;
+                    let bytes = match file.row.variant {
+                        Some(variant) => transcode::variant(&png, variant)?,
+                        None => transcode::jpeg(&png, file.row.quality.unwrap_or(95), dpi)?,
+                    };
+                    std::fs::write(stage.join(file.relative()), bytes).map_err(|e| e.to_string())?;
+                    std::fs::remove_file(&target).map_err(|e| e.to_string())?;
+                }
                 outputs.push(ResultFile {
                     path: folder.join(file.relative()),
                     notes,

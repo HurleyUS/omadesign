@@ -169,6 +169,18 @@ pub fn selection(doc: &Document, selected: &[(usize, u64)]) -> Result<Document, 
     Ok(output)
 }
 
+/// Grow the export area by a bleed on every side, keeping artwork in place.
+/// Args: cropped scope and bleed in document units. Returns the enlarged document.
+pub fn bleed(doc: &Document, amount: f32) -> Result<Document, String> {
+    if !amount.is_finite() || amount < 0. {
+        return Err("Export bleed must be zero or positive".into());
+    }
+    crop(
+        doc.clone(),
+        Bounds { min: crate::geom::Pt::new(-amount, -amount), max: crate::geom::Pt::new(doc.width + amount, doc.height + amount) },
+    )
+}
+
 fn crop(mut doc: Document, bounds: Bounds) -> Result<Document, String> {
     if !bounds.min.x.is_finite()
         || !bounds.min.y.is_finite()

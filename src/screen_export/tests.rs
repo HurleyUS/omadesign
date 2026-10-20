@@ -532,3 +532,82 @@ fn craft_screen_export_cubic_crop_uses_actual_extrema_not_sampled_points() {
     assert!(image.rows().skip(3553).flatten().any(|pixel| pixel[3] > 0));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn craft_export_options_bleed_quality_and_variants_publish_actual_files() {
+    let mut s = fixture();
+    let id = s.doc.screen_export.assets[0].id;
+    s.doc.screen_export.rows = vec![
+        Row { id: 1, suffix: "-bleed".into(), bleed: 2., ..Default::default() },
+        Row { id: 2, format: Format::Jpeg, suffix: "-q".into(), quality: Some(40), ..Default::default() },
+        Row { id: 3, suffix: "-8".into(), variant: Some(transcode::Variant::Png8), ..Default::default() },
+        Row { id: 4, suffix: "-w".into(), variant: Some(transcode::Variant::WebP), ..Default::default() },
+        Row { id: 5, suffix: "-g".into(), variant: Some(transcode::Variant::Gif), ..Default::default() },
+    ];
+    let root = folder();
+    let outputs = Plan::new(&s.doc, &[Scope::Asset(id)]).unwrap().save(&root, &NoProgress).unwrap();
+    assert_eq!(outputs.len(), 5);
+    let bled = image::open(root.join("Badge-bleed.png")).unwrap().to_rgba8();
+    assert_eq!(bled.dimensions(), (20, 16), "2 units of bleed on every side");
+    assert_eq!(bled.get_pixel(6, 6).0, [240, 30, 20, 255], "artwork stays in place inside the bleed");
+    let q40 = std::fs::read(root.join("Badge-q.jpg")).unwrap();
+    assert_eq!(image::guess_format(&q40).unwrap(), image::ImageFormat::Jpeg);
+    let p8 = std::fs::read(root.join("Badge-8.png")).unwrap();
+    let decoder = png::Decoder::new(std::io::Cursor::new(&p8)).read_info().unwrap();
+    assert_eq!(decoder.info().color_type, png::ColorType::Indexed);
+    assert_eq!(image::load_from_memory(&p8).unwrap().to_rgba8().get_pixel(4, 4).0, [240, 30, 20, 255]);
+    let webp = image::open(root.join("Badge-w.webp")).unwrap().to_rgba8();
+    assert_eq!(webp.get_pixel(4, 4).0, [240, 30, 20, 255], "lossless WebP");
+    assert_eq!(image::guess_format(&std::fs::read(root.join("Badge-g.gif")).unwrap()).unwrap(), image::ImageFormat::Gif);
+    let names: Vec<_> = std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    assert!(names.iter().all(|n| !n.contains("render")), "no staging leftovers: {names:?}");
+    assert_eq!(names.len(), 5);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn craft_export_options_quality_changes_size_and_png8_quantizes_many_colors() {
+    let mut big = image::RgbaImage::new(64, 64);
+    for (x, y, p) in big.enumerate_pixels_mut() {
+        *p = image::Rgba([(x * 4) as u8, (y * 4) as u8, ((x + y) * 2) as u8, 255]);
+    }
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(big.clone()).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let low = transcode::jpeg(&png, 10, None).unwrap();
+    let high = transcode::jpeg(&png, 100, None).unwrap();
+    assert!(low.len() < high.len());
+    let p8 = transcode::variant(&png, transcode::Variant::Png8).unwrap();
+    let back = image::load_from_memory(&p8).unwrap().to_rgba8();
+    let mut colors: Vec<_> = back.pixels().map(|p| p.0).collect();
+    colors.sort_unstable();
+    colors.dedup();
+    assert!(colors.len() <= 256);
+    let error: u64 = back.pixels().zip(big.pixels()).map(|(a, b)| (0..3).map(|c| u64::from(a[c].abs_diff(b[c]))).sum::<u64>()).sum();
+    assert!(error / (64 * 64 * 3) < 8, "median cut stays close: {}", error / (64 * 64 * 3));
+}
+
+#[test]
+fn craft_export_options_feature38_only_with_options_and_invalid_rows_refused() {
+    let mut s = fixture();
+    let base: serde_json::Value = serde_json::from_str(&crate::project::encode(&s.doc).unwrap()).unwrap();
+    assert_eq!(base["version"], 29);
+    s.doc.screen_export.rows[0].variant = Some(transcode::Variant::WebP);
+    let encoded = crate::project::encode(&s.doc).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(value["version"], 38);
+    assert!(encoded.contains("export_variant"));
+    assert_eq!(crate::project::encode(&crate::project::decode(&encoded).unwrap()).unwrap(), encoded);
+    value["version"] = 37.into();
+    assert!(crate::project::decode(&value.to_string()).is_err());
+    for bad in [
+        Row { id: 9, bleed: -1., ..Default::default() },
+        Row { id: 9, bleed: f32::NAN, ..Default::default() },
+        Row { id: 9, quality: Some(50), ..Default::default() },
+        Row { id: 9, format: Format::Jpeg, quality: Some(0), ..Default::default() },
+        Row { id: 9, format: Format::Jpeg, variant: Some(transcode::Variant::Gif), ..Default::default() },
+    ] {
+        let mut catalog = s.doc.screen_export.clone();
+        catalog.rows = vec![bad.clone()];
+        assert!(catalog.validate().is_err(), "{bad:?}");
+    }
+}

@@ -425,6 +425,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
         )
         .on_hover_text("Filename prefix");
         let mut remove = None;
+        let mut reorder: Option<(u64, isize)> = None;
         for row in &mut state.draft.rows {
             let size = state
                 .sizes
@@ -507,6 +508,45 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                 "Export row filename suffix",
             )
             .on_hover_text("Filename suffix");
+            ui.horizontal_wrapped(|ui| {
+                fields::native_scope(ui, owner.with((row.id, "bleed")), |ui| {
+                    ui.add(egui::DragValue::new(&mut row.bleed).range(0.0..=1000.0).speed(0.5).prefix("Bleed "))
+                })
+                .inner
+                .on_hover_text("Extra area around the exported scope");
+                if row.format == crate::export::Format::Jpeg {
+                    let mut custom = row.quality.is_some();
+                    ui.checkbox(&mut custom, "Quality");
+                    if custom {
+                        let mut q = row.quality.unwrap_or(95);
+                        ui.add(egui::Slider::new(&mut q, 1..=100));
+                        row.quality = Some(q);
+                    } else {
+                        row.quality = None;
+                    }
+                } else {
+                    row.quality = None;
+                }
+                if row.format == crate::export::Format::Png {
+                    let label = row.variant.map_or("PNG-24", |v| v.label());
+                    fields::native_scope(ui, owner.with((row.id, "variant")), |ui| {
+                        egui::ComboBox::from_id_salt("variant").selected_text(label).show_ui(ui, |ui| {
+                            ui.selectable_value(&mut row.variant, None, "PNG-24");
+                            for v in crate::screen_export::transcode::Variant::ALL {
+                                ui.selectable_value(&mut row.variant, Some(v), v.label());
+                            }
+                        })
+                    });
+                } else {
+                    row.variant = None;
+                }
+                if ui.small_button("▲").on_hover_text("Move row up").clicked() {
+                    reorder = Some((row.id, -1));
+                }
+                if ui.small_button("▼").on_hover_text("Move row down").clicked() {
+                    reorder = Some((row.id, 1));
+                }
+            });
             if state.draft.subfolders {
                 let response = text(
                     ui,
@@ -521,6 +561,14 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                         "Use a single folder name without separators, . or .. (80 bytes maximum)",
                     );
                 }
+            }
+        }
+        if let Some((id, step)) = reorder
+            && let Some(i) = state.draft.rows.iter().position(|r| r.id == id)
+        {
+            let j = i as isize + step;
+            if (0..state.draft.rows.len() as isize).contains(&j) {
+                state.draft.rows.swap(i, j as usize);
             }
         }
         if state.draft.rows.len() > 1

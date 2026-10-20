@@ -30,6 +30,7 @@ pub(super) const VARIABLE_FONTS: u32 = 34;
 pub(super) const LAYER_CLIPPING: u32 = 35;
 pub(super) const ACTIVE_SELECTION: u32 = 36;
 pub(super) const SPOT_CHANNELS: u32 = 37;
+pub(super) const EXPORT_OPTIONS: u32 = 38;
 
 /// Identify implemented project readers.
 /// Args: envelope version. Returns false for reserved formats whose models are absent.
@@ -57,6 +58,7 @@ pub(super) fn supports_version(version: u32) -> bool {
             | LAYER_CLIPPING
             | ACTIVE_SELECTION
             | SPOT_CHANNELS
+            | EXPORT_OPTIONS
     )
 }
 
@@ -70,19 +72,20 @@ pub(super) fn required_version(doc: &Document) -> u32 {
                 .max()
                 .unwrap_or(5)
         })
-        .unwrap_or(SPOT_CHANNELS + 1)
+        .unwrap_or(EXPORT_OPTIONS + 1)
 }
 
 fn local_required_version(doc: &Document) -> u32 {
     let mut version = if doc.mask_sources().is_empty() { 5 } else { 13 };
     if let Some(replica) = &doc.collaboration {
-        version = version.max(retained::replica_version(replica).unwrap_or(SPOT_CHANNELS + 1));
+        version = version.max(retained::replica_version(replica).unwrap_or(EXPORT_OPTIONS + 1));
     }
     if crate::text::variations::document(doc) { version = version.max(VARIABLE_FONTS); }
     if !doc.channels.is_empty() { version=version.max(CHANNELS); }
     if doc.quick_mask.is_some() { version=version.max(QUICK_MASK); }
     if doc.active_selection.is_some() { version=version.max(ACTIVE_SELECTION); }
     if crate::channels::spot::any(&doc.channels) { version=version.max(SPOT_CHANNELS); }
+    if doc.screen_export.rows.iter().any(|row| row.has_options()) { version=version.max(EXPORT_OPTIONS); }
     if !doc.screen_export.is_empty() {
         version = version.max(SCREEN_EXPORT);
     }
@@ -502,10 +505,10 @@ mod tests {
         let encoded = super::super::encode(&doc).unwrap();
         let mut envelope: serde_json::Value = serde_json::from_str(&encoded).unwrap();
         assert_eq!(envelope["version"], 5);
-        for version in 0..=38 {
+        for version in 0..=39 {
             let supported = matches!(
                 version,
-                1..=17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37
+                1..=17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 38
             );
             assert_eq!(supports_version(version), supported, "reader {version}");
             envelope["version"] = version.into();
@@ -835,7 +838,7 @@ mod tests {
             neutral["version"] = implemented.into();
             super::super::decode(&neutral.to_string()).unwrap();
         }
-        for reserved in [SPOT_CHANNELS + 1, u32::MAX] {
+        for reserved in [EXPORT_OPTIONS + 1, u32::MAX] {
             neutral["version"] = reserved.into();
             assert!(
                 super::super::decode(&neutral.to_string())
