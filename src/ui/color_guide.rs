@@ -798,6 +798,24 @@ fn recolor(ui: &mut Ui, studio: &mut Studio) {
             draft.target.patterns
         ));
     }
+    ui.horizontal_wrapped(|ui| {
+        use crate::app::recolor_reduce as r;
+        let n = draft.target.colors.len();
+        for count in [2usize, 3, 5, 8] {
+            if count < n && ui.button(format!("Reduce to {count}")).on_hover_text("Merge similar colors (median cut)").clicked() {
+                draft.colors = r::reduce(&draft.target.colors, count);
+            }
+        }
+        if ui.button("Grayscale").clicked() {
+            draft.colors = r::grayscale(&draft.target.colors);
+        }
+        if ui.button("Invert").clicked() {
+            draft.colors = r::invert(&draft.target.colors);
+        }
+        if ui.button("Reset").clicked() {
+            draft.colors = draft.target.colors.clone();
+        }
+    });
     for (index, (before, after)) in draft
         .target
         .colors
