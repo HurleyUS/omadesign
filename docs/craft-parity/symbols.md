@@ -25,4 +25,8 @@ The Symbols panel's replace button swaps every selected instance for an instance
 
 At `f02e52f274aaa770ba7dd2adc7a10e30dc11c412` that route passed 11 tests. Receipt `634119fb69a27a6c338c7000e1181f91d8e52aa3b1dfe9b1e8364cde362f9e05`.
 
-External libraries remain open.
+Symbols panel ▸ Import symbols from file… copies every symbol definition from another .oma document onto a hidden, locked "Symbol library: <file>" layer with fresh identities, in one Undo step; same-named symbols get the file name as a suffix. Symbol import receipt follows.
+
+At `1976092acfecb84f3982c16f607654339d9e7762` that route passed 11 tests. Receipt `dc2b49f1deaa4a86edfbaa39e6ce9fd22a7e39823c8655f9fcd9ba6e9d1abdf6`.
+
+Symbolism spray tools remain out of scope.
