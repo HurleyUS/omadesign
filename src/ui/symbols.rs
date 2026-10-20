@@ -62,6 +62,9 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
             .desired_width(ui.available_width()),
     );
     welcome::name_control(ui, &query, owner.with("query-label"), "Find symbols");
+    if ui.button("Import symbols from file…").on_hover_text("Copy every symbol from another .oma document").clicked() {
+        studio.import_symbol_library_dialog();
+    }
     let mut place = None;
     for (layer, id, name, _) in &definitions {
         if !name.to_lowercase().contains(&state.query.to_lowercase()) {
