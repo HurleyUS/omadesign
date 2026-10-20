@@ -27,6 +27,6 @@ At `f02e52f274aaa770ba7dd2adc7a10e30dc11c412` that route passed 11 tests. Receip
 
 Symbols panel ▸ Import symbols from file… copies every symbol definition from another .oma document onto a hidden, locked "Symbol library: <file>" layer with fresh identities, in one Undo step; same-named symbols get the file name as a suffix. Symbol import receipt follows.
 
-At `1976092acfecb84f3982c16f607654339d9e7762` that route passed 11 tests. Receipt `dc2b49f1deaa4a86edfbaa39e6ce9fd22a7e39823c8655f9fcd9ba6e9d1abdf6`.
+At `b95655ebb5e783d940f98defcde5f951f3c2d097` that route passed 13 tests. Receipt `c29fced97807105a154f7e452f2d494b3671aba49ab5286d8a4fd52bd2be04eb`.
 
 Symbolism spray tools remain out of scope.
