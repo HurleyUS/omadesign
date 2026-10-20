@@ -8,6 +8,8 @@ Files gain native feature 37 only when a spot channel exists. Alpha-only files k
 
 PDF: the existing writer has no Separation color spaces, so spot inks are flattened to process color as a top image and the export reports a warning. PSD spot channels follow in the channel interchange slice.
 
+At `1e78379ee910955496601a7eaceb35a707416601` that route passed 111 tests. Receipt `1b160c14bd5640d781832a8cad8e22114c909286a053902eaa0da2cfdec2dd8f`.
+
 ## Decisions to review
 
 - Ink is stored as display sRGB plus solidity, not as a named library ink with Lab values. The default ink is magenta-pink at full solidity.
