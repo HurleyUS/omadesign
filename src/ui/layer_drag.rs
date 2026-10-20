@@ -689,3 +689,84 @@ mod tests {
         assert_eq!(order(&studio), vec![ids[0], ids[2], ids[1], ids[3]]);
     }
 }
+
+/// A Layers drag released over another panel's area becomes a selection for that panel to use.
+/// Args: panel ui and editor. Returns the dropped objects (or the dropped layer) and consumes the payload.
+pub(super) fn collect_drop(ui: &Ui, studio: &Studio) -> Option<(Vec<(usize, u64)>, Option<u64>)> {
+    let payload = DragAndDrop::payload::<LayerDrag>(ui.ctx())?;
+    if payload.document != studio.swap_id {
+        return None;
+    }
+    let pos = ui.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos()))?;
+    if !ui.clip_rect().contains(pos) || !ui.input(|i| i.pointer.any_released()) {
+        return None;
+    }
+    DragAndDrop::clear_payload(ui.ctx());
+    let index = |id: u64| studio.doc.layers.iter().position(|l| l.id == id);
+    match &payload.items {
+        DragItems::Layer(id) => index(*id).map(|_| (vec![], Some(*id))),
+        DragItems::Objects(items) => {
+            let selection: Vec<(usize, u64)> = items.iter().filter_map(|&(layer, id)| Some((index(layer)?, id))).collect();
+            (!selection.is_empty()).then_some((selection, None))
+        }
+    }
+}
+
+#[cfg(test)]
+mod collect_drop_tests {
+    use super::*;
+    use crate::ui::welcome::keyboard_tests as keys;
+    use egui::{Event, PointerButton, Pos2};
+
+    fn release(at: Pos2, modifiers: egui::Modifiers) -> Vec<Event> {
+        vec![Event::PointerMoved(at), Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers }]
+    }
+
+    #[test]
+    fn craft_drag_collect_layers_drop_on_asset_export_collects_in_one_undo() {
+        let ctx = egui::Context::default();
+        super::super::theme::apply(&ctx);
+        let mut studio = crate::app::screen_export::tests::fixture();
+        let shape = studio.selection[0].1;
+        let layer = studio.doc.layers[0].id;
+        studio.selection.clear();
+        studio.history.clear();
+        let mut frame = |studio: &mut Studio, events| keys::render(&ctx, events, |ui| super::super::screen_export::show(ui, studio));
+        frame(&mut studio, vec![]);
+        egui::DragAndDrop::set_payload(&ctx, LayerDrag { document: studio.swap_id.clone(), items: DragItems::Objects(vec![(layer, shape)]) });
+        frame(&mut studio, release(Pos2::new(40., 40.), egui::Modifiers::NONE));
+        assert_eq!(studio.doc.screen_export.assets.len(), 1, "{:?}", studio.status);
+        assert_eq!(studio.doc.screen_export.assets[0].name, "Badge");
+        assert_eq!(studio.history.len(), 1);
+        assert!(!egui::DragAndDrop::has_any_payload(&ctx), "the drop consumes the drag");
+        studio.undo();
+        assert!(studio.doc.screen_export.assets.is_empty());
+        // A whole-layer drag collects every top-level object of that layer.
+        egui::DragAndDrop::set_payload(&ctx, LayerDrag { document: studio.swap_id.clone(), items: DragItems::Layer(layer) });
+        frame(&mut studio, release(Pos2::new(40., 40.), egui::Modifiers::SHIFT));
+        assert_eq!(studio.doc.screen_export.assets.len(), 1);
+        assert_eq!(studio.doc.screen_export.assets[0].objects.len(), 1);
+    }
+
+    #[test]
+    fn craft_drag_collect_ignores_other_documents_and_drops_outside_the_pane() {
+        let ctx = egui::Context::default();
+        super::super::theme::apply(&ctx);
+        let mut studio = crate::app::screen_export::tests::fixture();
+        let shape = studio.selection[0].1;
+        let layer = studio.doc.layers[0].id;
+        let mut frame = |studio: &mut Studio, events| {
+            keys::render(&ctx, events, |ui| {
+                ui.set_clip_rect(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(300., 600.)));
+                super::super::screen_export::show(ui, studio)
+            })
+        };
+        frame(&mut studio, vec![]);
+        egui::DragAndDrop::set_payload(&ctx, LayerDrag { document: "another document".into(), items: DragItems::Objects(vec![(layer, shape)]) });
+        frame(&mut studio, release(Pos2::new(40., 40.), egui::Modifiers::NONE));
+        assert!(studio.doc.screen_export.assets.is_empty());
+        egui::DragAndDrop::set_payload(&ctx, LayerDrag { document: studio.swap_id.clone(), items: DragItems::Objects(vec![(layer, shape)]) });
+        frame(&mut studio, release(Pos2::new(900., 900.), egui::Modifiers::NONE));
+        assert!(studio.doc.screen_export.assets.is_empty(), "released outside the pane");
+    }
+}

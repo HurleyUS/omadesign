@@ -249,6 +249,24 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
     let running = ui.data(|d| d.get_temp::<Run>(run_id()));
     let pending = state.draft != state.base;
     let editing = running.is_none() && studio.doc.collaboration.is_none();
+    if editing
+        && !pending
+        && let Some((selection, layer)) = super::layer_drag::collect_drop(ui, studio)
+    {
+        // Dropping Layers rows collects them; Shift collects them as one asset.
+        studio.selection = selection;
+        studio.selected_layer = layer;
+        let one = ui.input(|i| i.modifiers.shift);
+        match studio.capture_export_assets().and_then(|target| studio.collect_export_assets(&target, one)) {
+            Ok(ids) => {
+                state.selected = ids;
+                state.base = studio.doc.screen_export.clone();
+                state.draft = state.base.clone();
+                state.error.clear();
+            }
+            Err(error) => state.error = error,
+        }
+    }
     let scope = fields::native_scope(ui, owner.with("mode"), |ui| {
         egui::ComboBox::from_id_salt("scope")
             .selected_text(["Assets", "Artboards", "Full document"][state.mode.min(2) as usize])
