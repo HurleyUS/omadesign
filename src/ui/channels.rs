@@ -473,6 +473,46 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
             }
         }
         ui.add_enabled_ui(editable, |ui| {
+            ui.menu_button("Calc", |ui| {
+                use crate::app::calculations::{Blend, Output, Spec};
+                use crate::channels::Target as T;
+                let id = key.with("calc-spec");
+                let mut spec = ui.data(|d| d.get_temp::<Spec>(id)).unwrap_or(Spec { source1: T::Composite, invert1: false, source2: T::Transparency, invert2: false, blend: Blend::Multiply, opacity: 1. });
+                let mut sources = vec![(T::Composite, "Gray".to_string()), (T::Transparency, "Transparency".to_string())];
+                let colors = if studio.doc.color.model == crate::deep_color::cms::Model::Cmyk { ["Cyan", "Magenta", "Yellow", "Black"].as_slice() } else { ["Red", "Green", "Blue"].as_slice() };
+                sources.extend(colors.iter().enumerate().map(|(i, n)| (T::Color(i), n.to_string())));
+                sources.extend(studio.doc.channels.iter().map(|c| (T::Saved(c.id), c.name.clone())));
+                let mut pick = |ui: &mut egui::Ui, label: &str, value: &mut T, invert: &mut bool| {
+                    ui.horizontal(|ui| {
+                        let current = sources.iter().find(|(t, _)| t == value).map(|(_, n)| n.clone()).unwrap_or_default();
+                        egui::ComboBox::from_label(label).selected_text(current).show_ui(ui, |ui| {
+                            for (t, n) in &sources { ui.selectable_value(value, *t, n); }
+                        });
+                        ui.checkbox(invert, "Invert");
+                    });
+                };
+                pick(ui, "Source 1", &mut spec.source1, &mut spec.invert1);
+                pick(ui, "Source 2", &mut spec.source2, &mut spec.invert2);
+                egui::ComboBox::from_label("Blending").selected_text(spec.blend.name()).show_ui(ui, |ui| {
+                    for b in Blend::ALL { ui.selectable_value(&mut spec.blend, b, b.name()); }
+                });
+                ui.add(egui::Slider::new(&mut spec.opacity, 0.0..=1.0).text("Opacity"));
+                ui.data_mut(|d| d.insert_temp(id, spec));
+                let mut run = None;
+                if ui.button("Calculate to new channel").clicked() { run = Some(Output::NewChannel); }
+                if ui.button("Calculate to selection").clicked() { run = Some(Output::Selection); }
+                if let Some(output) = run {
+                    match studio.capture_channels().and_then(|target| studio.calculate_channels(&target, spec, output)) {
+                        Ok(Some(new)) => { state.selected = Target::Saved(new); let _ = studio.select_channel_target(Some(new)); state.error.clear(); ui.close(); }
+                        Ok(None) => { state.error.clear(); ui.close(); }
+                        Err(e) => state.error = e,
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Calculations");
+        });
+        ui.add_enabled_ui(editable, |ui| {
             ui.menu_button("Spot", |ui| {
                 let current = saved.and_then(|id| studio.doc.channels.iter().find(|c| c.id == id)).and_then(|c| c.spot);
                 let draft_id = key.with(("spot-draft", saved));

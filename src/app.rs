@@ -49,6 +49,7 @@ pub(crate) mod quick_mask;
 mod active_selection;
 pub(crate) mod mask_affine;
 pub(crate) mod mask_filter;
+pub(crate) mod calculations;
 mod restart;
 pub(crate) mod selection;
 mod alignment;
