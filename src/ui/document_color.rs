@@ -30,6 +30,14 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
             }
         }
         ui.separator();
+        let rgb = studio.doc.color.model == Model::Rgb;
+        for (label, tag) in [("RGB document", None), ("Gray document (tagged)", Some(crate::deep_color::tagged::ColorTag::Gray)), ("Lab document (tagged)", Some(crate::deep_color::tagged::ColorTag::Lab))] {
+            if ui.add_enabled(rgb, eframe::egui::Button::selectable(studio.doc.color_tag == tag, label)).clicked() {
+                studio.set_color_tag(tag);
+                ui.close();
+            }
+        }
+        ui.separator();
         if ui.button("Convert with ICC profile…").clicked() {
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("ICC profiles", &["icc", "icm"])

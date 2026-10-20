@@ -148,6 +148,11 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
         icc_profile: parsed.icc_profile.clone(),
         intent: 1,
     };
+    doc.color_tag = match parsed.mode {
+        1 => Some(crate::deep_color::tagged::ColorTag::Gray),
+        9 => Some(crate::deep_color::tagged::ColorTag::Lab),
+        _ => None,
+    };
     crate::deep_color::cms::validate_profile(&doc.color.icc_profile, doc.color.model)?;
     if parsed.mode == 4 && parsed.icc_profile.is_empty() {
         warn(
@@ -412,6 +417,11 @@ fn rgba_channels<'a>(
                     .transpose()?
                     .unwrap_or(1.),
             ]);
+            if mode == 9 {
+                let lab = [p[0] * 100., p[1] * 255. - 128., p[2] * 255. - 128.];
+                let rgb = crate::deep_color::tagged::lab_to_srgb(lab);
+                p[..3].copy_from_slice(&rgb);
+            }
             if white_matte && mode == 3 {
                 let alpha = p[3];
                 for value in &mut p[..3] {*value = if alpha > 0. {(*value - (1. - alpha)) / alpha} else {0.};}

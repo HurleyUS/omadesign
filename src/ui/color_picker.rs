@@ -172,7 +172,55 @@ pub(super) fn inline(ui: &mut Ui, color: &mut Rgba) -> bool {
     *color!=before
 }
 
+fn tag_id() -> Id {
+    Id::new("document-color-tag")
+}
+
+/// Remember the document's Gray/Lab tag for this frame's pickers.
+pub(crate) fn set_tag(ctx: &egui::Context, tag: Option<crate::deep_color::tagged::ColorTag>) {
+    ctx.data_mut(|d| d.insert_temp(tag_id(), tag));
+}
+
+/// Gray or L*a*b* fields for tagged documents. Returns true when the color changed.
+pub(crate) fn tagged_fields(ui: &mut Ui, tag: Option<crate::deep_color::tagged::ColorTag>, color: &mut Rgba) -> bool {
+    use crate::deep_color::tagged::{self as t, ColorTag};
+    let rgb = [color.r, color.g, color.b].map(|v| v as f32 / 255.);
+    let to8 = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
+    match tag {
+        Some(ColorTag::Gray) => {
+            let mut k = ((1. - t::gray_of(rgb)) * 100.).round();
+            let changed = ui.horizontal(|ui| { ui.label("Gray K%"); ui.add(egui::DragValue::new(&mut k).range(0.0..=100.0)).changed() }).inner;
+            if changed {
+                let v = to8(1. - k / 100.);
+                *color = Rgba::new(v, v, v, color.a);
+            }
+            changed
+        }
+        Some(ColorTag::Lab) => {
+            let mut lab = t::srgb_to_lab(rgb).map(|v| v.round());
+            let changed = ui.horizontal(|ui| {
+                let mut c = false;
+                for (i, (name, lo, hi)) in [("L", 0.0, 100.0), ("a", -128.0, 127.0), ("b", -128.0, 127.0)].into_iter().enumerate() {
+                    ui.label(name);
+                    c |= ui.add(egui::DragValue::new(&mut lab[i]).range(lo..=hi)).changed();
+                }
+                c
+            }).inner;
+            if changed {
+                let [r, g, b] = t::lab_to_srgb(lab).map(to8);
+                *color = Rgba::new(r, g, b, color.a);
+            }
+            changed
+        }
+        None => false,
+    }
+}
+
 fn picker_contents(ui: &mut Ui, id: Id, color: &mut Rgba, state: &mut PickerState) {
+    let tag = ui.data(|d| d.get_temp::<Option<crate::deep_color::tagged::ColorTag>>(tag_id())).flatten();
+    if tagged_fields(ui, tag, color) {
+        state.hsv = egui::ecolor::Hsva::from_srgba_unmultiplied(color.to_array());
+    }
     ui.spacing_mut().slider_width = 240.0;
     ui.horizontal(|ui| {
         ui.vertical(|ui| {

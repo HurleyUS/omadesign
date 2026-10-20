@@ -4,6 +4,7 @@ mod color_pixels;
 mod composite;
 pub mod retouch;
 pub mod storage;
+pub mod tagged;
 pub mod surface;
 pub mod tiff;
 pub use composite::{blend_pixel, composite, composite_scaled_with_cancel, composite_with_cancel};

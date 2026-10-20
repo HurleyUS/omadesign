@@ -153,6 +153,7 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
     }
     // Give cancellable library loads Escape before canvas shortcuts consume it.
     library::tick(&ctx, studio);
+    color_picker::set_tag(&ctx, studio.doc.color_tag);
     welcome::tick(&ctx, studio);
     plugins::tick(&ctx, studio);
     canvas::poll_screen_pick(&ctx, studio);

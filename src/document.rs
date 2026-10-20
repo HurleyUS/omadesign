@@ -1277,6 +1277,9 @@ pub struct Document {
     pub publishing: crate::publishing::Publishing,
     #[serde(default)]
     pub color: crate::deep_color::cms::DocumentColor,
+    /// Gray or Lab authoring tag over the RGB working space (edges convert).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_tag: Option<crate::deep_color::tagged::ColorTag>,
     #[serde(default)]
     pub text_wrap_above_only: bool,
     pub name: String,
@@ -1544,6 +1547,7 @@ impl Document {
             layout_tokens: vec![],
             screen_export: Default::default(),
             linked_styles: vec![],
+            color_tag: None,
         };
         if show_bleed {
             // Outer bleed rect guides
@@ -2142,6 +2146,10 @@ pub enum Cmd {
     SetScreenExport {
         before: crate::screen_export::Catalog,
         after: crate::screen_export::Catalog,
+    },
+    SetColorTag {
+        before: Option<crate::deep_color::tagged::ColorTag>,
+        after: Option<crate::deep_color::tagged::ColorTag>,
     },
     SetLinkedStyles {
         before: Vec<crate::linked_styles::LinkedStyle>,
@@ -2769,6 +2777,7 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
             before: after,
             after: before,
         },
+        Cmd::SetColorTag { before, after } => Cmd::SetColorTag { before: after, after: before },
         Cmd::SetLinkedStyles { before, after } => Cmd::SetLinkedStyles {
             before: after,
             after: before,
@@ -3184,6 +3193,7 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
         Cmd::SetLayoutTokens { after, .. } => doc.layout_tokens.clone_from(after),
         Cmd::SetScreenExport { after, .. } => doc.screen_export.clone_from(after),
         Cmd::SetLinkedStyles { after, .. } => doc.linked_styles.clone_from(after),
+        Cmd::SetColorTag { after, .. } => doc.color_tag = *after,
         Cmd::SetQuickMask {after,..} => doc.quick_mask.clone_from(after),
         Cmd::SetChannels {after,..} => doc.channels.clone_from(after),
         Cmd::SetVectorShapes { layer, after, .. } => {

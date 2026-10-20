@@ -32,6 +32,7 @@ pub(super) const ACTIVE_SELECTION: u32 = 36;
 pub(super) const SPOT_CHANNELS: u32 = 37;
 pub(super) const EXPORT_OPTIONS: u32 = 38;
 pub(super) const LINKED_STYLES: u32 = 39;
+pub(super) const COLOR_TAGS: u32 = 40;
 
 /// Identify implemented project readers.
 /// Args: envelope version. Returns false for reserved formats whose models are absent.
@@ -61,6 +62,7 @@ pub(super) fn supports_version(version: u32) -> bool {
             | SPOT_CHANNELS
             | EXPORT_OPTIONS
             | LINKED_STYLES
+            | COLOR_TAGS
     )
 }
 
@@ -74,13 +76,13 @@ pub(super) fn required_version(doc: &Document) -> u32 {
                 .max()
                 .unwrap_or(5)
         })
-        .unwrap_or(LINKED_STYLES + 1)
+        .unwrap_or(COLOR_TAGS + 1)
 }
 
 fn local_required_version(doc: &Document) -> u32 {
     let mut version = if doc.mask_sources().is_empty() { 5 } else { 13 };
     if let Some(replica) = &doc.collaboration {
-        version = version.max(retained::replica_version(replica).unwrap_or(LINKED_STYLES + 1));
+        version = version.max(retained::replica_version(replica).unwrap_or(COLOR_TAGS + 1));
     }
     if crate::text::variations::document(doc) { version = version.max(VARIABLE_FONTS); }
     if !doc.channels.is_empty() { version=version.max(CHANNELS); }
@@ -89,6 +91,7 @@ fn local_required_version(doc: &Document) -> u32 {
     if crate::channels::spot::any(&doc.channels) { version=version.max(SPOT_CHANNELS); }
     if doc.screen_export.rows.iter().any(|row| row.has_options()) { version=version.max(EXPORT_OPTIONS); }
     if !doc.linked_styles.is_empty() { version=version.max(LINKED_STYLES); }
+    if doc.color_tag.is_some() { version=version.max(COLOR_TAGS); }
     if !doc.screen_export.is_empty() {
         version = version.max(SCREEN_EXPORT);
     }
@@ -508,10 +511,10 @@ mod tests {
         let encoded = super::super::encode(&doc).unwrap();
         let mut envelope: serde_json::Value = serde_json::from_str(&encoded).unwrap();
         assert_eq!(envelope["version"], 5);
-        for version in 0..=40 {
+        for version in 0..=41 {
             let supported = matches!(
                 version,
-                1..=17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 38 | 39
+                1..=17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 38 | 39 | 40
             );
             assert_eq!(supports_version(version), supported, "reader {version}");
             envelope["version"] = version.into();
@@ -841,7 +844,7 @@ mod tests {
             neutral["version"] = implemented.into();
             super::super::decode(&neutral.to_string()).unwrap();
         }
-        for reserved in [LINKED_STYLES + 1, u32::MAX] {
+        for reserved in [COLOR_TAGS + 1, u32::MAX] {
             neutral["version"] = reserved.into();
             assert!(
                 super::super::decode(&neutral.to_string())

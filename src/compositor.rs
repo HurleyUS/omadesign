@@ -262,6 +262,7 @@ pub fn render_view_posed(
         &mut motion_scene::Budget::default(),
     );
     MOTION_ERROR.with(|e| *e.borrow_mut() = scene_result.err());
+    crate::deep_color::tagged::finish(&mut pm, doc.color_tag);
     crate::channels::spot::overlay(&mut pm, &doc.channels, t);
     Some(pm)
 }
@@ -298,6 +299,7 @@ pub(crate) fn render_export_sized(
         &mut || true,
         &mut motion_scene::Budget::default(),
     )?;
+    crate::deep_color::tagged::finish(&mut pm, doc.color_tag);
     crate::channels::spot::overlay(&mut pm, &doc.channels, spot_view);
     Ok(pm)
 }
@@ -336,6 +338,7 @@ pub(crate) fn render_export_preview(doc: &Document, max_edge: u32) -> Result<Pix
         &mut || true,
         &mut motion_scene::Budget::default(),
     )?;
+    crate::deep_color::tagged::finish(&mut pm, doc.color_tag);
     crate::channels::spot::overlay(&mut pm, &doc.channels, Transform::from_scale(s, s));
     Ok(pm)
 }
@@ -406,15 +409,18 @@ pub fn render_export_at_cancellable(
     if !keep() {
         return Err("Cancelled: render cancelled".into());
     }
+    crate::deep_color::tagged::finish(&mut pm, doc.color_tag);
     crate::channels::spot::overlay(&mut pm, &doc.channels, t);
     Ok(pm)
 }
 
 pub fn export_png(doc: &Document, scale: u32) -> Result<Vec<u8>, String> {
     if crate::deep_color::has_native(doc) {return crate::export::encode(&crate::export::Source::Document(doc.clone()),crate::export::Settings {format:crate::export::Format::Png,scale,ai:None},&crate::ml::NoProgress).map(|out|out.0);}
-    render_export(doc, scale)?
-        .encode_png()
-        .map_err(|e| e.to_string())
+    let pm = render_export(doc, scale)?;
+    if doc.color_tag == Some(crate::deep_color::tagged::ColorTag::Gray) {
+        return crate::deep_color::tagged::encode_gray_png(&pm);
+    }
+    pm.encode_png().map_err(|e| e.to_string())
 }
 
 pub fn export_png_bounds(

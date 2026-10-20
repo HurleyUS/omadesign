@@ -151,7 +151,10 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
             "Photoshop {depth}-bit depth is not supported; use 8, 16, or 32-bit RGB."
         ));
     }
-    if ![1, 3, 4].contains(&mode) {
+    if mode == 9 && depth != 8 {
+        return Err("Photoshop Lab import supports 8-bit files; convert 16/32-bit Lab to RGB first.".into());
+    }
+    if ![1, 3, 4, 9].contains(&mode) {
         return Err(format!(
             "Photoshop color mode {mode} is not supported; convert to RGB or grayscale before importing."
         ));
@@ -252,7 +255,14 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
         mode,
         depth,
         dpi,
-        icc_profile,
+        icc_profile: if matches!(mode, 1 | 9) {
+            if !icc_profile.is_empty() {
+                warnings.push("The embedded Gray/Lab profile was not applied; colors use sRGB and D65 Lab.".into());
+            }
+            Vec::new()
+        } else {
+            icc_profile
+        },
         linked,
         layers,
         merged,

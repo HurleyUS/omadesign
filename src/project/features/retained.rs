@@ -1,5 +1,5 @@
 use super::{
-    ACTIVE_SELECTION, SPOT_CHANNELS, EXPORT_OPTIONS, LINKED_STYLES, ADVANCED_LAYOUT, LAYER_CLIPPING, VARIABLE_FONTS, QUICK_MASK, CHANNELS, COLOR, COMPOSITIONS, EXPORT_FOLDERS, EXPORT_RESOLUTION, EXPRESSIONS, NATIVE,
+    ACTIVE_SELECTION, SPOT_CHANNELS, EXPORT_OPTIONS, LINKED_STYLES, COLOR_TAGS, ADVANCED_LAYOUT, LAYER_CLIPPING, VARIABLE_FONTS, QUICK_MASK, CHANNELS, COLOR, COMPOSITIONS, EXPORT_FOLDERS, EXPORT_RESOLUTION, EXPRESSIONS, NATIVE,
     PSD_TYPE, SCENE3D, SCREEN_EXPORT, SMART, SOURCE,
 };
 use serde::Deserialize;
@@ -73,6 +73,9 @@ fn field_version(key: &str, value: &Seen) -> u32 {
         .any(|field| matches!(field, "export_folder" | "export_subfolders"))
     {
         return EXPORT_FOLDERS;
+    }
+    if key.split('/').any(|field| field == "color_tag") {
+        return COLOR_TAGS;
     }
     if key.split('/').any(|field| field == "linked_styles") {
         return LINKED_STYLES;
