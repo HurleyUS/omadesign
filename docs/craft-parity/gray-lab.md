@@ -9,4 +9,6 @@ Document ▸ Color and precision can tag an RGB document as Gray or Lab (project
 
 True Gray/Lab working modes can later replace these edge conversions without changing the saved tag.
 
+At `68e8fbaa1635830d4ae6696cf38e30998acc3a55` that route passed 4 tests. Receipt `0853a2ff752e0aa969f06654a28e5a04b7de0a2af4cd562eeee93d8476685512`.
+
 Gray Lab receipt follows.
