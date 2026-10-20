@@ -78,6 +78,8 @@ enum Output {
 
 pub(super) fn available(studio: &Studio) -> bool {
     studio.persona == Persona::Pixel
+        && studio.channel_target.is_none()
+        && !studio.quick_mask_painting()
         && studio.active_layer.is_some_and(|i| {
             studio.doc.layer_editable(i)
                 && studio
@@ -167,9 +169,9 @@ pub(super) fn open(ctx: &Context, studio: &mut Studio) {
     let source = Source {
         w: pixels.w,
         h: pixels.h,
-        rgba: Arc::new(pixels.data.clone()),
+        rgba: Arc::new(pixels.data.to_vec()),
         selection,
-        existing_mask: layer.mask.as_ref().map(|m| Arc::new(m.data.clone())),
+        existing_mask: layer.mask.as_ref().map(|m| Arc::new(m.data.to_vec())),
     };
     if let Err(e) = source.region() {
         studio.status = e;
@@ -269,8 +271,8 @@ fn commit(studio: &mut Studio, s: &Session) -> Result<(), String> {
         );
     }
     let layer = &studio.doc.layers[i];
-    if layer.kind.pixels().unwrap().data != *s.source.rgba
-        || layer.mask.as_ref().map(|m| &m.data) != s.source.existing_mask.as_deref()
+    if layer.kind.pixels().unwrap().data.as_slice() != s.source.rgba.as_slice()
+        || layer.mask.as_ref().map(|m| m.data.as_slice()) != s.source.existing_mask.as_deref().map(Vec::as_slice)
     {
         return Err("The source pixels or mask changed. Open Remove Background again.".into());
     }
@@ -282,6 +284,7 @@ fn commit(studio: &mut Studio, s: &Session) -> Result<(), String> {
     let pixels = Pixels::from_rgba(result.w, result.h, mask.as_ref().clone())
         .ok_or("Invalid mask dimensions")?;
     if result.w != s.source.w || result.h != s.source.h || result.rgba != s.source.rgba {
+        if layer.kind.pixels().is_some_and(|p|p.native.is_some()) {return Err("AI upscaling produces 8-bit pixels. Use the editable mask-only workflow to preserve this layer’s native precision, or convert an explicit copy to 8-bit first.".into());}
         let after = Pixels::from_rgba(result.w, result.h, result.rgba.as_ref().clone())
             .ok_or("Invalid upscaled pixels")?;
         let kind = &studio.doc.layers[i].kind;
@@ -384,6 +387,33 @@ fn close(ctx: &Context) {
     ctx.data_mut(|d| d.remove::<Session>(id()));
 }
 
+/// Name the existing resolution choice within its immutable layer owner.
+/// Args: UI, target identity and factor. Returns the native combo response.
+fn resolution_choice(ui: &mut egui::Ui, owner: Id, value: &mut u32) -> egui::Response {
+    let options = [
+        (1, "Original resolution".into()),
+        (2, "Upscale ×2 before removal".into()),
+        (4, "Upscale ×4 before removal".into()),
+    ];
+    super::fields::native_scope(ui, owner.with("before"), |ui| {
+        super::keyboard_controls::choice(ui, "value", "Resolution before removal", value, &options)
+    })
+    .inner
+}
+
+/// Name the existing local background model choice without starting its worker.
+/// Args: UI, target identity and model. Returns the native combo response.
+fn model_choice(ui: &mut egui::Ui, owner: Id, value: &mut Model) -> egui::Response {
+    let models = Model::ALL
+        .into_iter()
+        .map(|model| (model, model.label().into()))
+        .collect::<Vec<_>>();
+    super::fields::native_scope(ui, owner.with("model"), |ui| {
+        super::keyboard_controls::choice(ui, "value", "Background removal model", value, &models)
+    })
+    .inner
+}
+
 pub(super) fn show(ctx: &Context, studio: &mut Studio) {
     let Some(mut s) = ctx.data(|d| d.get_temp::<Session>(id())) else {
         return;
@@ -443,6 +473,8 @@ pub(super) fn show(ctx: &Context, studio: &mut Studio) {
     let mut cancel = false;
     let mut apply = false;
     let before = (s.model, s.settings, s.workflow);
+    let owner=Id::new(("background-removal-native",&s.owner.document,s.owner.layer));
+    let mut removal_control=None;
     let response = egui::Modal::new(Id::new("remove-background-modal")).show(ctx, |ui| {
         let width = (ctx.content_rect().width() - 70.).clamp(560., 960.);
         ui.set_width(width);
@@ -487,16 +519,14 @@ pub(super) fn show(ctx: &Context, studio: &mut Studio) {
                             });
                             ui.small("RGB and mask resize together. Placement on the canvas stays the same.");
                         } else {
-                            egui::ComboBox::from_id_salt("upscale-before")
-                                .selected_text(match s.workflow.before { 2 => "Upscale ×2 before removal", 4 => "Upscale ×4 before removal", _ => "Original resolution" })
-                                .show_ui(ui, |ui| { for (factor, label) in [(1, "Original resolution"), (2, "Upscale ×2 before removal"), (4, "Upscale ×4 before removal")] { ui.selectable_value(&mut s.workflow.before, factor, label); } });
+                            resolution_choice(ui,owner,&mut s.workflow.before);
                             if s.source.region().is_ok_and(|r| r.w.min(r.h) < 512) {
                                 ui.small("Small subject: try upscaling before removal for finer edges.");
                             }
                             if s.workflow.before > 1 { ui.checkbox(&mut s.workflow.keep_original, "Keep original pixel dimensions"); }
                         }
                         if s.workflow.uses_ai() {
-                            super::export_dialog::model_choice(ui, &mut s.workflow.model);
+                            super::fields::native_scope(ui,owner.with("upscale-model"),|ui|super::export_dialog::model_choice(ui, &mut s.workflow.model));
                             if !s.workflow.model.present() && ui.add_enabled(!s.busy, egui::Button::new("Download upscaling model")).clicked() {
                                 let model = s.workflow.model;
                                 s.busy = true;
@@ -511,13 +541,7 @@ pub(super) fn show(ctx: &Context, studio: &mut Studio) {
                         }
                         ui.separator();
                         ui.add_enabled_ui(!s.workflow.cutout_only, |ui| {
-                        egui::ComboBox::from_id_salt("removal-model")
-                            .selected_text(s.model.label())
-                            .show_ui(ui, |ui| {
-                                for model in Model::ALL {
-                                    ui.selectable_value(&mut s.model, model, model.label());
-                                }
-                            });
+                        removal_control=Some(model_choice(ui,owner,&mut s.model));
                         ui.small("Runs locally on your machine.");
                         if !s.model.present() {
                             ui.label(format!(
@@ -593,7 +617,9 @@ pub(super) fn show(ctx: &Context, studio: &mut Studio) {
             );
         }
         if let Some(error) = &s.error {
-            ui.colored_label(Color32::LIGHT_RED, error);
+            let message=ui.colored_label(Color32::LIGHT_RED, error);
+            ctx.accesskit_node_builder(message.id,|node|{node.set_live(egui::accesskit::Live::Polite);node.set_live_atomic();});
+            if let Some(response)=&removal_control{ctx.accesskit_node_builder(response.id,|node|{node.set_error_message(message.id.accesskit_id());node.push_described_by(message.id.accesskit_id());});}
             if ui.button("Try again").clicked() {
                 s.error = None;
             }
@@ -721,15 +747,103 @@ fn preview(ui: &mut egui::Ui, s: &Session) {
 mod tests {
     use super::*;
     use crate::document::{Document, Layer};
+    #[test]
+    fn keyboard_pixel_fields_background_choices_retain_layer_identity_and_values() {
+        use crate::ui::welcome::keyboard_tests as keys;
+        use egui::{Event, Key, Modifiers};
+        fn frame(
+            ctx: &Context,
+            owner: Id,
+            before: &mut u32,
+            model: &mut Model,
+            preceding: bool,
+            events: Vec<Event>,
+        ) -> egui::FullOutput {
+            keys::render(ctx, events, |ui| {
+                if preceding {
+                    let _ = ui.button("Conditional background status");
+                }
+                resolution_choice(ui, owner, before);
+                model_choice(ui, owner, model);
+            })
+        }
+        let ctx = Context::default();
+        ctx.enable_accesskit();
+        crate::ui::theme::apply(&ctx);
+        let owner = Id::new(("background-native-fixture", "document", 42u64));
+        let mut before = 1;
+        let mut model = Model::U2NetP;
+        let output = keys::tab_to(&ctx, "Resolution before removal", |events| {
+            frame(&ctx, owner, &mut before, &mut model, false, events)
+        });
+        let target = keys::named(&output, "Resolution before removal").0;
+        frame(
+            &ctx,
+            owner,
+            &mut before,
+            &mut model,
+            false,
+            keys::key(Key::End, Modifiers::NONE),
+        );
+        assert_eq!(before, 4);
+        let output = frame(&ctx, owner, &mut before, &mut model, true, vec![]);
+        assert_eq!(keys::named(&output, "Resolution before removal").0, target);
+        keys::focused(&ctx, &output, "Resolution before removal");
+        frame(
+            &ctx,
+            owner,
+            &mut before,
+            &mut model,
+            true,
+            keys::key(Key::ArrowUp, Modifiers::NONE),
+        );
+        assert_eq!(before, 2);
+        keys::tab_to(&ctx, "Background removal model", |events| {
+            frame(&ctx, owner, &mut before, &mut model, true, events)
+        });
+        frame(
+            &ctx,
+            owner,
+            &mut before,
+            &mut model,
+            true,
+            keys::key(Key::End, Modifiers::NONE),
+        );
+        assert_eq!(model, *Model::ALL.last().unwrap());
+        let output = frame(
+            &ctx,
+            Id::new(("background-native-fixture", "document", 43u64)),
+            &mut before,
+            &mut model,
+            true,
+            vec![],
+        );
+        assert_ne!(keys::named(&output, "Resolution before removal").0, target);
+        assert!(!jobs::is_running::<Output>(&ctx, JOB));
+    }
     fn studio() -> Studio {
         let mut s = Studio::new();
         s.doc = Document::new("Removal QA", 4., 1., 96.);
-        s.doc.layers = vec![Layer::raster("Pixels", 4, 1)];
-        s.doc.layers[0].kind.pixels_mut().unwrap().data = vec![255; 16];
+        s.doc.layers = vec![Layer::raster("Pixels", 4, 1).unwrap()];
+        s.doc.layers[0].kind.pixels_mut().unwrap().replace_bytes(vec![255;16]).unwrap();
         s.active_layer = Some(0);
         s.persona = Persona::Pixel;
         s.show_welcome = false;
         s
+    }
+    #[test]
+    fn craft_channel_filter_families_background_removal_cannot_fall_through_scalar_target() {
+        let ctx=Context::default();let mut studio=studio();assert!(available(&studio));
+        let old=completed(&ctx,&mut studio);
+        let target=studio.capture_channels().unwrap();
+        let plane=crate::channels::Plane::from_mask(&[0,64,128,255],4,1,tiny_skia::Transform::identity(),&crate::deep_color::storage::check).unwrap();
+        let id=studio.save_channel(&target,plane,"Target guard").unwrap();studio.select_channel_target(Some(id)).unwrap();
+        let before=crate::project::encode(&studio.doc).unwrap();let history=studio.history.len();
+        assert!(!available(&studio));assert!(!owner_matches(&studio,&old));assert!(commit(&mut studio,&old).is_err());
+        close(&ctx);open(&ctx,&mut studio);assert!(!is_open(&ctx));assert!(!jobs::is_running::<Output>(&ctx,JOB));
+        assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);assert_eq!(studio.history.len(),history);
+        studio.select_channel_target(None).unwrap();assert!(available(&studio));studio.set_quick_mask(true).unwrap();
+        let before=crate::project::encode(&studio.doc).unwrap();let history=studio.history.len();assert!(!available(&studio));open(&ctx,&mut studio);assert!(!is_open(&ctx));assert_eq!(crate::project::encode(&studio.doc).unwrap(),before);assert_eq!(studio.history.len(),history);
     }
     fn completed(ctx: &Context, studio: &mut Studio) -> Session {
         open(ctx, studio);
@@ -746,26 +860,26 @@ mod tests {
         let s = completed(&ctx, &mut studio);
         commit(&mut studio, &s).unwrap();
         assert_eq!(
-            studio.doc.layers[0].kind.pixels().unwrap().data,
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
             vec![255; 16]
         );
         assert_eq!(
-            studio.doc.layers[0].mask.as_ref().unwrap().data,
+            studio.doc.layers[0].mask.as_ref().unwrap().data.as_slice(),
             vec![20; 16]
         );
         studio.undo();
         assert_eq!(
-            studio.doc.layers[0].mask.as_ref().unwrap().data,
+            studio.doc.layers[0].mask.as_ref().unwrap().data.as_slice(),
             vec![128; 16]
         );
         studio.redo();
         assert_eq!(
-            studio.doc.layers[0].mask.as_ref().unwrap().data,
+            studio.doc.layers[0].mask.as_ref().unwrap().data.as_slice(),
             vec![20; 16]
         );
         let doc: Document =
             serde_json::from_str(&serde_json::to_string(&studio.doc).unwrap()).unwrap();
-        assert_eq!(doc.layers[0].mask.as_ref().unwrap().data, vec![20; 16]);
+        assert_eq!(doc.layers[0].mask.as_ref().unwrap().data.as_slice(), vec![20; 16]);
     }
     #[test]
     fn upscaled_pixels_and_mask_share_one_undo_step_and_keep_placement() {
@@ -792,22 +906,22 @@ mod tests {
         assert_eq!(studio.doc.layers[0].kind.raster_xform(), before_transform);
         studio.undo();
         assert_eq!(
-            studio.doc.layers[0].kind.pixels().unwrap().data,
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
             vec![255; 16]
         );
         assert_eq!(
-            studio.doc.layers[0].mask.as_ref().unwrap().data,
+            studio.doc.layers[0].mask.as_ref().unwrap().data.as_slice(),
             vec![128; 16]
         );
         studio.redo();
         assert_eq!(studio.doc.layers[0].kind.raster_xform(), before_transform);
         assert_eq!(
-            studio.doc.layers[0].kind.pixels().unwrap().data,
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
             vec![220; 64]
         );
         let doc: Document =
             serde_json::from_str(&serde_json::to_string(&studio.doc).unwrap()).unwrap();
-        assert_eq!(doc.layers[0].mask.as_ref().unwrap().data, vec![100; 64]);
+        assert_eq!(doc.layers[0].mask.as_ref().unwrap().data.as_slice(), vec![100; 64]);
         assert_eq!(doc.layers[0].kind.pixels().unwrap().w, 8);
     }
     #[test]
@@ -818,8 +932,8 @@ mod tests {
             let s = completed(&ctx, &mut studio);
             match change {
                 0 => studio.swap_id = "other document".into(),
-                1 => studio.doc.layers[0].kind.pixels_mut().unwrap().data[0] = 3,
-                2 => studio.doc.layers[0].mask = Some(Pixels::new(4, 1)),
+                1 => studio.doc.layers[0].kind.pixels_mut().unwrap().bytes_mut().unwrap()[0] = 3,
+                2 => studio.doc.layers[0].mask = Some(Pixels::new(4, 1).unwrap()),
                 3 => studio.set_pixel_sel(Some(vec![255; 4])),
                 4 => studio.doc.layers[0].locked = true,
                 5 => studio.active_layer = None,

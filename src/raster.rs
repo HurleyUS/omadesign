@@ -1,7 +1,38 @@
 //! Destructive raster filters, evaluated from immutable source pixels.
 //! RGB is straight-alpha at the boundary; spatial mixing uses premultiplied alpha.
 use crate::color::Rgba;
+use crate::resources::Allocation;
 use rayon::prelude::*;
+trait AdmittedCollect<const C: usize>: IndexedParallelIterator<Item = [f32; C]> + Sized
+where
+    [f32; C]: Default,
+{
+    fn admit(self) -> Result<Allocation<[f32; C]>, String> {
+        self.admit_with(&crate::deep_color::storage::check)
+    }
+    fn admit_with(
+        self,
+        cancel: &(dyn crate::resources::CancellationCheck + Sync),
+    ) -> Result<Allocation<[f32; C]>, String> {
+        cancel.check()?;
+        let mut out = crate::resources::global().allocate_now::<[f32; C], _>(self.len(), cancel)?;
+        self.zip(out.as_mut_slice().par_iter_mut())
+            .enumerate()
+            .try_for_each(|(i, (src, dst))| {
+                if i % 4096 == 0 {
+                    cancel.check()?;
+                }
+                *dst = src;
+                Ok::<(), String>(())
+            })?;
+        cancel.check()?;
+        Ok(out)
+    }
+}
+impl<const C: usize, T: IndexedParallelIterator<Item = [f32; C]>> AdmittedCollect<C> for T where
+    [f32; C]: Default
+{
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Bank {
@@ -164,6 +195,160 @@ impl Kind {
     }
 }
 
+/// One existing filter control's units and bounds, shared by RGB and scalar dialogs.
+/// Fields identify the stored numeric slot, native label, accepted range and keyboard step.
+#[derive(Clone, Copy, Debug)]
+pub struct Parameter {
+    pub index: usize,
+    pub label: &'static str,
+    pub min: f32,
+    pub max: f32,
+    pub step: f64,
+}
+impl Parameter {
+    /// Describe one existing numeric slot.
+    /// Args: slot, label, limits and keyboard step. Returns immutable control metadata.
+    const fn new(index: usize, label: &'static str, min: f32, max: f32, step: f64) -> Self {
+        Self {
+            index,
+            label,
+            min,
+            max,
+            step,
+        }
+    }
+}
+impl Kind {
+    /// List existing numeric controls without changing their ranges or labels.
+    /// Args: filter kind. Returns its immutable settings catalog.
+    pub fn parameters(self) -> &'static [Parameter] {
+        match self {
+            Self::ChromaKey => {
+                const {
+                    &[
+                        Parameter::new(0, "Similarity", 0.0, 0.8, 0.01),
+                        Parameter::new(1, "Falloff", 0.0, 0.8, 0.01),
+                        Parameter::new(2, "Hardness", 0.0, 1.0, 0.01),
+                        Parameter::new(3, "Spill cleanup", 0.0, 1.0, 0.01),
+                    ]
+                }
+            }
+            Self::BrightnessContrast => {
+                const {
+                    &[
+                        Parameter::new(0, "Brightness", -1.0, 1.0, 0.01),
+                        Parameter::new(1, "Contrast", -1.0, 1.0, 0.01),
+                    ]
+                }
+            }
+            Self::Exposure => {
+                const {
+                    &[
+                        Parameter::new(0, "Exposure (EV)", -5.0, 5.0, 0.1),
+                        Parameter::new(1, "Gamma", 0.1, 4.0, 0.01),
+                    ]
+                }
+            }
+            Self::Levels => {
+                const {
+                    &[
+                        Parameter::new(0, "Black point", 0.0, 0.99, 0.01),
+                        Parameter::new(1, "White point", 0.01, 1.0, 0.01),
+                        Parameter::new(2, "Gamma", 0.1, 4.0, 0.01),
+                    ]
+                }
+            }
+            Self::HueSaturation => {
+                const {
+                    &[
+                        Parameter::new(0, "Hue (°)", -180.0, 180.0, 1.0),
+                        Parameter::new(1, "Saturation", -1.0, 1.0, 0.01),
+                        Parameter::new(2, "Lightness", -1.0, 1.0, 0.01),
+                    ]
+                }
+            }
+            Self::Vibrance => const { &[Parameter::new(0, "Vibrance", -1.0, 2.0, 0.01)] },
+            Self::ColorBalance => {
+                const {
+                    &[
+                        Parameter::new(0, "Cyan / red", -1.0, 1.0, 0.01),
+                        Parameter::new(1, "Magenta / green", -1.0, 1.0, 0.01),
+                        Parameter::new(2, "Yellow / blue", -1.0, 1.0, 0.01),
+                    ]
+                }
+            }
+            Self::Temperature => {
+                const {
+                    &[
+                        Parameter::new(0, "Cool / warm", -1.0, 1.0, 0.01),
+                        Parameter::new(1, "Green / magenta", -1.0, 1.0, 0.01),
+                    ]
+                }
+            }
+            Self::Threshold | Self::AlphaThreshold | Self::Solarize => {
+                const { &[Parameter::new(0, "Threshold", 0.0, 1.0, 0.01)] }
+            }
+            Self::Posterize => const { &[Parameter::new(0, "Levels", 2.0, 32.0, 1.0)] },
+            Self::GaussianBlur | Self::FeatherAlpha => {
+                const { &[Parameter::new(0, "Radius (px)", 0.0, 100.0, 0.1)] }
+            }
+            Self::GrowAlpha | Self::ShrinkAlpha => {
+                const { &[Parameter::new(0, "Radius (px)", 1.0, 20.0, 1.0)] }
+            }
+            Self::MotionBlur => {
+                const {
+                    &[
+                        Parameter::new(0, "Distance (px)", 1.0, 100.0, 0.1),
+                        Parameter::new(1, "Angle (°)", -180.0, 180.0, 1.0),
+                    ]
+                }
+            }
+            Self::Sharpen => const { &[Parameter::new(0, "Amount", 0.0, 2.0, 0.01)] },
+            Self::UnsharpMask => {
+                const {
+                    &[
+                        Parameter::new(0, "Radius (px)", 0.1, 50.0, 0.1),
+                        Parameter::new(1, "Amount", 0.0, 5.0, 0.01),
+                        Parameter::new(2, "Threshold", 0.0, 0.3, 0.01),
+                    ]
+                }
+            }
+            Self::EdgeDetect | Self::Emboss => {
+                const { &[Parameter::new(0, "Amount", 0.1, 5.0, 0.01)] }
+            }
+            Self::Pixelate | Self::Halftone => {
+                const { &[Parameter::new(0, "Cell size (px)", 2.0, 100.0, 1.0)] }
+            }
+            Self::Noise => const { &[Parameter::new(0, "Grain amount", 0.0, 1.0, 0.01)] },
+            Self::Vignette => {
+                const {
+                    &[
+                        Parameter::new(0, "Darkness", 0.0, 1.0, 0.01),
+                        Parameter::new(1, "Inner radius", 0.0, 1.2, 0.01),
+                    ]
+                }
+            }
+            Self::Swirl => {
+                const {
+                    &[
+                        Parameter::new(0, "Twist (°)", -720.0, 720.0, 1.0),
+                        Parameter::new(1, "Radius", 0.05, 1.5, 0.01),
+                    ]
+                }
+            }
+            Self::Ripple => {
+                const {
+                    &[
+                        Parameter::new(0, "Amplitude (px)", 0.0, 50.0, 0.1),
+                        Parameter::new(1, "Wavelength (px)", 4.0, 200.0, 0.1),
+                    ]
+                }
+            }
+            Self::Grayscale | Self::Sepia | Self::Invert => const { &[] },
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub kind: Kind,
@@ -173,6 +358,24 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Validate authored controls before a scalar worker allocates output.
+    /// Args: none. Returns an error instead of clamping an invalid loaded value.
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if !self.strength.is_finite()
+            || !(0. ..=1.).contains(&self.strength)
+            || self.values.iter().any(|v| !v.is_finite())
+            || self
+                .kind
+                .parameters()
+                .iter()
+                .any(|p| !(p.min..=p.max).contains(&self.values[p.index]))
+            || self.kind == Kind::Levels && self.values[0] >= self.values[1]
+        {
+            Err("Filter settings are outside their supported range".into())
+        } else {
+            Ok(())
+        }
+    }
     pub fn new(kind: Kind) -> Self {
         let values = match kind {
             Kind::ChromaKey => [0.08, 0.04, 0.0, 0.65, 0.0],
@@ -283,7 +486,7 @@ pub fn apply(
     w: u32,
     h: u32,
     settings: &Settings,
-    selection: Option<&[u8]>,
+    selection: Option<&[f32]>,
 ) -> Result<Vec<u8>, String> {
     let count = (w as usize)
         .checked_mul(h as usize)
@@ -291,10 +494,12 @@ pub fn apply(
     if count == 0 || count.checked_mul(4) != Some(source.len()) {
         return Err("Invalid image dimensions".into());
     }
-    if selection.is_some_and(|m| m.len() != count) {
+    if selection
+        .is_some_and(|m| m.len() != count || crate::selection_coverage::validate(m).is_err())
+    {
         return Err("Selection dimensions no longer match this layer".into());
     }
-    let src: Vec<[f32; 4]> = source
+    let src = source
         .par_chunks_exact(4)
         .map(|p| {
             [
@@ -304,23 +509,124 @@ pub fn apply(
                 p[3] as f32 / 255.0,
             ]
         })
-        .collect();
+        .admit()?;
+    Ok(apply_float(&src, w, h, settings, selection)?
+        .par_iter()
+        .flat_map_iter(|p| p.iter().map(|&v| byte(v)))
+        .collect())
+}
+
+/// Filter straight floating-point samples without an 8-bit intermediate.
+/// Args: source, dimensions, settings and optional coverage. Returns edited RGBA samples.
+pub fn apply_float(
+    src: &[[f32; 4]],
+    w: u32,
+    h: u32,
+    settings: &Settings,
+    selection: Option<&[f32]>,
+) -> Result<Allocation<[f32; 4]>, String> {
+    apply_float_with_cancel(
+        src,
+        w,
+        h,
+        settings,
+        selection,
+        &crate::deep_color::storage::check,
+    )
+}
+/// Evaluate the shared filter engine with an actual worker cancellation owner.
+/// Args: immutable float grid, settings, optional coverage and cancellation. Returns complete admitted output or an error before publication.
+pub(crate) fn apply_float_with_cancel(
+    src: &[[f32; 4]],
+    w: u32,
+    h: u32,
+    settings: &Settings,
+    selection: Option<&[f32]>,
+    cancel: &(dyn crate::resources::CancellationCheck + Sync),
+) -> Result<Allocation<[f32; 4]>, String> {
+    cancel.check()?;
+    if !settings.strength.is_finite() || settings.values.iter().any(|v| !v.is_finite()) {
+        return Err("Filter settings must be finite".into());
+    }
+    let count = (w as usize)
+        .checked_mul(h as usize)
+        .ok_or("Image is too large")?;
+    if count == 0
+        || src.len() != count
+        || selection
+            .is_some_and(|m| m.len() != count || crate::selection_coverage::validate(m).is_err())
+        || src.iter().flatten().any(|v| !v.is_finite())
+    {
+        return Err("Invalid native image or selection".into());
+    }
+    let mut out = evaluate(src, w, h, settings, cancel)?;
+    // Interpolate premultiplied colors so alpha-changing filters never create dark fringes.
+    let strength = settings.strength.clamp(0.0, 1.0);
+    out.as_mut_slice()
+        .par_iter_mut()
+        .enumerate()
+        .try_for_each(|(i, pixel)| {
+            if i % 4096 == 0 {
+                cancel.check()?;
+            }
+            let amount = strength * selection.map_or(1.0, |mask| mask[i]);
+            if amount <= 0.0 {
+                *pixel = src[i];
+                return Ok::<(), String>(());
+            }
+            if amount >= 1.0 {
+                return Ok::<(), String>(());
+            }
+            let original = src[i];
+            let alpha = original[3] * (1.0 - amount) + pixel[3] * amount;
+            for ch in 0..3 {
+                pixel[ch] = if alpha > 0.00001 {
+                    (original[ch] * original[3] * (1.0 - amount) + pixel[ch] * pixel[3] * amount)
+                        / alpha
+                } else {
+                    original[ch]
+                };
+            }
+            pixel[3] = alpha;
+            Ok(())
+        })?;
+    cancel.check()?;
+    Ok(out)
+}
+
+/// Evaluate scalar or RGBA channels through the same kernels before selection blending.
+/// Args: immutable grid, settings and cancellation. Returns complete admitted channel samples.
+fn evaluate<const C: usize>(
+    src: &[[f32; C]],
+    w: u32,
+    h: u32,
+    settings: &Settings,
+    cancel: &(dyn crate::resources::CancellationCheck + Sync),
+) -> Result<Allocation<[f32; C]>, String>
+where
+    [f32; C]: Default,
+{
+    cancel.check()?;
+    if !matches!(C, 1 | 4) || src.len() != crate::deep_color::storage::count(w, h, 1)? {
+        return Err("Invalid filter channel dimensions".into());
+    }
     let p = settings.values;
-    let mut out = match settings.kind {
-        Kind::GaussianBlur => blur(&src, w, h, p[0]),
+    let out = match settings.kind {
+        Kind::GaussianBlur => blur(&src, w, h, p[0], cancel)?,
         Kind::FeatherAlpha => {
-            let blurred = blur(&src, w, h, p[0]);
+            let blurred = blur(src, w, h, p[0], cancel)?;
             src.par_iter()
                 .zip(blurred.par_iter())
                 .map(|(a, b)| {
-                    // Newly revealed pixels need nearby visible color, never hidden RGB.
-                    if a[3] <= 0.00001 {
+                    if C == 1 || a[C - 1] <= 0.00001 {
                         *b
                     } else {
-                        [a[0], a[1], a[2], b[3]]
+                        let mut out = *a;
+                        out[C - 1] = b[C - 1];
+                        out
                     }
                 })
-                .collect()
+                .admit_with(cancel)?
         }
         Kind::GrowAlpha | Kind::ShrinkAlpha => morphology(
             &src,
@@ -328,185 +634,230 @@ pub fn apply(
             h,
             p[0].round().clamp(1.0, 32.0) as i32,
             settings.kind == Kind::GrowAlpha,
-        ),
-        Kind::MotionBlur => motion_blur(&src, w, h, p[0], p[1]),
-        Kind::Sharpen | Kind::UnsharpMask => {
-            let blurred = blur(
-                &src,
-                w,
-                h,
-                if settings.kind == Kind::Sharpen {
-                    1.0
-                } else {
-                    p[0]
-                },
-            );
-            src.par_iter()
-                .zip(blurred.par_iter())
-                .map(|(c, b)| {
-                    let amount = if settings.kind == Kind::Sharpen {
-                        p[0] * 3.0
-                    } else {
-                        p[1]
-                    };
-                    let threshold = if settings.kind == Kind::Sharpen {
-                        0.0
-                    } else {
-                        p[2]
-                    };
-                    let mut v = *c;
-                    for ch in 0..3 {
-                        if (c[ch] - b[ch]).abs() >= threshold {
-                            v[ch] = c[ch] + (c[ch] - b[ch]) * amount;
-                        }
-                    }
-                    v
-                })
-                .collect()
-        }
-        Kind::EdgeDetect | Kind::Emboss => convolution(&src, w, h, settings),
+            cancel,
+        )?,
+        Kind::MotionBlur => motion_blur(&src, w, h, p[0], p[1], cancel)?,
+        Kind::Sharpen | Kind::UnsharpMask => sharpen(src, w, h, settings, cancel)?,
+        Kind::EdgeDetect | Kind::Emboss => convolution(&src, w, h, settings, cancel)?,
         Kind::Pixelate | Kind::Halftone => pixelate(
             &src,
             w,
             h,
             p[0].round().max(1.0) as u32,
             settings.kind == Kind::Halftone,
-        ),
-        Kind::Swirl | Kind::Ripple => distort(&src, w, h, settings),
+            cancel,
+        )?,
+        Kind::Swirl | Kind::Ripple => distort(&src, w, h, settings, cancel)?,
         _ => src
             .par_iter()
             .enumerate()
             .map(|(i, c)| {
-                let mut v = *c;
-                let y = luma(c);
-                match settings.kind {
-                    Kind::ChromaKey => v = key_pixel(v, settings),
-                    Kind::BrightnessContrast => {
-                        for ch in 0..3 {
-                            v[ch] = (c[ch] - 0.5) * 2.0f32.powf(p[1] * 2.0) + 0.5 + p[0];
-                        }
-                    }
-                    Kind::Exposure => {
-                        for ch in 0..3 {
-                            v[ch] = (c[ch] * 2.0f32.powf(p[0]))
-                                .max(0.0)
-                                .powf(1.0 / p[1].max(0.05));
-                        }
-                    }
-                    Kind::Levels => {
-                        for ch in 0..3 {
-                            v[ch] = ((c[ch] - p[0]) / (p[1] - p[0]).max(0.001))
-                                .clamp(0.0, 1.0)
-                                .powf(1.0 / p[2].max(0.05));
-                        }
-                    }
-                    Kind::HueSaturation => {
-                        let mut hsv = rgb_to_hsv(*c);
-                        hsv[0] = (hsv[0] + p[0] / 360.0).rem_euclid(1.0);
-                        hsv[1] = (hsv[1] * (1.0 + p[1])).clamp(0.0, 1.0);
-                        let rgb = hsv_to_rgb(hsv);
-                        for ch in 0..3 {
-                            v[ch] = if p[2] >= 0.0 {
-                                rgb[ch] + (1.0 - rgb[ch]) * p[2]
-                            } else {
-                                rgb[ch] * (1.0 + p[2])
-                            };
-                        }
-                    }
-                    Kind::Vibrance => {
-                        let max = c[0].max(c[1]).max(c[2]);
-                        let min = c[0].min(c[1]).min(c[2]);
-                        let amount = 1.0 + p[0] * (1.0 - (max - min));
-                        for ch in 0..3 {
-                            v[ch] = y + (c[ch] - y) * amount;
-                        }
-                    }
-                    Kind::ColorBalance => {
-                        for ch in 0..3 {
-                            v[ch] += p[ch] * 0.5;
-                        }
-                    }
-                    Kind::Temperature => {
-                        v[0] += p[0] * 0.2 + p[1] * 0.05;
-                        v[1] -= p[1] * 0.15;
-                        v[2] -= p[0] * 0.2 - p[1] * 0.05;
-                    }
-                    Kind::Grayscale => v[..3].fill(y),
-                    Kind::Sepia => {
-                        v[0] = c[0] * 0.393 + c[1] * 0.769 + c[2] * 0.189;
-                        v[1] = c[0] * 0.349 + c[1] * 0.686 + c[2] * 0.168;
-                        v[2] = c[0] * 0.272 + c[1] * 0.534 + c[2] * 0.131;
-                    }
-                    Kind::Invert => {
-                        for ch in 0..3 {
-                            v[ch] = 1.0 - c[ch];
-                        }
-                    }
-                    Kind::Threshold => v[..3].fill(if y >= p[0] { 1.0 } else { 0.0 }),
-                    Kind::Posterize => {
-                        let steps = (p[0].round().max(2.0) - 1.0).max(1.0);
-                        for ch in 0..3 {
-                            v[ch] = (c[ch] * steps).round() / steps;
-                        }
-                    }
-                    Kind::AlphaThreshold => {
-                        v[3] = if c[3] >= p[0] && c[3] > 0.0 { 1.0 } else { 0.0 }
-                    }
-                    Kind::Noise => {
-                        let n = (hash(i as u32) as f32 / u32::MAX as f32 - 0.5) * p[0];
-                        for ch in 0..3 {
-                            v[ch] += n;
-                        }
-                    }
-                    Kind::Vignette => {
-                        let x = ((i % w as usize) as f32 + 0.5) / w as f32 * 2.0 - 1.0;
-                        let y = ((i / w as usize) as f32 + 0.5) / h as f32 * 2.0 - 1.0;
-                        let amount = smooth(p[1], 1.4143, (x * x + y * y).sqrt()) * p[0];
-                        for ch in 0..3 {
-                            v[ch] *= 1.0 - amount;
-                        }
-                    }
-                    Kind::Solarize => {
-                        for ch in 0..3 {
-                            if c[ch] > p[0] {
-                                v[ch] = 1.0 - c[ch];
-                            }
-                        }
-                    }
-                    _ => {}
+                let input = if C == 1 {
+                    [c[0], c[0], c[0], 1.]
+                } else {
+                    [c[0], c[1], c[2], c[3]]
+                };
+                let rgba = point_pixel(&input, w, h, settings, i);
+                let mut out = *c;
+                if C == 1 {
+                    out[0] = if matches!(settings.kind, Kind::Grayscale | Kind::Vibrance)
+                        || settings.kind == Kind::HueSaturation && p[2] == 0.
+                    {
+                        c[0]
+                    } else if settings.kind == Kind::AlphaThreshold {
+                        if c[0] >= p[0] && c[0] > 0. { 1. } else { 0. }
+                    } else if settings.kind == Kind::ChromaKey {
+                        gray(&rgba) * rgba[3]
+                    } else {
+                        gray(&rgba)
+                    };
+                } else {
+                    out.copy_from_slice(&rgba);
                 }
-                v
+                out
             })
-            .collect(),
+            .admit_with(cancel)?,
     };
-    // Interpolate premultiplied colors so alpha-changing filters never create dark fringes.
-    let strength = settings.strength.clamp(0.0, 1.0);
-    out.par_iter_mut().enumerate().for_each(|(i, pixel)| {
-        let amount = strength * selection.map_or(1.0, |mask| mask[i] as f32 / 255.0);
-        if amount <= 0.0 {
-            *pixel = src[i];
-            return;
+
+    cancel.check()?;
+    Ok(out)
+}
+/// Evaluate grayscale coverage without allocating an RGBA proxy.
+/// Args: original scalar grid, settings and cancellation. Returns one admitted float per sample; selection is applied by the scalar owner.
+pub(crate) fn apply_scalar(
+    src: &[f32],
+    w: u32,
+    h: u32,
+    settings: &Settings,
+    cancel: &(dyn crate::resources::CancellationCheck + Sync),
+) -> Result<Allocation<[f32; 1]>, String> {
+    if src.len() != crate::deep_color::storage::count(w, h, 1)?
+        || settings.values.iter().any(|v| !v.is_finite())
+    {
+        return Err("Invalid scalar filter input".into());
+    }
+    for block in src.chunks(16384) {
+        cancel.check()?;
+        if block
+            .iter()
+            .any(|v| !v.is_finite() || !(0. ..=1.).contains(v))
+        {
+            return Err("Scalar coverage must be finite and between zero and one".into());
         }
-        if amount >= 1.0 {
-            return;
+    }
+    evaluate(src.as_chunks::<1>().0, w, h, settings, cancel)
+}
+fn gray(c: &[f32; 4]) -> f32 {
+    if c[0].to_bits() == c[1].to_bits() && c[1].to_bits() == c[2].to_bits() {
+        c[0]
+    } else {
+        luma(c)
+    }
+}
+fn point_pixel(c: &[f32; 4], w: u32, h: u32, settings: &Settings, i: usize) -> [f32; 4] {
+    let p = settings.values;
+    let mut v = *c;
+    let y = luma(c);
+    match settings.kind {
+        Kind::ChromaKey => v = key_pixel(v, settings),
+        Kind::BrightnessContrast => {
+            for ch in 0..3 {
+                v[ch] = (c[ch] - 0.5) * 2.0f32.powf(p[1] * 2.0) + 0.5 + p[0];
+            }
         }
-        let original = src[i];
-        let alpha = original[3] * (1.0 - amount) + pixel[3] * amount;
-        for ch in 0..3 {
-            pixel[ch] = if alpha > 0.00001 {
-                (original[ch] * original[3] * (1.0 - amount)
-                    + pixel[ch].clamp(0.0, 1.0) * pixel[3] * amount)
-                    / alpha
+        Kind::Exposure => {
+            for ch in 0..3 {
+                v[ch] = (c[ch] * 2.0f32.powf(p[0]))
+                    .max(0.0)
+                    .powf(1.0 / p[1].max(0.05));
+            }
+        }
+        Kind::Levels => {
+            for ch in 0..3 {
+                v[ch] = ((c[ch] - p[0]) / (p[1] - p[0]).max(0.001))
+                    .clamp(0.0, 1.0)
+                    .powf(1.0 / p[2].max(0.05));
+            }
+        }
+        Kind::HueSaturation => {
+            let mut hsv = rgb_to_hsv(*c);
+            hsv[0] = (hsv[0] + p[0] / 360.0).rem_euclid(1.0);
+            hsv[1] = (hsv[1] * (1.0 + p[1])).clamp(0.0, 1.0);
+            let rgb = hsv_to_rgb(hsv);
+            for ch in 0..3 {
+                v[ch] = if p[2] >= 0.0 {
+                    rgb[ch] + (1.0 - rgb[ch]) * p[2]
+                } else {
+                    rgb[ch] * (1.0 + p[2])
+                };
+            }
+        }
+        Kind::Vibrance => {
+            let max = c[0].max(c[1]).max(c[2]);
+            let min = c[0].min(c[1]).min(c[2]);
+            let amount = 1.0 + p[0] * (1.0 - (max - min));
+            for ch in 0..3 {
+                v[ch] = y + (c[ch] - y) * amount;
+            }
+        }
+        Kind::ColorBalance => {
+            for ch in 0..3 {
+                v[ch] += p[ch] * 0.5;
+            }
+        }
+        Kind::Temperature => {
+            v[0] += p[0] * 0.2 + p[1] * 0.05;
+            v[1] -= p[1] * 0.15;
+            v[2] -= p[0] * 0.2 - p[1] * 0.05;
+        }
+        Kind::Grayscale => v[..3].fill(y),
+        Kind::Sepia => {
+            v[0] = c[0] * 0.393 + c[1] * 0.769 + c[2] * 0.189;
+            v[1] = c[0] * 0.349 + c[1] * 0.686 + c[2] * 0.168;
+            v[2] = c[0] * 0.272 + c[1] * 0.534 + c[2] * 0.131;
+        }
+        Kind::Invert => {
+            for ch in 0..3 {
+                v[ch] = 1.0 - c[ch];
+            }
+        }
+        Kind::Threshold => v[..3].fill(if y >= p[0] { 1.0 } else { 0.0 }),
+        Kind::Posterize => {
+            let steps = (p[0].round().max(2.0) - 1.0).max(1.0);
+            for ch in 0..3 {
+                v[ch] = (c[ch] * steps).round() / steps;
+            }
+        }
+        Kind::AlphaThreshold => v[3] = if c[3] >= p[0] && c[3] > 0.0 { 1.0 } else { 0.0 },
+        Kind::Noise => {
+            let n = (hash(i as u32) as f32 / u32::MAX as f32 - 0.5) * p[0];
+            for ch in 0..3 {
+                v[ch] += n;
+            }
+        }
+        Kind::Vignette => {
+            let x = ((i % w as usize) as f32 + 0.5) / w as f32 * 2.0 - 1.0;
+            let y = ((i / w as usize) as f32 + 0.5) / h as f32 * 2.0 - 1.0;
+            let amount = smooth(p[1], 1.4143, (x * x + y * y).sqrt()) * p[0];
+            for ch in 0..3 {
+                v[ch] *= 1.0 - amount;
+            }
+        }
+        Kind::Solarize => {
+            for ch in 0..3 {
+                if c[ch] > p[0] {
+                    v[ch] = 1.0 - c[ch];
+                }
+            }
+        }
+        _ => {}
+    }
+    v
+}
+fn sharpen<const C: usize>(
+    src: &[[f32; C]],
+    w: u32,
+    h: u32,
+    settings: &Settings,
+    cancel: &(dyn crate::resources::CancellationCheck + Sync),
+) -> Result<Allocation<[f32; C]>, String>
+where
+    [f32; C]: Default,
+{
+    let p = settings.values;
+    let blurred = blur(
+        &src,
+        w,
+        h,
+        if settings.kind == Kind::Sharpen {
+            1.0
+        } else {
+            p[0]
+        },
+        cancel,
+    )?;
+    src.par_iter()
+        .zip(blurred.par_iter())
+        .map(|(c, b)| {
+            let amount = if settings.kind == Kind::Sharpen {
+                p[0] * 3.0
             } else {
-                original[ch]
+                p[1]
             };
-        }
-        pixel[3] = alpha;
-    });
-    Ok(out
-        .par_iter()
-        .flat_map_iter(|p| p.iter().map(|&v| byte(v)))
-        .collect())
+            let threshold = if settings.kind == Kind::Sharpen {
+                0.0
+            } else {
+                p[2]
+            };
+            let mut v = *c;
+            for ch in 0..if C == 1 { 1 } else { C - 1 } {
+                if (c[ch] - b[ch]).abs() >= threshold {
+                    v[ch] = c[ch] + (c[ch] - b[ch]) * amount;
+                }
+            }
+            v
+        })
+        .admit_with(cancel)
 }
 
 fn hash(mut n: u32) -> u32 {
@@ -546,26 +897,38 @@ fn hsv_to_rgb(c: [f32; 3]) -> [f32; 3] {
         _ => [c[2], x, y],
     }
 }
-fn premul(c: [f32; 4]) -> [f32; 4] {
-    [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]]
-}
-fn unpremul(mut c: [f32; 4]) -> [f32; 4] {
-    if c[3] > 0.00001 {
-        for ch in 0..3 {
-            c[ch] /= c[3];
+fn premul<const C: usize>(c: [f32; C]) -> [f32; C] {
+    let mut out = c;
+    if C > 1 {
+        for ch in 0..C - 1 {
+            out[ch] *= c[C - 1];
         }
     }
-    c
+    out
 }
-fn at(src: &[[f32; 4]], w: u32, h: u32, x: i32, y: i32) -> [f32; 4] {
+fn unpremul<const C: usize>(c: [f32; C]) -> [f32; C] {
+    let mut out = c;
+    if C > 1 {
+        for ch in 0..C - 1 {
+            out[ch] = if c[C - 1] > 0.00001 {
+                c[ch] / c[C - 1]
+            } else {
+                0.
+            };
+        }
+    }
+    out
+}
+
+fn at<const C: usize>(src: &[[f32; C]], w: u32, h: u32, x: i32, y: i32) -> [f32; C] {
     src[y.clamp(0, h as i32 - 1) as usize * w as usize + x.clamp(0, w as i32 - 1) as usize]
 }
-fn sample(src: &[[f32; 4]], w: u32, h: u32, x: f32, y: f32) -> [f32; 4] {
+fn sample<const C: usize>(src: &[[f32; C]], w: u32, h: u32, x: f32, y: f32) -> [f32; C] {
     let ix = x.floor() as i32;
     let iy = y.floor() as i32;
     let fx = x - x.floor();
     let fy = y - y.floor();
-    let mut out = [0.0; 4];
+    let mut out = [0.0; C];
     for (dx, dy, weight) in [
         (0, 0, (1.0 - fx) * (1.0 - fy)),
         (1, 0, fx * (1.0 - fy)),
@@ -573,74 +936,111 @@ fn sample(src: &[[f32; 4]], w: u32, h: u32, x: f32, y: f32) -> [f32; 4] {
         (1, 1, fx * fy),
     ] {
         let p = premul(at(src, w, h, ix + dx, iy + dy));
-        for ch in 0..4 {
+        for ch in 0..C {
             out[ch] += p[ch] * weight;
         }
     }
     unpremul(out)
 }
-fn blur(src: &[[f32; 4]], w: u32, h: u32, radius: f32) -> Vec<[f32; 4]> {
-    let input: Vec<_> = src.par_iter().copied().map(premul).collect();
-    blur_channels(&input, w, h, radius)
-        .into_par_iter()
-        .map(unpremul)
-        .collect()
+fn blur<const C: usize>(
+    src: &[[f32; C]],
+    w: u32,
+    h: u32,
+    radius: f32,
+    cancel: &(dyn crate::resources::CancellationCheck + Sync),
+) -> Result<Allocation<[f32; C]>, String>
+where
+    [f32; C]: Default,
+{
+    let input = src.par_iter().copied().map(premul).admit_with(cancel)?;
+    let mut out = blur_channels(&input, w, h, radius, cancel)?;
+    out.as_mut_slice()
+        .par_iter_mut()
+        .for_each(|p| *p = unpremul(*p));
+    Ok(out)
 }
-fn blur_channels(src: &[[f32; 4]], w: u32, h: u32, radius: f32) -> Vec<[f32; 4]> {
-    if radius < 0.1 {
-        return src.to_vec();
+/// Blur a fixed number of float channels using the existing three-box kernel.
+/// Args: matching grid, radius and cancellation. Returns admitted samples; original data remains immutable.
+pub(crate) fn blur_channels<const C: usize>(
+    src: &[[f32; C]],
+    w: u32,
+    h: u32,
+    radius: f32,
+    cancel: &dyn crate::resources::CancellationCheck,
+) -> Result<Allocation<[f32; C]>, String>
+where
+    [f32; C]: Default,
+{
+    if C == 0 || src.len() != crate::deep_color::storage::count(w, h, 1)? || !radius.is_finite() {
+        return Err("Invalid blur dimensions or radius".into());
     }
-    let r = (radius * 0.58).round().clamp(1.0, 128.0) as i32;
-    let mut out = src.to_vec();
-    // Three separable box passes approximate a Gaussian in linear time.
+    cancel.check()?;
+    if radius < 0.1 {
+        return crate::resources::global().copy_now(src, cancel);
+    }
+    let r = (radius * 0.58).round().clamp(1., 128.) as i32;
+    let pool = crate::resources::global();
+    let mut out = pool.copy_now(src, cancel)?;
     for _ in 0..3 {
-        let mut tmp = vec![[0.0; 4]; out.len()];
-        tmp.par_chunks_mut(w as usize)
+        let mut tmp = pool.allocate_now::<[f32; C], _>(out.len(), cancel)?;
+        for (group, rows) in tmp.as_mut_slice().chunks_mut(w as usize * 64).enumerate() {
+            cancel.check()?;
+            rows.par_chunks_mut(w as usize)
+                .enumerate()
+                .for_each(|(dy, row)| {
+                    let y = group * 64 + dy;
+                    let mut sum = [0.; C];
+                    for dx in -r..=r {
+                        let p = at(&out, w, h, dx, y as i32);
+                        for ch in 0..C {
+                            sum[ch] += p[ch];
+                        }
+                    }
+                    for (x, p) in row.iter_mut().enumerate() {
+                        for ch in 0..C {
+                            p[ch] = sum[ch] / (2 * r + 1) as f32;
+                        }
+                        let a = at(&out, w, h, x as i32 - r, y as i32);
+                        let b = at(&out, w, h, x as i32 + r + 1, y as i32);
+                        for ch in 0..C {
+                            sum[ch] += b[ch] - a[ch];
+                        }
+                    }
+                });
+        }
+        let mut transposed = pool.allocate_now::<[f32; C], _>(out.len(), cancel)?;
+        for (group, cols) in transposed
+            .as_mut_slice()
+            .chunks_mut(h as usize * 64)
             .enumerate()
-            .for_each(|(y, row)| {
-                let mut sum = [0.0; 4];
-                for dx in -r..=r {
-                    let p = at(&out, w, h, dx, y as i32);
-                    for ch in 0..4 {
-                        sum[ch] += p[ch];
+        {
+            cancel.check()?;
+            cols.par_chunks_mut(h as usize)
+                .enumerate()
+                .for_each(|(dx, col)| {
+                    let x = group * 64 + dx;
+                    let mut sum = [0.; C];
+                    for dy in -r..=r {
+                        let p = at(&tmp, w, h, x as i32, dy);
+                        for ch in 0..C {
+                            sum[ch] += p[ch];
+                        }
                     }
-                }
-                for (x, p) in row.iter_mut().enumerate() {
-                    for ch in 0..4 {
-                        p[ch] = sum[ch] / (2 * r + 1) as f32;
+                    for (y, p) in col.iter_mut().enumerate() {
+                        for ch in 0..C {
+                            p[ch] = sum[ch] / (2 * r + 1) as f32;
+                        }
+                        let a = at(&tmp, w, h, x as i32, y as i32 - r);
+                        let b = at(&tmp, w, h, x as i32, y as i32 + r + 1);
+                        for ch in 0..C {
+                            sum[ch] += b[ch] - a[ch];
+                        }
                     }
-                    let a = at(&out, w, h, x as i32 - r, y as i32);
-                    let b = at(&out, w, h, x as i32 + r + 1, y as i32);
-                    for ch in 0..4 {
-                        sum[ch] += b[ch] - a[ch];
-                    }
-                }
-            });
-        // Transpose to keep vertical sliding-window passes parallel and contiguous.
-        let mut transposed = vec![[0.0; 4]; out.len()];
-        transposed
-            .par_chunks_mut(h as usize)
-            .enumerate()
-            .for_each(|(x, col)| {
-                let mut sum = [0.0; 4];
-                for dy in -r..=r {
-                    let p = at(&tmp, w, h, x as i32, dy);
-                    for ch in 0..4 {
-                        sum[ch] += p[ch];
-                    }
-                }
-                for (y, p) in col.iter_mut().enumerate() {
-                    for ch in 0..4 {
-                        p[ch] = sum[ch] / (2 * r + 1) as f32;
-                    }
-                    let a = at(&tmp, w, h, x as i32, y as i32 - r);
-                    let b = at(&tmp, w, h, x as i32, y as i32 + r + 1);
-                    for ch in 0..4 {
-                        sum[ch] += b[ch] - a[ch];
-                    }
-                }
-            });
-        out.par_chunks_mut(w as usize)
+                });
+        }
+        cancel.check()?;
+        out.as_mut_slice()
+            .par_chunks_mut(w as usize)
             .enumerate()
             .for_each(|(y, row)| {
                 for (x, p) in row.iter_mut().enumerate() {
@@ -648,10 +1048,21 @@ fn blur_channels(src: &[[f32; 4]], w: u32, h: u32, radius: f32) -> Vec<[f32; 4]>
                 }
             });
     }
-    out
+    cancel.check()?;
+    Ok(out)
 }
-fn morphology(src: &[[f32; 4]], w: u32, h: u32, r: i32, grow: bool) -> Vec<[f32; 4]> {
-    let mut out = src.to_vec();
+fn morphology<const C: usize>(
+    src: &[[f32; C]],
+    w: u32,
+    h: u32,
+    r: i32,
+    grow: bool,
+    cancel: &(dyn crate::resources::CancellationCheck + Sync),
+) -> Result<Allocation<[f32; C]>, String>
+where
+    [f32; C]: Default,
+{
+    let mut out = crate::resources::global().copy_now(src, cancel)?;
     // Separable square structuring element. Keep the winning pixel's RGB when growing.
     for vertical in [false, true] {
         let input = out;
@@ -670,21 +1081,35 @@ fn morphology(src: &[[f32; 4]], w: u32, h: u32, r: i32, grow: bool) -> Vec<[f32;
                         x + if vertical { 0 } else { d },
                         y + if vertical { d } else { 0 },
                     );
-                    if (grow && c[3] > best[3]) || (!grow && c[3] < best[3]) {
+                    if (grow && c[C - 1] > best[C - 1]) || (!grow && c[C - 1] < best[C - 1]) {
                         best = c;
                     }
                 }
                 if grow {
                     best
                 } else {
-                    [p[0], p[1], p[2], best[3]]
+                    {
+                        let mut out = *p;
+                        out[C - 1] = best[C - 1];
+                        out
+                    }
                 }
             })
-            .collect();
+            .admit_with(cancel)?;
     }
-    out
+    Ok(out)
 }
-fn motion_blur(src: &[[f32; 4]], w: u32, h: u32, length: f32, angle: f32) -> Vec<[f32; 4]> {
+fn motion_blur<const C: usize>(
+    src: &[[f32; C]],
+    w: u32,
+    h: u32,
+    length: f32,
+    angle: f32,
+    cancel: &(dyn crate::resources::CancellationCheck + Sync),
+) -> Result<Allocation<[f32; C]>, String>
+where
+    [f32; C]: Default,
+{
     let n = length.round().clamp(1.0, 128.0) as u32;
     let theta = angle.to_radians();
     src.par_iter()
@@ -692,25 +1117,40 @@ fn motion_blur(src: &[[f32; 4]], w: u32, h: u32, length: f32, angle: f32) -> Vec
         .map(|(i, _)| {
             let x = (i % w as usize) as f32;
             let y = (i / w as usize) as f32;
-            let mut sum = [0.0; 4];
+            let mut sum = [0.0; C];
             for step in 0..n {
                 let d = step as f32 - (n - 1) as f32 * 0.5;
                 let p = premul(sample(src, w, h, x + d * theta.cos(), y + d * theta.sin()));
-                for ch in 0..4 {
-                    sum[ch] += p[ch] / n as f32;
+                for ch in 0..C {
+                    sum[ch] += if C == 1 { p[ch] } else { p[ch] / n as f32 };
                 }
+            }
+            if C == 1 {
+                sum[0] /= n as f32;
             }
             unpremul(sum)
         })
-        .collect()
+        .admit_with(cancel)
 }
-fn convolution(src: &[[f32; 4]], w: u32, h: u32, s: &Settings) -> Vec<[f32; 4]> {
+fn convolution<const C: usize>(
+    src: &[[f32; C]],
+    w: u32,
+    h: u32,
+    s: &Settings,
+    cancel: &(dyn crate::resources::CancellationCheck + Sync),
+) -> Result<Allocation<[f32; C]>, String>
+where
+    [f32; C]: Default,
+{
     src.par_iter()
         .enumerate()
         .map(|(i, c)| {
             let x = (i % w as usize) as i32;
             let y = (i / w as usize) as i32;
-            let mut v = [0.0, 0.0, 0.0, c[3]];
+            let mut v = [0.0; C];
+            if C > 1 {
+                v[C - 1] = c[C - 1];
+            }
             let kernel = if s.kind == Kind::Emboss {
                 [-2.0, -1.0, 0.0, -1.0, 0.0, 1.0, 0.0, 1.0, 2.0]
             } else {
@@ -720,12 +1160,12 @@ fn convolution(src: &[[f32; 4]], w: u32, h: u32, s: &Settings) -> Vec<[f32; 4]> 
                 for dx in -1..=1 {
                     let p = at(src, w, h, x + dx, y + dy);
                     let weight = kernel[((dy + 1) * 3 + dx + 1) as usize];
-                    for ch in 0..3 {
+                    for ch in 0..if C == 1 { 1 } else { C - 1 } {
                         v[ch] += p[ch] * weight;
                     }
                 }
             }
-            for ch in 0..3 {
+            for ch in 0..if C == 1 { 1 } else { C - 1 } {
                 v[ch] = if s.kind == Kind::Emboss {
                     0.5 + v[ch] * s.values[0]
                 } else {
@@ -734,33 +1174,43 @@ fn convolution(src: &[[f32; 4]], w: u32, h: u32, s: &Settings) -> Vec<[f32; 4]> 
             }
             v
         })
-        .collect()
+        .admit_with(cancel)
 }
-fn pixelate(src: &[[f32; 4]], w: u32, h: u32, size: u32, halftone: bool) -> Vec<[f32; 4]> {
+fn pixelate<const C: usize>(
+    src: &[[f32; C]],
+    w: u32,
+    h: u32,
+    size: u32,
+    halftone: bool,
+    cancel: &(dyn crate::resources::CancellationCheck + Sync),
+) -> Result<Allocation<[f32; C]>, String>
+where
+    [f32; C]: Default,
+{
     let bw = w.div_ceil(size);
     let bh = h.div_ceil(size);
-    let cells: Vec<[f32; 4]> = (0..bw * bh)
+    let cells = (0..bw * bh)
         .into_par_iter()
         .map(|i| {
             let x = i % bw * size;
             let y = i / bw * size;
-            let mut sum = [0.0; 4];
+            let mut sum = [0.0; C];
             let mut n = 0;
             for sy in y..(y + size).min(h) {
                 for sx in x..(x + size).min(w) {
                     let p = premul(src[(sy * w + sx) as usize]);
-                    for ch in 0..4 {
+                    for ch in 0..C {
                         sum[ch] += p[ch];
                     }
                     n += 1;
                 }
             }
-            for ch in 0..4 {
+            for ch in 0..C {
                 sum[ch] /= n as f32;
             }
             unpremul(sum)
         })
-        .collect();
+        .admit_with(cancel)?;
     src.par_iter()
         .enumerate()
         .map(|(i, c)| {
@@ -772,13 +1222,36 @@ fn pixelate(src: &[[f32; 4]], w: u32, h: u32, size: u32, halftone: bool) -> Vec<
             }
             let dx = (x % size) as f32 + 0.5 - size as f32 * 0.5;
             let dy = (y % size) as f32 + 0.5 - size as f32 * 0.5;
-            let radius = (1.0 - luma(&cell)).sqrt() * size as f32 * 0.7072;
+            let radius = (1.0
+                - if C == 1 {
+                    cell[0].clamp(0., 1.)
+                } else {
+                    luma(&[cell[0], cell[1], cell[2], cell[3]])
+                })
+            .sqrt()
+                * size as f32
+                * 0.7072;
             let v = smooth(radius - 0.5, radius + 0.5, (dx * dx + dy * dy).sqrt());
-            [v, v, v, c[3]]
+            {
+                let mut out = *c;
+                for ch in 0..if C == 1 { 1 } else { C - 1 } {
+                    out[ch] = v;
+                }
+                out
+            }
         })
-        .collect()
+        .admit_with(cancel)
 }
-fn distort(src: &[[f32; 4]], w: u32, h: u32, s: &Settings) -> Vec<[f32; 4]> {
+fn distort<const C: usize>(
+    src: &[[f32; C]],
+    w: u32,
+    h: u32,
+    s: &Settings,
+    cancel: &(dyn crate::resources::CancellationCheck + Sync),
+) -> Result<Allocation<[f32; C]>, String>
+where
+    [f32; C]: Default,
+{
     src.par_iter()
         .enumerate()
         .map(|(i, c)| {
@@ -809,7 +1282,7 @@ fn distort(src: &[[f32; 4]], w: u32, h: u32, s: &Settings) -> Vec<[f32; 4]> {
                 sample(src, w, h, cx + dx * scale, cy + dy * scale)
             }
         })
-        .collect()
+        .admit_with(cancel)
 }
 
 #[cfg(test)]
@@ -837,10 +1310,10 @@ mod tests {
     fn selection_limits_key_and_strength_preserves_partial_alpha() {
         let source = [0, 255, 0, 128, 0, 255, 0, 255];
         let s = Settings::new(Kind::ChromaKey);
-        let out = apply(&source, 2, 1, &s, Some(&[0, 128])).unwrap();
+        let out = apply(&source, 2, 1, &s, Some(&[0., 128. / 255.])).unwrap();
         assert_eq!(&out[..4], &source[..4]);
         assert!((out[7] as i32 - 127).abs() <= 1);
-        assert!(apply(&source, 2, 1, &s, Some(&[255])).is_err());
+        assert!(apply(&source, 2, 1, &s, Some(&[1.])).is_err());
     }
     #[test]
     fn blur_does_not_bleed_hidden_rgb_into_opaque_edges() {

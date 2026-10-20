@@ -1,9 +1,10 @@
 //! SVG object import after standards-based CSS, transform and path normalization.
+use crate::artwork_mask::{ArtworkMask, MaskMode, MaskSource};
 use crate::color::{Blend, Rgba};
 use crate::document::{Cap, Document, Fill, Join, Layer, Pixels, Shape, Stroke, Style};
-use crate::geom::{Anchor, Geom, Pt, TypeRun};
+use crate::geom::{Anchor, Geom, PathContour, Pt, TypeRun};
 use std::collections::HashMap;
-use tiny_skia::{PathSegment, Transform};
+use tiny_skia::Transform;
 
 const MAX_PIXELS: u64 = 64 * 1024 * 1024;
 const MAX_ELEMENTS: usize = 100_000;
@@ -13,6 +14,7 @@ struct Metadata {
     name: String,
     hidden: bool,
     locked: bool,
+    filter_ids: Vec<String>,
 }
 
 fn editable_element(tag: &str) -> bool {
@@ -62,6 +64,15 @@ impl simplecss::Element for CssElement<'_, '_> {
         matches!(class, simplecss::PseudoClass::FirstChild)
             && self.0.prev_sibling_element().is_none()
     }
+}
+
+pub(crate) fn cascaded_property(node:roxmltree::Node<'_, '_>,sheet:&simplecss::StyleSheet<'_>,property:&str)->Option<String> {
+    let mut winner:Option<(String,bool)>=None;
+    let mut set=|value:&str,important:bool|{if !winner.as_ref().is_some_and(|(_,old)|*old && !important){winner=Some((value.trim().into(),important));}};
+    if let Some(value)=node.attribute(property){set(value,false);}
+    for rule in &sheet.rules {if rule.selector.matches(&CssElement(node)){for d in &rule.declarations {if d.name.eq_ignore_ascii_case(property){set(d.value,d.important);}}}}
+    for d in simplecss::DeclarationTokenizer::from(node.attribute("style").unwrap_or("")){if d.name.eq_ignore_ascii_case(property){set(d.value,d.important);}}
+    winner.map(|(value,_)|value)
 }
 
 fn cascaded_visibility(
@@ -257,6 +268,8 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
     if svg.len() > 256 * 1024 * 1024 {
         return Err("SVG exceeds the 256 MiB import limit".into());
     }
+    let flowed=crate::text::svg_type::prepare_flow(svg)?;
+    let svg=flowed.as_deref().unwrap_or(svg);
     // Desktop design tools commonly include the SVG 1.1 DOCTYPE. Accept that
     // declaration, as usvg does, without fetching its DTD or external entities.
     // Bound the initial XML parse as well as the editable-element count below.
@@ -274,8 +287,16 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
     }
     let mut metadata = HashMap::new();
     let mut edits = Vec::new();
-    let mut warnings = Vec::new();
+    let mut warnings = crate::svg_source::reductions(svg);
     let visibility = preserve_hidden_artwork(&xml, svg, &mut edits);
+    let mut sheet = simplecss::StyleSheet::new();
+    for text in xml
+        .descendants()
+        .filter(|n| n.has_tag_name("style"))
+        .filter_map(|n| n.text())
+    {
+        sheet.parse_more(text);
+    }
     // Keep hidden artwork editable: usvg deliberately discards display:none nodes.
     for (index, node) in xml.descendants().filter(|n| n.is_element()).enumerate() {
         if index >= MAX_ELEMENTS {
@@ -302,6 +323,7 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
         }
         let state = visibility.get(&node.id()).copied().unwrap_or_default();
         let meta = Metadata {
+            filter_ids: filter_ids(node, &sheet),
             name: node
                 .attribute(("http://www.inkscape.org/namespaces/inkscape", "label"))
                 .or_else(|| {
@@ -345,16 +367,17 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
     for (range, replacement) in edits {
         normalized.replace_range(range, &replacement);
     }
-    let mut options = usvg::Options::default();
-    options.fontdb_mut().load_system_fonts();
-    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    let mut options = crate::text::svg_type::options();
+    crate::text::webfonts::load(&xml, &mut options)?;
     let tree = usvg::Tree::from_str(&normalized, &options)
         .map_err(|e| format!("Could not parse SVG: {e}"))?;
+    let type_xml=roxmltree::Document::parse_with_options(&normalized,roxmltree::ParsingOptions{allow_dtd:true,nodes_limit:400000,entity_resolver:None}).map_err(|e|e.to_string())?;
+    let rich_text=type_xml.descendants().filter(|n|n.has_tag_name("text")).filter_map(|node|node.attribute("id").map(|id|crate::text::svg_type::capture(&type_xml,node,String::new(),16.).map(|value|(id.to_owned(),value)))).collect::<Result<_,String>>()?;
     let (w, h) = (tree.size().width(), tree.size().height());
-    if w as f64 * h as f64 > MAX_PIXELS as f64 {
-        return Err("SVG canvas exceeds 64 megapixels".into());
-    }
-    let mut doc = Document::new(name, w, h, 96.);
+    let mut doc = Document::new(name, 1., 1., 96.);
+    doc.width = w;
+    doc.height = h;
+    doc.artboards = crate::document::Artboard::tiled(1, w, h);
     doc.transparent = true;
     doc.layers.clear();
     let mut reader = Reader {
@@ -362,7 +385,20 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
         warnings,
         metadata,
         tree: &tree,
+        options: &options,
+        definitions: normalized_definitions(&tree).into(),
+        raw_definitions: raw_definitions(&xml, &sheet).into(),
+        definition_cache: HashMap::new(),
+        effect_sources: std::collections::HashSet::new(),
+        original_definitions: xml
+            .descendants()
+            .filter(|n| n.has_tag_name("filter"))
+            .map(|n| &svg[n.range()])
+            .collect::<String>()
+            .into(),
         pixel_bytes: 0,
+        mask_sources: HashMap::new(),
+        rich_text,
     };
     reader.children(tree.root(), None, 0)?;
     if reader.doc.layers.is_empty() {
@@ -373,13 +409,60 @@ pub fn read(svg: &str, name: &str) -> Result<(Document, Vec<String>), String> {
 }
 
 struct Reader<'a> {
+    options: &'a usvg::Options<'static>,
     doc: Document,
     warnings: Vec<String>,
     metadata: HashMap<String, Metadata>,
     tree: &'a usvg::Tree,
+    definitions: std::sync::Arc<str>,
+    raw_definitions: std::sync::Arc<str>,
+    original_definitions: std::sync::Arc<str>,
+    definition_cache: HashMap<String, std::sync::Arc<str>>,
+    effect_sources: std::collections::HashSet<String>,
     pixel_bytes: u64,
+    mask_sources: HashMap<usize, MaskSource>,
+    rich_text: HashMap<String,(crate::text::svg_type::SvgText,String,std::collections::BTreeMap<usize,f32>)>,
 }
 impl Reader<'_> {
+    fn paint(
+        &mut self,
+        p: &usvg::Paint,
+        alpha: f32,
+        t: Transform,
+        b: crate::geom::Bounds,
+    ) -> Option<Fill> {
+        if let usvg::Paint::Pattern(pattern) = p {
+            let placement =
+                Transform::from_scale(1. / b.width().max(0.001), 1. / b.height().max(0.001))
+                    .pre_translate(-b.min.x, -b.min.y)
+                    .pre_concat(t)
+                    .pre_concat(pattern.transform());
+            return Some(Fill::Pattern(crate::svg_source::SvgPattern {
+                definitions: self.resources(&[pattern.id().to_string()], false),
+                id: pattern.id().to_string(),
+                transform: matrix(placement),
+                opacity: alpha,
+            }));
+        }
+        paint(p, alpha, t, b)
+    }
+    fn resources(&mut self, ids: &[String], raw: bool) -> std::sync::Arc<str> {
+        let key = format!("{raw}:{}", ids.join(" "));
+        self.definition_cache
+            .entry(key)
+            .or_insert_with(|| {
+                crate::svg_source::subset(
+                    if raw {
+                        &self.raw_definitions
+                    } else {
+                        &self.definitions
+                    },
+                    ids,
+                )
+                .into()
+            })
+            .clone()
+    }
     fn reserve(&mut self, w: u32, h: u32) -> Result<(), String> {
         self.pixel_bytes = self
             .pixel_bytes
@@ -422,15 +505,6 @@ impl Reader<'_> {
             }
             match node {
                 usvg::Node::Group(g) => {
-                    let filters = native_filters(g);
-                    if filters.is_none() {
-                        self.raster(
-                            node,
-                            parent,
-                            "SVG filter appearance retained as a pixel layer",
-                        )?;
-                        continue;
-                    }
                     let mut layer = Layer::group(self.name(g.id(), "Group"));
                     layer.parent = parent;
                     layer.opacity = g.opacity().get();
@@ -439,15 +513,88 @@ impl Reader<'_> {
                         && g.opacity().get() == 1.
                         && g.blend_mode() == usvg::BlendMode::Normal;
                     self.meta(&mut layer, g.id());
-                    layer.filters = filters.unwrap();
-                    if g.clip_path().is_some() || g.mask().is_some() {
-                        let (w, h) = (self.doc.width.ceil() as u32, self.doc.height.ceil() as u32);
-                        self.reserve(w, h)?;
-                        layer.mask = Some(group_mask(g, w, h)?);
+                    let source_id = if !g.id().is_empty() {
+                        g.id().to_string()
+                    } else {
+                        g.children()
+                            .iter()
+                            .find_map(|n| {
+                                self.metadata
+                                    .get(n.id())
+                                    .filter(|m| !m.filter_ids.is_empty())
+                                    .map(|_| n.id().to_string())
+                            })
+                            .unwrap_or_default()
+                    };
+                    let raw_ids = self
+                        .metadata
+                        .get(&source_id)
+                        .map(|m| m.filter_ids.clone())
+                        .unwrap_or_default();
+                    if !g.filters().is_empty() || !raw_ids.is_empty() {
+                        let raw = self
+                            .metadata
+                            .get(&source_id)
+                            .map(|m| m.filter_ids.clone())
+                            .unwrap_or_default();
+                        let filters: Vec<String> =
+                            if raw.len() == g.filters().len() || g.filters().is_empty() {
+                                raw
+                            } else {
+                                Vec::new()
+                            };
+                        let filters = if filters.is_empty() {
+                            g.filters()
+                                .iter()
+                                .map(|f| f.id().to_string())
+                                .collect::<Vec<_>>()
+                        } else {
+                            filters
+                        };
+                        let raw = !filters.is_empty()
+                            && filters
+                                .iter()
+                                .all(|id| self.raw_definitions.contains(&format!("id=\"{id}\"")));
+                        let filters = if raw {
+                            filters
+                        } else {
+                            g.filters().iter().map(|f| f.id().to_string()).collect()
+                        };
+                        let definitions = self.resources(&filters, raw);
+                        layer.svg_filter = Some(crate::svg_source::SvgFilterGraph {
+                            definitions,
+                            original_definitions: self.original_definitions.clone(),
+                            filters,
+                            transform: matrix(g.abs_transform()),
+                            reductions: crate::svg_source::reductions(&format!(
+                                "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\">{}</svg>",
+                                self.original_definitions
+                            )),
+                        });
                         layer.pass_through = false;
-                        warn(&mut self.warnings,"SVG vector clips and masks converted to editable pixel masks; child artwork remains editable.".into());
+                    }
+                    if let Some(clip) = g.clip_path() {
+                        layer.artwork_masks.extend(self.clip_masks(
+                            clip,
+                            g.abs_transform(),
+                            depth + 1,
+                        )?);
+                    }
+                    if let Some(mask) = g.mask() {
+                        layer.artwork_masks.extend(self.svg_masks(
+                            mask,
+                            g.abs_transform(),
+                            depth + 1,
+                        )?);
+                    }
+                    if !layer.artwork_masks.is_empty() {
+                        layer.pass_through = false;
+                    }
+                    if layer.svg_filter.is_some() {
+                        self.effect_sources.insert(source_id.clone());
                     }
                     self.children(g, Some(layer.id), depth + 1)?;
+                    self.effect_sources.remove(&source_id);
                     self.doc.layers.push(layer);
                 }
                 usvg::Node::Path(path) => {
@@ -461,7 +608,8 @@ impl Reader<'_> {
                 }
                 usvg::Node::Image(image) => self.image(node, image, parent)?,
                 usvg::Node::Text(text) => {
-                    if !self.text(text, parent)? {
+                    let native=!self.rich_text.get(text.id()).is_some_and(|(svg,_,_)|svg.flow.is_some()) && text.chunks().iter().all(|c|c.text().is_ascii() && c.spans().iter().all(|s|s.font().families().len()==1)) && self.text(text,parent)?;
+                    if !native && !self.rich_type(text,parent)? {
                         warn(&mut self.warnings,"Complex SVG text retained as editable outlines; text content cannot be edited as type.".into());
                         self.children(text.flattened(), parent, depth + 1)?;
                     }
@@ -470,13 +618,80 @@ impl Reader<'_> {
         }
         Ok(())
     }
-    fn path(&mut self, path: &usvg::Path, parent: Option<u64>) -> Result<bool, String> {
-        if path.paint_order() == usvg::PaintOrder::StrokeAndFill
-            && path.fill().is_some()
-            && path.stroke().is_some()
-        {
-            return Ok(false);
+    fn mask_source(
+        &mut self,
+        root: &usvg::Group,
+        name: &str,
+        depth: usize,
+    ) -> Result<MaskSource, String> {
+        let key = root as *const usvg::Group as usize;
+        if let Some(source) = self.mask_sources.get(&key) {
+            return Ok(*source);
         }
+        let mut layer = Layer::group(name);
+        layer.pass_through = false;
+        self.children(root, Some(layer.id), depth + 1)?;
+        let source = MaskSource {
+            layer: layer.id,
+            shape: None,
+        };
+        self.doc.layers.push(layer);
+        self.mask_sources.insert(key, source);
+        Ok(source)
+    }
+    fn clip_masks(
+        &mut self,
+        clip: &usvg::ClipPath,
+        transform: Transform,
+        depth: usize,
+    ) -> Result<Vec<ArtworkMask>, String> {
+        if depth > 64 {
+            return Err("SVG clip nesting exceeds 64 levels".into());
+        }
+        let mut mask = ArtworkMask::new(self.mask_source(
+            clip.root(),
+            &self.name(clip.id(), "Clip"),
+            depth,
+        )?);
+        mask.transform = matrix(transform.pre_concat(clip.transform()));
+        let mut masks = vec![mask];
+        if let Some(other) = clip.clip_path() {
+            masks.extend(self.clip_masks(other, transform, depth + 1)?);
+        }
+        Ok(masks)
+    }
+    fn svg_masks(
+        &mut self,
+        source: &usvg::Mask,
+        transform: Transform,
+        depth: usize,
+    ) -> Result<Vec<ArtworkMask>, String> {
+        if depth > 64 {
+            return Err("SVG mask nesting exceeds 64 levels".into());
+        }
+        let mut mask = ArtworkMask::new(self.mask_source(
+            source.root(),
+            &self.name(source.id(), "Mask"),
+            depth,
+        )?);
+        mask.mode = if source.kind() == usvg::MaskType::Alpha {
+            MaskMode::Alpha
+        } else {
+            MaskMode::Luminance
+        };
+        mask.transform = matrix(transform);
+        let r = source.rect();
+        mask.region = Some(crate::geom::Bounds::from_min_size(
+            Pt::new(r.x(), r.y()),
+            Pt::new(r.width(), r.height()),
+        ));
+        let mut masks = vec![mask];
+        if let Some(other) = source.mask() {
+            masks.extend(self.svg_masks(other, transform, depth + 1)?);
+        }
+        Ok(masks)
+    }
+    fn path(&mut self, path: &usvg::Path, parent: Option<u64>) -> Result<bool, String> {
         let transform = path.abs_transform();
         let Some(transformed) = path.data().clone().transform(transform) else {
             return Ok(false);
@@ -491,7 +706,7 @@ impl Reader<'_> {
         };
         let bounds = geom.bbox();
         let fill = if let Some(f) = path.fill() {
-            let Some(fill) = paint(f.paint(), f.opacity().get(), transform, bounds) else {
+            let Some(fill) = self.paint(f.paint(), f.opacity().get(), transform, bounds) else {
                 return Ok(false);
             };
             fill
@@ -499,19 +714,21 @@ impl Reader<'_> {
             Fill::None
         };
         let stroke = if let Some(s) = path.stroke() {
-            let Some(stroke_paint) = paint(s.paint(), s.opacity().get(), transform, bounds) else {
+            let Some(stroke_paint) = self.paint(s.paint(), s.opacity().get(), transform, bounds)
+            else {
                 return Ok(false);
             };
             let (sx, sy) = transform.get_scale();
             let axes_dot = transform.sx * transform.kx + transform.ky * transform.sy;
-            if (sx - sy).abs() > 0.01
+            if matches!(stroke_paint, Fill::Pattern(_))
+                || (sx - sy).abs() > 0.01
                 || axes_dot.abs() > 0.0001 * (sx * sy).max(1.)
                 || s.linejoin() == usvg::LineJoin::MiterClip
                 || s.linejoin() == usvg::LineJoin::Miter
                     && (s.miterlimit().get() - 4.).abs() > 0.001
                 || s.dasharray().is_some_and(|a| a.len() != 2)
             {
-                return Ok(false);
+                return self.outlined_stroke(path, parent, geom, fill);
             }
             Some(Stroke {
                 alignment: crate::document::StrokeAlignment::Center,
@@ -534,14 +751,139 @@ impl Reader<'_> {
         } else {
             None
         };
-        let mut shape = Shape::new(geom, Style { fill, stroke });
+        let stroke_first = path.paint_order() == usvg::PaintOrder::StrokeAndFill;
+        let separate = !fill.is_none()
+            && stroke.is_some()
+            && (stroke_first || geom.path_contours().iter().any(|(_, closed)| !closed));
+        let border = separate.then(|| {
+            Shape::new(
+                geom.clone(),
+                Style {
+                    fill: Fill::None,
+                    stroke: stroke.clone(),
+                },
+            )
+        });
+        let geom = if fill.is_none() {
+            geom
+        } else {
+            closed_fill(geom)
+        };
+        let mut shape = Shape::new(
+            geom,
+            Style {
+                fill,
+                stroke: if separate { None } else { stroke },
+            },
+        );
         shape.name = self.name(path.id(), "Path");
         shape.visible = path.is_visible();
         let mut layer = Layer::vector(shape.name.clone());
         layer.parent = parent;
         self.meta(&mut layer, path.id());
-        layer.kind.shapes_mut().unwrap().push(shape);
+        let mut shapes = vec![shape];
+        if let Some(mut border) = border {
+            border.name = format!("{} stroke", shapes[0].name);
+            border.visible = shapes[0].visible;
+            if stroke_first {
+                shapes.insert(0, border);
+            } else {
+                shapes.push(border);
+            }
+        }
+        layer.kind.shapes_mut().unwrap().extend(shapes);
+        if !self.effect_sources.contains(path.id()) {
+            let ids = self
+                .metadata
+                .get(path.id())
+                .map(|m| m.filter_ids.clone())
+                .unwrap_or_default();
+            if !ids.is_empty() {
+                layer.svg_filter = Some(crate::svg_source::SvgFilterGraph {
+                    definitions: self.resources(&ids, true),
+                    original_definitions: self.original_definitions.clone(),
+                    filters: ids,
+                    transform: matrix(transform),
+                    reductions: crate::svg_source::reductions(&format!(
+                        "<svg>{}</svg>",
+                        self.original_definitions
+                    )),
+                });
+            }
+        }
         self.doc.layers.push(layer);
+        Ok(true)
+    }
+    fn outlined_stroke(
+        &mut self,
+        path: &usvg::Path,
+        parent: Option<u64>,
+        geom: Geom,
+        fill: Fill,
+    ) -> Result<bool, String> {
+        let Some(stroke) = path.stroke() else {
+            return Ok(false);
+        };
+        let transform = path.abs_transform();
+        let scale = tiny_skia::PathStroker::compute_resolution_scale(&transform);
+        let settings = stroke.to_tiny_skia();
+        let dashed = settings
+            .dash
+            .as_ref()
+            .map(|dash| path.data().dash(dash, scale));
+        let source = match &dashed {
+            Some(Some(path)) => path,
+            Some(None) => return Ok(false),
+            None => path.data(),
+        };
+        let Some(outline) = source
+            .stroke(&settings, scale)
+            .and_then(|outline| outline.transform(transform))
+        else {
+            return Ok(false);
+        };
+        let Some(outline) = path_geom(&outline, true) else {
+            return Ok(true);
+        };
+        let Some(paint) = self.paint(
+            stroke.paint(),
+            stroke.opacity().get(),
+            transform,
+            outline.bbox(),
+        ) else {
+            return Ok(false);
+        };
+        let name = self.name(path.id(), "Path");
+        let mut border = Shape::new(
+            outline,
+            Style {
+                fill: paint,
+                stroke: None,
+            },
+        );
+        border.name = format!("{name} stroke");
+        border.visible = path.is_visible();
+        let mut shapes = vec![];
+        if !fill.is_none() {
+            let mut inside = Shape::new(closed_fill(geom), Style { fill, stroke: None });
+            inside.name = name.clone();
+            inside.visible = path.is_visible();
+            shapes.push(inside);
+        }
+        if path.paint_order() == usvg::PaintOrder::StrokeAndFill {
+            shapes.insert(0, border);
+        } else {
+            shapes.push(border);
+        }
+        let mut layer = Layer::vector(name);
+        layer.parent = parent;
+        self.meta(&mut layer, path.id());
+        layer.kind.shapes_mut().unwrap().extend(shapes);
+        self.doc.layers.push(layer);
+        warn(
+            &mut self.warnings,
+            "SVG stroke settings retained as editable vector outlines.".into(),
+        );
         Ok(true)
     }
     fn image(
@@ -575,24 +917,94 @@ impl Reader<'_> {
         self.doc.layers.push(layer);
         Ok(())
     }
+    fn rich_type(&mut self,text:&usvg::Text,parent:Option<u64>)->Result<bool,String> {
+        let Some((mut svg,content,manual_kern))=self.rich_text.get(text.id()).cloned() else {return Ok(false);};
+        let glyph=text.layouted().iter().flat_map(|s|&s.positioned_glyphs).next();
+        let font=glyph.and_then(|g|crate::text::webfonts::reference(self.tree.fontdb(),g.font)).ok_or("Cannot retain this SVG text face within the existing font archive limits")?;
+        let px=text.chunks().iter().flat_map(|c|c.spans()).next().map_or(16.,|s|s.font_size().get());
+        if let crate::text::svg_type::TextNode::Element{attributes,..}=&mut svg.root {
+            if !attributes.contains_key("font-family") {
+                if let Some(span)=text.chunks().iter().flat_map(|c|c.spans()).next() {
+                    attributes.insert("font-family".into(),span.font().families().iter().map(crate::text::svg_type::family_css).collect::<Vec<_>>().join(", "));
+                }
+            }
+        }
+        svg.base_font=font.clone();svg.base_px=px;
+        for chunk in text.chunks(){for span in chunk.spans(){
+            let available=span.font().families().iter().any(|f|match f {usvg::FontFamily::Named(name)=>self.tree.fontdb().faces().any(|f|f.families.iter().any(|(n,_)|n.eq_ignore_ascii_case(name))),_=>true});
+            if !available {
+                let requested=span.font().families().iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+                let actual=glyph.and_then(|g|self.tree.fontdb().face(g.font)).and_then(|face|face.families.first()).map_or("system sans",|(name,_)|name.as_str());
+                warn(&mut self.warnings,format!("SVG font '{requested}' substituted with '{actual}'."));
+            }
+        }}
+
+        let t=text.abs_transform();
+        let mut run=TypeRun{content,font,px,manual_kern,transform:Some(matrix(t)),svg_text:Some(svg),..Default::default()};
+        crate::text::svg_type::restore_scales(&mut run)?;
+        crate::text::svg_type::restore_offsets(&mut run)?;
+        if let Some(layout) = crate::text::svg_type::layout_with_options(&run, self.options) {
+            for (at, style) in &layout.styles {
+                if !style.features.is_empty(){run.set_character_style(*at,at+1,|s|s.features=style.features.clone());}
+                if let Some(axes) = &style.font_variations {
+                    run.set_character_style(*at, at+1, |s| {s.font_variations=Some(axes.clone());});
+                }
+            }
+            let mut used=layout.styles.clone();used.extend(layout.font_choices().map(|(at,font)|(at,crate::geom::CharSpan{font:Some(font.into()),..Default::default()})));
+            crate::text::webfonts::bind(run.svg_text.as_mut().unwrap(), layout.tree.fontdb(),&used)?;
+        } else {return Err("Cannot resolve this SVG text's font families".into());}
+        run.contours=crate::text::shape(&run);
+        let fill=text.chunks().iter().flat_map(|c|c.spans()).next().and_then(|s|s.fill()).map(|f|self.paint(f.paint(),f.opacity().get(),text.abs_transform(),Geom::Text(run.clone()).bbox()).unwrap_or_else(||{warn(&mut self.warnings,"SVG type source paint retained; changing object paint replaces it.".into());Fill::Solid(Rgba::BLACK)})).unwrap_or(Fill::None);
+        run.svg_text.as_mut().unwrap().base_fill=fill.clone();
+        let mut shape=Shape::new(Geom::Text(run),Style{fill,stroke:None});shape.name=self.name(text.id(),"Text");
+        let mut layer=Layer::vector(shape.name.clone());layer.parent=parent;self.meta(&mut layer,text.id());layer.kind.shapes_mut().unwrap().push(shape);self.doc.layers.push(layer);Ok(true)
+    }
     fn text(&mut self, text: &usvg::Text, parent: Option<u64>) -> Result<bool, String> {
         let t = text.abs_transform();
         if t.kx.abs() > 0.0001
             || t.ky.abs() > 0.0001
             || t.sx <= 0.
-            || (t.sx - t.sy).abs() > 0.001
+            || t.sy <= 0.
             || text.chunks().len() != 1
             || text.rotate().iter().any(|v| v.abs() > 0.001)
             || text.dx().iter().any(|v| v.abs() > 0.001)
             || text.dy().iter().any(|v| v.abs() > 0.001)
+            || text.writing_mode() != usvg::WritingMode::LeftToRight
         {
             return Ok(false);
         }
         let chunk = &text.chunks()[0];
-        if chunk.spans().len() != 1 || !matches!(chunk.text_flow(), usvg::TextFlow::Linear) {
+        if chunk.spans().is_empty() || !matches!(chunk.text_flow(), usvg::TextFlow::Linear) {
             return Ok(false);
         }
         let span = &chunk.spans()[0];
+        if span.font_size().get() * t.sy < 1. || !(0.01..=10.).contains(&(t.sx / t.sy)) {
+            return Ok(false);
+        }
+        if chunk.spans().iter().any(|span| {
+            span.small_caps()
+                || !matches!(
+                    span.dominant_baseline(),
+                    usvg::DominantBaseline::Auto | usvg::DominantBaseline::Alphabetic
+                )
+                || !matches!(
+                    span.alignment_baseline(),
+                    usvg::AlignmentBaseline::Auto
+                        | usvg::AlignmentBaseline::Baseline
+                        | usvg::AlignmentBaseline::Alphabetic
+                )
+                || span.baseline_shift().iter().any(|shift| {
+                    !matches!(
+                        shift,
+                        usvg::BaselineShift::Baseline | usvg::BaselineShift::Number(0.)
+                    )
+                })
+                || span.decoration().underline().is_some()
+                || span.decoration().overline().is_some()
+                || span.decoration().line_through().is_some()
+        }) {
+            return Ok(false);
+        }
         if span.stroke().is_some()
             || span.text_length().is_some()
             || span.word_spacing().abs() > 0.001
@@ -607,6 +1019,32 @@ impl Reader<'_> {
         } else {
             Fill::None
         };
+        for other in chunk.spans().iter().skip(1) {
+            let other_fill = match other.fill() {
+                Some(paint) => match paint.paint() {
+                    usvg::Paint::Color(color_value) => {
+                        Fill::Solid(color(*color_value, paint.opacity().get()))
+                    }
+                    _ => return Ok(false),
+                },
+                None => Fill::None,
+            };
+            if other_fill != fill
+                || other.stroke().is_some()
+                || other.text_length().is_some()
+                || other.font_size() != span.font_size()
+                || other.letter_spacing() != span.letter_spacing()
+                || other.word_spacing() != span.word_spacing()
+                || other.apply_kerning() != span.apply_kerning()
+                || other.is_visible() != span.is_visible()
+                || other.font().families() != span.font().families()
+                || other.font().style() != span.font().style()
+                || other.font().weight() != span.font().weight()
+                || other.font().stretch() != span.font().stretch()
+            {
+                return Ok(false);
+            }
+        }
         let Some(glyph) = text
             .layouted()
             .iter()
@@ -615,9 +1053,59 @@ impl Reader<'_> {
         else {
             return Ok(false);
         };
+        if text
+            .layouted()
+            .iter()
+            .flat_map(|span| &span.positioned_glyphs)
+            .any(|other| other.font != glyph.font)
+        {
+            return Ok(false);
+        }
         let Some(face) = self.tree.fontdb().face(glyph.font) else {
             return Ok(false);
         };
+        let requested = span.font();
+        let requested_family = requested.families().first().is_none_or(|family| match family {
+            usvg::FontFamily::Named(name) => face.families.iter().any(|(alias, _)| alias.eq_ignore_ascii_case(name)),
+            _ => true,
+        });
+        if !requested_family || face.weight.0 != requested.weight()
+            || face.style != requested.style().into() || face.stretch != requested.stretch().into() {
+            return Ok(false);
+        }
+        let native_axes = self
+            .tree
+            .fontdb()
+            .with_face_data(glyph.font, |bytes, index| {
+                let Ok(font) = rustybuzz::ttf_parser::Face::parse(bytes, index) else {
+                    return false;
+                };
+                index == 0
+                    && font.variation_axes().into_iter().all(|axis| {
+                        chunk.spans().iter().all(|span| {
+                            let explicit = span
+                                .font()
+                                .variations()
+                                .iter()
+                                .find(|value| value.tag == axis.tag.to_bytes());
+                            let value = explicit.map(|value| value.value).unwrap_or_else(|| {
+                                if axis.tag.to_bytes() == *b"opsz"
+                                    && span.font_optical_sizing() == usvg::FontOpticalSizing::Auto
+                                {
+                                    span.font_size().get()
+                                } else {
+                                    axis.def_value
+                                }
+                            });
+                            (value.clamp(axis.min_value, axis.max_value) - axis.def_value).abs()
+                                < 0.0001
+                        })
+                    })
+            })
+            .unwrap_or(false);
+        if !native_axes {
+            return Ok(false);
+        }
         let font = match &face.source {
             usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _) => {
                 p.to_string_lossy().into_owned()
@@ -636,6 +1124,14 @@ impl Reader<'_> {
             kern: span.apply_kerning(),
             ..Default::default()
         };
+        if (t.sx - t.sy).abs() > 0.0001 {
+            run.spans.push(crate::geom::CharSpan {
+                start: 0,
+                end: run.content.chars().count(),
+                hscale: Some(t.sx / t.sy * 100.),
+                ..Default::default()
+            });
+        }
         let width = crate::text::measure(&run).0;
         run.origin.x -= match chunk.anchor() {
             usvg::TextAnchor::Start => 0.,
@@ -701,7 +1197,7 @@ impl Reader<'_> {
         let name = self.name(node.id(), "Appearance");
         let mut layer = Layer::placed_raster(
             name.clone(),
-            Pixels::from_pixmap(&pm),
+            Pixels::from_pixmap(&pm)?,
             Pt::new(left, top),
             Pt::new(w as f32, h as f32),
         );
@@ -715,124 +1211,37 @@ impl Reader<'_> {
         Ok(())
     }
 }
-fn native_filters(g: &usvg::Group) -> Option<crate::filter::FilterStack> {
-    let mut stack = crate::filter::FilterStack::default();
-    for filter in g.filters() {
-        if filter.primitives().len() != 1 {
-            return None;
-        }
-        match filter.primitives()[0].kind() {
-            usvg::filter::Kind::GaussianBlur(blur)
-                if (blur.std_dev_x().get() - blur.std_dev_y().get()).abs() < 0.001 =>
-            {
-                let (sx, sy) = g.abs_transform().get_scale();
-                if (sx - sy).abs() > 0.001 {
-                    return None;
-                }
-                stack.items.push(crate::filter::Fx::Blur {
-                    std: blur.std_dev_x().get() * sx,
-                });
-            }
-            _ => return None,
-        }
-    }
-    Some(stack)
-}
-fn render_mask_group(
-    root: &usvg::Group,
-    transform: Transform,
-    w: u32,
-    h: u32,
-    alpha: bool,
-) -> Result<Vec<u8>, String> {
-    let node = usvg::Node::Group(Box::new(root.clone()));
-    let mut pm = tiny_skia::Pixmap::new(w, h).ok_or("Could not allocate SVG mask")?;
-    if let Some(b) = node.abs_layer_bounding_box() {
-        resvg::render_node(
-            &node,
-            transform.pre_translate(b.x(), b.y()),
-            &mut pm.as_mut(),
-        );
-    }
-    Ok(pm
-        .pixels()
-        .iter()
-        .map(|p| {
-            if alpha {
-                p.alpha()
-            } else {
-                (0.2126 * p.red() as f32 + 0.7152 * p.green() as f32 + 0.0722 * p.blue() as f32)
-                    .round() as u8
-            }
+/// Serialize resolved vector resources without creating pixel layers.
+/// Args: normalized SVG tree. Returns portable definition XML, including SVG 2 inner radii.
+pub(crate) fn normalized_definitions(tree: &usvg::Tree) -> String {
+    let source = tree.to_string(&usvg::WriteOptions::default());
+    let xml = roxmltree::Document::parse(&source).expect("normalized SVG");
+    let mut defs = xml
+        .descendants()
+        .find(|n| n.has_tag_name("defs"))
+        .map(|n| {
+            n.children()
+                .filter(|n| n.is_element())
+                .map(|n| &source[n.range()])
+                .collect::<String>()
         })
-        .collect())
+        .unwrap_or_default()
+        .replace("xlink:href", "href");
+    for gradient in tree.radial_gradients() {
+        let needle = format!("id=\"{}\"", gradient.id());
+        defs = defs.replace(&needle, &format!("{needle} fr=\"{}\"", gradient.fr().get()));
+    }
+    defs
 }
-fn clip_mask(
-    clip: &usvg::ClipPath,
-    t: Transform,
-    w: u32,
-    h: u32,
-    depth: usize,
-) -> Result<Vec<u8>, String> {
-    if depth > 64 {
-        return Err("SVG clip nesting exceeds 64 levels".into());
+fn spread(mode: usvg::SpreadMethod) -> crate::gradient::Spread {
+    match mode {
+        usvg::SpreadMethod::Pad => crate::gradient::Spread::Pad,
+        usvg::SpreadMethod::Repeat => crate::gradient::Spread::Repeat,
+        usvg::SpreadMethod::Reflect => crate::gradient::Spread::Reflect,
     }
-    let mut mask = render_mask_group(clip.root(), t.pre_concat(clip.transform()), w, h, true)?;
-    if let Some(other) = clip.clip_path() {
-        let other = clip_mask(other, t, w, h, depth + 1)?;
-        for (a, b) in mask.iter_mut().zip(other) {
-            *a = (u16::from(*a) * u16::from(b) / 255) as u8;
-        }
-    }
-    Ok(mask)
 }
-fn svg_mask(
-    mask: &usvg::Mask,
-    t: Transform,
-    w: u32,
-    h: u32,
-    depth: usize,
-) -> Result<Vec<u8>, String> {
-    if depth > 64 {
-        return Err("SVG mask nesting exceeds 64 levels".into());
-    }
-    let mut out = render_mask_group(mask.root(), t, w, h, mask.kind() == usvg::MaskType::Alpha)?;
-    // The SVG mask region clips mask content, independently of its children.
-    let rect = mask.rect();
-    let mut region = tiny_skia::Pixmap::new(w, h).ok_or("Could not allocate mask region")?;
-    let mut white = tiny_skia::Paint::default();
-    white.set_color_rgba8(255, 255, 255, 255);
-    region.fill_rect(
-        tiny_skia::Rect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height())
-            .ok_or("Invalid mask region")?,
-        &white,
-        t,
-        None,
-    );
-    for (a, p) in out.iter_mut().zip(region.pixels()) {
-        *a = (u16::from(*a) * u16::from(p.alpha()) / 255) as u8;
-    }
-    if let Some(other) = mask.mask() {
-        let other = svg_mask(other, t, w, h, depth + 1)?;
-        for (a, b) in out.iter_mut().zip(other) {
-            *a = (u16::from(*a) * u16::from(b) / 255) as u8;
-        }
-    }
-    Ok(out)
-}
-fn group_mask(group: &usvg::Group, w: u32, h: u32) -> Result<Pixels, String> {
-    let mut values = vec![255u8; w as usize * h as usize];
-    if let Some(clip) = group.clip_path() {
-        values = clip_mask(clip, group.abs_transform(), w, h, 0)?;
-    }
-    if let Some(mask) = group.mask() {
-        let mask = svg_mask(mask, group.abs_transform(), w, h, 0)?;
-        for (a, b) in values.iter_mut().zip(mask) {
-            *a = (u16::from(*a) * u16::from(b) / 255) as u8;
-        }
-    }
-    let rgba = values.into_iter().flat_map(|v| [v, v, v, 255]).collect();
-    Pixels::from_rgba(w, h, rgba).ok_or("Invalid SVG mask".into())
+fn matrix(t: Transform) -> [f32; 6] {
+    [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]
 }
 
 fn color(c: usvg::Color, a: f32) -> Rgba {
@@ -843,10 +1252,10 @@ fn color(c: usvg::Color, a: f32) -> Rgba {
         (a.clamp(0., 1.) * 255.).round() as u8,
     )
 }
-fn paint(p: &usvg::Paint, alpha: f32, t: Transform, b: crate::geom::Bounds) -> Option<Fill> {
+pub(crate) fn paint(p: &usvg::Paint, alpha: f32, t: Transform, b: crate::geom::Bounds) -> Option<Fill> {
     match p {
         usvg::Paint::Color(c) => Some(Fill::Solid(color(*c, alpha))),
-        usvg::Paint::LinearGradient(g) if g.spread_method() == usvg::SpreadMethod::Pad => {
+        usvg::Paint::LinearGradient(g) => {
             let xf = t.pre_concat(g.transform());
             let mut from = tiny_skia::Point::from_xy(g.x1(), g.y1());
             xf.map_point(&mut from);
@@ -889,7 +1298,11 @@ fn paint(p: &usvg::Paint, alpha: f32, t: Transform, b: crate::geom::Bounds) -> O
                     color: color(s.color(), alpha * s.opacity().get()),
                 })
                 .collect();
-            if stops.len() == 2 && stops[0].offset == 0. && stops[1].offset == 1. {
+            if g.spread_method() == usvg::SpreadMethod::Pad
+                && stops.len() == 2
+                && stops[0].offset == 0.
+                && stops[1].offset == 1.
+            {
                 Some(Fill::Linear {
                     from,
                     to,
@@ -902,8 +1315,48 @@ fn paint(p: &usvg::Paint, alpha: f32, t: Transform, b: crate::geom::Bounds) -> O
                     from,
                     to,
                     stops,
+                    radial_axis: None,
+                    spread: spread(g.spread_method()),
+                    focal: [0., 0.],
+                    inner_radius: 0.,
+                    silhouette: None,
                 }))
             }
+        }
+        usvg::Paint::RadialGradient(g) => {
+            let xf = t.pre_concat(g.transform());
+            let r = g.r().get();
+            let mut center = tiny_skia::Point::from_xy(g.cx(), g.cy());
+            let mut radius = tiny_skia::Point::from_xy(g.cx() + r, g.cy());
+            xf.map_point(&mut center);
+            xf.map_point(&mut radius);
+            let point = |p: tiny_skia::Point| {
+                [
+                    (p.x - b.min.x) / b.width().max(0.001),
+                    (p.y - b.min.y) / b.height().max(0.001),
+                ]
+            };
+            Some(Fill::Gradient(crate::gradient::Gradient {
+                kind: crate::gradient::GradientKind::Radial,
+                radial_axis: Some([
+                    xf.kx * r / b.width().max(0.001),
+                    xf.sy * r / b.height().max(0.001),
+                ]),
+                spread: spread(g.spread_method()),
+                focal: [(g.fx() - g.cx()) / r, (g.fy() - g.cy()) / r],
+                inner_radius: g.fr().get() / r,
+                from: point(center),
+                to: point(radius),
+                silhouette: None,
+                stops: g
+                    .stops()
+                    .iter()
+                    .map(|stop| crate::gradient::GradientStop {
+                        offset: stop.offset().get(),
+                        color: color(stop.color(), alpha * stop.opacity().get()),
+                    })
+                    .collect(),
+            }))
         }
         _ => None,
     }
@@ -934,67 +1387,371 @@ fn warn(warnings: &mut Vec<String>, s: String) {
     }
 }
 
-fn path_geom(path: &tiny_skia::Path, winding: bool) -> Option<Geom> {
-    let mut paths = Vec::<(Vec<Anchor>, bool)>::new();
-    let mut anchors = Vec::<Anchor>::new();
-    let mut closed = false;
-    for segment in path.segments() {
-        match segment {
-            PathSegment::MoveTo(p) => {
-                if !anchors.is_empty() {
-                    paths.push((std::mem::take(&mut anchors), closed));
-                }
-                closed = false;
-                anchors.push(Anchor::corner(Pt::new(p.x, p.y)));
-            }
-            PathSegment::LineTo(p) => anchors.push(Anchor::corner(Pt::new(p.x, p.y))),
-            PathSegment::QuadTo(c, p) => {
-                let previous = anchors.last_mut()?;
-                let end = Pt::new(p.x, p.y);
-                let control = Pt::new(c.x, c.y);
-                previous.h_out = (control - previous.pt) * (2. / 3.);
-                let mut a = Anchor::corner(end);
-                a.h_in = (control - end) * (2. / 3.);
-                anchors.push(a);
-            }
-            PathSegment::CubicTo(c1, c2, p) => {
-                let previous = anchors.last_mut()?;
-                previous.h_out = Pt::new(c1.x, c1.y) - previous.pt;
-                let mut a = Anchor::corner(Pt::new(p.x, p.y));
-                a.h_in = Pt::new(c2.x, c2.y) - a.pt;
-                anchors.push(a);
-            }
-            PathSegment::Close => {
-                closed = true;
-                if anchors.len() > 1 && (anchors[0].pt - anchors.last()?.pt).length() < 0.0001 {
-                    let last = anchors.pop()?;
-                    anchors[0].h_in = last.h_in;
-                }
-            }
-        }
+fn closed_fill(mut geom: Geom) -> Geom {
+    match &mut geom {
+        Geom::Path { closed, .. } => *closed = true,
+        Geom::Paths { paths, .. } => paths.iter_mut().for_each(|path| path.closed = true),
+        _ => {}
     }
-    if !anchors.is_empty() {
-        paths.push((anchors, closed));
-    }
-    if paths.is_empty() {
-        None
-    } else if paths.len() == 1 {
-        let (anchors, closed) = paths.pop()?;
-        Some(Geom::Path { anchors, closed })
-    } else {
-        Some(Geom::Poly {
-            contours: paths
-                .into_iter()
-                .flat_map(|(anchors, closed)| Geom::Path { anchors, closed }.contours(64))
-                .collect(),
-            winding,
-        })
-    }
+    geom
 }
+
+pub(crate) use crate::geom::path_geom;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svg_stroke_variants_remain_editable_vectors() {
+        for source in [
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><path d="M15 70L45 12L73 70" fill="#c72" stroke="#258" stroke-width="14" stroke-miterlimit="1.5"/></svg>"##,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><path transform="matrix(1.7 .1 .3 .8 8 9)" d="M5 5C15 75 40 5 65 70" fill="none" stroke="#258" stroke-width="6" stroke-linecap="round" stroke-dasharray="8 3 2 3"/></svg>"##,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><path d="M25 25H120V75H25Z" fill="#fc8" stroke="#258" stroke-width="18" paint-order="stroke fill"/></svg>"##,
+        ] {
+            let (doc, notes, maximum, mean) = compare_render(source);
+            assert!(
+                doc.layers.iter().all(|layer| layer.kind.pixels().is_none()),
+                "{notes:?}"
+            );
+            assert!(maximum <= 64 && mean < 0.05, "max={maximum}, mean={mean}");
+            doc.validate_hierarchy().unwrap();
+        }
+    }
+
+    #[test]
+    fn svg_repeat_reflect_paint_remains_vector_through_native_codec() {
+        for tag in ["linearGradient", "radialGradient"] {
+            for spread in ["repeat", "reflect"] {
+                let source = format!(
+                    r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><defs><{tag} id="p" gradientUnits="userSpaceOnUse" x1="20" y1="15" x2="50" y2="25" cx="60" cy="55" r="24" fx="55" fy="50" fr="3" spreadMethod="{spread}" gradientTransform="skewX(20)"><stop stop-color="#128"/><stop offset=".4" stop-color="#4cc" stop-opacity=".6"/><stop offset="1" stop-color="white"/></{tag}></defs><path d="M8 8H152V112H8Z" fill="url(#p)" stroke="url(#p)" stroke-width="4"/></svg>"##
+                );
+                let (doc, notes, maximum, mean) = compare_render(&source);
+                assert!(notes.is_empty(), "{notes:?}");
+                assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+                assert!(
+                    maximum < 6 && mean < 0.12,
+                    "{tag} {spread}: max={maximum}, mean={mean}"
+                );
+                let reopened =
+                    crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+                assert_eq!(
+                    crate::compositor::export_png(&doc, 1).unwrap(),
+                    crate::compositor::export_png(&reopened, 1).unwrap()
+                );
+                let exported = crate::svg::export(&reopened).unwrap();
+                assert!(!exported.contains("<image"));
+                assert!(exported.contains(&format!("spreadMethod=\"{spread}\"")));
+                let (_, _, maximum, mean) = compare_render(&exported);
+                assert!(
+                    maximum < 6 && mean < 0.12,
+                    "{tag} {spread}: max={maximum}, mean={mean}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn svg_transformed_nested_symbol_patterns_remain_vector_and_editable() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><defs><symbol id="inner" viewBox="0 0 10 10"><path d="M0 0H5V10H0Z" fill="#28a"/></symbol><symbol id="outer" viewBox="0 0 10 10"><use href="#inner" width="10" height="10"/><circle cx="7" cy="5" r="2" fill="#e73"/></symbol><pattern id="p" patternUnits="userSpaceOnUse" width="18" height="16" patternTransform="matrix(1 .2 .35 1 4 6)"><use href="#outer" width="18" height="16"/></pattern></defs><path d="M8 8H152V112H8Z" fill="url(#p)" fill-opacity=".8" stroke="url(#p)" stroke-width="3"/></svg>"##;
+        let (mut doc, notes, maximum, mean) = compare_render(source);
+        assert!(
+            notes.iter().all(|n| n.contains("editable vector outlines")),
+            "{notes:?}"
+        );
+        assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+        assert!(maximum < 12 && mean < 0.4, "max={maximum}, mean={mean}");
+        let original = crate::compositor::export_png(&doc, 1).unwrap();
+        let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        assert_eq!(
+            original,
+            crate::compositor::export_png(&reopened, 1).unwrap()
+        );
+        let exported = crate::svg::export(&reopened).unwrap();
+        assert!(!exported.contains("<image"));
+        assert!(exported.contains("<pattern"));
+        let (_, _, maximum, mean) = compare_render(&exported);
+        assert!(maximum < 12 && mean < 0.4, "max={maximum}, mean={mean}");
+        let pattern = doc
+            .layers
+            .iter_mut()
+            .filter_map(|l| l.kind.shapes_mut())
+            .flatten()
+            .find_map(|s| {
+                if let Fill::Pattern(p) = &mut s.style.fill {
+                    Some(p)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        pattern.transform[4] += 0.1;
+        pattern.definitions = pattern.definitions.replace("#2288aa", "#ff0000").into();
+        assert_ne!(original, crate::compositor::export_png(&doc, 1).unwrap());
+    }
+
+    #[test]
+    fn svg_affine_radial_strokes_preserve_zero_width_or_height_paint_bounds() {
+        for path in ["M10 40H150", "M80 10V110"] {
+            let source = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><defs><radialGradient id="r" gradientUnits="userSpaceOnUse" cx="70" cy="60" r="40" fx="62" fy="55" fr="4" gradientTransform="skewX(15)"><stop stop-color="#28a"/><stop offset="1" stop-color="#f64"/></radialGradient></defs><path d="{path}" fill="none" stroke="url(#r)" stroke-width="12" stroke-linecap="round"/></svg>"##
+            );
+            let (doc, notes, maximum, mean) = compare_render(&source);
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+            assert!(
+                maximum <= 2 && mean < 0.02,
+                "{path}: max={maximum} mean={mean}"
+            );
+            let restored = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+            let exported = crate::svg::export(&restored).unwrap();
+            assert!(!exported.contains("<image"));
+            let (_, notes, maximum, mean) = compare_render(&exported);
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(
+                maximum <= 2 && mean < 0.02,
+                "export {path}: max={maximum} mean={mean}"
+            );
+        }
+    }
+
+    #[test]
+    fn svg_affine_focal_radial_survives_edit_save_and_vector_export() {
+        for fr in [0., 7.] {
+            let source = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><defs><radialGradient id="p" gradientUnits="userSpaceOnUse" cx="55" cy="50" r="43" fx="47" fy="43" fr="{fr}" gradientTransform="matrix(1 .15 .4 .65 -8 6)"><stop stop-color="#128"/><stop offset=".4" stop-color="#4cc" stop-opacity=".6"/><stop offset="1" stop-color="white"/></radialGradient></defs><path d="M8 8H152V112H8Z" fill="url(#p)"/></svg>"##
+            );
+            let (mut doc, notes, maximum, mean) = compare_render(&source);
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+            assert!(maximum <= 2 && mean < 0.1, "max={maximum}, mean={mean}");
+            let original = crate::compositor::export_png(&doc, 1).unwrap();
+            let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+            assert_eq!(
+                original,
+                crate::compositor::export_png(&reopened, 1).unwrap()
+            );
+            let exported = crate::svg::export(&reopened).unwrap();
+            assert!(!exported.contains("<image"));
+            let (_, notes, maximum, mean) = compare_render(&exported);
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(maximum <= 2 && mean < 0.1, "max={maximum}, mean={mean}");
+            let shape = doc
+                .layers
+                .iter_mut()
+                .filter_map(|l| l.kind.shapes_mut())
+                .flatten()
+                .next()
+                .unwrap();
+            let Fill::Gradient(g) = &mut shape.style.fill else {
+                panic!("native radial")
+            };
+            g.focal[0] += 0.25;
+            g.inner_radius = 0.1;
+            g.set_angle(35., shape.geom.bbox());
+            assert_ne!(original, crate::compositor::export_png(&doc, 1).unwrap());
+        }
+        let legacy = r#"{"kind":"Radial","from":[0.5,0.5],"to":[1.0,0.5],"stops":[]}"#;
+        let g: crate::gradient::Gradient = serde_json::from_str(legacy).unwrap();
+        assert!(g.radial_axis.is_none());
+        assert_eq!(g.focal, [0., 0.]);
+        assert_eq!(g.inner_radius, 0.);
+    }
+
+    #[test]
+    fn svg_radial_paint_keeps_editable_stops_and_radius() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><defs><radialGradient id="p" gradientUnits="userSpaceOnUse" cx="37" cy="30" r="40"><stop stop-color="#128"/><stop offset=".4" stop-color="#4cc" stop-opacity=".6"/><stop offset="1" stop-color="white"/></radialGradient></defs><g transform="translate(5 6) scale(.8)"><path d="M5 5H95V75H5Z" fill="url(#p)"/></g></svg>"##;
+        let (doc, notes, maximum, mean) = compare_render(source);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(doc.layers.iter().all(|layer| layer.kind.pixels().is_none()));
+        let gradient = doc
+            .layers
+            .iter()
+            .filter_map(|layer| layer.kind.shapes())
+            .flatten()
+            .find_map(|shape| shape.style.fill.gradient())
+            .unwrap();
+        assert_eq!(gradient.kind, crate::gradient::GradientKind::Radial);
+        assert_eq!(gradient.stops.len(), 3);
+        assert!(maximum <= 1 && mean < 0.02, "max={maximum}, mean={mean}");
+    }
+
+    #[test]
+    fn svg_stretched_equivalent_spans_remain_editable_text() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><text x="12" y="45" font-family="sans-serif" font-size="28" fill="#248" transform="translate(4 6) scale(1.4 .8)"><tspan>Vec</tspan><tspan>tor</tspan></text></svg>"##;
+        let (doc, notes, maximum, mean) = compare_render(source);
+        assert!(notes.is_empty(), "{notes:?}");
+        let run = doc
+            .layers
+            .iter()
+            .filter_map(|layer| layer.kind.shapes())
+            .flatten()
+            .find_map(|shape| {
+                if let Geom::Text(run) = &shape.geom {
+                    Some(run)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(run.content, "Vector");
+        assert!((run.spans[0].hscale.unwrap() - 175.).abs() < 0.001);
+        assert!(crate::text::outline_path(run).unwrap().segments().any(|segment| matches!(segment, tiny_skia::PathSegment::QuadTo(..) | tiny_skia::PathSegment::CubicTo(..))));
+        assert!(mean < 0.1, "max={maximum}, mean={mean}, face={}, px={}, origin={:?}, spans={:?}", run.font, run.px, run.origin, run.spans);
+        let restored = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            serde_json::to_value(&doc).unwrap()
+        );
+        assert_eq!(crate::compositor::export_png(&restored, 1).unwrap(), crate::compositor::export_png(&doc, 1).unwrap());
+    }
+
+    #[test]
+    fn svg_inactive_variation_settings_do_not_outline_static_font_text() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><text x="12" y="45" font-family="Liberation Sans" font-size="28" fill="#248" style="font-variation-settings:'wdth' 75" transform="scale(1.4 .8)">Vector</text></svg>"##;
+        let (doc, notes, _, mean) = compare_render(source);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(
+            doc.layers
+                .iter()
+                .filter_map(|layer| layer.kind.shapes())
+                .flatten()
+                .any(|shape| matches!(shape.geom, Geom::Text(_)))
+        );
+        assert!(mean < 0.2, "mean={mean}");
+    }
+
+    #[test]
+    fn svg_compound_curves_keep_bezier_handles() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><path fill="#369" fill-rule="evenodd" d="M10 50C10 5 90 5 90 50C90 95 10 95 10 50ZM30 50C30 75 70 75 70 50C70 25 30 25 30 50Z"/></svg>"##;
+        let (doc, _, maximum, mean) = compare_render(source);
+        let shape = doc
+            .layers
+            .iter()
+            .filter_map(|layer| layer.kind.shapes())
+            .flatten()
+            .next()
+            .unwrap();
+        let Geom::Paths { paths, winding } = &shape.geom else {
+            panic!("Compound curves became flattened points")
+        };
+        assert_eq!(paths.len(), 2);
+        assert!(!winding);
+        assert!(
+            paths
+                .iter()
+                .all(|path| path.anchors.iter().any(|anchor| anchor.h_out.length() > 0.))
+        );
+        assert!(maximum <= 1 && mean < 0.02, "max={maximum}, mean={mean}");
+    }
+
+    #[test]
+    fn svg_open_fill_and_nonzero_winding_keep_their_appearance() {
+        for source in [
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="90"><path d="M10 75L50 10L90 75" fill="#fc8" stroke="#258" stroke-width="8"/></svg>"##,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="90"><path d="M50 5L77 80L7 33H93L23 80Z" fill="#369" fill-rule="nonzero"/></svg>"##,
+        ] {
+            let (doc, notes, maximum, mean) = compare_render(source);
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(doc.layers.iter().all(|layer| layer.kind.pixels().is_none()));
+            assert!(maximum <= 3 && mean < 0.02, "max={maximum}, mean={mean}");
+        }
+    }
+
+    #[test]
+    fn svg_type_styles_remain_editable_with_their_appearance() {
+        for source in [
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="65"><text x="10" y="45" font-size="28" fill="#248">A<tspan baseline-shift="super">2</tspan></text></svg>"##,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="65"><text x="10" y="45" font-size="28" fill="#248">Vec<tspan fill="#c42">tor</tspan></text></svg>"##,
+        ] {
+            let (doc, notes, maximum, mean) = compare_render(source);
+            assert!(!notes.iter().any(|note|note.contains("editable outlines")),"{notes:?}");
+            assert!(doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().any(|s|matches!(s.geom,Geom::Text(_))));
+            assert!(doc.layers.iter().all(|layer| layer.kind.pixels().is_none()));
+            assert!(maximum <= 3 && mean < 0.02, "max={maximum}, mean={mean}");
+        }
+    }
+
+    #[test]
+    fn large_vector_canvas_keeps_thousands_of_objects_editable() {
+        use std::fmt::Write;
+
+        let mut source = String::from(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="80000"><g fill="#168f72">"##,
+        );
+        for index in 0..2000 {
+            let x = index % 50 * 2000;
+            let y = index / 50 * 2000;
+            write!(
+                source,
+                r#"<rect x="{x}" y="{y}" width="800" height="800"/>"#
+            )
+            .unwrap();
+        }
+        source.push_str("</g></svg>");
+        assert!(source.len() < 128 * 1024);
+
+        let (doc, notes) = read(&source, "Large vector canvas").unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(doc.size(), Pt::new(100000., 80000.));
+        assert!(doc.layers.iter().all(|layer| layer.kind.pixels().is_none()));
+        assert_eq!(
+            doc.layers
+                .iter()
+                .map(|layer| layer.kind.shapes().map_or(0, <[Shape]>::len))
+                .sum::<usize>(),
+            2000,
+        );
+        let restored = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        assert_eq!(restored.size(), doc.size());
+        assert_eq!(restored.layers.len(), doc.layers.len());
+
+        let mut view = crate::compositor::View::default();
+        view.fit(
+            doc.size(),
+            crate::geom::Bounds::from_min_size(Pt::ZERO, Pt::new(1000., 800.)),
+        );
+        let rendered = crate::compositor::render_view(
+            &restored,
+            view,
+            1000,
+            800,
+            crate::compositor::Draft::none(),
+        )
+        .unwrap();
+        assert_eq!((rendered.width(), rendered.height()), (1000, 800));
+        assert!(
+            rendered
+                .pixels()
+                .iter()
+                .any(|pixel| u16::from(pixel.green()) > u16::from(pixel.red()) + 20)
+        );
+    }
+
+    #[test]
+    fn large_vector_canvas_keeps_patterns_vector_at_any_object_size() {
+        let source = |size| {
+            format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="80000"><defs><pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="2"/></pattern></defs><path d="M10 10h{size}v{size}H10Z" fill="url(#p)"/></svg>"##,
+            )
+        };
+        for size in [30, 9000] {
+            let (doc, notes) = read(&source(size), "Large vector paint").unwrap();
+            assert_eq!(doc.size(), Pt::new(100000., 80000.));
+            assert!(notes.is_empty(), "{notes:?}");
+            assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+            assert!(
+                doc.layers
+                    .iter()
+                    .filter_map(|l| l.kind.shapes())
+                    .flatten()
+                    .any(|s| matches!(s.style.fill, Fill::Pattern(_)))
+            );
+            let preview = crate::compositor::render_export_preview(&doc, 400).unwrap();
+            assert_eq!((preview.width(), preview.height()), (400, 320));
+            assert!(crate::project::encode(&doc).unwrap().len() < 20_000);
+        }
+    }
 
     #[test]
     fn svg_11_doctype_keeps_transformed_artwork_editable() {
@@ -1042,26 +1799,28 @@ mod tests {
         let (doc, notes) = read(source, "SVG appearance").unwrap();
         let actual =
             super::super::decode_image(&crate::compositor::export_png(&doc, 1).unwrap()).unwrap();
-        let tree = usvg::Tree::from_str(source, &usvg::Options::default()).unwrap();
+        let options = crate::text::svg_type::options();
+        let tree = usvg::Tree::from_str(source, &options).unwrap();
         let mut expected = tiny_skia::Pixmap::new(actual.w, actual.h).unwrap();
         resvg::render(&tree, Transform::identity(), &mut expected.as_mut());
-        let expected = Pixels::from_pixmap(&expected);
+        let actual = actual.to_pixmap().unwrap();
         let mut maximum = 0;
         let mut sum = 0u64;
-        for (a, b) in actual.data.iter().zip(&expected.data) {
+        for (a, b) in actual.data().iter().zip(expected.data()) {
             let delta = a.abs_diff(*b);
             maximum = maximum.max(delta);
             sum += u64::from(delta);
         }
-        (doc, notes, maximum, sum as f64 / actual.data.len() as f64)
+        (doc, notes, maximum, sum as f64 / actual.data().len() as f64)
     }
 
     #[test]
-    fn fallback_paths_and_images_keep_ancestor_transforms() {
+    fn svg_vector_patterns_and_images_keep_ancestor_transforms() {
         let pattern = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><defs><pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="4" fill="red"/></pattern></defs><g transform="translate(13 7) scale(2)"><rect x="1" y="2" width="12" height="10" fill="url(#p)"/></g></svg>"##;
         let (doc, _, max, _) = compare_render(pattern);
         assert_eq!(max, 0);
-        assert!(doc.layers.iter().any(|l| l.kind.pixels().is_some()));
+        assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+        assert!(doc.layers.iter().filter_map(|l| l.kind.shapes()).flatten().any(|s| matches!(s.style.fill, Fill::Pattern(_))));
         let image = crate::photo::RgbaImage::new(
             2,
             2,
@@ -1124,13 +1883,13 @@ mod tests {
     }
 
     #[test]
-    fn fallback_filter_group_keeps_ancestor_transform_and_blend() {
+    fn svg_filter_graph_keeps_ancestor_transform_and_blend() {
         let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><defs><filter id="p" x="-50%" y="-50%" width="200%" height="200%"><feOffset dx="3" dy="2"/><feGaussianBlur stdDeviation="1"/></filter></defs><g transform="translate(15 7) scale(2)"><g filter="url(#p)" style="mix-blend-mode:multiply"><rect width="10" height="8" fill="red"/></g></g></svg>"##;
         let (doc, _, max, mean) = compare_render(source);
         assert!(
             doc.layers
                 .iter()
-                .any(|l| l.kind.pixels().is_some() && l.blend == Blend::Multiply)
+                .any(|l| l.svg_filter.is_some() && l.blend == Blend::Multiply)
         );
         assert!(max <= 1 && mean < 0.02, "max={max}, mean={mean}");
     }
@@ -1195,21 +1954,126 @@ mod tests {
     fn vector_clips_keep_child_geometry_and_match_svg_pixels() {
         let source = r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><defs><clipPath id="clip"><rect x="3" y="2" width="12" height="10"/></clipPath></defs><g transform="translate(6 4)" clip-path="url(#clip)"><rect width="30" height="25" fill="red"/></g></svg>"#;
         let (doc, notes) = read(source, "clip").unwrap();
-        assert!(notes.iter().any(|s| s.contains("pixel masks")));
-        assert!(doc.layers.iter().any(|l| l.is_group && l.mask.is_some()));
-        assert_eq!(doc.layers.iter().filter(|l| !l.is_group).count(), 1);
+        assert!(!notes.iter().any(|s| s.contains("pixel masks")));
+        assert!(
+            doc.layers
+                .iter()
+                .any(|l| l.is_group && !l.artwork_masks.is_empty())
+        );
+        assert!(doc.layers.iter().all(|l| l.mask.is_none()));
+        assert_eq!(doc.layers.iter().filter(|l| !l.is_group).count(), 2);
         let actual =
             super::super::decode_image(&crate::compositor::export_png(&doc, 1).unwrap()).unwrap();
         let tree = usvg::Tree::from_str(source, &usvg::Options::default()).unwrap();
         let mut expected = tiny_skia::Pixmap::new(40, 30).unwrap();
         resvg::render(&tree, Transform::identity(), &mut expected.as_mut());
-        let expected = Pixels::from_pixmap(&expected);
-        assert_eq!(actual.data, expected.data);
+        let expected = Pixels::from_pixmap(&expected).unwrap();
+        assert_eq!(actual.data.as_slice(), expected.data.as_slice());
         let exported = crate::svg::export(&doc).unwrap();
         let (roundtrip, _) = read(&exported, "again").unwrap();
         assert_eq!(
-            roundtrip.layers.iter().filter(|l| l.mask.is_some()).count(),
+            roundtrip
+                .layers
+                .iter()
+                .filter(|l| !l.artwork_masks.is_empty())
+                .count(),
             1
         );
     }
+}
+
+/// Resolve a source element's filter URLs using the same static cascade as import.
+/// Args: element and parsed stylesheet. Returns source IDs in filter-list order.
+fn filter_ids(node: roxmltree::Node<'_, '_>, sheet: &simplecss::StyleSheet<'_>) -> Vec<String> {
+    let mut value = node.attribute("filter").map(|v| (v.to_string(), false));
+    for declaration in sheet
+        .rules
+        .iter()
+        .filter(|r| r.selector.matches(&CssElement(node)))
+        .flat_map(|r| &r.declarations)
+        .chain(
+            simplecss::DeclarationTokenizer::from(node.attribute("style").unwrap_or_default())
+                .collect::<Vec<_>>()
+                .iter(),
+        )
+    {
+        if declaration.name == "filter"
+            && !value
+                .as_ref()
+                .is_some_and(|(_, old)| *old && !declaration.important)
+        {
+            value = Some((declaration.value.to_string(), declaration.important));
+        }
+    }
+    let Some((value, _)) = value else {
+        return Vec::new();
+    };
+    value
+        .split("url(")
+        .skip(1)
+        .filter_map(|v| {
+            v.split(')')
+                .next()?
+                .trim()
+                .trim_matches(['\'', '"'])
+                .strip_prefix('#')
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// Preserve source filter units and inline their stylesheet properties.
+/// Args: original SVG XML and its stylesheet. Returns inert vector definitions.
+fn raw_definitions(xml: &roxmltree::Document<'_>, sheet: &simplecss::StyleSheet<'_>) -> String {
+    let mut source = String::new();
+    for node in xml
+        .descendants()
+        .filter(|n| n.parent_element().is_some_and(|p| p.has_tag_name("defs")))
+    {
+        let mut resource = crate::svg_source::xml_node(node);
+        let mut edits = Vec::new();
+        let wrapper = format!("<svg>{resource}</svg>");
+        if let Ok(parsed) = roxmltree::Document::parse(&wrapper) {
+            for (original, target) in node
+                .descendants()
+                .filter(|n| n.is_element())
+                .zip(parsed.descendants().filter(|n| n.is_element()).skip(1))
+            {
+                let mut style = String::new();
+                for rule in sheet
+                    .rules
+                    .iter()
+                    .filter(|r| r.selector.matches(&CssElement(original)))
+                {
+                    for declaration in &rule.declarations {
+                        style.push_str(&format!(
+                            "{}:{}{};",
+                            declaration.name,
+                            declaration.value,
+                            if declaration.important {
+                                " !important"
+                            } else {
+                                ""
+                            }
+                        ));
+                    }
+                }
+                style.push_str(original.attribute("style").unwrap_or_default());
+                if style.is_empty() {
+                    continue;
+                }
+                if let Some(attr) = target.attributes().find(|a| a.name() == "style") {
+                    edits.push((attr.range().start - 5..attr.range().end - 5, String::new()));
+                }
+                let start = target.range().start - 5 + 1 + target.tag_name().name().len();
+                edits.push((start..start, format!(" style=\"{}\"", xml_text(&style))));
+            }
+        }
+        edits.sort_by_key(|(r, _)| std::cmp::Reverse(r.start));
+        for (range, value) in edits {
+            resource.replace_range(range, &value);
+        }
+        source.push_str(&resource);
+    }
+    source
 }

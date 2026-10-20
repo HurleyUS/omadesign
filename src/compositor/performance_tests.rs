@@ -353,6 +353,8 @@ fn reference_layer(
     doc: &Document,
     overrides: &HashMap<u64, Pose>,
 ) {
+    let mut filters = layer.filters.clone();
+    crate::filter::scale(&mut filters,transform.get_scale().0);
     let mut content = Pixmap::new(pm.width(), pm.height()).unwrap();
     draw_content(
         &mut content,
@@ -365,6 +367,7 @@ fn reference_layer(
         None,
         doc,
         Some(overrides),
+        &doc.mask_sources(),
     );
     if let Some(pixels) = &layer.mask {
         let mut placed = Pixmap::new(pm.width(), pm.height()).unwrap();
@@ -392,7 +395,7 @@ fn reference_layer(
         crate::filter::composite(
             pm,
             content,
-            &layer.filters,
+            &filters,
             Transform::identity(),
             layer.blend.to_skia(),
             layer.opacity,
@@ -402,7 +405,7 @@ fn reference_layer(
         );
     } else {
         if layer.filters.active() {
-            crate::filter::apply(&mut content, &layer.filters);
+            crate::filter::apply(&mut content, &filters);
         }
         pm.draw_pixmap(
             0,
@@ -494,7 +497,9 @@ fn cached_nested_group_filters_match_fresh_compositing() {
             &doc,
             &overrides,
         );
-        crate::filter::apply(&mut inner_pixels, &doc.layers[1].filters);
+        let mut inner_filters=doc.layers[1].filters.clone();
+        crate::filter::scale(&mut inner_filters,transform.get_scale().0);
+        crate::filter::apply(&mut inner_pixels, &inner_filters);
         let mut outer_pixels = Pixmap::new(121, 97).unwrap();
         outer_pixels.draw_pixmap(
             0,
@@ -536,7 +541,9 @@ fn cached_nested_group_filters_match_fresh_compositing() {
             placed.as_ref(),
             tiny_skia::MaskType::Luminance,
         ));
-        crate::filter::apply(&mut outer_pixels, &outer.filters);
+        let mut outer_filters=outer.filters.clone();
+        crate::filter::scale(&mut outer_filters,transform.get_scale().0);
+        crate::filter::apply(&mut outer_pixels, &outer_filters);
         let mut expected = backdrop();
         expected.draw_pixmap(
             0,
@@ -559,7 +566,7 @@ fn cached_nested_group_filters_match_fresh_compositing() {
                 &Draft::none(),
                 None,
                 Some(&overrides),
-            );
+            ).unwrap();
             assert_pixels_equal(&actual, &expected, "cached nested group filter pixels");
         }
     }
@@ -664,6 +671,7 @@ fn bounded_layer_surfaces_match_full_viewport_compositing() {
                     None,
                     &doc,
                     Some(&overrides),
+                    &doc.mask_sources(),
                 );
                 assert_pixels_equal(
                     &actual,

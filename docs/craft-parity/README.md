@@ -1,0 +1,26 @@
+# Craft workflow parity
+
+The original comparison selected 25 gaps and eight deeper investigations. It was not an exhaustive feature inventory. The rejected nightly and its human QA report remain part of the record. The workspace correction in #332 provides working docks and native editing paths; it does not establish full parity.
+
+Run `node scripts/craft-parity.mjs REFERENCE_REPOS OUTPUT_JSON` against the pinned local reference checkouts to enumerate command declarations and pane source files. Keep generated source evidence under `.artifacts`. Every emitted entry starts unmapped. Runtime-built commands, tools, menus, file formats and complete workflows require inspection beyond that catalog.
+
+## Current implementation layers
+
+| Layer | Working scope | Remaining scope |
+| --- | --- | --- |
+| Workspace, #332 | Theme-derived chrome, one mode control, actual dock nesting/splits, recoverable sizing, Layers thumbnails/footer, ratio lock, native paste | Full panel and workflow parity |
+| Color workflows, #333 | 21 harmony choices, compact variation grid, five-color themes, linked/custom wheel edits, atomic file-backed theme library, guarded swatch saving, explicit recolor mappings | Pattern-internal recoloring, CMYK/spot-color models, color reduction, global swatch linkage and recolor preview remain open |
+| Actions, #341 | Actual recording of initial vector command set, durable libraries, atomic playback/rollback and recording recovery | Wider commands, selection/parameter editing, pixel/photo/motion actions and dedicated import/export |
+| Styles, #339 | File-backed appearance presets, rendered previews, atomic multi-object apply | Linked document styles, additive appearances, character-color override and dedicated import/export |
+| Channels, #354–#366 | Composite-channel selection, full-depth saved alpha drawing and Curves, persistent Quick Mask, exact selection transfer, saved active selections (feature 36), all 30 existing scalar filter/effect choices, native Undo/Redo and cold reopen | Color/spot channels, calculations, wider filter options and interchange |
+| Pixel command menus, #368 | Actual Image adjustments and Filter categories using existing captured artwork/mask/scalar dialogs; native menu and independent saved-output checks | Full reference menu coverage and RGB Curves |
+| Type command menus and fields, #370/#372/#374 | Existing area/point, threading and path-text routes in top Type; full-story ownership guards, one Undo, exact image/native reopen; area-text dimensions fit resized docks; actual whole-column keyboard shrink/expand; native and imported SVG painted outlines; Type menu font-size step; Type menu fit headline; Type menu placeholder text; Type menu font, recent font, bold and italic; Type menu orientation; Type menu hidden characters and inline symbols; point-type object shape-distance outlines; point-type character shape-distance outlines; imported shape-distance outlines; animated paint outlines; contour wrapping outlines; placed text image outlines; layout-frame outlines | unresolved pointer-divider targeting observation |
+| Mode command menus | Motion Animation menu: Add keyframe, keyframe with a chosen ease, all 13 motion presets and Loop playback; Layout menu: Wrap in frame, Add auto layout, Create component and Detach instance; Develop menu: Auto light, Clear crop, Reset all adjustments and Show original; Effect menu: Add effect from the full catalog and Clear effects on the selection; all through the existing commands, each one Undo step with exact reopen | Layer-level effects from the menu and fuller reference menu coverage |
+| Symbols, #335/#337 | Linked vector creation/place/edit, independent copies, select instances, batch reset/break, rename and source-fitted thumbnails | Hidden library definitions, cross-definition replacement, alternate-artwork redefinition, external libraries and symbolism tools |
+| Export, #343/#347/#349/#351 | Document-owned live asset collection, shared fractional/width/height/PPI rows, genuine density tags, Mobile/Density presets and per-row subfolders; native Undo/cold reopen, actual PNG/SVG files and held-directory collision-safe publication; painted stroke/curve/effect bounds | Extra formats/settings, bleed, SVG graph overflow bounds, drag collection, reorder and asset import/export remain open |
+| Other vector panes | Existing type, path, appearance, paint, effects and library bodies | Attributes, CSS properties, document info, flattener/separation previews and remaining reference commands |
+| Photo, Layout, Motion | Existing source and exact-source qualified work retained | Complete reference workflows still need item-by-item reconciliation and implementation |
+
+An item closes when its real editing path works, has the necessary Undo and native save/reopen behavior, and has been exercised at the appropriate boundary. A missing reference file, disabled control, unsupported operation or unrun test remains open. Historical passes stay bound to their source; they do not certify a later union.
+
+Do not replace or steer Michael's QA window while implementation continues. New binaries use separate directories so user settings and documents remain intact. Version preparation and public release remain separate from this work.

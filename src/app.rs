@@ -8,34 +8,65 @@ mod type_clipboard;
 pub(crate) mod type_ime;
 mod clipboard_insert;
 mod cloud;
+mod live;
 pub mod deform;
 mod file_dialogs;
 mod file_io;
 mod guides;
 mod hierarchy_edit;
 pub use hierarchy_edit::TreePlacement;
+pub(crate) use hierarchy_edit::GroupRequest;
 mod key_hints;
+pub(crate) mod keyboard_authoring;
 mod layer_groups;
+mod history_targets;
+mod layer_copy;
+mod layer_copy_destination;
+pub(crate) use layer_copy_destination::{LayerCopyDestination, LayerCopyTarget};
+pub(crate) mod layer_merge;
+mod layer_clipping;
 mod layout;
+pub(crate) use layout::LayoutStackField;
 mod layout_components;
+pub(crate) use layout_components::{ComponentPropertyTarget, ComponentPropertyEdit};
 mod layout_edit;
 pub mod libraries;
 pub(crate) mod masking;
 mod motion_presets;
-mod photo_session;
+pub(crate) mod photo_session;
 pub(crate) mod pixel_selection;
 pub(crate) mod pixel_edit;
 mod placement;
 mod recovery;
+pub(crate) mod recolor;
+pub(crate) mod graphic_styles;
+pub(crate) mod actions;
+pub(crate) mod screen_export;
+pub(crate) mod channels;
+pub(crate) mod channel_paint;
+pub(crate) mod channel_adjustment;
+pub(crate) mod quick_mask;
+mod active_selection;
+pub(crate) mod mask_affine;
+pub(crate) mod mask_filter;
+pub(crate) mod calculations;
+mod symbol_library;
+mod linked_styles;
+mod color_tag;
+pub(crate) mod recolor_reduce;
 mod restart;
 pub(crate) mod selection;
 mod alignment;
 mod shortcuts;
+pub(crate) mod input_history;
 mod snapping;
+pub(crate) mod symbols;
 pub mod startup;
 mod tabs;
 mod typography;
 mod text_geometry;
+mod text_outlines;
+pub(crate) mod type_commands;
 pub mod updates;
 
 pub use key_hints::{KeyHint, KeyHints};
@@ -225,38 +256,41 @@ pub enum Op {
     Brush {
         layer: usize,
         erase: bool,
-        buf: Pixmap,
-        preview: Option<Pixmap>,
+        buf: crate::deep_color::surface::Surface,
+        preview: Option<crate::deep_color::surface::Surface>,
         last: Option<Pt>,
-        before: Vec<u8>,
+        before: crate::document::RasterState,
         selection_generation: u64,
     },
+    NativeRetouch {layer:usize,before:crate::document::Pixels,working:crate::document::Pixels,last:Pt,offset:Pt,tool:Tool},
+    NativeStroke {layer:usize,mask:bool,erase:bool,before:crate::document::Pixels,coverage:Pixmap,memory:std::sync::Arc<crate::resources::Lease>,last:Pt},
+    ChannelStroke(Box<channel_paint::Stroke>),
     Retouch {
         layer: usize,
         mask: bool,
         erase: bool,
         heal: bool,
-        source: Option<Pixmap>,
-        buf: Pixmap,
+        source: Option<crate::deep_color::surface::Surface>,
+        buf: crate::deep_color::surface::Surface,
         offset: Pt,
         last: Pt,
-        before: Vec<u8>,
+        before: std::sync::Arc<crate::resources::Allocation<u8>>,
         selection_generation: u64,
     },
     Smudge {
         layer: usize,
         last: Option<Pt>,
-        buf: Pixmap,
+        buf: crate::deep_color::surface::Surface,
         published: bool,
-        before: Vec<u8>,
+        before: std::sync::Arc<crate::resources::Allocation<u8>>,
         selection_generation: u64,
     },
     Clone {
         layer: usize,
         last: Option<Pt>,
         offset: Pt,
-        buf: Pixmap,
-        before: Vec<u8>,
+        buf: crate::deep_color::surface::Surface,
+        before: std::sync::Arc<crate::resources::Allocation<u8>>,
         selection_generation: u64,
     },
     Marquee {
@@ -332,9 +366,13 @@ pub struct Studio {
     pub selection: Vec<(usize, u64)>,
     /// Explicit sidebar layer target, independent of its selected descendants.
     pub selected_layer: Option<u64>,
+    layer_rows: Option<layer_groups::LayerRows>,
     pub individual_object: Option<(usize, u64)>,
     pub active_layer: Option<usize>,
     pub history: History,
+    pub(crate) actions: crate::actions::Recorder,
+    field_history_context: Option<egui::Context>,
+    field_history_generation: Option<u64>,
     pub style: Style,
     pub gradient: (Rgba, Rgba),
     pub brush: Brush,
@@ -347,14 +385,17 @@ pub struct Studio {
     pub clone_source: Option<Pt>,
     /// Keep the source offset while painting. Off samples the same source each dab.
     pub clone_aligned: bool,
-    pub pixel_sel: Option<Vec<u8>>,
+    pub pixel_sel: Option<std::sync::Arc<crate::resources::Allocation<f32>>>,
     pub(crate) pixel_edit: Option<pixel_edit::Editor>,
     pub(crate) pixel_path: Option<pixel_edit::SelectionPath>,
     pub pixel_sel_space: Option<masking::SelectionSpace>,
     pub pixel_sel_gen: u64,
     pixel_sel_cache: masking::SelectionCache,
     pub paint_mask: bool,
-    pub pending_item_mask: Option<masking::ItemMask>,
+    pub(crate) channel_target: Option<u64>,
+    quick_mask_palette: Option<quick_mask::Palette>,
+    pub(crate) quick_mask_defaults: crate::channels::quick_mask::Options,
+    pub pending_item_mask: Option<crate::artwork_mask::MaskSource>,
     pub snap: SnapSettings,
     pub snap_scene: Option<snap::Scene>,
     pub(crate) snap_points: Option<snapping::PointCache>,
@@ -389,6 +430,8 @@ pub struct Studio {
     pub text_character: crate::geom::CharSpan,
     type_paste_jobs: Vec<type_clipboard::TypePasteJob>,
     pub type_edit: Option<TypeEdit>,
+    /// View marks for spaces, paragraph breaks and the end of each story. Not a document edit.
+    pub hidden_characters: bool,
     pub polygon_sides: u32,
     pub star_points: u32,
     pub star_inner: f32,
@@ -457,6 +500,7 @@ pub struct Studio {
     pub allow_close: bool,
     pub welcome_page: WelcomePage,
     pub startup_preferences: startup::Preferences,
+    pub(crate) panel_workspaces: crate::ui::workspace::Book,
     startup_preferences_path: Option<PathBuf>,
     pub font_query: String,
     pub font_recents: Vec<String>,
@@ -465,6 +509,7 @@ pub struct Studio {
     pub shape_rename: Option<(usize, u64, String)>,
     pub clipboard_rasters: Vec<Layer>,
     file_jobs: Vec<file_io::ImportJob>,
+    file_failures: Vec<file_io::FileFailure>,
     pending_open_files: std::collections::VecDeque<(PathBuf, file_io::ImportMode)>,
     file_dialog: Option<file_dialogs::FileDialogJob>,
     clipboard_jobs: Vec<clipboard::PasteJob>,
@@ -473,6 +518,8 @@ pub struct Studio {
     pub cloud_identity: crate::cloud::Identity,
     pub cloud_modal: CloudModal,
     pub cloud_panel: crate::cloud::client::Panel,
+    live_runtime: live::LiveRuntime,
+    pub live_join_id: String,
     cloud_job: Option<std::sync::mpsc::Receiver<Result<crate::cloud::client::Event, String>>>,
     pub pinning_comment: bool,
     pub comment_draft: String,
@@ -485,6 +532,7 @@ pub struct Studio {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CloudModal {
+    Live,
     None,
     SignIn,
     Invite,
@@ -554,7 +602,7 @@ fn recolor_fill(fill: Fill, color: Rgba) -> Fill {
             }
             Fill::Gradient(gradient)
         }
-        Fill::None | Fill::Solid(_) => Fill::Solid(color),
+        Fill::None | Fill::Solid(_) | Fill::Pattern(_) => Fill::Solid(color),
     }
 }
 
@@ -583,9 +631,13 @@ impl Studio {
             updates: Default::default(),
             settings_page: 0,
             selected_layer: None,
+            layer_rows: None,
             individual_object: None,
             active_layer: Some(1),
             history: History::default(),
+            actions: Default::default(),
+            field_history_context: None,
+            field_history_generation: None,
             style: Style::default(),
             gradient: (Rgba::from_hex(0xFFD166), Rgba::from_hex(0xE5484D)),
             brush: Brush::default(),
@@ -604,6 +656,9 @@ impl Studio {
             pixel_sel_gen: 0,
             pixel_sel_cache: Default::default(),
             paint_mask: false,
+            channel_target: None,
+            quick_mask_palette: None,
+            quick_mask_defaults: Default::default(),
             pending_item_mask: None,
             snap: SnapSettings::default(),
             snap_scene: None,
@@ -640,6 +695,7 @@ impl Studio {
             text_character: Default::default(),
             type_paste_jobs: Vec::new(),
             type_edit: None,
+            hidden_characters: false,
             polygon_sides: 6,
             star_points: 5,
             star_inner: 0.4,
@@ -706,6 +762,7 @@ impl Studio {
             allow_close: false,
             welcome_page: WelcomePage::New,
             startup_preferences: startup::Preferences::default(),
+            panel_workspaces: Default::default(),
             startup_preferences_path: None,
             font_query: String::new(),
             font_recents: crate::project::load_font_recents(),
@@ -714,6 +771,7 @@ impl Studio {
             shape_rename: None,
             clipboard_rasters: vec![],
             file_jobs: vec![],
+            file_failures: vec![],
             pending_open_files: Default::default(),
             file_dialog: None,
             clipboard_jobs: vec![],
@@ -722,6 +780,8 @@ impl Studio {
             cloud_identity: crate::cloud::load_identity(),
             cloud_modal: CloudModal::None,
             cloud_panel: Default::default(),
+            live_runtime: Default::default(),
+            live_join_id: String::new(),
             cloud_job: None,
             pinning_comment: false,
             comment_draft: String::new(),
@@ -772,6 +832,12 @@ impl Studio {
             self.new_doc_bleed,
             self.new_doc_safe,
         );
+        if self.persona == Persona::Pixel {
+            match Layer::raster("Layer 1", doc.width.round() as u32, doc.height.round() as u32) {
+                Ok(layer) => doc.layers[1] = layer,
+                Err(error) => {self.status = error; return;}
+            }
+        }
         doc.ruler.guides_locked = self.startup_preferences.guides_locked_by_default;
         crate::project::delete_swap(&self.swap_id);
         self.replace_active_tab(TabState::new(doc, None));
@@ -912,7 +978,7 @@ impl Studio {
                 &b,
                 false,
             );
-            *px = crate::document::Pixels::from_pixmap(&pm);
+            match crate::document::Pixels::from_pixmap(&pm) {Ok(pixels)=>*px=pixels,Err(error)=>{self.status=error;return;}}
         }
 
         self.selection.clear();
@@ -924,8 +990,10 @@ impl Studio {
     }
 
     pub fn mark(&mut self) {
+        if self.actions.depth == 0 { self.actions.pause("This edit cannot be recorded yet. Save or discard the recorded steps"); }
         crate::compositor::reset_effect_admission();
         self.interaction_render.clear();
+        crate::text::refresh_document(&mut self.doc);
         crate::text_geometry::reflow(&mut self.doc);
         self.mark_interaction();
     }
@@ -987,6 +1055,10 @@ impl Studio {
     }
 
     pub fn flip_selection(&mut self, horizontal: bool) {
+        self.with_action_step(crate::actions::Step::Flip { horizontal }, |studio| studio.flip_selection_command(horizontal));
+    }
+
+    fn flip_selection_command(&mut self, horizontal: bool) {
         if !self.can_flip_selection() {
             self.status = if self.selection.iter().any(|&(layer, id)| {
                 self.doc
@@ -1519,6 +1591,8 @@ impl Studio {
     }
 
     pub fn commit(&mut self, cmd: Cmd) {
+        self.actions.committed(&self.swap_id);
+        let field = self.take_field_history_key();
         crate::telemetry::count("feature.edit");
         self.end_pixel_stroke(false);
         self.end_deform(false);
@@ -1531,17 +1605,24 @@ impl Studio {
             crate::document::apply(&mut self.doc, &change);
             changes.push(change);
         }
-        self.history.push(if changes.len() == 1 {
+        let command = if changes.len() == 1 {
             changes.remove(0)
         } else {
             Cmd::Batch(changes)
-        });
+        };
+        if let Some(field) = field {
+            self.history.push_field(command, field, &self.doc);
+        } else {
+            self.history.push(command);
+        }
         self.dirty = true;
         self.mark();
+        self.field_history_generation = field.map(|_| self.canvas_gen);
         self.sanitize();
     }
 
     pub fn undo(&mut self) {
+        self.actions.pause("Undo is not recorded. Save or discard the recorded steps");
         if self.pixel_edit_history(false) { return; }
         crate::telemetry::count("feature.undo");
         if self.persona == Persona::Photo {
@@ -1560,8 +1641,10 @@ impl Studio {
         if dragging {
             return;
         }
-        if let Some(inv) = self.history.undo() {
+        if self.live_undo(false) { return; }
+        if let Some((inv, target)) = self.history.undo_targeted() {
             self.apply_with_layer_selection(&inv);
+            if let Some(target) = target { self.restore_history_target(target); }
             self.dirty = true;
             self.sanitize();
             self.mark();
@@ -1570,6 +1653,7 @@ impl Studio {
     }
 
     pub fn redo(&mut self) {
+        self.actions.pause("Redo is not recorded. Save or discard the recorded steps");
         if self.pixel_edit_history(true) { return; }
         crate::telemetry::count("feature.redo");
         if self.persona == Persona::Photo {
@@ -1581,8 +1665,10 @@ impl Studio {
         }
         self.end_deform(true);
         self.reset_snap_gesture();
-        if let Some(cmd) = self.history.redo() {
+        if self.live_undo(true) { return; }
+        if let Some((cmd, target)) = self.history.redo_targeted() {
             self.apply_with_layer_selection(&cmd);
+            if let Some(target) = target { self.restore_history_target(target); }
             self.dirty = true;
             self.sanitize();
             self.mark();
@@ -1591,6 +1677,9 @@ impl Studio {
     }
 
     fn sanitize(&mut self) {
+        self.sync_quick_mask_palette();
+        if self.quick_mask_painting() && !Self::quick_mask_tool_allowed(self.tool) {self.set_tool(Tool::Brush);}
+        self.channel_target = self.channel_target.filter(|id| self.doc.channels.iter().any(|c| c.id == *id));
         self.selected_layer = self
             .selected_layer
             .filter(|id| self.doc.layers.iter().any(|l| l.id == *id));
@@ -1673,11 +1762,7 @@ impl Studio {
     pub fn add_layer(&mut self, raster: bool) {
         let n = self.doc.layers.len() + 1;
         let mut layer = if raster {
-            Layer::raster(
-                format!("Pixel {n}"),
-                self.doc.width as u32,
-                self.doc.height as u32,
-            )
+            match Layer::raster(format!("Pixel {n}"),self.doc.width as u32,self.doc.height as u32) { Ok(layer)=>layer, Err(error)=>{self.status=error;return;} }
         } else {
             Layer::vector(format!("Layer {n}"))
         };
@@ -1845,11 +1930,21 @@ impl Studio {
     }
 
     pub fn duplicate_selection_by(&mut self, delta: Pt) {
+        self.with_action_step(crate::actions::Step::Duplicate { delta }, |studio| studio.duplicate_selection_command(delta));
+    }
+
+    fn duplicate_selection_command(&mut self, delta: Pt) {
+        if self.selection.is_empty()
+            && let Some(index) = self.selected_layer.and_then(|id| self.doc.layers.iter().position(|l| l.id == id))
+        {
+            self.duplicate_layer_tree_by(index, delta);
+            return;
+        }
         let mut selected = Vec::new();
         let mut commands = Vec::new();
         let mut new_layers = 0;
         let mut ids = self.selection.clone();
-        let mut groups: Vec<_> = self.selected_layer.filter(|_| self.selection.is_empty()).and_then(|id| self.doc.layers.iter().position(|l| l.id == id)).into_iter().collect();
+        let mut groups = Vec::new();
         for &hit in &self.selection {
             if self.individual_object == Some(hit) {
                 continue;
@@ -1867,73 +1962,23 @@ impl Studio {
         let mut copied_group = None;
         let mut duplicated_motion = self.doc.motion.clone();
         for group in groups {
-            let tree = self.layer_tree_indices(group);
-            let layer_ids: HashMap<_, _> = tree
-                .iter()
-                .map(|&i| (self.doc.layers[i].id, crate::document::next_id()))
-                .collect();
-            let shape_ids: HashMap<_, _> = tree
-                .iter()
-                .flat_map(|&i| {
-                    self.doc.layers[i]
-                        .kind
-                        .shapes()
-                        .unwrap_or(&[])
-                        .iter()
-                        .map(|s| (s.id, crate::document::next_id()))
-                })
-                .collect();
-            for track in &self.doc.motion.tracks {
-                if let Some(&id) = shape_ids
-                    .get(&track.shape)
-                    .or_else(|| layer_ids.get(&track.shape))
-                {
-                    let mut copied = track.clone();
-                    copied.shape = id;
-                    duplicated_motion.tracks.push(copied);
-                }
-            }
-            for &i in &tree {
-                let mut layer = self.doc.layers[i].clone();
+            let copied = match layer_copy::prepare(&self.doc, group, delta) {
+                Ok(copied) => copied,
+                Err(error) => { self.status = error; return; }
+            };
+            layer_copy::append_motion(&self.doc.motion, &mut duplicated_motion, &copied.shape_ids, &copied.layer_ids);
+            copied_group = Some(copied.layer_ids[&self.doc.layers[group].id]);
+            for (&i, layer) in copied.indices.iter().zip(&copied.layers) {
                 let index = self.doc.layers.len() + new_layers;
-                layer.id = layer_ids[&layer.id];
-                if i != group {
-                    layer.parent = layer.parent.and_then(|p| layer_ids.get(&p).copied());
-                }
-                if i == group {
-                    layer.name = format!("{} copy", layer.name);
-                    copied_group = Some(layer.id);
-                }
-                if let Some(shapes) = layer.kind.shapes_mut() {
-                    for shape in shapes {
-                        let old = shape.id;
-                        shape.id = shape_ids[&old];
-                        crate::layout_components::remap_duplicate(shape, &shape_ids);
-                        crate::text_geometry::remap_copy_in_document(&self.doc, shape, &shape_ids);
-                        shape.layout.parent =
-                            shape.layout.parent.and_then(|p| shape_ids.get(&p).copied());
-                        shape.geom.translate(delta);
-                        if self.selection.contains(&(i, old)) {
-                            selected.push((index, shape.id));
-                        }
-                    }
-                } else if let Some((origin, size, rotation)) = layer.kind.raster_xform() {
-                    layer.kind.set_raster_xform(origin + delta, size, rotation);
-                    if self.selection.contains(&(i, RASTER_ID)) {
-                        selected.push((index, RASTER_ID));
+                for &(li, id) in &self.selection {
+                    if li == i {
+                        selected.push((index, copied.shape_ids.get(&id).copied().unwrap_or(id)));
                     }
                 }
-                if layer.kind.pixels().is_none() && layer.mask.is_some() {
-                    if layer.mask_size.x <= 0. || layer.mask_size.y <= 0. {
-                        let m = layer.mask.as_ref().unwrap();
-                        layer.mask_size = Pt::new(m.w as f32, m.h as f32);
-                    }
-                    layer.mask_origin += delta;
-                }
-                commands.push(Cmd::AddLayer { index, layer });
+                commands.push(Cmd::AddLayer { index, layer: layer.clone() });
                 new_layers += 1;
             }
-            ids.retain(|(li, _)| !tree.contains(li));
+            ids.retain(|(li, _)| !copied.indices.contains(li));
         }
         let standalone = ids.clone();
         for (li, id) in standalone.clone() {
@@ -1960,29 +2005,13 @@ impl Studio {
             .filter(|(_, id)| *id != RASTER_ID)
             .map(|(_, id)| (*id, crate::document::next_id()))
             .collect();
-        for track in &self.doc.motion.tracks {
-            if let Some(&id) = remap.get(&track.shape) {
-                let mut copied = track.clone();
-                copied.shape = id;
-                duplicated_motion.tracks.push(copied);
-            }
-        }
+        layer_copy::append_motion(&self.doc.motion, &mut duplicated_motion, &remap, &HashMap::new());
         for (li, id) in ids {
             if id == RASTER_ID {
                 if let Some(mut layer) = self.doc.layers.get(li).cloned() {
                     let previous_id = layer.id;
                     layer.id = crate::document::next_id();
-                    for track in self
-                        .doc
-                        .motion
-                        .tracks
-                        .iter()
-                        .filter(|track| track.shape == previous_id)
-                    {
-                        let mut copied = track.clone();
-                        copied.shape = layer.id;
-                        duplicated_motion.tracks.push(copied);
-                    }
+                    layer_copy::append_motion(&self.doc.motion, &mut duplicated_motion, &HashMap::new(), &HashMap::from([(previous_id, layer.id)]));
                     layer.parent = None;
                     layer.name = format!("{} copy", layer.name);
                     if let Some((origin, size, rotation)) = layer.kind.raster_xform() {
@@ -1994,6 +2023,7 @@ impl Studio {
                     selected.push((index, RASTER_ID));
                 }
             } else if let Some(mut shape) = self.doc.find_shape(li, id).cloned() {
+                for mask in &mut shape.artwork_masks {mask.remap(&HashMap::new(),&remap,tiny_skia::Transform::from_translate(delta.x,delta.y));}
                 shape.id = remap[&id];
                 crate::layout_components::remap_duplicate(&mut shape, &remap);
                 crate::text_geometry::remap_copy_in_document(&self.doc, &mut shape, &remap);
@@ -2014,7 +2044,12 @@ impl Studio {
                     after: duplicated_motion,
                 });
             }
-            self.commit(Cmd::Batch(commands));
+            let command = Cmd::Batch(commands);
+            if let Err(error) = layer_copy::validate(&self.doc, &command) {
+                self.status = error;
+                return;
+            }
+            self.commit(command);
             self.selected_layer = if standalone.is_empty() {
                 copied_group
             } else {
@@ -2141,6 +2176,13 @@ impl Studio {
     }
 
     pub fn nudge(&mut self, dx: f32, dy: f32) {
+        if !self.is_motion() {
+            return self.with_action_step(crate::actions::Step::Move { delta: Pt::new(dx, dy) }, |studio| studio.nudge_command(dx, dy));
+        }
+        self.nudge_command(dx, dy)
+    }
+
+    fn nudge_command(&mut self, dx: f32, dy: f32) {
         if self.is_motion() {
             let sel = self.selection.clone();
             let t = self.playhead;
@@ -2272,12 +2314,15 @@ impl Studio {
     }
 
     fn type_frame_caret(&self, frame: (usize, u64), world: Pt) -> Option<usize> {
-        let point = self.doc.layout_hit_point(frame.0, frame.1, world)?;
+        let point = self.doc.layout_hit_point_with(frame.0, frame.1, world, |id| self.live_pose(id))?;
         let shape = self.doc.find_shape(frame.0, frame.1)?;
         let Geom::Text(run) = &shape.geom else {
             return None;
         };
-        Some(crate::text::hit_char(run, shape.local_point(point)))
+        let inverse = self.live_pose(shape.id).to_skia(shape.world_bbox().center()).invert()?;
+        let mut point = tiny_skia::Point::from_xy(point.x, point.y);
+        inverse.map_point(&mut point);
+        Some(crate::text::hit_char(run, shape.local_point(Pt::new(point.x, point.y))))
     }
 
     /// Hit-test a story frame in its unrotated layout coordinates.
@@ -2309,12 +2354,6 @@ impl Studio {
         let Some(s) = self.doc.find_shape_mut(edit.layer, edit.id) else {
             return;
         };
-        if let Geom::Text(run) = &mut s.geom
-            && run.content.trim().is_empty()
-        {
-            run.content = "Type".into();
-            crate::text::fill_contours(&mut s.geom);
-        }
         let after = s.geom.clone();
         let rot = s.rotation;
         if after != edit.before {
@@ -2465,7 +2504,7 @@ impl Studio {
         if let Some(edit)=self.type_edit.clone() {
             let (a,b)=(edit.caret.min(edit.anchor),edit.caret.max(edit.anchor));
             if a==b {
-                let mut style=edit.pending_style.unwrap_or_else(||self.selected_type().map_or_else(Default::default,|r|r.character_style(a.saturating_sub(1))));
+                let mut style=edit.pending_style.unwrap_or_else(||self.selected_type().map_or_else(Default::default,|r|r.typing_style(a.saturating_sub(1))));
                 f(&mut style);self.type_edit.as_mut().unwrap().pending_style=Some(style);return;
             }
             self.patch_type(|r|r.set_character_style(a,b,|s|f(s)));
@@ -2565,6 +2604,11 @@ impl Studio {
     }
 
     pub fn set_tool(&mut self, t: Tool) {
+        if self.quick_mask_tools_limited() && !Self::quick_mask_tool_allowed(t) {self.status="Exit Quick Mask before using this layer tool".into();return;}
+        if !matches!(t, Tool::Brush | Tool::Eraser | Tool::Fill | Tool::Hand | Tool::Zoom) {
+            self.end_pixel_stroke(true);
+            self.channel_target = None;
+        }
         if t != self.tool { self.pixel_edit = None; }
         if t == Tool::Eyedropper {
             crate::screen_pick::rearm();
@@ -3594,11 +3638,11 @@ impl Studio {
     }
 
     pub fn bring_to_front(&mut self) {
-        self.reorder_selected(true, true);
+        self.with_action_step(crate::actions::Step::Front, |studio| studio.reorder_selected(true, true));
     }
 
     pub fn send_to_back(&mut self) {
-        self.reorder_selected(false, true);
+        self.with_action_step(crate::actions::Step::Back, |studio| studio.reorder_selected(false, true));
     }
 
     pub fn bring_forward(&mut self) {
@@ -3905,6 +3949,7 @@ impl Studio {
             Persona::Photo => Tool::Hand,
             _ => Tool::Select,
         };
+        self.restore_active_selection();
         if let Some(p) = path {
             self.remember_path(&p);
             self.status = format!("opened {}", p.display());
@@ -4024,8 +4069,11 @@ impl Studio {
 
     fn save_document(&mut self, path: &std::path::Path) -> Result<(), String> {
         self.doc.workspace = Some(self.persona);
-        crate::project::save_to(&self.doc, path)
-            .inspect_err(|_| crate::telemetry::count("error.save"))?;
+        // The active selection is written with the file only; it is not history.
+        self.doc.active_selection = self.active_selection_plane();
+        let saved = crate::project::save_to(&self.doc, path);
+        self.doc.active_selection = None;
+        saved.inspect_err(|_| crate::telemetry::count("error.save"))?;
         crate::telemetry::count("feature.save");
         self.path = Some(path.to_owned());
         self.dirty = false;
@@ -4375,8 +4423,7 @@ impl Studio {
     }
 
     fn place_raster(&mut self, name: String, image: RgbaImage, dest: Bounds) {
-        let pixels = crate::document::Pixels::from_rgba(image.w, image.h, image.data)
-            .unwrap_or_else(|| crate::document::Pixels::new(image.w.max(1), image.h.max(1)));
+        let Some(pixels) = crate::document::Pixels::from_rgba(image.w, image.h, image.data) else { self.status="Not enough memory to place this image; existing layers were kept".into(); return; };
         let layer = Layer::placed_raster(
             name.clone(),
             pixels,
@@ -4627,6 +4674,10 @@ impl Studio {
 }
 
 impl eframe::App for Studio {
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        visuals.panel_fill.to_normalized_gamma_f32()
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if self.allow_close || ctx.input(|i| i.viewport().close_requested()) {
@@ -4664,6 +4715,7 @@ impl eframe::App for Studio {
         crate::ui::anim_export::poll(&ctx, self);
         crate::ui::run(ui, self);
         if !self.file_dialog_pending() {
+            self.file_activity_windows(&ctx);
             self.import_notes_window(&ctx);
         }
     }
@@ -4731,8 +4783,9 @@ mod tests {
             .layers
             .iter()
             .filter_map(|l| l.kind.shapes())
-            .map(|ss| ss.len())
-            .sum();
+            .flatten()
+            .filter(|shape| matches!(&shape.geom, Geom::Path { .. }))
+            .count();
         assert_eq!(n, 1);
         let Geom::Path { closed, .. } = &s.doc.layers[1].kind.shapes().unwrap()[0].geom else {
             panic!("path");
@@ -4784,8 +4837,9 @@ mod tests {
             .layers
             .iter()
             .filter_map(|l| l.kind.shapes())
-            .map(|ss| ss.len())
-            .sum();
+            .flatten()
+            .filter(|shape| matches!(&shape.geom, Geom::Path { .. }))
+            .count();
         assert_eq!(n, 1);
         let Geom::Path { closed, .. } = &s.doc.layers[1].kind.shapes().unwrap()[0].geom else {
             panic!("path");
@@ -4948,8 +5002,9 @@ mod tests {
             .layers
             .iter()
             .filter_map(|l| l.kind.shapes())
-            .map(|ss| ss.len())
-            .sum();
+            .flatten()
+            .filter(|shape| matches!(&shape.geom, Geom::Text(_)))
+            .count();
         assert_eq!(n, 2);
     }
 
@@ -5169,6 +5224,13 @@ mod tests {
     fn place_svg_adds_a_shape() {
         let mut s = Studio::new();
         s.show_welcome = false;
+        let before: usize = s
+            .doc
+            .layers
+            .iter()
+            .filter_map(|l| l.kind.shapes())
+            .map(|ss| ss.len())
+            .sum();
         let svg = r##"<svg viewBox="0 0 10 10"><path d="M0 0 L10 0 L10 10 L0 10 Z" fill="#112233"/></svg>"##;
         s.pending_place = Some(PendingPlace::Svg {
             name: "box.svg".into(),
@@ -5182,7 +5244,7 @@ mod tests {
             .filter_map(|l| l.kind.shapes())
             .map(|ss| ss.len())
             .sum();
-        assert_eq!(n, 1);
+        assert_eq!(n, before + 1);
         assert_eq!(s.selection.len(), 1);
     }
 
@@ -5222,7 +5284,7 @@ mod tests {
                 data[i + 2] = 0;
             }
         }
-        let mut layer = Layer::raster("ink", 32, 32);
+        let mut layer = Layer::raster("ink", 32, 32).unwrap();
         if let LayerKind::Raster { pixels, .. } = &mut layer.kind {
             *pixels = crate::document::Pixels::from_rgba(32, 32, data).unwrap();
         }

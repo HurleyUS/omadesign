@@ -31,6 +31,112 @@ const PALETTE_ACTION: &str = "palette-action";
 const BRAND_ACTION: &str = "brand-action";
 const PREVIEW: &str = "brand-preview";
 const PLACE: &str = "brand-place";
+
+/// Name and focus an existing native library control in its property scope.
+/// Args: UI, source/property identity, accessible purpose and native widget closure. Returns its real response.
+fn native(
+    ui: &mut Ui,
+    id: egui::Id,
+    purpose: &str,
+    widget: impl FnOnce(&mut Ui) -> egui::Response,
+) -> egui::Response {
+    let response = super::fields::native_scope(ui, id, widget).inner;
+    super::agent::named(ui, response, purpose)
+}
+
+/// Identify a library collection independently of its editable names and colors.
+/// Args: collection root. Returns the personal or project collection namespace.
+fn collection_id(root: &Option<PathBuf>) -> egui::Id {
+    egui::Id::new(("library-collection", root))
+}
+
+/// Keep a draft's native target separate after structural collection replacement.
+/// Args: context and collection root. Returns the current app-owned UI generation.
+fn collection_generation(ctx: &egui::Context, root: &Option<PathBuf>) -> u64 {
+    ctx.data(|data| data.get_temp::<u64>(collection_id(root).with("generation")))
+        .unwrap_or_default()
+}
+
+#[derive(Clone, Default)]
+struct PaletteOwner {
+    id: u64,
+    colors: Vec<u64>,
+}
+
+#[derive(Clone, Default)]
+struct CollectionOwners {
+    next: u64,
+    palettes: Vec<PaletteOwner>,
+}
+
+/// Retain native identities while existing palettes and swatches are renamed or shifted.
+/// Args: context, collection root and current palettes. Returns identities independent of edited values.
+fn collection_owners(
+    ctx: &egui::Context,
+    root: &Option<PathBuf>,
+    palettes: &[Palette],
+) -> Vec<PaletteOwner> {
+    let key = collection_id(root).with("owners");
+    ctx.data_mut(|data| {
+        let mut owners = data.get_temp::<CollectionOwners>(key).unwrap_or_default();
+        while owners.palettes.len() < palettes.len() {
+            owners.next += 1;
+            let id = owners.next;
+            owners.palettes.push(PaletteOwner { id, colors: vec![] });
+        }
+        owners.palettes.truncate(palettes.len());
+        for (index, palette) in palettes.iter().enumerate() {
+            while owners.palettes[index].colors.len() < palette.colors.len() {
+                owners.next += 1;
+                let id = owners.next;
+                owners.palettes[index].colors.push(id);
+            }
+            owners.palettes[index].colors.truncate(palette.colors.len());
+        }
+        let result = owners.palettes.clone();
+        data.insert_temp(key, owners);
+        result
+    })
+}
+
+/// Retire only the native target removed by the existing palette action.
+/// Args: context, collection root, palette index and optional swatch index. Returns no value.
+fn remove_collection_owner(
+    ctx: &egui::Context,
+    root: &Option<PathBuf>,
+    palette: usize,
+    color: Option<usize>,
+) {
+    let key = collection_id(root).with("owners");
+    ctx.data_mut(|data| {
+        if let Some(mut owners) = data.get_temp::<CollectionOwners>(key) {
+            if let Some(color) = color {
+                if let Some(palette) = owners.palettes.get_mut(palette) {
+                    palette.colors.remove(color);
+                }
+            } else {
+                owners.palettes.remove(palette);
+            }
+            data.insert_temp(key, owners);
+        }
+    });
+}
+
+/// End native editing ownership when a saved collection is replaced.
+/// Args: context and collection root. Returns no value; library data and artwork history stay unchanged.
+fn replace_collection_owner(ctx: &egui::Context, root: &Option<PathBuf>) {
+    let key = collection_id(root).with("generation");
+    let owners = collection_id(root).with("owners");
+    ctx.data_mut(|data| {
+        let next = data
+            .get_temp::<u64>(key)
+            .unwrap_or_default()
+            .wrapping_add(1);
+        data.insert_temp(key, next);
+        data.remove::<CollectionOwners>(owners);
+    });
+}
+
 type Colours = Result<(Vec<Palette>, Option<u64>), String>;
 struct Snapshot {
     source: Source,
@@ -105,6 +211,30 @@ fn draft_at<'a>(s: &'a mut Libraries, root: &Option<PathBuf>) -> &'a mut Palette
     } else {
         &mut s.personal
     }
+}
+
+/// Add a generated palette through the existing guarded collection writer.
+/// Args: UI context, editor and palette. Returns an error before changing an unavailable collection.
+pub(super) fn save_generated_palette(ctx:&egui::Context,studio:&mut Studio,palette:Palette)->Result<(),String> {
+    if jobs::is_running::<PaletteResult>(ctx,PALETTE_ACTION) {return Err("Wait for the current palette save".into());}
+    let state=&mut studio.libraries;
+    let root=if state.project_scope {Some(state.root.clone().ok_or("Choose a palette project folder first")?)} else {None};
+    let path=state.palette_path().ok_or("Palette collection is unavailable")?;
+    let draft=state.draft();
+    if !draft.loaded || draft.conflict {return Err("Open Swatches and load or resolve the palette collection first".into());}
+    let mut saved=draft.palettes.clone();
+    crate::palette::merge(&mut saved,vec![palette])?;
+    let expected=draft.stamp;
+    draft.palettes=saved.clone();
+    draft.selected=draft.palettes.len().saturating_sub(1);
+    draft.selected_name();
+    draft.dirty=true;
+    start_palette(ctx,root,move || {
+        if file_stamp(&path)?!=expected {return Err("Changed on disk. Reload or export a copy before saving.".into());}
+        crate::palette::save_file(&path,&saved)?;
+        Ok(PaletteChange::Saved(saved,file_stamp(&path)?))
+    });
+    Ok(())
 }
 
 pub fn tick(ctx: &egui::Context, studio: &mut Studio) {
@@ -200,14 +330,20 @@ pub fn tick(ctx: &egui::Context, studio: &mut Studio) {
             Ok(snapshot) if s.source.as_ref() == Some(&snapshot.source) => {
                 s.root = snapshot.root;
                 match snapshot.personal {
-                    Ok((p, stamp)) => s.personal.receive(p, stamp),
+                    Ok((p, stamp)) => {
+                        if !s.personal.dirty&&(!s.personal.loaded||s.personal.stamp!=stamp){replace_collection_owner(ctx,&None);}
+                        s.personal.receive(p, stamp)
+                    },
                     Err(e) => s.personal.message = e,
                 }
                 if let Some(root) = s.root.clone() {
-                    let draft = s.projects.entry(root).or_default();
+                    let draft = s.projects.entry(root.clone()).or_default();
                     if let Some(result) = snapshot.project {
                         match result {
-                            Ok((p, stamp)) => draft.receive(p, stamp),
+                            Ok((p, stamp)) => {
+                                if !draft.dirty&&(!draft.loaded||draft.stamp!=stamp){replace_collection_owner(ctx,&Some(root.clone()));}
+                                draft.receive(p, stamp)
+                            },
                             Err(e) => draft.message = e,
                         }
                     }
@@ -355,11 +491,23 @@ pub fn tabs(ui: &mut Ui, studio: &mut Studio) {
             (Sidebar::Palettes, super::icons::ph::PALETTE, "Palettes"),
             (Sidebar::Brand, super::icons::ph::TOOLBOX, "Brand assets"),
         ] {
-            if super::icons::icon_button(ui, glyph, name, studio.libraries.sidebar == tab) {
+            let id=egui::Id::new(("library-tab",&studio.swap_id,tab as u8));
+            if super::fields::native_scope(ui,id,|ui|super::icons::icon_button(ui,glyph,name,studio.libraries.sidebar==tab)).inner {
                 studio.libraries.sidebar = tab;
+                let pane = match tab {Sidebar::Inspector=>"transform",Sidebar::Typography=>"character",Sidebar::Palettes=>"swatches",Sidebar::Brand=>"assets"};
+                super::panel_workspace::open(ui.ctx(),studio,pane);
             }
         }
     });
+}
+
+/// Draw a chosen library inside its docked pane.
+/// Args: pane UI, editor and library. Returns nothing; the existing collection jobs remain shared.
+pub(super) fn pane(ui: &mut Ui, studio: &mut Studio, sidebar: Sidebar) {
+    let before=studio.libraries.sidebar;
+    studio.libraries.sidebar=sidebar;
+    show(ui,studio);
+    studio.libraries.sidebar=before;
 }
 pub fn show(ui: &mut Ui, studio: &mut Studio) {
     if studio.libraries.sidebar == Sidebar::Typography {
@@ -393,8 +541,8 @@ fn project_picker(ui: &mut Ui, studio: &mut Studio, s: &mut Libraries) {
             .and_then(|r| r.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Choose a project".into());
-        if ui
-            .small_button(name)
+        let owner=egui::Id::new(("library-project",&studio.swap_id));
+        if native(ui,owner,"Choose library project folder",|ui|ui.small_button(name))
             .on_hover_text(
                 s.root
                     .as_ref()
@@ -458,7 +606,7 @@ pub(super) fn queue_place(
 }
 pub(super) fn canvas_drop(ui: &Ui, studio: &mut Studio, response: &egui::Response) -> bool {
     let dragging = egui::DragAndDrop::has_payload_of_type::<BrandDrag>(ui.ctx());
-    if let Some(asset) = response.dnd_release_payload::<BrandDrag>()
+    if dragging && let Some(asset) = response.dnd_release_payload::<BrandDrag>()
         && let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos())
     {
         let at = studio.view.pointer_to_world(
@@ -495,3 +643,7 @@ mod tests;
 #[cfg(test)]
 #[path = "library_layout_tests.rs"]
 mod layout_tests;
+
+#[cfg(test)]
+#[path = "library_keyboard_tests.rs"]
+mod keyboard_tests;

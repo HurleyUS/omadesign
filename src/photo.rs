@@ -1,8 +1,14 @@
+pub mod catalog;
 pub mod edits;
+pub mod local;
+pub mod optics;
 pub mod presets;
 mod raw_photo;
 pub mod transfer;
+mod white_balance;
+pub use white_balance::auto_white_balance;
 pub use raw_photo::LinearImage;
+pub use raw_photo::{AdmittedImage, AdmittedSamples, EncodedPhoto};
 
 use image::ImageEncoder;
 use rayon::prelude::*;
@@ -107,6 +113,10 @@ pub struct DevelopParams {
     pub hsl: [HslBand; 8],
     pub rotate: u32,
     pub crop: Option<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "optics::OpticalSettings::is_default")]
+    pub optics: optics::OpticalSettings,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_adjustments: Vec<local::LocalAdjustment>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -155,6 +165,8 @@ impl Default for DevelopParams {
             hsl: [HslBand::default(); 8],
             rotate: 0,
             crop: None,
+            optics: Default::default(),
+            local_adjustments: vec![],
         }
     }
 }
@@ -203,34 +215,6 @@ pub struct PhotoImage {
 }
 
 impl PhotoImage {
-    /// Small live preview, including saved edits, crop, rotation and linear RAW
-    /// adjustments. It never renders or retains a full-resolution developed image.
-    pub fn render_thumbnail(&self, max_edge: u32) -> RgbaImage {
-        if let Some(raw) = &self.raw_preview {
-            let scale = (max_edge as f32 / raw.w.max(raw.h) as f32).min(1.0);
-            let w = (raw.w as f32 * scale).round().max(1.0) as u32;
-            let h = (raw.h as f32 * scale).round().max(1.0) as u32;
-            let mut pixels = Vec::with_capacity(w as usize * h as usize * 3);
-            for y in 0..h {
-                for x in 0..w {
-                    let sx = (x as u64 * raw.w as u64 / w as u64) as u32;
-                    let sy = (y as u64 * raw.h as u64 / h as u64) as u32;
-                    let index = (sy as usize * raw.w as usize + sx as usize) * 3;
-                    pixels.extend_from_slice(&raw.pixels[index..index + 3]);
-                }
-            }
-            let mut params = self.develop.clone();
-            params.exposure += self
-                .raw
-                .as_ref()
-                .map_or(0.0, |raw| raw.metadata.baseline_exposure);
-            let (w, h, data) = develop_inner::<u8>(DevelopSource::linear(w, h, &pixels), &params);
-            RgbaImage { w, h, data }
-        } else {
-            develop(&self.preview.downscaled(max_edge), &self.develop)
-        }
-    }
-
     pub fn from_full(name: String, full: RgbaImage) -> Self {
         let preview = std::sync::Arc::new(full.downscaled(1600));
         let thumb = std::sync::Arc::new(full.downscaled(192));
@@ -339,6 +323,11 @@ impl OutputChannel for u16 {
         (value.clamp(0., 1.) * 65535.).round() as u16
     }
 }
+impl OutputChannel for f32 {
+    fn encode(value: f32) -> Self {
+        value
+    }
+}
 fn srgb_encode(linear: f32) -> f32 {
     let x = linear.clamp(0., 1.);
     if x <= 0.0031308 {
@@ -351,11 +340,49 @@ fn develop_inner<T: OutputChannel>(
     src: DevelopSource<'_>,
     p: &DevelopParams,
 ) -> (u32, u32, Vec<T>) {
+    develop_checked(src, p, &crate::ml::NoProgress).expect("photo preview allocation")
+}
+
+/// Develop admitted pixels with cancellation between bounded pieces of work.
+/// Args: source, saved adjustments and progress owner. Returns straight encoded RGBA or an allocation/cancellation error.
+fn develop_checked<T: OutputChannel>(
+    src: DevelopSource<'_>,
+    p: &DevelopParams,
+    progress: &dyn crate::ml::Progress,
+) -> Result<(u32, u32, Vec<T>), String> {
+    develop_checked_impl(src, p, progress, p.clarity.abs() > 0.001)
+}
+
+fn develop_checked_impl<T: OutputChannel>(
+    src: DevelopSource<'_>,
+    p: &DevelopParams,
+    progress: &dyn crate::ml::Progress,
+    buffered: bool,
+) -> Result<(u32, u32, Vec<T>), String> {
+    progress.check()?;
     let (rw, rh) = p.rotated_dim(src.w, src.h);
     let (cw, ch) = p.output_dim(src.w, src.h);
 
-    let n = src.w as usize * src.h as usize;
-    let mut col = vec![0f32; n * 3];
+    let n = (src.w as usize)
+        .checked_mul(src.h as usize)
+        .filter(|n| *n > 0)
+        .ok_or("Invalid photo dimensions")?;
+
+    let optical = p.optics.active();
+    let mut opacity = if optical && buffered {
+        Some(photo_buffer(n)?)
+    } else {
+        None
+    };
+    if let Some(alpha) = &mut opacity {
+        alpha.par_iter_mut().enumerate().try_for_each(|(i, a)| {
+            if i % 4096 == 0 {
+                progress.check()?;
+            }
+            *a = p.optics.sample(src, i)[3];
+            Ok::<_, String>(())
+        })?;
+    }
 
     let exp = 2f32.powf(p.exposure);
     let t = p.temperature.clamp(-100.0, 100.0) / 100.0;
@@ -375,111 +402,155 @@ fn develop_inner<T: OutputChannel>(
             .iter()
             .any(|band| band.hue.abs() + band.sat.abs() + band.luma.abs() > 0.001);
 
-    col.par_chunks_mut(3).enumerate().for_each(|(i, px)| {
-        let [mut r, mut g, mut b, a] = src.pixel(i);
-
-        if a > 0.0 {
-            // RAW exposure and WB operate on scene-linear channels before the
-            // display transfer curve. Original 16-bit samples remain unchanged.
-            if src.linear.is_some() {
-                r = srgb_encode(r * exp * temp_r);
-                g = srgb_encode(g * exp * temp_g);
-                b = srgb_encode(b * exp * temp_b);
+    let transform =
+        |i: usize| -> Result<[f32; 4], String> {
+            if i % 4096 == 0 {
+                progress.check()?;
+            }
+            let [mut r, mut g, mut b, a] = if optical {
+                p.optics.sample(src, i)
             } else {
-                r = pil(r * exp * temp_r);
-                g = pil(g * exp * temp_g);
-                b = pil(b * exp * temp_b);
-            }
+                src.pixel(i)
+            };
 
-            let l = pixel_luma(r, g, b);
+            if a > 0.0 {
+                let local = p.local_adjustments.iter().any(|a| a.enabled);
+                if local {
+                    if src.linear.is_none() && !optical {
+                        r = optics::srgb_decode(r);
+                        g = optics::srgb_decode(g);
+                        b = optics::srgb_decode(b);
+                    }
+                    let point = [
+                        ((i % src.w as usize) as f32 + 0.5) / src.w as f32,
+                        ((i / src.w as usize) as f32 + 0.5) / src.h as f32,
+                    ];
+                    for adjustment in &p.local_adjustments {
+                        [r, g, b] = adjustment.apply([r, g, b], point, src.w as f32 / src.h as f32);
+                    }
+                }
+                // RAW exposure and WB operate on scene-linear channels before the
+                // display transfer curve. Original 16-bit samples remain unchanged.
+                if src.linear.is_some() || optical || local {
+                    r = srgb_encode(r * exp * temp_r);
+                    g = srgb_encode(g * exp * temp_g);
+                    b = srgb_encode(b * exp * temp_b);
+                } else {
+                    r = pil(r * exp * temp_r);
+                    g = pil(g * exp * temp_g);
+                    b = pil(b * exp * temp_b);
+                }
 
-            let hl_w = l * l;
-            let sh_w = (1.0 - l) * (1.0 - l);
-            let wh_w = l * l * l * l * l * l;
-            let bl_w = (1.0 - l) * (1.0 - l) * (1.0 - l) * (1.0 - l) * (1.0 - l) * (1.0 - l);
-            r =
-                pil(r
-                    * (1.0
-                        + hl * 0.9 * hl_w
-                        + sh * 0.9 * sh_w
-                        + wh * 0.7 * wh_w
-                        + bl * 0.7 * bl_w));
-            g =
-                pil(g
-                    * (1.0
-                        + hl * 0.9 * hl_w
-                        + sh * 0.9 * sh_w
-                        + wh * 0.7 * wh_w
-                        + bl * 0.7 * bl_w));
-            b =
-                pil(b
-                    * (1.0
-                        + hl * 0.9 * hl_w
-                        + sh * 0.9 * sh_w
-                        + wh * 0.7 * wh_w
-                        + bl * 0.7 * bl_w));
-
-            r = pil((r - 0.5) * contrast + 0.5);
-            g = pil((g - 0.5) * contrast + 0.5);
-            b = pil((b - 0.5) * contrast + 0.5);
-
-            let ln = pixel_luma(r, g, b);
-            let total_sat = sat * (1.0 + (vib - 1.0) * (1.0 - (r.max(g).max(b) - r.min(g).min(b))));
-            let s = total_sat;
-            r = pil(ln + (r - ln) * s);
-            g = pil(ln + (g - ln) * s);
-            b = pil(ln + (b - ln) * s);
-
-            if p.dehaze.abs() > 0.001 {
                 let l = pixel_luma(r, g, b);
-                let haze = (l - r.min(g).min(b)).max(0.0);
-                let k = p.dehaze.clamp(-1.0, 1.0);
-                r = pil(r - haze * k * 0.85);
-                g = pil(g - haze * k * 0.85);
-                b = pil(b - haze * k * 0.85);
+
+                let hl_w = l * l;
+                let sh_w = (1.0 - l) * (1.0 - l);
+                let wh_w = l * l * l * l * l * l;
+                let bl_w = (1.0 - l) * (1.0 - l) * (1.0 - l) * (1.0 - l) * (1.0 - l) * (1.0 - l);
+                r = pil(r
+                    * (1.0
+                        + hl * 0.9 * hl_w
+                        + sh * 0.9 * sh_w
+                        + wh * 0.7 * wh_w
+                        + bl * 0.7 * bl_w));
+                g = pil(g
+                    * (1.0
+                        + hl * 0.9 * hl_w
+                        + sh * 0.9 * sh_w
+                        + wh * 0.7 * wh_w
+                        + bl * 0.7 * bl_w));
+                b = pil(b
+                    * (1.0
+                        + hl * 0.9 * hl_w
+                        + sh * 0.9 * sh_w
+                        + wh * 0.7 * wh_w
+                        + bl * 0.7 * bl_w));
+
+                r = pil((r - 0.5) * contrast + 0.5);
+                g = pil((g - 0.5) * contrast + 0.5);
+                b = pil((b - 0.5) * contrast + 0.5);
+
+                let ln = pixel_luma(r, g, b);
+                let total_sat =
+                    sat * (1.0 + (vib - 1.0) * (1.0 - (r.max(g).max(b) - r.min(g).min(b))));
+                let s = total_sat;
+                r = pil(ln + (r - ln) * s);
+                g = pil(ln + (g - ln) * s);
+                b = pil(ln + (b - ln) * s);
+
+                if p.dehaze.abs() > 0.001 {
+                    let l = pixel_luma(r, g, b);
+                    let haze = (l - r.min(g).min(b)).max(0.0);
+                    let k = p.dehaze.clamp(-1.0, 1.0);
+                    r = pil(r - haze * k * 0.85);
+                    g = pil(g - haze * k * 0.85);
+                    b = pil(b - haze * k * 0.85);
+                }
+
+                if adjust_hsl {
+                    let (mut h, mut s, mut l) = rgb_to_hsl(r, g, b);
+                    h = (h + p.hue / 360.0).rem_euclid(1.0);
+                    let band = hsl_band(h);
+                    let hb = p.hsl[band];
+                    h = (h + hb.hue / 360.0).rem_euclid(1.0);
+                    s = pil(s * (1.0 + hb.sat));
+                    l = pil(l * (1.0 + hb.luma));
+                    let (nr, ng, nb) = hsl_to_rgb(h, s, l);
+                    r = nr;
+                    g = ng;
+                    b = nb;
+                }
+
+                let l = pixel_luma(r, g, b);
+                let bal = p.split_balance.clamp(-1.0, 1.0);
+                let sh_w = ((1.0 - l) * (1.0 - bal * 0.5)).clamp(0.0, 1.0);
+                let hi_w = (l * (1.0 + bal * 0.5)).clamp(0.0, 1.0);
+                r = pil(r + p.split_shadow[0] * sh_w + p.split_highlight[0] * hi_w);
+                g = pil(g + p.split_shadow[1] * sh_w + p.split_highlight[1] * hi_w);
+                b = pil(b + p.split_shadow[2] * sh_w + p.split_highlight[2] * hi_w);
+
+                r = eval_curve(r, &p.curve);
+                g = eval_curve(g, &p.curve);
+                b = eval_curve(b, &p.curve);
             }
 
-            if adjust_hsl {
-                let (mut h, mut s, mut l) = rgb_to_hsl(r, g, b);
-                h = (h + p.hue / 360.0).rem_euclid(1.0);
-                let band = hsl_band(h);
-                let hb = p.hsl[band];
-                h = (h + hb.hue / 360.0).rem_euclid(1.0);
-                s = pil(s * (1.0 + hb.sat));
-                l = pil(l * (1.0 + hb.luma));
-                let (nr, ng, nb) = hsl_to_rgb(h, s, l);
-                r = nr;
-                g = ng;
-                b = nb;
-            }
-
-            let l = pixel_luma(r, g, b);
-            let bal = p.split_balance.clamp(-1.0, 1.0);
-            let sh_w = ((1.0 - l) * (1.0 - bal * 0.5)).clamp(0.0, 1.0);
-            let hi_w = (l * (1.0 + bal * 0.5)).clamp(0.0, 1.0);
-            r = pil(r + p.split_shadow[0] * sh_w + p.split_highlight[0] * hi_w);
-            g = pil(g + p.split_shadow[1] * sh_w + p.split_highlight[1] * hi_w);
-            b = pil(b + p.split_shadow[2] * sh_w + p.split_highlight[2] * hi_w);
-
-            r = eval_curve(r, &p.curve);
-            g = eval_curve(g, &p.curve);
-            b = eval_curve(b, &p.curve);
-        }
-
-        px[0] = r;
-        px[1] = g;
-        px[2] = b;
-    });
+            Ok([r, g, b, a])
+        };
+    let mut col = if buffered {
+        let mut col = photo_buffer(n.checked_mul(3).ok_or("Photo dimensions overflow")?)?;
+        col.par_chunks_mut(3)
+            .enumerate()
+            .try_for_each(|(i, pixel)| {
+                pixel.copy_from_slice(&transform(i)?[..3]);
+                Ok::<_, String>(())
+            })?;
+        Some(col)
+    } else {
+        None
+    };
 
     if p.clarity.abs() > 0.001 {
-        let lum: Vec<f32> = col
-            .par_chunks(3)
-            .map(|px| pixel_luma(px[0], px[1], px[2]))
-            .collect();
+        let col = col
+            .as_mut()
+            .ok_or("Clarity needs its admitted neighborhood buffer")?;
+        let mut lum: Vec<f32> = photo_buffer(n)?;
+        lum.par_iter_mut()
+            .zip(col.par_chunks(3))
+            .enumerate()
+            .try_for_each(|(i, (out, px))| {
+                if i % 4096 == 0 {
+                    progress.check()?;
+                }
+                *out = pixel_luma(px[0], px[1], px[2]);
+                Ok::<_, String>(())
+            })?;
         let radius = ((src.w.min(src.h)) as f32 / 260.0).clamp(2.0, 10.0) as usize;
-        let bl = box_blur(&lum, src.w as usize, src.h as usize, radius);
+        let bl = box_blur_checked(&lum, src.w as usize, src.h as usize, radius, progress)?;
         let c = (p.clarity.clamp(-1.0, 1.0) * 3.0) / (1.0 + radius as f32 * 0.5);
-        col.par_chunks_mut(3).enumerate().for_each(|(i, px)| {
+        col.par_chunks_mut(3).enumerate().try_for_each(|(i, px)| {
+            if i % 4096 == 0 {
+                progress.check()?;
+            }
             let l = lum[i];
             let delta = (l - bl[i]) * c;
             let nl = pil(l + delta);
@@ -489,16 +560,22 @@ fn develop_inner<T: OutputChannel>(
                 px[1] = pil(px[1] * f);
                 px[2] = pil(px[2] * f);
             }
-        });
+            Ok::<_, String>(())
+        })?;
     }
 
     let grain = p.grain.clamp(0.0, 1.0);
     let vign = p.vignette.clamp(-1.0, 1.0);
 
-    let mut out = vec![T::default(); cw as usize * ch as usize * 4];
+    let count = (cw as usize)
+        .checked_mul(ch as usize)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or("Photo output dimensions overflow")?;
+    let mut out = photo_buffer(count)?;
     out.par_chunks_mut(cw as usize * 4)
         .enumerate()
-        .for_each(|(y, row)| {
+        .try_for_each(|(y, row)| {
+            progress.check()?;
             for (x, px) in row.chunks_mut(4).enumerate() {
                 let sw = src.w as f64;
                 let sh = src.h as f64;
@@ -540,8 +617,15 @@ fn develop_inner<T: OutputChannel>(
                 let sxr = ix as usize;
                 let syr = iy as usize;
                 let si = (syr * src.w as usize + sxr) * 3;
-                let a = src.alpha(sxr as u32, syr as u32);
-                let (mut r, mut g, mut b) = (col[si], col[si + 1], col[si + 2]);
+                let [mut r, mut g, mut b, a] = if let Some(col) = &col {
+                    let a = opacity.as_ref().map_or_else(
+                        || src.alpha(sxr as u32, syr as u32),
+                        |alpha| alpha[syr * src.w as usize + sxr],
+                    );
+                    [col[si], col[si + 1], col[si + 2], a]
+                } else {
+                    transform(si / 3)?
+                };
 
                 if vign.abs() > 0.001 {
                     let nx = (x as f32 / cw as f32 - 0.5) * 2.0;
@@ -575,9 +659,20 @@ fn develop_inner<T: OutputChannel>(
                 px[2] = T::encode(b);
                 px[3] = T::encode(a);
             }
-        });
+            Ok::<_, String>(())
+        })?;
 
-    (cw, ch, out)
+    progress.check()?;
+    Ok((cw, ch, out))
+}
+
+fn photo_buffer<T: Default + Clone>(count: usize) -> Result<Vec<T>, String> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(count)
+        .map_err(|_| "Not enough memory to develop this photo")?;
+    values.resize(count, T::default());
+    Ok(values)
 }
 
 fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
@@ -624,29 +719,44 @@ fn eval_curve(x: f32, pts: &[f32; 5]) -> f32 {
 }
 
 fn box_blur(lum: &[f32], w: usize, h: usize, radius: usize) -> Vec<f32> {
+    box_blur_checked(lum, w, h, radius, &crate::ml::NoProgress).expect("photo preview allocation")
+}
+fn box_blur_checked(
+    lum: &[f32],
+    w: usize,
+    h: usize,
+    radius: usize,
+    progress: &dyn crate::ml::Progress,
+) -> Result<Vec<f32>, String> {
     let win = radius * 2 + 1;
-    let mut horiz = vec![0f32; w * h];
-    horiz.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-        let source = &lum[y * w..(y + 1) * w];
-        let mut sum = source[0] * radius as f32;
-        for x in 0..=radius {
-            sum += source[x.min(w - 1)];
-        }
-        for (x, pixel) in row.iter_mut().enumerate() {
-            *pixel = sum / win as f32;
-            sum -= source[x.saturating_sub(radius)];
-            sum += source[(x + radius + 1).min(w - 1)];
-        }
-    });
+    let mut horiz = photo_buffer(w.checked_mul(h).ok_or("Photo dimensions overflow")?)?;
+    horiz
+        .par_chunks_mut(w)
+        .enumerate()
+        .try_for_each(|(y, row)| {
+            progress.check()?;
+            let source = &lum[y * w..(y + 1) * w];
+            let mut sum = source[0] * radius as f32;
+            for x in 0..=radius {
+                sum += source[x.min(w - 1)];
+            }
+            for (x, pixel) in row.iter_mut().enumerate() {
+                *pixel = sum / win as f32;
+                sum -= source[x.saturating_sub(radius)];
+                sum += source[(x + radius + 1).min(w - 1)];
+            }
+            Ok::<_, String>(())
+        })?;
 
-    let mut vert = vec![0f32; w * h];
+    let mut vert = photo_buffer(w * h)?;
     // Each strip owns complete output rows; vertical sums stay contiguous in memory.
     const STRIP_ROWS: usize = 64;
     vert.par_chunks_mut(w * STRIP_ROWS)
         .enumerate()
-        .for_each(|(strip_index, strip)| {
+        .try_for_each(|(strip_index, strip)| {
+            progress.check()?;
             let start_y = strip_index * STRIP_ROWS;
-            let mut sums = vec![0f32; w];
+            let mut sums: Vec<f32> = photo_buffer(w)?;
             for offset in 0..win {
                 let y = (start_y + offset).saturating_sub(radius).min(h - 1);
                 for (sum, value) in sums.iter_mut().zip(&horiz[y * w..(y + 1) * w]) {
@@ -654,6 +764,7 @@ fn box_blur(lum: &[f32], w: usize, h: usize, radius: usize) -> Vec<f32> {
                 }
             }
             for (offset, row) in strip.chunks_exact_mut(w).enumerate() {
+                progress.check()?;
                 let y = start_y + offset;
                 let remove = y.saturating_sub(radius) * w;
                 let add = (y + radius + 1).min(h - 1) * w;
@@ -662,8 +773,9 @@ fn box_blur(lum: &[f32], w: usize, h: usize, radius: usize) -> Vec<f32> {
                     *sum += horiz[add + x] - horiz[remove + x];
                 }
             }
-        });
-    vert
+            Ok::<_, String>(())
+        })?;
+    Ok(vert)
 }
 
 #[derive(Clone, Copy)]
@@ -726,8 +838,10 @@ pub fn auto_tone(p: &mut DevelopParams, img: &RgbaImage) {
     let lo = percentile(0.01);
     let hi = percentile(0.99);
     p.exposure = (0.5 / ((lo + hi) * 0.5).max(0.01)).log2();
-    p.blacks = -lo * 4.0;
-    p.whites = (1.0 - hi) * 4.0;
+    // Keep the stored values inside the slider, sidecar and render range
+    // (-1..=1) so the panel never rewrites them outside history.
+    p.blacks = (-lo * 4.0).clamp(-1.0, 1.0);
+    p.whites = ((1.0 - hi) * 4.0).clamp(-1.0, 1.0);
 }
 
 fn hash01(x: u32, y: u32) -> f32 {
@@ -957,6 +1071,63 @@ pub fn sample_photo(kind: usize) -> (String, RgbaImage) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn point_development_matches_buffered_color_with_optics_masks_and_framing() {
+        let (w, h) = (53, 37);
+        let linear: Vec<u16> = (0..w * h * 3).map(|n| (n * 193 % 65536) as u16).collect();
+        let rgba: Vec<u8> = (0..w * h * 4).map(|n| (n * 53 % 256) as u8).collect();
+        let raster = RgbaImage { w, h, data: rgba };
+        let mut params = DevelopParams {
+            exposure: 0.625,
+            temperature: -17.,
+            tint: 12.,
+            contrast: 1.13,
+            highlights: -0.25,
+            shadows: 0.3,
+            whites: 0.2,
+            blacks: -0.1,
+            saturation: 1.2,
+            vibrance: 1.15,
+            hue: 17.,
+            grain: 0.15,
+            vignette: 0.27,
+            dehaze: 0.17,
+            split_shadow: [0.01, -0.02, 0.005],
+            split_highlight: [0.03, 0.02, -0.015],
+            curve: [0., 0.22, 0.53, 0.77, 1.],
+            ..Default::default()
+        };
+        params.hsl[3] = HslBand {
+            hue: 12.,
+            sat: -0.1,
+            luma: 0.04,
+        };
+        params.local_adjustments.push(local::LocalAdjustment {
+            exposure: 0.5,
+            ..Default::default()
+        });
+        for optical in [false, true] {
+            params.optics.profile.distortion[0] = if optical { 0.08 } else { 0. };
+            params.optics.profile.chromatic_aberration =
+                if optical { [0.012, -0.008] } else { [0.; 2] };
+            for rotation in [0, 90, 180, 270] {
+                params.rotate = rotation;
+                params.crop = Some([0.07, 0.11, 0.83, 0.91]);
+                for source in [
+                    DevelopSource::linear(w, h, &linear),
+                    DevelopSource::rgba(&raster),
+                ] {
+                    let streamed =
+                        develop_checked::<f32>(source, &params, &crate::ml::NoProgress).unwrap();
+                    let buffered =
+                        develop_checked_impl::<f32>(source, &params, &crate::ml::NoProgress, true)
+                            .unwrap();
+                    assert_eq!(streamed, buffered, "point-color ordering/alpha changed");
+                }
+            }
+        }
+    }
+
     fn gray_rgba(v: u8, w: u32, h: u32) -> RgbaImage {
         let mut data = vec![0u8; w as usize * h as usize * 4];
         for px in data.chunks_exact_mut(4) {
@@ -973,21 +1144,23 @@ mod tests {
             crate::formats::raw::RawImage {
                 width: 80,
                 height: 40,
-                pixels: [4096, 4096, 4096].repeat(80 * 40),
+                pixels: [4096, 4096, 4096].repeat(80 * 40).into(),
+                memory: None,
                 metadata: crate::formats::raw::RawMetadata {
                     baseline_exposure: 0.5,
                     ..Default::default()
                 },
                 warnings: vec![],
             },
-        );
+        )
+        .unwrap();
         for mut image in [raster, raw] {
-            let before = image.render_thumbnail(80);
-            assert_eq!(before, image.render_preview());
+            let before = image.render_thumbnail(80).unwrap();
+            assert_eq!(before, image.render_preview().unwrap());
             image.develop.exposure = 1.0;
             image.develop.rotate = 90;
             image.develop.crop = Some([0.0, 0.0, 1.0, 0.5]);
-            let after = image.render_thumbnail(40);
+            let after = image.render_thumbnail(40).unwrap();
             assert_eq!((after.w, after.h), (20, 20));
             assert!(after.data[0] > before.data[0]);
         }
@@ -1096,8 +1269,9 @@ mod tests {
         let img = gray_rgba(64, 1, 1);
         auto_tone(&mut params, &img);
         assert!((params.exposure - (127.5_f32 / 64.0).log2()).abs() < 0.0001);
-        assert!((params.blacks + 64.0 / 255.0 * 4.0).abs() < 0.0001);
-        assert!((params.whites - 191.0 / 255.0 * 4.0).abs() < 0.0001);
+        assert!((params.blacks + (64.0_f32 / 255.0 * 4.0).min(1.0)).abs() < 0.0001);
+        assert!((params.whites - (191.0_f32 / 255.0 * 4.0).min(1.0)).abs() < 0.0001);
+        assert!(crate::photo::edits::validate(&params).is_ok());
     }
 
     #[test]

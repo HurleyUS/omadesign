@@ -6,6 +6,7 @@ use crate::{
     geom::{Anchor, Geom, Pt},
 };
 mod animation;
+mod scene;
 mod catalog;
 mod editing;
 pub mod files;
@@ -140,6 +141,9 @@ pub fn mutates(name: &str) -> bool {
             | "paint_stroke"
             | "set_mask"
             | "set_motion"
+            | "set_composition"
+            | "set_expression"
+            | "set_scene3d"
             | "set_keyframes"
             | "apply_motion_preset"
             | "develop_photo"
@@ -321,6 +325,7 @@ fn native_shape(
                 run.px = number(spec, "font_size", run.px)?.clamp(1.0, 2048.0);
                 run.content = text(spec, "text", &run.content)?;
                 if let Some(font) = spec.get("font") {
+                    run.font_variations = Default::default();
                     let name = font.as_str().ok_or("Font must be an installed font name")?;
                     run.font = if name.is_empty() {
                         String::new()
@@ -541,6 +546,7 @@ pub fn execute_prepared(
         }
     }
     let result = match name {
+        "get_scene3d" | "set_scene3d" => scene::execute(studio,name,args)?,
         "get_document" => {
             let offset = args["layer_offset"].as_u64().unwrap_or(0) as usize;
             let layers: Vec<_> = studio
@@ -552,7 +558,7 @@ pub fn execute_prepared(
                 .take(50)
                 .map(|(i, l)| {
                     json!({"index":i,"id":l.id,"kind":if l.is_group{"group"}else if l.kind.pixels().is_some(){"raster"}else{"vector"},"visible":l.visible,"locked":l.locked,"opacity":l.opacity,"parent":l.parent,"raster":raster_summary(l),"name":l.name.chars().take(200).collect::<String>(),
-                    "editable":studio.doc.layer_editable(i),"vector":l.kind.shapes().is_some(),
+                    "editable":studio.doc.layer_editable(i),"vector":l.kind.shapes().is_some(),"artwork_masks":l.artwork_masks,
                     "objects":l.kind.shapes().map_or(0,|s|s.len()),
                     "items":l.kind.shapes().map(|s|s.iter().take(20).map(|s|json!({
                         "id":s.id,"name":s.name.chars().take(200).collect::<String>(),
@@ -597,7 +603,7 @@ pub fn execute_prepared(
                     "bounds":shape.world_bbox(),"geom":(points<=4096).then_some(&shape.geom),
                     "geometry_omitted":points>4096,"style":shape.style,"rotation":shape.rotation,
                     "opacity":shape.opacity,"fill_opacity":shape.fill_opacity,"blend_interior":shape.blend_interior,"text_wrap":shape.text_wrap,"blend":shape.blend,"visible":shape.visible,
-                    "locked":shape.locked,"guide":shape.guide,"filters":shape.filters,
+                    "locked":shape.locked,"guide":shape.guide,"filters":shape.filters,"artwork_masks":shape.artwork_masks,
                     "corners":shape.corners,"layout":layout_summary(&shape.layout),
                     "mask":shape.mask.as_ref().map(|m|json!({"width":m.w,"height":m.h}))});
                 let size = serde_json::to_vec(&item).map_err(|e| e.to_string())?.len();
@@ -770,7 +776,7 @@ pub fn execute_prepared(
                     if w == 0 || h == 0 || w > 32768 || h > 32768 || w * h > 64_000_000 {
                         return Err("Raster dimensions must be positive, at most 32768 per edge and 64 megapixels".into());
                     }
-                    Layer::raster(name, w as u32, h as u32)
+                    Layer::raster(name, w as u32, h as u32)?
                 }
                 _ => return Err("Choose vector, raster or group".into()),
             };
@@ -877,7 +883,7 @@ pub fn execute_prepared(
                     .photo
                     .selected()
                     .ok_or("Select/import a photo first")?;
-                let preview = p.render_thumbnail(960);
+                let preview = p.render_thumbnail(960)?;
                 let bytes = preview.encode_png().ok_or("Could not render photo")?;
                 return Ok(
                     json!({"content":[{"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(bytes)},{"type":"text","text":format!("Photo revision {} · {}",studio.photo.edit_revision,p.name)}]}),
@@ -946,7 +952,7 @@ pub fn execute_prepared(
         | "get_editor_capabilities"
         | "editor_action" => editing::execute(studio, name, args)?,
         "set_pixel_selection" | "paint_stroke" | "set_mask" => pixels::execute(studio, name, args)?,
-        "get_motion" | "set_motion" | "set_keyframes" | "apply_motion_preset" => {
+        "get_motion" | "set_motion" | "set_composition" | "set_expression" | "set_keyframes" | "apply_motion_preset" => {
             animation::execute(studio, name, args)?
         }
         "get_photos" | "select_photo" | "develop_photo" | "save_document" => {

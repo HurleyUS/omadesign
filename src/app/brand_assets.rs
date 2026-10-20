@@ -43,7 +43,36 @@ impl Studio {
         if !at.x.is_finite() || !at.y.is_finite() {
             return Err("The placement point is invalid".into());
         }
-        let (name, mut layers, motion, notes, imported_tokens) = match imported {
+        if let Imported::Document(doc) = &imported
+            && (!doc.motion.compositions.is_empty()
+                || !doc.motion.expressions.is_empty()
+                || doc.motion.scene3d.is_some())
+        {
+            crate::motion::compositions::validate(doc)?;
+            let mut comp = crate::motion::compositions::Composition::new(doc.clone());
+            if let Some((source, dest)) = placement {
+                comp.scale = Pt::new(
+                    dest.width() / source.width(),
+                    dest.height() / source.height(),
+                );
+                comp.anchor = source.min;
+                comp.position = dest.min;
+            } else {
+                comp.position = at - doc.size() * 0.5;
+            }
+            let mut after = self.doc.motion.clone();
+            after.duration = after.duration.max(comp.end);
+            after.compositions.push(comp);
+            let mut candidate = self.doc.clone();
+            candidate.motion = after.clone();
+            crate::motion::compositions::validate(&candidate)?;
+            self.commit(Cmd::Batch(vec![Cmd::SetMotion {
+                before: self.doc.motion.clone(),
+                after,
+            }]));
+            return Ok(());
+        }
+        let (name, mut layers, motion, notes, imported_tokens, imported_sources) = match imported {
             Imported::Photo(_) => {
                 return Err(
                     "Open camera RAW in Photo or use File → Place to develop it first".into(),
@@ -57,6 +86,7 @@ impl Studio {
                     doc.motion,
                     doc.import_notes,
                     doc.layout_tokens,
+                    doc.sources,
                 )
             }
             Imported::Raster { name, image } => {
@@ -69,20 +99,27 @@ impl Studio {
                     Pt::ZERO,
                     Pt::new(image.w as f32, image.h as f32),
                 );
-                (name, vec![layer], Motion::default(), vec![], vec![])
+                (name, vec![layer], Motion::default(), vec![], vec![], vec![])
             }
             Imported::Svg { name, svg } => {
                 if svg.len() > 16 * 1024 * 1024 {
                     return Err("Choose an SVG smaller than 16 MB".into());
                 }
                 let (doc, notes) = crate::formats::svg::read(&svg, &name)?;
-                (name, doc.layers, doc.motion, notes, doc.layout_tokens)
+                (
+                    name,
+                    doc.layers,
+                    doc.motion,
+                    notes,
+                    doc.layout_tokens,
+                    doc.sources,
+                )
             }
         };
         if layers.len() > 1024 {
             return Err("The brand asset contains too many layers".into());
         }
-        let mut total_pixels = 0usize;
+        let mut legacy_pixels = 0usize;
         let mut total_shapes = 0usize;
         let mut largest_id = 0;
         let mut vector_masks = 0usize;
@@ -92,7 +129,20 @@ impl Studio {
                 .into_iter()
                 .flatten()
             {
-                total_pixels += checked_pixels(pixels.w, pixels.h, pixels.data.len())?;
+                pixels.validate_native()?;
+                if pixels.native.is_some() {
+                    let count = (pixels.w as usize)
+                        .checked_mul(pixels.h as usize)
+                        .filter(|&count| count > 0)
+                        .and_then(|count| count.checked_mul(4));
+                    if count != Some(pixels.data.len()) {
+                        return Err("The asset contains invalid native display pixels".into());
+                    }
+                } else {
+                    legacy_pixels = legacy_pixels
+                        .checked_add(checked_pixels(pixels.w, pixels.h, pixels.data.len())?)
+                        .ok_or("The asset image dimensions overflow")?;
+                }
             }
             total_shapes += layer.kind.shapes().map_or(0, <[Shape]>::len);
             if let Some(shapes) = layer.kind.shapes() {
@@ -107,7 +157,7 @@ impl Studio {
                 }
             }
         }
-        if total_pixels > MAX_PIXELS || total_shapes > 100_000 {
+        if legacy_pixels > MAX_PIXELS || total_shapes > 100_000 {
             return Err("The brand asset is too large to place safely".into());
         }
         if vector_masks as f64
@@ -201,9 +251,37 @@ impl Studio {
         }
         let mut selected = Vec::new();
         let mut commands = Vec::new();
+        let mut sources = self.doc.sources.clone();
+        for source in imported_sources {
+            source.validate()?;
+            if !sources.iter().any(|s| s.id == source.id) {
+                sources.push(source);
+            }
+        }
+        if sources.iter().map(|s| s.bytes().len()).sum::<usize>() > 512 * 1024 * 1024 {
+            return Err("Retained sources exceed 512 MiB".into());
+        }
+        for layer in &layers {
+            if let Some(id) = &layer.source_attachment
+                && !sources.iter().any(|s| &s.id == id)
+            {
+                return Err("Placed artwork references a missing original source".into());
+            }
+        }
+        if sources != self.doc.sources {
+            commands.push(Cmd::SetSources {
+                before: self.doc.sources.clone(),
+                after: sources,
+            });
+        }
         let layer_ids: HashMap<_, _> = layers.iter().map(|layer| (layer.id, next_id())).collect();
         for (position, mut layer) in layers.into_iter().enumerate() {
             let index = self.doc.layers.len() + position;
+            let placement =
+                tiny_skia::Transform::from_translate(offset.x, offset.y).pre_scale(scale, scale);
+            for mask in &mut layer.artwork_masks {
+                mask.remap(&layer_ids, &ids, placement);
+            }
             layer.id = layer_ids[&layer.id];
             layer.parent = layer.parent.and_then(|id| layer_ids.get(&id).copied());
             match &mut layer.kind {
@@ -221,6 +299,9 @@ impl Studio {
                         )?);
                     }
                     for shape in shapes {
+                        for mask in &mut shape.artwork_masks {
+                            mask.remap(&layer_ids, &ids, placement);
+                        }
                         shape.id = ids[&shape.id];
                         crate::layout_components::remap_duplicate(shape, &ids);
                         shape.layout.parent =
@@ -295,7 +376,10 @@ impl Studio {
         }
         let mut after = self.doc.motion.clone();
         for mut track in motion.tracks {
-            let Some(id) = ids.get(&track.shape).or_else(|| layer_ids.get(&track.shape)) else {
+            let Some(id) = ids
+                .get(&track.shape)
+                .or_else(|| layer_ids.get(&track.shape))
+            else {
                 continue;
             };
             track.shape = *id;
@@ -329,6 +413,11 @@ impl Studio {
         self.commit_type_edit();
         self.commit(Cmd::Batch(commands));
         selected.retain(|(index, _)| self.doc.layer_editable(*index));
+        selected.retain(|(li, id)| {
+            !self
+                .doc
+                .is_mask_source(*li, (*id != RASTER_ID).then_some(*id))
+        });
         self.selection = selected;
         self.active_layer = self
             .selection
@@ -419,53 +508,7 @@ fn map_mask(
 }
 
 pub(super) fn scale_filters(stack: &mut crate::filter::FilterStack, scale: f32) {
-    use crate::filter::Fx;
-    for effect in &mut stack.items {
-        match effect {
-            Fx::Blur { std } => *std *= scale,
-            Fx::Shadow {
-                dx,
-                dy,
-                blur,
-                spread: extent,
-                ..
-            }
-            | Fx::InnerShadow {
-                dx,
-                dy,
-                blur,
-                choke: extent,
-                ..
-            } => {
-                *extent *= scale;
-                *dx *= scale;
-                *dy *= scale;
-                *blur *= scale;
-            }
-            Fx::OuterGlow { blur, spread, .. }
-            | Fx::InnerGlow {
-                blur,
-                choke: spread,
-                ..
-            } => {
-                *blur *= scale;
-                *spread *= scale;
-            }
-            Fx::Offset { dx, dy } => {
-                *dx *= scale;
-                *dy *= scale;
-            }
-            Fx::Morphology { radius, .. } => *radius *= scale,
-            Fx::Displacement { scale: amount, .. } => *amount *= scale,
-            Fx::AppleGlass(glass) => {
-                glass.edge_width *= scale;
-                glass.blur *= scale;
-                glass.falloff *= scale;
-            }
-            Fx::Turbulence { base, .. } => *base /= scale,
-            _ => {}
-        }
-    }
+    crate::filter::scale(stack, scale);
 }
 
 #[cfg(test)]
@@ -626,7 +669,7 @@ mod tests {
         let (origin, size, _) = raster.kind.raster_xform().unwrap();
         assert_eq!(origin, Pt::new(92.0, 96.0));
         assert_eq!(size, Pt::new(4.0, 4.0));
-        assert_eq!(raster.kind.pixels().unwrap().data, data);
+        assert_eq!(raster.kind.pixels().unwrap().data.as_slice(), data);
         studio.doc.validate_hierarchy().unwrap();
         let placed = serde_json::to_value(&studio.doc).unwrap();
         studio.undo();
@@ -809,7 +852,7 @@ mod tests {
             )
             .unwrap();
         let layer = studio.doc.layers.last().unwrap();
-        assert_eq!(layer.kind.pixels().unwrap().data, data);
+        assert_eq!(layer.kind.pixels().unwrap().data.as_slice(), data);
         assert_eq!(
             layer.kind.raster_bounds().unwrap().center(),
             Pt::new(150.0, 120.0)
@@ -827,11 +870,11 @@ mod tests {
             Pt::new(16.0, 16.0),
             Rgba::WHITE,
         ));
-        let mut mask = Pixels::new(32, 16);
+        let mut mask = Pixels::new(32, 16).unwrap();
         for y in 0..16 {
             for x in 0..8 {
                 let i = (y * 32 + x) * 4;
-                mask.data[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
+                mask.bytes_mut().unwrap()[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
             }
         }
         source.layers[0].mask = Some(mask);

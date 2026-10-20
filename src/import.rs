@@ -19,11 +19,14 @@ pub fn classify(path: &Path) -> &'static str {
     }
     match ext.as_str() {
         "oma" => "oma",
+        "omamotion" => "motion-project",
+        "gltf"|"glb"|"obj"|"stl"|"fbx"=>"model",
         "omaphoto" => "photo-settings",
         "svg" | "svgz" => "svg",
         "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" => "raster",
         "pdf" => "pdf",
         "ora" => "ora",
+        "idml" => "idml",
         "xcf" => "xcf",
         "ai" => "ai",
         "eps" | "ps" => "eps",
@@ -37,6 +40,14 @@ pub fn classify(path: &Path) -> &'static str {
 }
 
 pub fn open_any(path: &Path) -> Result<Imported, String> {
+    open_with_progress(path, |_| {})
+}
+
+pub(crate) fn open_with_progress(
+    path: &Path,
+    stage: impl Fn(&'static str),
+) -> Result<Imported, String> {
+    stage("Reading document");
     let name = file_name(path);
     let kind = classify(path);
     if matches!(kind, "raw" | "photo-settings") {
@@ -44,31 +55,53 @@ pub fn open_any(path: &Path) -> Result<Imported, String> {
     }
     let document = |mut doc: crate::document::Document, notes: Vec<String>| {
         doc.import_notes.extend(notes);
+        doc.validate_sources()?;
         doc.validate_hierarchy()?;
         Ok(Imported::Document(doc))
     };
     if kind == "oma" {
         return Ok(Imported::Document(crate::project::load_from(path)?));
     }
+    if kind == "motion-project" {
+        return Ok(Imported::Document(crate::motion::compositions::load_from(path)?));
+    }
+    if kind == "model" {
+        let model=crate::scene3d::import_model(path)?;
+        let mut scene=crate::scene3d::Scene::default();scene.add(model,name.clone())?;
+        let mut doc=crate::document::Document::new(&name,640.,480.,96.);
+        doc.layers.clear();doc.artboards.clear();doc.artboardless=true;doc.transparent=true;
+        doc.motion.scene3d=Some(scene);return Ok(Imported::Document(doc));
+    }
     if kind == "affinity" {
-        let (svg, mut notes) = crate::formats::affinity::read(path)?;
-        let (doc, svg_notes) = crate::formats::svg::read(&svg, &name)?;
-        notes.extend(svg_notes);
+        stage("Reading native Affinity objects");
+        let (doc, notes) = crate::formats::affinity::read_document(path)?;
         return document(doc, notes);
     }
     if kind == "lottie" {
         return Err("Use File → Import Lottie for that JSON".into());
     }
     if kind == "eps" {
+        let bytes = read_bounded(path)?;
+        match crate::formats::illustrator::read_with_path(&bytes, &name, Some(path)) {
+            Ok((doc, notes)) => return document(doc, notes),
+            Err(error) if crate::formats::illustrator::picture_import_failed(&error) => return Err(error),
+            Err(_) => {}
+        }
         return import_eps(path, &name);
     }
-    let bytes = read_bounded(path)?;
+    let admitted;
+    let legacy;
+    let bytes: &[u8] = if matches!(kind, "psd" | "raster") {
+        admitted = crate::project::read_admitted(path)?;
+        &admitted
+    } else {legacy = read_bounded(path)?; &legacy};
     if kind == "svg" || looks_svg(&bytes) {
+        stage("Reading SVG objects");
         let decoded;
         let data = if bytes.starts_with(&[0x1f, 0x8b]) {
             use std::io::Read;
             let mut output = Vec::new();
-            flate2::read::GzDecoder::new(bytes.as_slice())
+            flate2::read::GzDecoder::new(bytes)
                 .take(256 * 1024 * 1024 + 1)
                 .read_to_end(&mut output)
                 .map_err(|e| format!("Invalid SVGZ: {e}"))?;
@@ -78,10 +111,20 @@ pub fn open_any(path: &Path) -> Result<Imported, String> {
             decoded = output;
             decoded.as_slice()
         } else {
-            bytes.as_slice()
+            bytes
         };
         let svg = std::str::from_utf8(data).map_err(|e| format!("Invalid SVG text: {e}"))?;
         let (doc, notes) = crate::formats::svg::read(svg, &name)?;
+        return document(doc, notes);
+    }
+    if kind == "idml" {
+        let root = path.parent().unwrap_or(Path::new(".")).canonicalize().map_err(|e|e.to_string())?;
+        let (doc, notes) = crate::formats::idml::read_with_links(&bytes, &name, &|uri| {
+            let candidate = match url::Url::parse(uri) { Ok(url) if url.scheme()=="file" => url.to_file_path().ok()?, Ok(_) => return None, Err(_) => root.join(uri) };
+            let candidate=candidate.canonicalize().ok()?;
+            if !candidate.starts_with(&root) { return None; }
+            read_bounded(&candidate).ok()
+        })?;
         return document(doc, notes);
     }
     if kind == "ora" {
@@ -97,33 +140,64 @@ pub fn open_any(path: &Path) -> Result<Imported, String> {
         return document(result.document, result.warnings);
     }
     if kind == "pdf" || kind == "ai" || bytes.starts_with(b"%PDF-") {
+        let editing_error = if kind == "ai" {
+            stage("Reading Illustrator editing data");
+            match crate::formats::illustrator::read_with_path(&bytes, &name, Some(path)) {
+                Ok((doc, notes)) => return document(doc, notes),
+                Err(error) if crate::formats::illustrator::picture_import_failed(&error) => return Err(error),
+                Err(error) => Some(error),
+            }
+        } else { None };
         if bytes.starts_with(b"%!") {
-            return import_eps(path, &name);
+            let imported = import_eps(path, &name)?;
+            if let Imported::Document(mut doc) = imported {
+                let id = doc.retain_source(crate::source_attachment::SourceAttachment::new(&name, "illustrator", bytes.to_vec())?);
+                for layer in &mut doc.layers { if layer.source_attachment.is_none() { layer.source_attachment = Some(id.clone()); } }
+                doc.import_notes.insert(0, format!("Illustrator editing data could not be reconstructed: {}. Opened converted PostScript artwork; unsupported live structures are not editable. Original source bytes are retained.", editing_error.unwrap_or_default()));
+                return Ok(Imported::Document(doc));
+            }
+            return Ok(imported);
         }
-        let (doc, mut notes) = crate::formats::pdf::read(&bytes, &name)?;
+        let (mut doc, mut notes) = crate::formats::pdf::read(&bytes, &name)?;
         if kind == "ai" {
-            notes.insert(0,"Opened Illustrator's PDF-compatible artwork. Illustrator private data such as live effects, symbols and appearance stacks is not editable.".into());
+            let id = doc.retain_source(crate::source_attachment::SourceAttachment::new(&name, "illustrator", bytes.to_vec())?);
+            for layer in &mut doc.layers { if layer.source_attachment.is_none() { layer.source_attachment = Some(id.clone()); } }
+            notes.insert(0,format!("Illustrator editing data could not be reconstructed: {}. Opened PDF-compatible artwork instead. Original bytes are retained; unsupported live structures are not editable.", editing_error.unwrap_or_default()));
         }
         return document(doc, notes);
     }
     if bytes.starts_with(&[0x00, 0xff, 0x4b, 0x41]) {
-        let (svg, mut notes) = crate::formats::affinity::read(path)?;
-        let (doc, more) = crate::formats::svg::read(&svg, &name)?;
-        notes.extend(more);
+        stage("Reading native Affinity objects");
+        let (doc, notes) = crate::formats::affinity::read_document(path)?;
         return document(doc, notes);
     }
     match crate::formats::decode_image(&bytes) {
+        Ok(pixels) if pixels.native.is_some() => {
+            let mut doc = crate::document::Document::new(&name, 1., 1., 72.);
+            doc.width = pixels.w as f32;
+            doc.height = pixels.h as f32;
+            doc.transparent = true;
+            if let Some(n)=&pixels.native {doc.color=crate::deep_color::cms::DocumentColor {model:if n.cmyk.is_some(){crate::deep_color::cms::Model::Cmyk}else{crate::deep_color::cms::Model::Rgb},depth:n.depth,icc_profile:n.icc_profile.to_vec(),intent:n.intent};}
+            doc.artboards = crate::document::Artboard::tiled(1, doc.width, doc.height);
+            doc.layers = vec![crate::document::Layer::placed_raster(
+                &name,
+                pixels,
+                crate::geom::Pt::ZERO,
+                crate::geom::Pt::new(doc.width, doc.height),
+            )];
+            document(doc, vec![])
+        }
         Ok(pixels) => Ok(Imported::Raster {
             name,
             image: RgbaImage {
                 w: pixels.w,
                 h: pixels.h,
-                data: pixels.data,
+                data: {let allocation = std::sync::Arc::try_unwrap(pixels.data).map_err(|_| "Shared imported image storage")?;let (bytes, _memory) = allocation.into_parts(); bytes},
             },
         }),
         Err(error) if kind == "raster" => Err(error),
         Err(_) => Err(format!(
-            "Cannot open {name}. Choose OMA, OMAPHOTO, camera RAW, SVG/SVGZ, PNG, JPEG, WebP, GIF, TIFF, BMP, PSD/PSB, XCF, PDF, AI, EPS, or an Affinity document."
+            "Cannot open {name}. Choose OMA, OMAPHOTO, camera RAW, SVG/SVGZ, PNG, JPEG, WebP, GIF, TIFF, BMP, PSD/PSB, XCF, IDML, PDF, AI, EPS, or an Affinity document."
         )),
     }
 }
@@ -276,7 +350,11 @@ mod tests {
 
     #[test]
     fn missing_affinity_file_reports_read_failure() {
-        let err = match open_any(Path::new("/tmp/omadesign-no-such-file.afdesign")) {
+        let missing = std::env::temp_dir().join(format!(
+            "omadesign-missing-{}.afdesign",
+            crate::document::next_id()
+        ));
+        let err = match open_any(&missing) {
             Err(e) => e,
             Ok(_) => panic!(),
         };

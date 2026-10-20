@@ -12,9 +12,12 @@ pub(super) struct TabState {
     selected_layer: Option<u64>,
     individual_object: Option<(usize, u64)>,
     active_layer: Option<usize>,
+    channel_target: Option<u64>,
+    quick_mask_palette: Option<super::quick_mask::Palette>,
     history: History,
+    pub(super) live_runtime: super::live::LiveRuntime,
     clone_source: Option<Pt>,
-    pixel_sel: Option<Vec<u8>>,
+    pixel_sel: Option<std::sync::Arc<crate::resources::Allocation<f32>>>,
     pixel_sel_space: Option<masking::SelectionSpace>,
     pixel_path: Option<pixel_edit::SelectionPath>,
     pixel_edit: Option<pixel_edit::Editor>,
@@ -60,7 +63,10 @@ impl TabState {
             selected_layer: None,
             individual_object: None,
             active_layer,
+            channel_target: None,
+            quick_mask_palette: None,
             history: History::default(),
+            live_runtime: Default::default(),
             clone_source: None,
             pixel_sel: None,
             pixel_sel_space: None,
@@ -101,6 +107,7 @@ impl Studio {
         if self.pending_svg_export.take().is_some() {
             self.status = "Animated SVG export cancelled.".into();
         }
+        if let Some(palette)=self.quick_mask_palette.as_mut() {palette.mask=self.brush.color;self.brush.color=palette.normal;}
         let t = &mut self.tabs[i];
         swap(&mut self.doc, &mut t.doc);
         swap(&mut self.path, &mut t.path);
@@ -110,7 +117,11 @@ impl Studio {
         swap(&mut self.selected_layer, &mut t.selected_layer);
         swap(&mut self.individual_object, &mut t.individual_object);
         swap(&mut self.active_layer, &mut t.active_layer);
+        swap(&mut self.channel_target, &mut t.channel_target);
+        swap(&mut self.quick_mask_palette, &mut t.quick_mask_palette);
+        if let Some(palette)=self.quick_mask_palette {self.brush.color=palette.mask;}
         swap(&mut self.history, &mut t.history);
+        swap(&mut self.live_runtime, &mut t.live_runtime);
         swap(&mut self.clone_source, &mut t.clone_source);
         swap(&mut self.pixel_sel, &mut t.pixel_sel);
         swap(&mut self.pixel_sel_space, &mut t.pixel_sel_space);
@@ -137,6 +148,7 @@ impl Studio {
         swap(&mut self.last_swap, &mut t.last_swap);
         swap(&mut self.shape_rename, &mut t.shape_rename);
         swap(&mut self.artboard_rename, &mut t.artboard_rename);
+        self.sync_quick_mask_palette();
     }
 
     fn activate_tab(&mut self) {
@@ -201,6 +213,18 @@ impl Studio {
                 .get(i)
                 .map(|tab| (&tab.doc, tab.swap_id.as_str(), tab.last_input, tab.playhead))
         }
+    }
+
+    pub(super) fn layer_copy_insertion(&self, index: usize) -> Option<(usize, Option<u64>)> {
+        let (doc, active) = if index == self.active_tab {
+            (&self.doc, self.active_layer)
+        } else {
+            let tab = self.tabs.get(index)?;
+            (&tab.doc, tab.active_layer)
+        };
+        Some(active.filter(|&i| i < doc.layers.len())
+            .map(|i| (i + 1, doc.layers[i].parent))
+            .unwrap_or((doc.layers.len(), None)))
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
@@ -495,13 +519,14 @@ mod tests {
     #[test]
     fn tabs_move_rasters_and_restore_independent_history_and_selection() {
         let mut studio = Studio::new();
+        studio.doc.layers[0] = Layer::raster("Background", 1280, 800).unwrap();
         studio.show_welcome = false;
         studio.finish_create(CreateKind::Rect, Pt::ZERO, Pt::new(20.0, 20.0));
         let selection = studio.selection.clone();
         let selected_layer = Some(studio.doc.layers[selection[0].0].id);
         studio.selected_layer = selected_layer;
         let pixels = studio.doc.layers[0].kind.pixels().unwrap().data.as_ptr();
-        studio.pixel_sel = Some(vec![255; 64]);
+        studio.pixel_sel = Some(crate::deep_color::storage::adopt(vec![1.; 64]).unwrap());
         let mask = studio.pixel_sel.as_ref().unwrap().as_ptr();
         studio.view.scale = 2.5;
 
@@ -657,6 +682,22 @@ mod tests {
 }
 
 impl Studio {
+    /// Attach a completed live session to its originating tab.
+    /// Args: original tab ID and session state. Returns nothing; closed tabs stay closed.
+    pub(super) fn attach_live_tab(&mut self, swap_id: &str, replica: crate::collaboration::Replica) {
+        if self.swap_id == swap_id {
+            self.doc.collaboration = Some(replica);
+            self.live_runtime = Default::default();
+            self.history.clear();
+            self.dirty = true;
+        } else if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.swap_id == swap_id) {
+            tab.doc.collaboration = Some(replica);
+            tab.live_runtime = Default::default();
+            tab.history.clear();
+            tab.dirty = true;
+        }
+    }
+
     /// A background upload must never link whichever document happens to be active.
     pub(super) fn link_cloud_tab(&mut self, swap_id: &str, link: crate::cloud::CloudLink) {
         if self.swap_id == swap_id {
@@ -705,7 +746,8 @@ impl Studio {
                 selected_layer: self.selected_layer,
                 individual_object: self.individual_object,
                 expanded: self.layer_expanded.clone(),
-                pixel_selection: self.pixel_sel.clone(),
+                pixel_selection: None,
+                pixel_selection_float: self.pixel_sel.as_ref().map(|values| values.to_vec()),
                 selection_space: self.pixel_sel_space.map(|v| {
                     let t = v.transform;
                     (v.w, v.h, [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty])
@@ -724,7 +766,7 @@ impl Studio {
         docs: Vec<crate::project::SwapMeta>,
         active: usize,
     ) {
-        self.tabs = states
+        let prepared: Result<Vec<_>, String> = states
             .into_iter()
             .zip(docs)
             .map(|(s, meta)| {
@@ -737,7 +779,7 @@ impl Studio {
                 tab.selected_layer = s.selected_layer;
                 tab.individual_object = s.individual_object;
                 tab.layer_expanded = s.expanded;
-                tab.pixel_sel = s.pixel_selection;
+                tab.pixel_sel = if let Some(values)=s.pixel_selection_float{crate::selection_coverage::validate(&values)?;Some(crate::deep_color::storage::adopt(values)?)}else{s.pixel_selection.map(|values|crate::selection_coverage::from_bytes(&values,&crate::deep_color::storage::check)).transpose()?};
                 tab.pixel_sel_space =
                     s.selection_space
                         .map(|(w, h, t)| super::masking::SelectionSpace {
@@ -751,9 +793,13 @@ impl Studio {
                 tab.show_welcome = s.welcome;
                 tab.playhead = s.playhead;
                 tab.need_fit = false;
-                tab
+                Ok(tab)
             })
             .collect();
+        match prepared {
+            Ok(tabs) => self.tabs = tabs,
+            Err(error) => {self.status=format!("Could not restore selection: {error}");return;}
+        }
         self.active_tab = active;
         self.exchange_tab(active);
         self.activate_tab();

@@ -3,7 +3,7 @@ use super::*;
 use crate::geom::{BreakMode, LastLine, ParagraphStyle, TextAlign};
 use unicode_segmentation::UnicodeSegmentation;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LayoutGlyph {
     pub id: u16,
     pub cluster: usize,
@@ -13,8 +13,10 @@ pub struct LayoutGlyph {
     pub is_space: bool,
     pub hscale: f32,
     pub vscale: f32,
+    /// 0 keeps the horizontal pen. 1 stands upright in a column. 2 lies on its side.
+    pub turn: u8,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LayoutLine {
     pub text: String,
     pub hyphenated: bool,
@@ -66,8 +68,14 @@ pub fn compose_plain(run: &TypeRun) -> Arc<Vec<LayoutLine>> {
 pub fn compose(run: &TypeRun) -> Arc<Vec<LayoutLine>> {
     type Cache = HashMap<(String, u64), Arc<Vec<LayoutLine>>>;
     static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    let mut encoded = serde_json::to_string(run).unwrap_or_default();
+    if !run.inlines.is_empty() {
+        for paint in &run.inline_paint {
+            encoded.push_str(&format!("\n{}:{:.4}", paint.at, paint.advance));
+        }
+    }
     let key = (
-        serde_json::to_string(run).unwrap_or_default(),
+        encoded,
         FONT_REVISION.load(std::sync::atomic::Ordering::Relaxed),
     );
     let cache = CACHE.get_or_init(Default::default);
@@ -79,10 +87,24 @@ pub fn compose(run: &TypeRun) -> Arc<Vec<LayoutLine>> {
     {
         return lines;
     }
+    if run.vertical && run.frame.is_none() && run.on_path.is_none() {
+        let mut flat = run.clone();
+        flat.vertical = false;
+        flat.wrap_width = None;
+        let horizontal = compose(&flat);
+        let stacked = super::vertical::stack_point(run, &horizontal);
+        let result = Arc::new(stacked);
+        let mut stored = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if stored.len() >= 256 {
+            stored.clear();
+        }
+        stored.insert(key, result.clone());
+        return result;
+    }
     let bytes = resolve_path(run).and_then(|p| font_bytes(&p));
     let face = bytes
         .as_ref()
-        .and_then(|b| rustybuzz::Face::from_slice(b, 0));
+        .and_then(|b| super::variations::shaping_face(b, &run.font_variations));
     let mut lines:Vec<LayoutLine> = Vec::new();
     let mut base = 0;
 
@@ -303,7 +325,7 @@ pub fn compose(run: &TypeRun) -> Arc<Vec<LayoutLine>> {
                     _ => 0.,
                 };
             }
-            let height=(start..end).map(|i|super::character_metrics(run,i).leading.unwrap().pixels(run.px)).fold(0.,f32::max).max(if start==end{run.line_height()}else{1.});
+            let height=(start..end).map(|i|{let m=super::character_metrics(run,i);m.leading.unwrap().pixels(m.px.unwrap_or(run.px))}).fold(0.,f32::max).max(if start==end{run.line_height()}else{1.});
             let baseline=lines.last().map_or(0.,|previous|previous.baseline+height);
 
             for glyph in &mut glyphs {
@@ -382,6 +404,70 @@ fn shape_line(
     start: usize,
     hyphen: bool,
 ) -> Vec<LayoutGlyph> {
+    let count = text.chars().count();
+    let mut cuts = vec![0, count];
+    for span in &run.spans {
+        if span.font.is_some() || span.px.is_some() || span.font_variations.is_some() {
+            cuts.extend([
+                span.start.saturating_sub(start).min(count),
+                span.end.saturating_sub(start).min(count),
+            ]);
+        }
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    cuts.retain(|&at|at==0 || at==count || {let a=run.character_style(start+at-1);let b=run.character_style(start+at);(a.font.unwrap_or_else(||run.font.clone()),a.px.unwrap_or(run.px),super::variations::at(run,start+at-1))!=(b.font.unwrap_or_else(||run.font.clone()),b.px.unwrap_or(run.px),super::variations::at(run,start+at))});
+    if cuts.len() <= 2
+        && run.character_style(start).font.is_none()
+        && run.character_style(start).px.is_none()
+        && run.spans.iter().find(|s| s.start <= start && start < s.end).is_none_or(|s| s.font_variations.is_none())
+    {
+        return shape_line_uniform(run, face, text, start, hyphen);
+    }
+    let mut glyphs = Vec::new();
+    let mut pen = 0.;
+    for pair in cuts.windows(2) {
+        let style = run.character_style(start + pair[0]);
+        let mut part = run.clone();
+        part.font = style.font.unwrap_or_else(|| run.font.clone());
+        part.font_variations = super::variations::at(run, start + pair[0]);
+        part.px = style.px.unwrap_or(run.px);
+        part.align=TextAlign::Start;part.paragraphs=vec![ParagraphStyle{start:paragraph_style(run,start).start,word_spacing:[100.;3],..Default::default()}];
+        let bytes = resolve_path(&part).and_then(|path| font_bytes(&path));
+        let face = bytes
+            .as_ref()
+            .and_then(|bytes| super::variations::shaping_face(bytes, &part.font_variations));
+        let fragment = &text[char_to_byte(text, pair[0])..char_to_byte(text, pair[1])];
+        let mut next = shape_line_uniform(
+            &part,
+            face.as_ref(),
+            fragment,
+            start + pair[0],
+            hyphen && pair[1] == count,
+        );
+        let width = next.last().map_or(0., |g| g.x + g.advance);
+        for glyph in &mut next {
+            glyph.x += pen;
+        }
+        if pair[0]>0 {
+            let index=start+pair[0];
+            let boundary=run.manual_kern.get(&index).copied().unwrap_or(0.)*part.px/1000.;
+            for glyph in &mut next{glyph.x+=boundary;} pen+=boundary;
+        }
+        glyphs.extend(next);
+        pen += width;
+    }
+    paragraph_adjustments(run,start,&mut glyphs);
+    glyphs
+}
+
+fn shape_font_line(
+    run: &TypeRun,
+    face: Option<&rustybuzz::Face<'_>>,
+    text: &str,
+    start: usize,
+    hyphen: bool,
+) -> Vec<LayoutGlyph> {
     let mut visible = String::new();
     let mut mapping = Vec::new();
     for (i, c) in text.chars().enumerate() {
@@ -411,6 +497,7 @@ fn shape_line(
                 is_space: *c == ' ',
                 hscale: 1.,
                 vscale: 1.,
+                turn: 0,
             })
             .collect();
     };
@@ -434,10 +521,115 @@ fn shape_line(
         }
         let untracked_advance = pos.x_advance as f32 * scale * hscale;
         let advance=untracked_advance+metrics.tracking.unwrap()*run.px/1000.;
-        result.push(LayoutGlyph{id:info.glyph_id as u16,cluster,x:pen+pos.x_offset as f32*scale*hscale,y:-pos.y_offset as f32*scale*vscale-metrics.baseline_shift.unwrap(),advance,is_space:c==' '||c=='\t',hscale,vscale});
+        result.push(LayoutGlyph{id:info.glyph_id as u16,cluster,x:pen+pos.x_offset as f32*scale*hscale,y:-pos.y_offset as f32*scale*vscale-metrics.baseline_shift.unwrap(),advance,is_space:c==' '||c=='\t',hscale,vscale,turn:0});
         pen+=advance;previous_cluster=Some(cluster);
         previous_untracked_advance = untracked_advance;
     }
+    result
+}
+
+/// Shape one line, giving each inline symbol its own advance instead of a font glyph.
+/// Args: run, face, line text, character index of the line and whether it ends in a hyphen. Returns positioned glyphs before paragraph spacing.
+fn shape_line_uniform(
+    run: &TypeRun,
+    face: Option<&rustybuzz::Face<'_>>,
+    text: &str,
+    start: usize,
+    hyphen: bool,
+) -> Vec<LayoutGlyph> {
+    let mut result = if text.chars().any(|c| c == '\u{FFFC}') {
+        shape_inline_line(run, face, text, start, hyphen)
+    } else {
+        shape_font_line(run, face, text, start, hyphen)
+    };
+    paragraph_adjustments(run, start, &mut result);
+    result
+}
+
+fn shape_inline_line(
+    run: &TypeRun,
+    face: Option<&rustybuzz::Face<'_>>,
+    text: &str,
+    start: usize,
+    hyphen: bool,
+) -> Vec<LayoutGlyph> {
+    let mut glyphs = Vec::new();
+    let mut pen = 0.;
+    let mut buf = String::new();
+    let mut buf_at = 0usize;
+    for (index, ch) in text.chars().enumerate() {
+        if ch != '\u{FFFC}' {
+            if buf.is_empty() {
+                buf_at = index;
+            }
+            buf.push(ch);
+            continue;
+        }
+        pen = flush_inline_text(run, face, &buf, start + buf_at, false, &mut glyphs, pen);
+        buf.clear();
+        let advance = inline_advance(run, start + index);
+        glyphs.push(LayoutGlyph {
+            id: 0,
+            cluster: start + index,
+            x: pen,
+            y: 0.,
+            advance,
+            is_space: false,
+            hscale: 1.,
+            vscale: 1.,
+            turn: 0,
+        });
+        pen += advance;
+    }
+    flush_inline_text(run, face, &buf, start + buf_at, hyphen, &mut glyphs, pen);
+    glyphs
+}
+
+fn flush_inline_text(
+    run: &TypeRun,
+    face: Option<&rustybuzz::Face<'_>>,
+    text: &str,
+    start: usize,
+    hyphen: bool,
+    glyphs: &mut Vec<LayoutGlyph>,
+    pen: f32,
+) -> f32 {
+    if text.is_empty() {
+        return pen;
+    }
+    let part = shape_font_line(run, face, text, start, hyphen);
+    let width = part.last().map_or(0., |glyph| glyph.x + glyph.advance);
+    for mut glyph in part {
+        glyph.x += pen;
+        glyphs.push(glyph);
+    }
+    pen + width
+}
+
+/// Width of one inline symbol. A resolved symbol uses its art. Anything else uses the font size.
+/// Args: story and character index. Returns the advance in pixels.
+fn inline_advance(run: &TypeRun, cluster: usize) -> f32 {
+    if let Some(paint) = run.inline_paint.iter().find(|paint| paint.at == cluster) {
+        if paint.advance.is_finite() && paint.advance >= 0. {
+            return paint.advance;
+        }
+    }
+    let scale = run
+        .inlines
+        .iter()
+        .find(|item| item.at == cluster)
+        .map(|item| item.scale)
+        .unwrap_or(1.);
+    let px = run.character_style(cluster).px.unwrap_or(run.px).max(1.);
+    let scale = if scale.is_finite() && scale > 0. && scale <= 100. {
+        scale
+    } else {
+        1.
+    };
+    px * scale
+}
+
+fn paragraph_adjustments(run:&TypeRun,start:usize,result:&mut [LayoutGlyph]) {
     let style = paragraph_style(run, start);
     if matches!(style.align,TextAlign::Justify{..}) && run.wrap_width.is_some() && style.break_mode!=BreakMode::KeepAll && let Some(last)=result.last_mut() {last.advance-=super::character_metrics(run,last.cluster).tracking.unwrap()*run.px/1000.;}
     let n = result.len();
@@ -449,14 +641,13 @@ fn shape_line(
         } else {
             0.
         }) + if i + 1 < n {
-            run.px * style.letter_spacing[1] / 100.
+            run.character_style(g.cluster).px.unwrap_or(run.px) * style.letter_spacing[1] / 100.
         } else {
             0.
         };
         g.advance += extra;
         added += extra;
     }
-    result
 }
 fn trim_width(glyphs: &[LayoutGlyph]) -> f32 {
     glyphs
@@ -518,32 +709,121 @@ fn justify_glyphs(glyphs: &mut [LayoutGlyph], target: f32, style: &ParagraphStyl
     glyphs[count-1].x+glyphs[count-1].advance
 }
 
+/// Resolve a glyph through the shared font cache.
+/// Args: run and positioned glyph. Returns its font outline and document-unit scale.
+pub(super) fn glyph_outline(run: &TypeRun, glyph: &LayoutGlyph) -> Option<(ab_glyph::Outline, f32)> {
+    let style = run.character_style(glyph.cluster);
+    let mut face_run = run.clone();
+    face_run.font = style.font.unwrap_or_else(|| run.font.clone());
+    let bytes = resolve_path(&face_run).and_then(|p| font_bytes(&p))?;
+    let font = super::variations::outline_face(&bytes, &super::variations::at(run, glyph.cluster))?;
+    let outline = font.outline(GlyphId(glyph.id))?;
+    let scale = style.px.unwrap_or(run.px).max(1.) / font.units_per_em().unwrap_or(1000.);
+    Some((outline, scale))
+}
+
+/// Trace a glyph in the run's local type space.
+/// Args: text run and positioned glyph. Returns contours before the optional run matrix.
 pub fn glyph_contours(run: &TypeRun, glyph: &LayoutGlyph) -> Vec<Vec<Pt>> {
-    let Some(bytes) = resolve_path(run).and_then(|p| font_bytes(&p)) else {
+    if run.inlines.iter().any(|item| item.at == glyph.cluster) {
+        return Vec::new();
+    }
+    let Some((outline, scale)) = glyph_outline(run, glyph) else {
         return Vec::new();
     };
-    let Ok(font) = ab_glyph::FontRef::try_from_slice(&bytes) else {
-        return Vec::new();
-    };
-    let Some(outline) = font.outline(GlyphId(glyph.id)) else {
-        return Vec::new();
-    };
-    let scale = run.px.max(1.) / font.units_per_em().unwrap_or(1000.);
     let curves = map_curves(&outline.curves, 0., 0., scale);
-    flatten_outline(&curves)
+    let [a, b, c, d, _, _] = run.transform.unwrap_or([1., 0., 0., 1., 0., 0.]);
+    let stretch = ((a * glyph.hscale).powi(2) + (b * glyph.hscale).powi(2)
+        + (c * glyph.vscale).powi(2) + (d * glyph.vscale).powi(2)).sqrt().max(1.);
+    let flat = flatten_outline(&curves, 1. / (64. * stretch));
+    if glyph.turn == 0 {
+        return flat
+            .into_iter()
+            .map(|contour| {
+                contour
+                    .into_iter()
+                    .map(|p| {
+                        Pt::new(
+                            run.origin.x + glyph.x + p.x * glyph.hscale,
+                            run.origin.y + glyph.y + p.y * glyph.vscale,
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+    }
+    let mut contours: Vec<Vec<Pt>> = flat
         .into_iter()
         .map(|contour| {
             contour
                 .into_iter()
-                .map(|p| {
-                    Pt::new(
-                        run.origin.x + glyph.x + p.x * glyph.hscale,
-                        run.origin.y + glyph.y + p.y * glyph.vscale,
-                    )
-                })
+                .map(|p| Pt::new(p.x * glyph.hscale, p.y * glyph.vscale))
                 .collect()
         })
-        .collect()
+        .collect();
+    let center = outline_center(&contours);
+    if glyph.turn == 2 {
+        for point in contours.iter_mut().flatten() {
+            *point = turn_clockwise(*point, center);
+        }
+    }
+    let center = outline_center(&contours);
+    let delta = Pt::new(run.origin.x + glyph.x, run.origin.y + glyph.y) - center;
+    for point in contours.iter_mut().flatten() {
+        *point += delta;
+    }
+    contours
+}
+
+/// Centre of flattened ink. An empty outline stays at the origin.
+/// Args: contours. Returns the midpoint of their bounds.
+fn outline_center(contours: &[Vec<Pt>]) -> Pt {
+    let mut min = Pt::new(f32::MAX, f32::MAX);
+    let mut max = Pt::new(f32::MIN, f32::MIN);
+    let mut count = 0usize;
+    for point in contours.iter().flatten() {
+        min.x = min.x.min(point.x);
+        min.y = min.y.min(point.y);
+        max.x = max.x.max(point.x);
+        max.y = max.y.max(point.y);
+        count += 1;
+    }
+    if count == 0 {
+        return Pt::ZERO;
+    }
+    Pt::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5)
+}
+
+/// Centre of a glyph's upright ink, before a vertical column moves it.
+/// Args: text run and positioned glyph. Returns that centre in glyph space, or the origin when the glyph has no ink.
+pub(super) fn upright_center(run: &TypeRun, glyph: &LayoutGlyph) -> Pt {
+    let Some((outline, scale)) = glyph_outline(run, glyph) else {
+        return Pt::ZERO;
+    };
+    let curves = map_curves(&outline.curves, 0., 0., scale);
+    let [a, b, c, d, _, _] = run.transform.unwrap_or([1., 0., 0., 1., 0., 0.]);
+    let stretch = ((a * glyph.hscale).powi(2) + (b * glyph.hscale).powi(2)
+        + (c * glyph.vscale).powi(2)
+        + (d * glyph.vscale).powi(2))
+    .sqrt()
+    .max(1.);
+    let contours: Vec<Vec<Pt>> = flatten_outline(&curves, 1. / (64. * stretch))
+        .into_iter()
+        .map(|contour| {
+            contour
+                .into_iter()
+                .map(|point| Pt::new(point.x * glyph.hscale, point.y * glyph.vscale))
+                .collect()
+        })
+        .collect();
+    outline_center(&contours)
+}
+
+/// Turn one document point a quarter turn clockwise around `center`.
+/// Args: point and pivot. Returns the turned point. Y grows downward.
+pub(super) fn turn_clockwise(point: Pt, center: Pt) -> Pt {
+    let delta = point - center;
+    Pt::new(center.x - delta.y, center.y + delta.x)
 }
 
 #[cfg(test)]

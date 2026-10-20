@@ -1,5 +1,33 @@
 #[path = "document_previews.rs"]
-mod document_previews;
+pub(super) mod document_previews;
+#[cfg(test)]
+#[path = "pixel_menu_tests.rs"]
+mod pixel_menu_tests;
+#[cfg(test)]
+#[path = "type_menu_tests.rs"]
+mod type_menu_tests;
+#[path = "pixel_layers.rs"]
+mod pixel_layers;
+#[path = "animation_menu.rs"]
+mod animation_menu;
+#[path = "layout_menu.rs"]
+mod layout_menu;
+#[path = "develop_menu.rs"]
+mod develop_menu;
+#[path = "effect_menu.rs"]
+mod effect_menu;
+#[cfg(test)]
+#[path = "effect_menu_tests.rs"]
+mod effect_menu_tests;
+#[cfg(test)]
+#[path = "develop_menu_tests.rs"]
+mod develop_menu_tests;
+#[cfg(test)]
+#[path = "layout_menu_tests.rs"]
+mod layout_menu_tests;
+#[cfg(test)]
+#[path = "animation_menu_tests.rs"]
+mod animation_menu_tests;
 
 use crate::app::Studio;
 use crate::geom::Pt;
@@ -21,7 +49,7 @@ pub fn top_bar(ui: &mut Ui, studio: &mut Studio) {
         .show(ui, |ui| {
             let row = ui.max_rect();
             let modes = mode_tabs_rect(row);
-            let compact = row.width() < 1120.0;
+            let compact = modes.left() - row.left() < 660.0;
             let left = eframe::egui::Rect::from_min_max(
                 row.min,
                 eframe::egui::pos2(modes.left() - 12.0, row.bottom()),
@@ -54,7 +82,6 @@ pub fn top_bar(ui: &mut Ui, studio: &mut Studio) {
                     }
                 });
             });
-            // Center against the entire title bar, independently of menu widths.
             ui.scope_builder(eframe::egui::UiBuilder::new().max_rect(modes), |ui| {
                 persona_picker(ui, studio);
             });
@@ -65,14 +92,8 @@ pub fn top_bar(ui: &mut Ui, studio: &mut Studio) {
                 );
                 ui.scope_builder(eframe::egui::UiBuilder::new().max_rect(right), |ui| {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let photo = studio.persona == Persona::Photo;
                         super::library::tabs(ui, studio);
-                        if photo {
-                            library_buttons(ui, studio);
-                        }
-                        if !compact && photo && ui.button("Place in Design").clicked() {
-                            studio.send_photo_to_design();
-                        }
+
                     });
                 });
             }
@@ -121,20 +142,84 @@ fn zoom_corner(ui: &mut Ui, studio: &mut Studio) {
 fn main_menus(ui: &mut Ui, studio: &mut Studio) {
     file_menu(ui, studio);
     edit_menu(ui, studio);
-    ui.menu_button("Select", |ui| super::selection::menu(ui, studio));
-    ui.add_enabled_ui(studio.persona != Persona::Photo, |ui| {
-        object_menu(ui, studio);
-    });
+    if studio.persona == Persona::Photo {
+        ui.menu_button("Photo", |ui| {
+            if ui.button("Copy adjustments").clicked() {super::photo::copy_adjustments(studio);ui.close();}
+            if ui.button("Paste adjustments…").clicked() {super::photo::paste_adjustments(ui.ctx(),studio);ui.close();}
+            if ui.button("Presets…").clicked() {super::photo::preset_library(ui.ctx(),studio);ui.close();}
+            if ui.button("Place in Design").clicked() {studio.send_photo_to_design();ui.close();}
+            ui.separator();
+            if ui.button("Shape library…").clicked(){studio.show_shape_browser=true;ui.close();}
+            if ui.button("Free photos…").clicked(){studio.show_asset_browser=true;ui.close();}
+        });
+        ui.menu_button("Develop", |ui| {
+            develop_menu::menu(ui, studio);
+            pane_items(ui, studio, &["photo-develop","histogram","presets","history"]);
+        });
+    } else {
+        if studio.persona == Persona::Pixel {
+            ui.menu_button("Image", |ui| {
+                ui.menu_button("Adjustments", |ui| super::raster::command_menu(ui, studio, true));
+                ui.separator();
+                for (panel, label) in [("transform", "Transform panel…"), ("adjustments", "Adjustments panel…"), ("channels", "Channels panel…"), ("info", "Info panel…")] {
+                    if ui.button(label).clicked() {super::panel_workspace::open(ui.ctx(), studio, panel);ui.close();}
+                }
+            });
+            pixel_layers::show(ui, studio);
+        } else { object_menu(ui, studio); }
+        let type_menu = ui.menu_button("Type", |ui| {
+            super::text_geometry::menu(ui, studio);
+            super::find_font::menu(ui, studio);
+            ui.separator();
+            for (panel, label) in [("character", "Character panel…"), ("paragraph", "Paragraph panel…"), ("opentype", "OpenType panel…"), ("glyphs", "Glyphs panel…"), ("typography", "Typography library…")] {
+                if ui.button(label).clicked() {super::panel_workspace::open(ui.ctx(), studio, panel);ui.close();}
+            }
+        });
+        if type_menu.response.clicked() { type_menu.response.request_focus(); }
+        ui.menu_button("Select", |ui| super::selection::menu(ui, studio));
+        if studio.persona==Persona::Layout {
+            ui.menu_button("Layout", |ui| {
+                layout_menu::menu(ui, studio);
+                pane_items(ui, studio, &["layout","hierarchy","components","variables","prototype"]);
+            });
+        } else if studio.persona==Persona::Motion {
+            ui.menu_button("Animation", |ui| {
+                animation_menu::menu(ui, studio);
+                pane_items(ui, studio, &["timeline","keyframes","compositions","scene3d"]);
+            });
+        } else if studio.persona == Persona::Pixel {
+            ui.menu_button("Filter", |ui| super::raster::command_menu(ui, studio, false));
+        } else {
+            ui.menu_button("Effect", |ui| {
+                effect_menu::menu(ui, studio);
+                pane_items(ui, studio, &["effects","adjustments","appearance","transparency"]);
+            });
+        }
+    }
     view_menu(ui, studio);
+    super::panel_workspace::menu(ui,studio);
     super::plugins::menu(ui, studio);
 }
 
+fn pane_menu(ui: &mut Ui, studio: &mut Studio, title: &str, panels: &[&str]) {
+    ui.menu_button(title,|ui| pane_items(ui, studio, panels));
+}
+
+fn pane_items(ui: &mut Ui, studio: &mut Studio, panels: &[&str]) {
+    for panel in panels {
+        if let Some((_,label))=super::panel_workspace::PANELS.iter().find(|entry|entry.0==*panel) {
+            if ui.button(*label).clicked() {super::panel_workspace::open(ui.ctx(),studio,panel);ui.close();}
+        }
+    }
+}
+
 fn mode_tabs_rect(row: eframe::egui::Rect) -> eframe::egui::Rect {
-    eframe::egui::Rect::from_center_size(row.center(), vec2(7.0 * 36.0 + 6.0 * 6.0, 30.0))
+    eframe::egui::Rect::from_min_size(eframe::egui::pos2((row.right() - 144.0 - 288.0).max(row.left() + 180.0), row.center().y - 15.0), vec2(288.0, 30.0))
 }
 
 fn file_menu(ui: &mut Ui, studio: &mut Studio) {
     ui.menu_button("File", |ui| {
+        if studio.persona!=Persona::Photo {super::document_color::menu(ui,studio);ui.separator();}
         if ui.button("Template library…").clicked() {
             studio.show_templates = true;
             ui.close();
@@ -198,6 +283,27 @@ fn file_menu(ui: &mut Ui, studio: &mut Studio) {
             studio.save_as();
             ui.close();
         }
+        if !studio.doc.sources.is_empty() {
+            ui.menu_button("Save original source…", |ui| {
+                for source in studio.doc.sources.clone() {
+                    if ui.button(&source.name).clicked() {
+                        studio.request_file_dialog(
+                            move || {
+                                let path = rfd::FileDialog::new().set_file_name(&source.name).save_file()?;
+                                Some(source.write_original(&path).map(|()| path))
+                            },
+                            |_, studio, result| {
+                                studio.status = match result {
+                                    Ok(path) => format!("Saved original source {}", path.display()),
+                                    Err(error) => format!("Source recovery failed: {error}"),
+                                };
+                            },
+                        );
+                        ui.close();
+                    }
+                }
+            });
+        }
         ui.separator();
         if ui
             .add(Button::new("Place…").shortcut_text("Ctrl+Shift+P"))
@@ -208,7 +314,9 @@ fn file_menu(ui: &mut Ui, studio: &mut Studio) {
         }
         ui.separator();
         ui.label(RichText::new("Export").small().color(fg_weak()));
-        if ui.add(Button::new("Export…").shortcut_text("Ctrl+E")).clicked() {
+        let export_button=Button::new("Export…");
+        let export_button=if studio.persona==Persona::Pixel {export_button} else {export_button.shortcut_text("Ctrl+E")};
+        if ui.add(export_button).clicked() {
             super::export_dialog::open(ui.ctx(), studio, crate::export::Format::Png, false);
             ui.close();
         }
@@ -218,6 +326,10 @@ fn file_menu(ui: &mut Ui, studio: &mut Studio) {
                 ui.close();
             }
             return;
+        }
+        if ui.button("Export for Screens…").clicked() {
+            super::screen_export::open(ui.ctx(),studio);
+            ui.close();
         }
         if ui.button("Export animated SVG…").clicked() {
             studio.export_animated_svg();
@@ -238,7 +350,7 @@ fn file_menu(ui: &mut Ui, studio: &mut Studio) {
             ("Export WebM…", crate::anim_export::AnimKind::Webm),
         ] {
             if ui.button(label).clicked() {
-                super::anim_export::open(studio, kind);
+                super::anim_export::open(ui.ctx(), studio, kind);
                 ui.close();
             }
         }
@@ -297,6 +409,10 @@ fn file_menu(ui: &mut Ui, studio: &mut Studio) {
             studio.show_cloud_projects();
             ui.close();
         }
+        if ui.button("Live collaboration…").clicked() {
+            studio.cloud_modal = crate::app::CloudModal::Live;
+            ui.close();
+        }
         if ui.button("Review cloud annotations…").clicked() {
             studio.refresh_cloud_review();
             ui.close();
@@ -327,13 +443,13 @@ fn file_menu(ui: &mut Ui, studio: &mut Studio) {
 }
 
 fn edit_menu(ui: &mut Ui, studio: &mut Studio) {
-    ui.menu_button("Edit", |ui| {
+    let menu = ui.menu_button("Edit", |ui| {
         if ui
             .add_enabled(
                 if studio.persona == Persona::Photo {
                     studio.photo.can_undo()
                 } else {
-                    studio.history.can_undo()
+                    studio.can_undo()
                 },
                 Button::new("Undo").shortcut_text("Ctrl+Z"),
             )
@@ -347,7 +463,7 @@ fn edit_menu(ui: &mut Ui, studio: &mut Studio) {
                 if studio.persona == Persona::Photo {
                     studio.photo.can_redo()
                 } else {
-                    studio.history.can_redo()
+                    studio.can_redo()
                 },
                 Button::new("Redo").shortcut_text("Ctrl+Shift+Z"),
             )
@@ -386,6 +502,9 @@ fn edit_menu(ui: &mut Ui, studio: &mut Studio) {
             });
             return;
         }
+        super::find_replace::menu(ui, studio);
+        ui.separator();
+        pane_menu(ui,studio,"Edit Colors",&["recolor","color-guide","color-themes","swatches"]);
         if ui.add(Button::new("Cut").shortcut_text("Ctrl+X")).clicked() {
             studio.cut_selection(ui.ctx());
             ui.close();
@@ -434,11 +553,20 @@ fn edit_menu(ui: &mut Ui, studio: &mut Studio) {
             ui.close();
         }
     });
+    if menu.response.clicked() { menu.response.request_focus(); }
 }
 
 fn object_menu(ui: &mut Ui, studio: &mut Studio) {
     ui.menu_button("Object", |ui| {
-        ui.menu_button("Type", |ui| super::text_geometry::menu(ui, studio));
+        if ui.add_enabled(matches!(studio.persona, Persona::Design | Persona::Layout | Persona::Motion),
+            Button::new("Create artwork…").shortcut_text("Ctrl+Shift+K")).clicked() {
+            super::keyboard_authoring::open(ui.ctx(), studio);
+            ui.close();
+        }
+        if ui.button("Symbols…").clicked() {
+            super::panel_workspace::open(ui.ctx(),studio,"symbols");
+            ui.close();
+        }
         if ui
             .add_enabled(
                 !studio.selection.is_empty(),
@@ -514,12 +642,22 @@ fn object_menu(ui: &mut Ui, studio: &mut Studio) {
         ui.separator();
         if ui
             .add_enabled(
-                !studio.selection.is_empty() || studio.selected_layer.is_some(),
+                studio.can_group_selection(),
                 Button::new("Group").shortcut_text("Ctrl+G"),
             )
             .clicked()
         {
             studio.group_selected();
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                studio.can_group_selection(),
+                Button::new("Group from Layers…"),
+            )
+            .clicked()
+        {
+            super::layer_group::open(ui.ctx(), studio);
             ui.close();
         }
         if ui
@@ -697,7 +835,8 @@ fn view_menu(ui: &mut Ui, studio: &mut Studio) {
             studio.toggle_guides();
             ui.close();
         }
-        ui.menu_button("Guides", |ui| {
+        let guides = ui.menu_button("Guides", |ui| {
+            super::guide_keyboard::menu(ui, studio);
             if ui.add_enabled(!studio.doc.ruler.guides_locked, Button::new("Lock all guides")).clicked() {
                 studio.set_guides_locked(true);
                 ui.close();
@@ -710,6 +849,7 @@ fn view_menu(ui: &mut Ui, studio: &mut Studio) {
                 studio.toggle_guides(); ui.close();
             }
         });
+        ui.ctx().accesskit_node_builder(guides.response.id, |node| node.set_label("Guides"));
         ui.menu_button("Ruler units", |ui| {
             for unit in crate::document::RulerUnit::ALL {
                 if ui
@@ -832,7 +972,8 @@ pub fn doc_tabs(ui: &mut Ui, studio: &mut Studio) {
                         }
                         let (title, dirty) = studio.tab_title(i);
                         let active = i == studio.active_tab;
-                        ui.push_id(i, |ui| {
+                        let identity = studio.tab_preview_source(i).unwrap().1.to_owned();
+                        ui.push_id(("document-tab", identity), |ui| {
                             let (rect, response) = ui.allocate_exact_size(
                                 vec2(64.0, 64.0),
                                 eframe::egui::Sense::click(),
@@ -842,7 +983,7 @@ pub fn doc_tabs(ui: &mut Ui, studio: &mut Studio) {
                                     eframe::egui::WidgetType::Button,
                                     ui.is_enabled(),
                                     active,
-                                    title,
+                                    format!("{title} · document {} of {count}{}", i + 1, if dirty { " · Unsaved changes" } else { "" }),
                                 )
                             });
                             let mut close_hovered = false;
@@ -887,7 +1028,7 @@ pub fn doc_tabs(ui: &mut Ui, studio: &mut Studio) {
                                         accent(),
                                     );
                                 }
-                                if ui.rect_contains_pointer(rect) || response.has_focus() {
+                                {
                                     let close_rect = eframe::egui::Rect::from_min_size(
                                         rect.right_top() + vec2(-22.0, 2.0),
                                         vec2(20.0, 20.0),
@@ -897,6 +1038,11 @@ pub fn doc_tabs(ui: &mut Ui, studio: &mut Studio) {
                                         response.id.with("close"),
                                         eframe::egui::Sense::click(),
                                     );
+                                    close_response.widget_info(|| eframe::egui::WidgetInfo::labeled(
+                                        eframe::egui::WidgetType::Button,
+                                        close_response.enabled(),
+                                        format!("Close {title} · document {} of {count}{}", i + 1, if dirty { " · Unsaved changes" } else { "" }),
+                                    ));
                                     close_hovered = close_response.hovered();
                                     ui.painter().rect_filled(close_rect, 4.0, bg_panel());
                                     ui.painter().text(
@@ -906,6 +1052,9 @@ pub fn doc_tabs(ui: &mut Ui, studio: &mut Studio) {
                                         icons::font(14.0),
                                         fg(),
                                     );
+                                    if close_response.has_focus() {
+                                        ui.painter().rect_stroke(close_rect, 4., ui.visuals().selection.stroke, eframe::egui::StrokeKind::Inside);
+                                    }
                                     if close_response.clicked() {
                                         close = Some(i);
                                     }
@@ -950,11 +1099,11 @@ pub fn document_previews_ready(ctx: &eframe::egui::Context) -> bool {
 pub fn left_toolbar(ui: &mut Ui, studio: &mut Studio) {
     Panel::left("tools")
         .resizable(false)
-        .exact_size(52.0)
+        .exact_size(76.0)
         .frame(
             Frame::new()
                 .fill(bg_panel())
-                .inner_margin(Margin::symmetric(8, 8)),
+                .inner_margin(Margin::symmetric(4, 8)),
         )
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
@@ -976,7 +1125,8 @@ pub fn left_toolbar(ui: &mut Ui, studio: &mut Studio) {
                 .scroll_bar_visibility(eframe::egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show(ui, |ui| {
                     let mut last_group = "";
-                    for t in well.iter().copied() {
+                    for row in well.chunks(2) {
+                        let t = row[0];
                         let group = match t {
                             Tool::Select | Tool::Node => "sel",
                             Tool::Pen | Tool::Pencil => "path",
@@ -1003,10 +1153,16 @@ pub fn left_toolbar(ui: &mut Ui, studio: &mut Studio) {
                             icons::well_separator(ui);
                         }
                         last_group = group;
-                        if icons::tool_button(ui, t, studio.tool == t) {
-                            studio.set_tool(t);
-                        }
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            for &tool in row {
+                                ui.add_enabled_ui(!studio.quick_mask_tools_limited() || Studio::quick_mask_tool_allowed(tool),|ui| {
+                                    if icons::tool_button(ui, tool, studio.tool == tool) {studio.set_tool(tool);}
+                                }).response.on_disabled_hover_text("Exit Quick Mask before using this layer tool");
+                            }
+                        });
                     }
+                    if studio.persona==Persona::Pixel {icons::well_separator(ui);super::quick_mask::button(ui,studio);}
                 });
             if libraries {
                 ui.add_space(4.0);
@@ -1124,6 +1280,85 @@ pub fn status_bar(ui: &mut Ui, studio: &mut Studio) {
                 });
             });
         });
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    use super::*;
+    use eframe::egui::{self, Event, Id, Key, Modifiers};
+
+    fn key(key: Key, modifiers: Modifiers) -> Event {
+        Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    fn frame(ctx: &egui::Context, studio: &mut Studio, events: Vec<Event>) -> egui::FullOutput {
+        let events = events.into_iter().flat_map(|event| {
+            if let Event::Key { key, physical_key, pressed: true, modifiers, .. } = &event {
+                let release = Event::Key { key: *key, physical_key: *physical_key, pressed: false, repeat: false, modifiers: *modifiers };
+                vec![event, release]
+            } else {
+                vec![event]
+            }
+        }).collect();
+        let mut output = ctx.run_ui(egui::RawInput {
+            events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(640., 480.))),
+            ..Default::default()
+        }, |ui| {
+            studio.handle_shortcuts(ui.ctx());
+            doc_tabs(ui, studio);
+            ui.interact(ui.available_rect_before_wrap(), Id::new("studio-canvas"), egui::Sense::click());
+        });
+        output.textures_delta.clear();
+        output
+    }
+
+    #[test]
+    fn keyboard_document_close_is_named_reachable_and_keeps_the_unsaved_guard() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        super::super::theme::apply(&ctx);
+        let mut studio = Studio::new();
+        studio.doc = crate::document::Document::new("Same name", 8., 8., 72.);
+        studio.show_welcome = false;
+        studio.dirty = true;
+        studio.new_tab();
+        studio.doc.name = "Same name".into();
+        let output = frame(&ctx, &mut studio, vec![]);
+        let tree = output.platform_output.accesskit_update.unwrap();
+        let mut close: Vec<_> = tree.nodes.iter().filter(|(_, node)| node.label().is_some_and(|s| s.starts_with("Close Same name"))).collect();
+        close.sort_by_key(|(_, node)| node.label());
+        assert_eq!(close.len(), 2);
+        assert_ne!(close[0].0, close[1].0);
+        assert_ne!(close[0].1.label(), close[1].1.label());
+        frame(&ctx, &mut studio, vec![key(Key::Tab, Modifiers::NONE)]);
+        frame(&ctx, &mut studio, vec![key(Key::Tab, Modifiers::NONE)]);
+        assert_eq!(ctx.memory(|m| m.focused()).unwrap().accesskit_id(), close[0].0);
+        frame(&ctx, &mut studio, vec![]);
+        assert_eq!(ctx.memory(|m| m.focused()).unwrap().accesskit_id(), close[0].0);
+        frame(&ctx, &mut studio, vec![key(Key::Enter, Modifiers::NONE)]);
+        assert!(matches!(studio.pending_nav, Some(crate::app::PendingNav::CloseTab(0))));
+        assert_eq!(studio.tab_count(), 2);
+    }
+
+    #[test]
+    fn keyboard_document_switch_close_and_canvas_focus_need_no_pointer() {
+        let ctx = egui::Context::default();
+        super::super::theme::apply(&ctx);
+        let mut studio = Studio::new();
+        studio.show_welcome = false;
+        studio.new_tab();
+        let identity = studio.tab_preview_source(0).unwrap().1.to_owned();
+        frame(&ctx, &mut studio, vec![key(Key::Tab, Modifiers::CTRL | Modifiers::COMMAND)]);
+        assert_eq!(studio.active_tab, 0);
+        assert_eq!(studio.swap_id, identity);
+        frame(&ctx, &mut studio, vec![key(Key::Tab, Modifiers::CTRL | Modifiers::COMMAND | Modifiers::SHIFT)]);
+        assert_eq!(studio.active_tab, 1);
+        frame(&ctx, &mut studio, vec![key(Key::W, Modifiers::CTRL | Modifiers::COMMAND)]);
+        assert_eq!(studio.tab_count(), 1);
+        assert_eq!(studio.swap_id, identity);
+        frame(&ctx, &mut studio, vec![key(Key::F8, Modifiers::NONE)]);
+        assert_eq!(ctx.memory(|m| m.focused()), Some(Id::new("studio-canvas")));
+    }
 }
 
 #[cfg(test)]

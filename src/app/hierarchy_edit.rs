@@ -215,6 +215,251 @@ mod tests {
         s.redo();
         assert!(s.selection.iter().all(|s| s.0 == 1));
     }
+
+    fn panel(s: &Studio) -> Vec<u64> {
+        s.layer_panel_order(true)
+            .into_iter()
+            .map(|index| s.doc.layers[index].id)
+            .collect()
+    }
+
+    #[test]
+    fn craft_whole_rows_group_empty_groups_in_painter_order_and_restore_parents() {
+        let mut s = studio();
+        let low = s.doc.layers[0].id;
+        let mid = s.doc.layers[1].id;
+        let empty = Layer::group("Empty");
+        let empty_id = empty.id;
+        s.doc.layers.push(empty);
+        let top = Layer::vector("Top");
+        let top_id = top.id;
+        s.doc.layers.push(top);
+        s.select_layer_rows(0, false, false);
+        s.select_layer_rows(2, false, true);
+        s.select_layer_rows(3, false, true);
+        let before = state(&s);
+        s.group_named("Set");
+        assert_eq!(s.history.len(), 1);
+        let group_id = s.selected_layer.unwrap();
+        let group = s.doc.layers.iter().find(|layer| layer.id == group_id).unwrap();
+        assert_eq!(group.name, "Set");
+        assert_eq!(group.parent, None);
+        let children: Vec<u64> = s
+            .layer_panel_order(true)
+            .into_iter()
+            .rev()
+            .filter(|&index| s.doc.layers[index].parent == Some(group_id))
+            .map(|index| s.doc.layers[index].id)
+            .collect();
+        assert_eq!(children, vec![low, empty_id, top_id]);
+        let rows = panel(&s);
+        let header = rows.iter().position(|id| *id == group_id).unwrap();
+        assert_eq!(&rows[header + 1..header + 4], &[top_id, empty_id, low]);
+        assert!(rows.iter().position(|id| *id == mid).unwrap() > header);
+        assert!(s.doc.validate_hierarchy().is_ok());
+        s.undo();
+        assert_eq!(state(&s), before);
+        assert_eq!(
+            s.doc.layers.iter().find(|layer| layer.id == empty_id).unwrap().parent,
+            None
+        );
+        s.redo();
+        assert_eq!(s.selected_layer, Some(group_id));
+    }
+
+    #[test]
+    fn craft_grouping_uses_the_highest_parent_and_prunes_selected_descendants() {
+        let mut s = studio();
+        let mut inner = Layer::vector("Inner");
+        let outer = Layer::group("Outer");
+        inner.parent = Some(outer.id);
+        let (inner_id, outer_id) = (inner.id, outer.id);
+        s.doc.layers.push(inner);
+        s.doc.layers.push(outer);
+        let mut high = Layer::vector("High child");
+        let high_group = Layer::group("High");
+        high.parent = Some(high_group.id);
+        let (high_id, high_group_id) = (high.id, high_group.id);
+        s.doc.layers.push(high);
+        s.doc.layers.push(high_group);
+        let inner_index = s.doc.layers.iter().position(|layer| layer.id == inner_id).unwrap();
+        let high_index = s.doc.layers.iter().position(|layer| layer.id == high_id).unwrap();
+        s.select_layer_rows(inner_index, false, false);
+        s.select_layer_rows(high_index, false, true);
+        s.group_selected();
+        let group_id = s.selected_layer.unwrap();
+        assert_eq!(
+            s.doc.layers.iter().find(|layer| layer.id == group_id).unwrap().parent,
+            Some(high_group_id)
+        );
+        assert_eq!(
+            s.doc.layers.iter().find(|layer| layer.id == high_id).unwrap().parent,
+            Some(group_id)
+        );
+        assert_eq!(
+            s.doc.layers.iter().find(|layer| layer.id == inner_id).unwrap().parent,
+            Some(group_id)
+        );
+        assert_eq!(
+            s.doc.layers.iter().find(|layer| layer.id == outer_id).unwrap().parent,
+            None
+        );
+        s.undo();
+        let outer_index = s.doc.layers.iter().position(|layer| layer.id == outer_id).unwrap();
+        s.select_layer_rows(outer_index, false, false);
+        s.select_layer_rows(inner_index, false, true);
+        s.group_selected();
+        let wrapped = s.selected_layer.unwrap();
+        assert_eq!(
+            s.doc.layers.iter().find(|layer| layer.id == inner_id).unwrap().parent,
+            Some(outer_id)
+        );
+        assert_eq!(
+            s.doc.layers.iter().find(|layer| layer.id == outer_id).unwrap().parent,
+            Some(wrapped)
+        );
+        assert_ne!(wrapped, outer_id);
+    }
+
+    #[test]
+    fn craft_partial_objects_still_extract_beside_an_unselected_empty_group() {
+        let mut s = studio();
+        let empty = Layer::group("Empty");
+        let empty_id = empty.id;
+        s.doc.layers.push(empty);
+        let objects = vec![rect(0.), rect(40.)];
+        let kept = objects[1].clone();
+        let moving = objects[0].id;
+        *s.doc.layers[0].kind.shapes_mut().unwrap() = objects;
+        s.selected_layer = None;
+        s.selection = vec![(0, moving)];
+        s.group_named("Extracted");
+        let group = s.doc.layers.iter().find(|layer| layer.name == "Extracted").unwrap();
+        let child = s.doc.layers.iter().find(|layer| layer.parent == Some(group.id)).unwrap();
+        assert_eq!(child.kind.shapes().unwrap().len(), 1);
+        assert_eq!(child.kind.shapes().unwrap()[0].id, moving);
+        assert_eq!(s.doc.layers[0].kind.shapes().unwrap(), &[kept]);
+        assert_eq!(
+            s.doc.layers.iter().find(|layer| layer.id == empty_id).unwrap().parent,
+            None
+        );
+    }
+
+    #[test]
+    fn craft_locked_rows_refuse_grouping_without_history() {
+        let mut s = studio();
+        s.doc.layers[1].locked = true;
+        s.select_layer_rows(0, false, false);
+        s.select_layer_rows(1, false, true);
+        let before = state(&s);
+        s.group_selected();
+        assert_eq!(s.history.len(), 0);
+        assert_eq!(state(&s), before);
+        assert_eq!(s.status, "Unlock the layers before grouping");
+    }
+
+    #[test]
+    fn craft_ungroup_keeps_the_sibling_slot_and_only_drops_group_animation() {
+        let mut s = studio();
+        let below = s.doc.layers[0].id;
+        let above = s.doc.layers[1].id;
+        let mut child_low = Layer::vector("Low");
+        let mut shape = rect(5.);
+        let shape_id = shape.id;
+        child_low.kind.shapes_mut().unwrap().push(shape);
+        let mut child_high = Layer::vector("High");
+        let mut group = Layer::group("Wrap");
+        child_low.parent = Some(group.id);
+        child_high.parent = Some(group.id);
+        let (low_id, high_id, group_id) = (child_low.id, child_high.id, group.id);
+        let mut marker = rect(9.);
+        let marker_id = marker.id;
+        group.kind.shapes_mut().unwrap().push(marker);
+        s.doc.layers = vec![
+            s.doc.layers[0].clone(),
+            child_low,
+            child_high,
+            group,
+            s.doc.layers[1].clone(),
+        ];
+        s.doc.motion.tracks = vec![
+            crate::motion::Track {
+                shape: group_id,
+                prop: crate::motion::Prop::Opacity,
+                keys: vec![
+                    crate::motion::Key::at(0., 1., crate::motion::Ease::Linear),
+                    crate::motion::Key::at(1., 0.4, crate::motion::Ease::Linear),
+                ],
+            },
+            crate::motion::Track {
+                shape: marker_id,
+                prop: crate::motion::Prop::Opacity,
+                keys: vec![
+                    crate::motion::Key::at(0., 1., crate::motion::Ease::Linear),
+                    crate::motion::Key::at(1., 0.2, crate::motion::Ease::Linear),
+                ],
+            },
+            crate::motion::Track {
+                shape: low_id,
+                prop: crate::motion::Prop::Opacity,
+                keys: vec![
+                    crate::motion::Key::at(0., 1., crate::motion::Ease::Linear),
+                    crate::motion::Key::at(1., 0.8, crate::motion::Ease::Linear),
+                ],
+            },
+        ];
+        let child_before = s
+            .doc
+            .layers
+            .iter()
+            .find(|layer| layer.id == low_id)
+            .unwrap()
+            .clone();
+        let group_index = s.doc.layers.iter().position(|layer| layer.id == group_id).unwrap();
+        s.activate_layer_tree(group_index);
+        let before = state(&s);
+        s.ungroup_selected();
+        assert!(!s.doc.layers.iter().any(|layer| layer.id == group_id));
+        assert!(s.doc.layers.iter().all(|layer| layer.parent.is_none()));
+        assert_eq!(panel(&s), vec![above, high_id, low_id, below]);
+        let kept = s.doc.layers.iter().find(|layer| layer.id == low_id).unwrap();
+        assert_eq!(kept.kind.shapes().unwrap()[0].id, shape_id);
+        assert_eq!(
+            serde_json::to_value(&kept.kind).unwrap(),
+            serde_json::to_value(&child_before.kind).unwrap()
+        );
+        let tracks: Vec<u64> = s.doc.motion.tracks.iter().map(|track| track.shape).collect();
+        assert_eq!(tracks, vec![low_id]);
+        assert!(s.doc.validate_hierarchy().is_ok());
+        s.undo();
+        assert_eq!(state(&s), before);
+        let mut animated = vec![group_id, low_id, marker_id];
+        animated.sort_unstable();
+        assert_eq!(s.doc.motion.shapes(), animated);
+    }
+
+    #[test]
+    fn craft_group_dialog_request_refuses_a_changed_document_or_selection() {
+        let mut s = studio();
+        s.show_welcome = false;
+        s.select_layer_rows(0, false, false);
+        s.select_layer_rows(1, false, true);
+        let request = s.capture_group_request().unwrap();
+        s.mark();
+        assert!(s.group_request_current(&request).is_err());
+        assert_eq!(s.history.len(), 0);
+        s.select_layer_rows(0, false, false);
+        let request = s.capture_group_request().unwrap();
+        s.select_layer_rows(1, false, true);
+        assert!(s.group_request_current(&request).is_err());
+        let request = s.capture_group_request().unwrap();
+        assert!(s.group_request_current(&request).is_ok());
+        s.group_named("  Kept  ");
+        assert_eq!(
+            s.doc.layers.iter().find(|layer| layer.is_group).unwrap().name,
+            "Kept"
+        );
+    }
 }
 
 fn reorder_commands(order: &mut Vec<u64>, desired: &[u64], commands: &mut Vec<Cmd>) {
@@ -458,24 +703,13 @@ impl Studio {
         if !self.can_drop_layer(source, target, place) {
             return false;
         }
-        let source_tree = self.layer_tree_indices(source);
-        let target_tree = self.layer_tree_indices(target);
         let parent = if place == TreePlacement::Inside {
             Some(self.doc.layers[target].id)
         } else {
             self.doc.layers[target].parent
         };
         let mut order: Vec<_> = self.doc.layers.iter().map(|l| l.id).collect();
-        let moved: Vec<_> = source_tree.iter().map(|&i| order[i]).collect();
-        let anchor = match place {
-            TreePlacement::Above | TreePlacement::Inside => self.doc.layers[target].id,
-            TreePlacement::Below => self.doc.layers[target_tree[0]].id,
-        };
-        let mut desired = order.clone();
-        desired.retain(|id| !moved.contains(id));
-        let insertion = desired.iter().position(|id| *id == anchor).unwrap()
-            + usize::from(place == TreePlacement::Above);
-        desired.splice(insertion..insertion, moved);
+        let desired = self.layer_drop_order(source, target, place);
         let mut commands = Vec::new();
         if self.doc.layers[source].parent != parent {
             commands.push(Cmd::SetLayerParent {
@@ -488,8 +722,12 @@ impl Studio {
         if commands.is_empty() {
             return false;
         }
+        let command = Cmd::Batch(commands);
+        if let Err(error) = layer_copy::validate(&self.doc, &command) { self.status = error; return false; }
         self.commit_type_edit();
-        self.commit(Cmd::Batch(commands));
+        let before = self.history_target();
+        self.commit(command);
+        self.history.remember_target(before, self.history_target());
         if let Some(parent) = parent {
             self.layer_expanded.insert(parent);
         }
@@ -498,11 +736,39 @@ impl Studio {
     }
 
     pub fn group_selected(&mut self) {
+        self.group_named("Group");
+    }
+
+    /// Group the current explicit rows or object selection under one name.
+    /// Args: group name. Returns nothing; a refused name, lock or hierarchy check adds no history.
+    pub fn group_named(&mut self, name: impl Into<String>) {
+        let name = name.into().trim().to_string();
+        let step = if name == "Group" {
+            crate::actions::Step::Group
+        } else {
+            crate::actions::Step::GroupNamed(name.clone())
+        };
+        self.with_action_step(step, |studio| studio.group_rows(&name));
+    }
+
+    fn group_rows(&mut self, name: &str) {
         crate::telemetry::count("feature.group");
         if self.op.is_some() {
             return;
         }
+        if name.is_empty() || name.chars().count() > 1024 || name.chars().any(|c| c.is_control()) {
+            self.status = "Name the group with 1 to 1024 characters".into();
+            return;
+        }
         self.commit_type_edit();
+        if let Some(rows) = self.explicit_group_rows() {
+            self.group_explicit_rows(name, &rows);
+            return;
+        }
+        self.group_object_pieces(name);
+    }
+
+    fn group_object_pieces(&mut self, name: &str) {
         let mut whole = Vec::new();
         let mut pieces: Vec<(usize, Vec<Shape>, Vec<Shape>)> = Vec::new();
         if let Some(index) = self
@@ -629,7 +895,7 @@ impl Studio {
             })
             .max()
             .unwrap();
-        let mut group = Layer::group("Group");
+        let mut group = Layer::group(name);
         group.parent = parent;
         let group_id = group.id;
         let mut commands = vec![Cmd::AddLayer {
@@ -692,19 +958,14 @@ impl Studio {
                 .filter(|id| !moved.contains(id)),
         );
         reorder_commands(&mut order, &desired, &mut commands);
-        self.commit(Cmd::Batch(commands));
-        let index = self
-            .doc
-            .layers
-            .iter()
-            .position(|l| l.id == group_id)
-            .unwrap();
-        self.layer_expanded.insert(group_id);
-        self.activate_layer_tree(index);
-        self.status = "Grouped · Ctrl+Shift+G to ungroup".into();
+        self.finish_group(group_id, Cmd::Batch(commands));
     }
 
     pub fn ungroup_selected(&mut self) {
+        self.with_action_step(crate::actions::Step::Ungroup, |studio| studio.ungroup_selected_command());
+    }
+
+    fn ungroup_selected_command(&mut self) {
         let index = self
             .selected_layer
             .and_then(|id| {
@@ -712,6 +973,13 @@ impl Studio {
                     .layers
                     .iter()
                     .position(|l| l.id == id && l.is_group)
+            })
+            .or_else(|| {
+                self.explicit_group_rows().and_then(|rows| {
+                    rows.into_iter()
+                        .rev()
+                        .find(|&i| self.doc.layers[i].is_group)
+                })
             })
             .or_else(|| {
                 self.primary()
@@ -735,6 +1003,14 @@ impl Studio {
             return;
         }
         let group = self.doc.layers[index].clone();
+        let child_ids: Vec<u64> = self
+            .layer_panel_order(true)
+            .into_iter()
+            .rev()
+            .filter(|&i| self.doc.layers[i].parent == Some(group.id))
+            .map(|i| self.doc.layers[i].id)
+            .collect();
+        let desired = self.ungrouped_storage(index);
         let mut commands = Vec::new();
         for (i, layer) in self.doc.layers.iter().enumerate() {
             if layer.parent == Some(group.id) {
@@ -745,23 +1021,315 @@ impl Studio {
                 });
             }
         }
+        let mut removed = vec![group.id];
+        removed.extend(group.kind.shapes().unwrap_or(&[]).iter().map(|shape| shape.id));
+        let before_motion = self.doc.motion.clone();
+        let mut after_motion = before_motion.clone();
+        after_motion.drop_shapes(&removed);
+        if after_motion != before_motion {
+            commands.push(Cmd::SetMotion {
+                before: before_motion,
+                after: after_motion,
+            });
+        }
         if self.doc.layers.len() == 1 {
             commands.push(Cmd::AddLayer {
                 index: 1,
                 layer: Layer::vector("Layer 1"),
             });
         }
+        let mut order: Vec<u64> = self.doc.layers.iter().map(|layer| layer.id).collect();
+        let position = order.iter().position(|id| *id == group.id).unwrap();
         commands.push(Cmd::RemoveLayer {
-            index,
-            layer: group,
+            index: position,
+            layer: group.clone(),
         });
-        self.commit(Cmd::Batch(commands));
-        self.selected_layer = None;
-        self.active_layer = self
-            .selection
-            .first()
-            .map(|s| s.0)
-            .or_else(|| self.doc.layers.len().checked_sub(1));
+        order.remove(position);
+        if self.doc.layers.len() > 1 {
+            reorder_commands(&mut order, &desired, &mut commands);
+        }
+        let command = Cmd::Batch(commands);
+        if let Err(error) = layer_copy::validate(&self.doc, &command) {
+            self.status = error;
+            return;
+        }
+        let before = self.history_target();
+        self.commit(command);
+        self.layer_expanded.retain(|id| *id != group.id);
+        let released: Vec<usize> = self
+            .layer_panel_order(true)
+            .into_iter()
+            .rev()
+            .filter(|&i| child_ids.contains(&self.doc.layers[i].id))
+            .collect();
+        if let Some(&first) = released.first() {
+            self.select_layer_rows(first, false, false);
+            for index in released.into_iter().skip(1) {
+                self.select_layer_rows(index, false, true);
+            }
+        } else if let Some(index) = self.doc.layers.len().checked_sub(1) {
+            self.activate_layer_tree(index);
+        }
+        self.history.remember_target(before, self.history_target());
         self.status = "Group released".into();
     }
+
+    /// Whole-layer rows chosen in the sidebar, independent of object hits.
+    /// Args: none. Returns painter order, or nothing when the editor only has an object selection.
+    pub(crate) fn explicit_group_rows(&self) -> Option<Vec<usize>> {
+        if self.selected_layer.is_none() && self.current_layer_rows().is_none() {
+            return None;
+        }
+        let rows = self.selected_layer_rows();
+        (!rows.is_empty()).then_some(rows)
+    }
+
+    /// Whether Group has an explicit row or object selection to act on.
+    /// Args: none. Returns false during another operation.
+    pub(crate) fn can_group_selection(&self) -> bool {
+        self.op.is_none()
+            && !self.updates.freezing
+            && (self.selected_layer.is_some()
+                || self.current_layer_rows().is_some()
+                || !self.selection.is_empty())
+    }
+
+    /// Capture the document revision and grouping target before a dialog edit.
+    /// Args: none. Returns the current target, or a refusal when nothing can be grouped.
+    pub(crate) fn capture_group_request(&self) -> Result<GroupRequest, String> {
+        if self.show_welcome || self.op.is_some() || self.updates.freezing || self.file_dialog_pending()
+        {
+            return Err("Finish the current operation before grouping".into());
+        }
+        if !self.can_group_selection() {
+            return Err("Select objects or a layer to group".into());
+        }
+        let rows = self.explicit_group_rows().map(|rows| {
+            rows.iter()
+                .map(|&index| self.doc.layers[index].id)
+                .collect()
+        });
+        let objects = if rows.is_some() {
+            Vec::new()
+        } else {
+            self.selection
+                .iter()
+                .filter_map(|&(index, id)| self.doc.layers.get(index).map(|layer| (layer.id, id)))
+                .collect()
+        };
+        Ok(GroupRequest {
+            document: self.swap_id.clone(),
+            revision: self.last_input,
+            rows,
+            objects,
+        })
+    }
+
+    /// Refuse a group dialog once its document or selection is no longer current.
+    /// Args: request captured when the dialog opened. Returns an error without editing.
+    pub(crate) fn group_request_current(&self, request: &GroupRequest) -> Result<(), String> {
+        if self.swap_id != request.document || self.last_input != request.revision {
+            return Err("The document changed. No layers were grouped".into());
+        }
+        if self.op.is_some() || self.updates.freezing {
+            return Err("Finish the current operation before grouping".into());
+        }
+        match &request.rows {
+            Some(rows) => {
+                let now: Vec<u64> = self
+                    .explicit_group_rows()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|&index| self.doc.layers[index].id)
+                    .collect();
+                if now != *rows {
+                    return Err("The selected layers changed. No layers were grouped".into());
+                }
+            }
+            None => {
+                if self.explicit_group_rows().is_some() {
+                    return Err("The selected layers changed. No layers were grouped".into());
+                }
+                let now: Vec<_> = self
+                    .selection
+                    .iter()
+                    .filter_map(|&(index, id)| {
+                        self.doc.layers.get(index).map(|layer| (layer.id, id))
+                    })
+                    .collect();
+                if now != request.objects {
+                    return Err("The selected objects changed. No layers were grouped".into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn group_explicit_rows(&mut self, name: &str, rows: &[usize]) {
+        let roots = group_roots(&self.doc, rows);
+        if roots.is_empty() {
+            self.status = "Select objects or a layer to group".into();
+            return;
+        }
+        if roots.iter().any(|&index| {
+            !self.layer_unlocked(index)
+                || self
+                    .layer_tree_indices(index)
+                    .iter()
+                    .any(|&child| self.doc.layers[child].locked)
+        }) {
+            self.status = "Unlock the layers before grouping".into();
+            return;
+        }
+        let top = *roots.last().unwrap();
+        let parent = self.doc.layers[top].parent;
+        let mut group = Layer::group(name);
+        group.parent = parent;
+        let group_id = group.id;
+        let mut commands = vec![Cmd::AddLayer {
+            index: self.doc.layers.len(),
+            layer: group,
+        }];
+        let mut order: Vec<u64> = self.doc.layers.iter().map(|layer| layer.id).collect();
+        order.push(group_id);
+        for &index in &roots {
+            commands.push(Cmd::SetLayerParent {
+                index,
+                before: self.doc.layers[index].parent,
+                after: Some(group_id),
+            });
+        }
+        let desired = self.grouped_storage(&roots, group_id);
+        reorder_commands(&mut order, &desired, &mut commands);
+        self.finish_group(group_id, Cmd::Batch(commands));
+    }
+
+    fn finish_group(&mut self, group_id: u64, command: Cmd) {
+        if let Err(error) = layer_copy::validate(&self.doc, &command) {
+            self.status = error;
+            return;
+        }
+        let before = self.history_target();
+        self.commit(command);
+        let index = self
+            .doc
+            .layers
+            .iter()
+            .position(|layer| layer.id == group_id)
+            .unwrap();
+        self.layer_expanded.insert(group_id);
+        for ancestor in self.doc.layer_ancestors(index) {
+            self.layer_expanded.insert(self.doc.layers[ancestor].id);
+        }
+        self.activate_layer_tree(index);
+        self.history.remember_target(before, self.history_target());
+        self.status = "Grouped · Ctrl+Shift+G to ungroup".into();
+    }
+
+    fn grouped_storage(&self, roots: &[usize], group_id: u64) -> Vec<u64> {
+        let paint: Vec<usize> = self.layer_panel_order(true).into_iter().rev().collect();
+        let root_ids: HashSet<u64> = roots.iter().map(|&index| self.doc.layers[index].id).collect();
+        let moved: HashSet<u64> = paint
+            .iter()
+            .copied()
+            .filter(|&index| {
+                let id = self.doc.layers[index].id;
+                root_ids.contains(&id)
+                    || self
+                        .doc
+                        .layer_ancestors(index)
+                        .iter()
+                        .any(|&ancestor| root_ids.contains(&self.doc.layers[ancestor].id))
+            })
+            .map(|index| self.doc.layers[index].id)
+            .collect();
+        let top = *roots.last().unwrap();
+        let top_ids: HashSet<u64> = self
+            .layer_tree_indices(top)
+            .into_iter()
+            .map(|index| self.doc.layers[index].id)
+            .collect();
+        let start = paint
+            .iter()
+            .position(|&index| top_ids.contains(&self.doc.layers[index].id))
+            .unwrap();
+        let mut block: Vec<u64> = paint
+            .iter()
+            .copied()
+            .filter(|&index| moved.contains(&self.doc.layers[index].id))
+            .map(|index| self.doc.layers[index].id)
+            .collect();
+        block.push(group_id);
+        let mut desired = Vec::with_capacity(paint.len() + 1);
+        for (offset, &index) in paint.iter().enumerate() {
+            if offset == start {
+                desired.extend(block.iter().copied());
+            }
+            let id = self.doc.layers[index].id;
+            if !moved.contains(&id) {
+                desired.push(id);
+            }
+        }
+        desired
+    }
+
+    fn ungrouped_storage(&self, group: usize) -> Vec<u64> {
+        let paint: Vec<usize> = self.layer_panel_order(true).into_iter().rev().collect();
+        let group_id = self.doc.layers[group].id;
+        let members: HashSet<u64> = self
+            .layer_tree_indices(group)
+            .into_iter()
+            .map(|index| self.doc.layers[index].id)
+            .collect();
+        let start = paint
+            .iter()
+            .position(|&index| members.contains(&self.doc.layers[index].id))
+            .unwrap();
+        let block: Vec<u64> = paint
+            .iter()
+            .copied()
+            .filter(|&index| {
+                members.contains(&self.doc.layers[index].id) && self.doc.layers[index].id != group_id
+            })
+            .map(|index| self.doc.layers[index].id)
+            .collect();
+        let mut desired = Vec::with_capacity(paint.len());
+        for (offset, &index) in paint.iter().enumerate() {
+            if offset == start {
+                desired.extend(block.iter().copied());
+            }
+            let id = self.doc.layers[index].id;
+            if !members.contains(&id) {
+                desired.push(id);
+            }
+        }
+        desired
+    }
+}
+
+/// Sidebar row targets with no selected ancestor, in the order supplied.
+fn group_roots(doc: &Document, rows: &[usize]) -> Vec<usize> {
+    let ids: HashSet<u64> = rows
+        .iter()
+        .filter_map(|&index| doc.layers.get(index).map(|layer| layer.id))
+        .collect();
+    rows.iter()
+        .copied()
+        .filter(|&index| {
+            doc.layers.get(index).is_some()
+                && !doc
+                    .layer_ancestors(index)
+                    .iter()
+                    .any(|&ancestor| ids.contains(&doc.layers[ancestor].id))
+        })
+        .collect()
+}
+
+/// Document revision and selection captured by the named group dialog.
+#[derive(Clone)]
+pub(crate) struct GroupRequest {
+    pub document: String,
+    pub revision: std::time::Instant,
+    pub rows: Option<Vec<u64>>,
+    pub objects: Vec<(u64, u64)>,
 }

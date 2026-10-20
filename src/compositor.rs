@@ -1,13 +1,24 @@
 //! One geometry, two outputs: the live canvas and PNG export.
+mod artwork_masks;
+pub(crate) use artwork_masks::raster_export_document;
 
 #[cfg(test)]
 mod appearance_tests;
 mod bounded_blit;
 pub(crate) mod cache_admission;
 mod effects_cache;
-mod mask_cache;
 mod frames;
 mod groups;
+mod svg_effects;
+mod mask_cache;
+mod motion_scene;
+pub(crate) mod layer_merge;
+thread_local! {static MOTION_ERROR:std::cell::RefCell<Option<String>>=const {std::cell::RefCell::new(None)};}
+
+/// Read the last live scene error. Returns a named error for the motion controls.
+pub fn motion_error() -> Option<String> {
+    MOTION_ERROR.with(|e| e.borrow().clone())
+}
 pub(crate) mod interaction;
 #[cfg(test)]
 mod performance_tests;
@@ -80,7 +91,7 @@ impl View {
 
     pub fn zoom_at(&mut self, screen: Pt, factor: f32) {
         let world = self.to_world(screen);
-        self.scale = (self.scale * factor).clamp(0.02, 64.0);
+        self.scale = (self.scale * factor).clamp(0.000001, 64.0);
         self.offset = screen - world * self.scale;
     }
 
@@ -88,8 +99,8 @@ impl View {
         if viewport.width() < 1.0 || viewport.height() < 1.0 {
             return;
         }
-        self.scale =
-            ((viewport.width() / doc.x).min(viewport.height() / doc.y) * 0.90).clamp(0.02, 64.0);
+        self.scale = ((viewport.width() / doc.x).min(viewport.height() / doc.y) * 0.90)
+            .clamp(0.000001, 64.0);
         let scaled = doc * self.scale;
         self.offset = viewport.center() - scaled * 0.5;
     }
@@ -103,7 +114,7 @@ impl View {
         }
         self.scale = (viewport.width() / ww)
             .min(viewport.height() / wh)
-            .clamp(0.02, 64.0);
+            .clamp(0.000001, 64.0);
         self.offset = viewport.center() - world.center() * self.scale;
     }
 
@@ -174,7 +185,18 @@ pub fn sample_color(doc: &Document, at: Pt) -> Option<Rgba> {
         offset: Pt::new(0.5 - at.x, 0.5 - at.y),
     };
     draw_plates(&mut pm, doc, view);
-    groups::draw(&mut pm, doc, view.transform(), &Draft::none(), None, None);
+    groups::draw(&mut pm, doc, view.transform(), &Draft::none(), None, None).ok()?;
+    motion_scene::draw(
+        &mut pm,
+        doc,
+        view.transform(),
+        0.,
+        0,
+        &HashMap::new(),
+        &mut || true,
+        &mut motion_scene::Budget::default(),
+    )
+    .ok()?;
     let px = pm.pixel(0, 0)?;
     if px.alpha() == 0 {
         return None;
@@ -219,19 +241,76 @@ pub fn render_view_posed(
     draw_plates(&mut pm, doc, view);
 
     let t = view.transform();
-    groups::draw(&mut pm, doc, t, &draft, motion_t, overrides);
+    let mut poses = motion_t
+        .and_then(|time| doc.motion.evaluate_frame(time, &mut || true).ok())
+        .unwrap_or_default();
+    if let Some(overrides) = overrides {
+        poses.extend(overrides.iter().map(|(id, pose)| (*id, *pose)));
+    }
+    if let Err(error) = groups::draw(&mut pm, doc, t, &draft, motion_t, Some(&poses)) {
+        MOTION_ERROR.with(|current| *current.borrow_mut() = Some(error));
+        return None;
+    }
+    let scene_result = motion_scene::draw(
+        &mut pm,
+        doc,
+        t,
+        motion_t.unwrap_or(0.),
+        0,
+        &poses,
+        &mut || true,
+        &mut motion_scene::Budget::default(),
+    );
+    MOTION_ERROR.with(|e| *e.borrow_mut() = scene_result.err());
+    crate::deep_color::tagged::finish(&mut pm, doc.color_tag);
+    crate::channels::spot::overlay(&mut pm, &doc.channels, t);
     Some(pm)
 }
 
 pub(crate) fn render_export(doc: &Document, scale: u32) -> Result<Pixmap, String> {
-    let s = scale.clamp(1, 8);
-    let w = (doc.width * s as f32).round().max(1.0) as u32;
-    let h = (doc.height * s as f32).round().max(1.0) as u32;
+    render_export_sized(doc, crate::export::RenderSize::legacy(doc, scale))
+}
+
+/// Draw the existing still frame at a checked pixel size and fractional scale.
+/// Args: document and resolved output size. Returns the same plates, layer tree and time-zero scene.
+pub(crate) fn render_export_sized(
+    doc: &Document,
+    size: crate::export::RenderSize,
+) -> Result<Pixmap, String> {
+    admit_precise_export(doc)?;
+    let (s, w, h) = (size.factor, size.width, size.height);
+    if (doc.motion.scene3d.is_some() || !doc.motion.compositions.is_empty())
+        && w as u64 * h as u64 > 16_000_000
+    {
+        return Err("ScenePixels: at most 16 million output pixels".into());
+    }
     let mut pm = Pixmap::new(w, h).ok_or("could not allocate export pixmap")?;
     draw_export_plates(&mut pm, doc, s as f32);
     let t = Transform::from_scale(s as f32, s as f32);
-    groups::draw(&mut pm, doc, t, &Draft::none(), None, None);
+    groups::draw(&mut pm, doc, t, &Draft::none(), None, None)?;
+    let spot_view = t;
+    motion_scene::draw(
+        &mut pm,
+        doc,
+        t,
+        0.,
+        0,
+        &HashMap::new(),
+        &mut || true,
+        &mut motion_scene::Budget::default(),
+    )?;
+    crate::deep_color::tagged::finish(&mut pm, doc.color_tag);
+    crate::channels::spot::overlay(&mut pm, &doc.channels, spot_view);
     Ok(pm)
+}
+
+/// Refuse an authored native document at an RGBA8 render boundary.
+/// Args: original document. Returns an explicit precision error before any fallback work.
+pub(crate) fn admit_precise_export(doc: &Document) -> Result<(), String> {
+    if crate::motion::compositions::documents(doc)?.into_iter().any(crate::deep_color::has_native) {
+        return Err("This RGBA8 renderer cannot preserve native pixel or mask precision. Use the float compositor, PSD or TIFF, or convert an explicit document copy to 8-bit.".into());
+    }
+    Ok(())
 }
 
 /// Bounded still preview using exactly the still export's plates and scene.
@@ -248,7 +327,19 @@ pub(crate) fn render_export_preview(doc: &Document, max_edge: u32) -> Result<Pix
         &Draft::none(),
         None,
         None,
-    );
+    )?;
+    motion_scene::draw(
+        &mut pm,
+        doc,
+        Transform::from_scale(s, s),
+        0.,
+        0,
+        &HashMap::new(),
+        &mut || true,
+        &mut motion_scene::Budget::default(),
+    )?;
+    crate::deep_color::tagged::finish(&mut pm, doc.color_tag);
+    crate::channels::spot::overlay(&mut pm, &doc.channels, Transform::from_scale(s, s));
     Ok(pm)
 }
 
@@ -262,14 +353,40 @@ pub fn render_export_at(
     time: f32,
     transparent: bool,
 ) -> Result<Pixmap, String> {
+    render_export_at_cancellable(doc, scale, time, transparent, &mut || true)
+}
+
+/// Render a motion frame with a shared expression budget and cancellation.
+/// Args: document, scale, sample time, alpha policy and keep-going callback. Returns pixels or a named error.
+pub fn render_export_at_cancellable(
+    doc: &Document,
+    scale: f32,
+    time: f32,
+    transparent: bool,
+    keep: &mut dyn FnMut() -> bool,
+) -> Result<Pixmap, String> {
+    crate::motion::compositions::validate(doc)?;
+    admit_precise_export(doc)?;
+    if !keep() {
+        return Err("Cancelled: render cancelled".into());
+    }
     let s = if scale.is_finite() {
         scale.clamp(0.1, 8.0)
     } else {
         1.0
     };
     let time = if time.is_finite() { time } else { 0.0 };
+    let poses = doc
+        .motion
+        .evaluate_frame(time, keep)
+        .map_err(|e| e.to_string())?;
     let w = (doc.width * s).round().max(1.0) as u32;
     let h = (doc.height * s).round().max(1.0) as u32;
+    if (doc.motion.scene3d.is_some() || !doc.motion.compositions.is_empty())
+        && w as u64 * h as u64 > 16_000_000
+    {
+        return Err("ScenePixels: at most 16 million output pixels".into());
+    }
     let mut pm = Pixmap::new(w, h).ok_or("could not allocate export pixmap")?;
     if !transparent {
         pm.fill(tiny_skia::Color::WHITE);
@@ -278,14 +395,32 @@ pub fn render_export_at(
         }
     }
     let t = Transform::from_scale(s, s);
-    groups::draw(&mut pm, doc, t, &Draft::none(), Some(time), None);
+    groups::draw(&mut pm, doc, t, &Draft::none(), Some(time), Some(&poses))?;
+    motion_scene::draw(
+        &mut pm,
+        doc,
+        t,
+        time,
+        0,
+        &poses,
+        keep,
+        &mut motion_scene::Budget::default(),
+    )?;
+    if !keep() {
+        return Err("Cancelled: render cancelled".into());
+    }
+    crate::deep_color::tagged::finish(&mut pm, doc.color_tag);
+    crate::channels::spot::overlay(&mut pm, &doc.channels, t);
     Ok(pm)
 }
 
 pub fn export_png(doc: &Document, scale: u32) -> Result<Vec<u8>, String> {
-    render_export(doc, scale)?
-        .encode_png()
-        .map_err(|e| e.to_string())
+    if crate::deep_color::has_native(doc) {return crate::export::encode(&crate::export::Source::Document(doc.clone()),crate::export::Settings {format:crate::export::Format::Png,scale,ai:None},&crate::ml::NoProgress).map(|out|out.0);}
+    let pm = render_export(doc, scale)?;
+    if doc.color_tag == Some(crate::deep_color::tagged::ColorTag::Gray) {
+        return crate::deep_color::tagged::encode_gray_png(&pm);
+    }
+    pm.encode_png().map_err(|e| e.to_string())
 }
 
 pub fn export_png_bounds(
@@ -357,7 +492,9 @@ fn draw_layer(
     motion_t: Option<f32>,
     doc: &Document,
     overrides: Option<&HashMap<u64, Pose>>,
+    sources: &std::collections::HashSet<crate::artwork_mask::MaskSource>,
 ) {
+    let mask_view = t;
     let raster_pose = layer
         .kind
         .pixels()
@@ -373,7 +510,9 @@ fn draw_layer(
     if opacity <= 0.0 || masked_outside_view(layer, t, pm.width(), pm.height()) {
         return;
     }
-    let filtered = layer.filters.active();
+    let mut filters = layer.filters.clone();
+    crate::filter::scale(&mut filters, t.get_scale().0);
+    let filtered = filters.active();
     // A regular layer is an isolated compositing container, including at 100%.
     // Without this, lowering opacity would change a child's blend backdrop.
     let blended_content = layer.kind.shapes().is_some_and(|shapes| {
@@ -383,6 +522,7 @@ fn draw_layer(
     });
     if blended_content
         || layer.mask.is_some()
+        || !layer.artwork_masks.is_empty()
         || filtered
         || layer.fill_opacity < 1.0
         || opacity < 1.0
@@ -417,6 +557,7 @@ fn draw_layer(
             motion_t,
             doc,
             overrides,
+            sources,
         );
         if let Some(mask) = &layer.mask {
             let _ = mask.with_pm(|mask_pm| {
@@ -439,35 +580,59 @@ fn draw_layer(
                 temp.apply_mask(&m);
             });
         }
-        if layer.filters.independent() || layer.fill_opacity < 1. || layer.blend_interior {
+        let live = artwork_masks::render(
+            &layer.artwork_masks,
+            doc,
+            mask_view,
+            pm.width(),
+            pm.height(),
+            motion_t,
+            overrides,
+        );
+        if filters.independent() || layer.fill_opacity < 1. || layer.blend_interior {
             crate::filter::composite(
                 pm,
                 temp,
-                &layer.filters,
+                &filters,
                 placement,
                 layer.blend.to_skia(),
                 opacity,
                 layer.fill_opacity,
                 layer.blend_interior,
-                None,
+                live.as_ref(),
             );
             return;
         }
         let cached;
         let (pixels, coverage) = if filtered {
-            cached = surface_cache::render(layer.id, temp, &layer.filters);
+            cached = surface_cache::render(layer.id, temp, &filters);
             (cached.as_ref(), surface_cache::bounds(layer.id, &cached))
         } else {
             (&temp, bounded_blit::bounds(temp.as_ref()))
         };
-        bounded_blit::draw(
-            pm,
-            pixels.as_ref(),
-            coverage,
-            opacity,
-            layer.blend,
-            placement,
-        );
+        if let Some(mask) = &live {
+            pm.draw_pixmap(
+                0,
+                0,
+                pixels.as_ref(),
+                &PixmapPaint {
+                    opacity: opacity.clamp(0., 1.),
+                    blend_mode: layer.blend.to_skia(),
+                    ..Default::default()
+                },
+                placement,
+                Some(mask),
+            );
+        } else {
+            bounded_blit::draw(
+                pm,
+                pixels.as_ref(),
+                coverage,
+                opacity,
+                layer.blend,
+                placement,
+            );
+        }
     } else {
         draw_content(
             pm,
@@ -480,6 +645,7 @@ fn draw_layer(
             motion_t,
             doc,
             overrides,
+            sources,
         );
     }
 }
@@ -560,7 +726,7 @@ fn layer_region(
 
 /// A mask bounds all output unless a filter expands or replaces the masked pixels.
 fn masked_outside_view(layer: &Layer, view: Transform, width: u32, height: u32) -> bool {
-    if layer.filters.active() {
+    if layer.filters.active() || layer.svg_filter.is_some() {
         return false;
     }
     let Some(mask) = &layer.mask else {
@@ -637,10 +803,13 @@ fn draw_content(
     motion_t: Option<f32>,
     doc: &Document,
     overrides: Option<&HashMap<u64, Pose>>,
+    sources: &std::collections::HashSet<crate::artwork_mask::MaskSource>,
 ) {
     match &layer.kind {
         LayerKind::Vector { shapes } => {
-            frames::draw(pm, shapes, t, opacity, blend, motion_t, doc, overrides);
+            frames::draw(
+                pm, shapes, t, opacity, blend, motion_t, doc, overrides, sources,
+            );
             if let Some(p) = preview
                 && p.visible
                 && !p.guide
@@ -764,7 +933,11 @@ fn object_mask(
     if let Some(parent) = parent {
         // A parent's coverage can change independently. Keep the reusable own
         // mask immutable, and combine the current parent only for this draw.
-        for (a, b) in std::sync::Arc::make_mut(&mut mask).data_mut().iter_mut().zip(parent.data()) {
+        for (a, b) in std::sync::Arc::make_mut(&mut mask)
+            .data_mut()
+            .iter_mut()
+            .zip(parent.data())
+        {
             *a = ((u16::from(*a) * u16::from(*b) + 127) / 255) as u8;
         }
     }
@@ -773,15 +946,33 @@ fn object_mask(
 
 /// Transform a shape's coordinates through its outer frame rotations.
 pub(crate) fn shape_parent_transform(doc: &Document, layer: usize, id: u64) -> Transform {
+    shape_parent_transform_with(doc, layer, id, |_| Pose::identity())
+}
+
+/// Place a frame's contents in its caller's coordinate system.
+/// Args: frame, inherited transform and current pose. Returns the same placement used by frame painting.
+pub(crate) fn frame_transform(shape: &Shape, inherited: Transform, pose: Pose) -> Transform {
+    let center = shape.geom.bbox().center();
+    inherited.pre_concat(pose.to_skia(shape.world_bbox().center())).pre_concat(
+        Transform::from_rotate_at(shape.rotation.to_degrees(), center.x, center.y),
+    )
+}
+
+/// Place coordinates through the current ancestor frames.
+/// Args: document, layer, shape ID and pose sampler. Returns the inherited frame placement.
+pub(crate) fn shape_parent_transform_with(
+    doc: &Document,
+    layer: usize,
+    id: u64,
+    pose: impl Fn(u64) -> Pose,
+) -> Transform {
     let mut transform = Transform::identity();
     let mut parent = doc.find_shape(layer, id).and_then(|s| s.layout.parent);
     for _ in 0..64 {
         let Some(frame) = parent.and_then(|id| doc.find_shape(layer, id)) else {
             break;
         };
-        let c = frame.geom.bbox().center();
-        transform =
-            Transform::from_rotate_at(frame.rotation.to_degrees(), c.x, c.y).pre_concat(transform);
+        transform = frame_transform(frame, Transform::identity(), pose(frame.id)).pre_concat(transform);
         parent = frame.layout.parent;
     }
     transform
@@ -796,44 +987,34 @@ pub(crate) fn item_alpha(
     w: u32,
     h: u32,
 ) -> Option<Vec<u8>> {
-    let mut source = doc.clone();
-    let selected_layer = source.layers.get(index)?.id;
-    let descendants = id
-        .map(|id| crate::layout::descendants(doc, index, id))
-        .unwrap_or_default();
-    let root_transform = id.map_or(transform, |id| {
-        transform.pre_concat(shape_parent_transform(doc, index, id))
-    });
-    let indices: std::collections::HashSet<_> = (0..source.layers.len())
-        .filter(|&i| i == index || source.layer_ancestors(i).contains(&index))
-        .collect();
-    source.layers = source
-        .layers
-        .into_iter()
-        .enumerate()
-        .filter(|(i, _)| indices.contains(i))
-        .map(|(_, mut layer)| {
-            if layer.id == selected_layer {
-                layer.parent = None;
-                layer.visible = true;
-                if let (Some(id), Some(shapes)) = (id, layer.kind.shapes_mut()) {
-                    shapes.retain(|s| s.id == id || descendants.contains(&s.id));
-                    if let Some(s) = shapes.iter_mut().find(|s| s.id == id) {
-                        s.layout.parent = None;
-                        s.visible = true;
-                    }
-                }
-            }
-            layer
-        })
-        .collect();
     let mut pm = Pixmap::new(w, h)?;
-    groups::draw(&mut pm, &source, root_transform, &Draft::none(), None, None);
+    if let Some(id) = id {
+        frames::draw_item(&mut pm, doc, index, id, transform, None, None);
+    } else {
+        groups::draw_item(&mut pm, doc, index, transform, None, None).ok()?;
+    }
+    groups::apply_clipping_mask(&mut pm, doc, index, transform, None, None).ok()?;
     Some(pm.pixels().iter().map(|p| p.alpha()).collect())
 }
 
+/// Test live clipping transparency at the same point used by native object selection.
+/// Args: document, layer index, world point and optional current animation/poses. Returns false for hidden/empty clipping coverage.
+pub(crate) fn clipping_visible_at(
+    doc: &Document, index: usize, point: Pt, motion: Option<f32>, overrides: Option<&HashMap<u64, Pose>>,
+) -> bool {
+    for base in doc.clipping_bases(index) {
+        if !doc.layer_visible(base) { return false; }
+        let Some(mut pixels) = Pixmap::new(1, 1) else { return false; };
+        let transform = Transform::from_translate(0.5 - point.x, 0.5 - point.y);
+        if groups::clipping_base(&mut pixels, doc, base, transform, motion, overrides).is_err() || pixels.data()[3] <= 8 {return false;}
+    }
+    true
+}
+
 /// Paint the keyed fill, stroke width, and gradient angle onto a copy of the design.
-fn posed_paint(shape: &mut Shape, pose: Pose) {
+/// Apply the native animated paint channels.
+/// Args: editable shape and sampled pose. Updates its gradient and stroke paint.
+pub(crate) fn posed_paint(shape: &mut Shape, pose: Pose) {
     if let Some(offset) = pose.gradient_angle.filter(|offset| offset.abs() > 1e-3) {
         tilt_gradient(shape, offset);
     }
@@ -866,7 +1047,7 @@ fn recolor_fill(fill: &mut Fill, color: crate::color::Rgba) {
                 stop.color = color;
             }
         }
-        Fill::None => *fill = Fill::Solid(color),
+        Fill::None | Fill::Pattern(_) => *fill = Fill::Solid(color),
     }
 }
 
@@ -876,7 +1057,6 @@ fn tilt_gradient(shape: &mut Shape, offset: f32) {
     if let Fill::Gradient(gradient) = &mut shape.style.fill {
         let rest = gradient.angle(bounds);
         gradient.set_angle(rest + offset, bounds);
-        return;
     }
     if let Some(stroke) = &mut shape.style.stroke
         && let Some(gradient) = &mut stroke.gradient
@@ -940,7 +1120,9 @@ fn draw_shape_masked(
         shape.blend.to_skia()
     };
     if !shape.filters.active()
-        && (alpha * shape.fill_opacity < 1.0 || shape.blend != crate::color::Blend::Normal)
+        && (mask.is_some()
+            || alpha * shape.fill_opacity < 1.0
+            || shape.blend != crate::color::Blend::Normal)
     {
         // Composite the complete fill/image/stroke once, using a bounded temporary.
         let pad = shape
@@ -1022,11 +1204,18 @@ fn draw_shape_masked(
         // into and out of large world coordinates introduces cancellation noise
         // that invalidates blur/shadow caches during otherwise identical motion.
         let translation = Pt::new(pose.dx, pose.dy);
-        let pose = Pose { dx: 0., dy: 0., ..pose };
+        let pose = Pose {
+            dx: 0.,
+            dy: 0.,
+            ..pose
+        };
         let b = pose.map_bounds(shape.world_bbox()).inflate(pad);
         let tw = b.width().ceil().max(1.0) as u32;
         let th = b.height().ceil().max(1.0) as u32;
-        let xf = t.pre_concat(Transform::from_translate(b.min.x + translation.x, b.min.y + translation.y));
+        let xf = t.pre_concat(Transform::from_translate(
+            b.min.x + translation.x,
+            b.min.y + translation.y,
+        ));
         // These stacks already combine locally before one bilinear canvas blit.
         // Reuse those exact pixels; backdrop-dependent appearance keeps its full
         // compositing path below, including per-effect blend and group opacity.
@@ -1076,19 +1265,39 @@ fn draw_shape_masked(
         let prepared = effects_cache::prepared(shape, pose, b, || {
             let mut temp = Pixmap::new(tw, th)?;
             let local = Transform::from_translate(-b.min.x, -b.min.y);
-            let opaque_pose = Pose { opacity: Some(1.), ..pose };
-            draw_shape_inner(&mut temp, shape, local, 1., tiny_skia::BlendMode::SourceOver, opaque_pose, None);
+            let opaque_pose = Pose {
+                opacity: Some(1.),
+                ..pose
+            };
+            draw_shape_inner(
+                &mut temp,
+                shape,
+                local,
+                1.,
+                tiny_skia::BlendMode::SourceOver,
+                opaque_pose,
+                None,
+            );
             if shape.filters.active() {
                 for fx in &shape.filters.items {
-                    if fx.appearance().is_none() { crate::filter::apply_one(&mut temp, fx); }
+                    if fx.appearance().is_none() {
+                        crate::filter::apply_one(&mut temp, fx);
+                    }
                 }
             }
             Some(temp)
         });
         if let Some(temp) = prepared {
             crate::filter::composite_cached(
-                pm, temp, &shape.filters, xf, blend,
-                opacity * alpha, shape.fill_opacity, shape.blend_interior, mask,
+                pm,
+                temp,
+                &shape.filters,
+                xf,
+                blend,
+                opacity * alpha,
+                shape.fill_opacity,
+                shape.blend_interior,
+                mask,
             );
         }
         return;
@@ -1158,6 +1367,122 @@ fn transformed_bounds(
     Some(bounds)
 }
 
+/// Keep one-to-one glyph coverage stable when the viewport moves by whole pixels.
+/// Args: destination, existing SVG text layout, world placement, authored rotation, opacity, blend and screen mask.
+/// Returns true after drawing the original tree in its stable local pixel grid; other transforms retain the general route.
+fn draw_svg_type_integer(
+    pm: &mut Pixmap, layout: &crate::text::svg_type::Layout, world: Transform,
+    rotation: Transform, opacity: f32, blend: tiny_skia::BlendMode, mask: Option<&tiny_skia::Mask>,
+) -> bool {
+    if world.sx != 1. || world.sy != 1. || world.kx != 0. || world.ky != 0.
+        || !world.tx.is_finite() || !world.ty.is_finite()
+        || world.tx.fract() != 0. || world.ty.fract() != 0.
+    { return false; }
+    let rect = layout.tree.root().abs_layer_bounding_box();
+    let Some(bounds) = transformed_bounds(crate::geom::Bounds::from_min_size(
+        Pt::new(rect.x(), rect.y()), Pt::new(rect.width(), rect.height())), rotation)
+    else { return false; };
+    let min = Pt::new(bounds.min.x.floor() - 2., bounds.min.y.floor() - 2.);
+    let max = Pt::new(bounds.max.x.ceil() + 2., bounds.max.y.ceil() + 2.);
+    let origin = min + Pt::new(world.tx, world.ty);
+    if ![min.x, min.y, max.x, max.y, origin.x, origin.y].into_iter().all(f32::is_finite)
+        || f64::from(origin.x).abs() >= f64::from(i32::MAX)
+        || f64::from(origin.y).abs() >= f64::from(i32::MAX)
+        || max.x - min.x <= 0. || max.y - min.y <= 0.
+        || f64::from(max.x - min.x) >= f64::from(u32::MAX)
+        || f64::from(max.y - min.y) >= f64::from(u32::MAX)
+    { return false; }
+    let (width, height) = ((max.x - min.x) as u32, (max.y - min.y) as u32);
+    let Ok(bytes) = crate::deep_color::storage::count(width, height, 4) else { return false; };
+    let Ok(_memory) = crate::resources::global().reserve_now(bytes as u64, &|| Ok(())) else { return false; };
+    let Some(mut pixels) = Pixmap::new(width, height) else { return false; };
+    let transform = Transform::from_translate(-min.x, -min.y).pre_concat(rotation);
+    resvg::render(&layout.tree, transform, &mut pixels.as_mut());
+    pm.draw_pixmap(origin.x as i32, origin.y as i32, pixels.as_ref(),
+        &PixmapPaint { opacity, blend_mode: blend, ..Default::default() }, Transform::identity(), mask);
+    true
+}
+
+fn draw_svg_type(pm:&mut Pixmap,shape:&Shape,run:&crate::geom::TypeRun,layout:&crate::text::svg_type::Layout,t:Transform,opacity:f32,blend:tiny_skia::BlendMode,pose:Pose,mask:Option<&tiny_skia::Mask>){
+    let center=shape.geom.bbox().center();let world=t.pre_concat(pose.to_skia(shape.world_bbox().center()));let xf=world.pre_concat(Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y));
+    let op=(opacity*pose.opacity.unwrap_or(shape.opacity)).clamp(0.,1.);let fill=pose.fill_reveal.unwrap_or(1.).clamp(0.,1.);let stroke=pose.stroke_reveal.unwrap_or(1.).clamp(0.,1.);
+    if fill>=1. && stroke>=1. && draw_svg_type_integer(pm,layout,world,Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y),op,blend,mask){return;}
+    if fill>=1. && stroke>=1. && op>=1. && blend==tiny_skia::BlendMode::SourceOver && mask.is_none(){resvg::render(&layout.tree,xf,&mut pm.as_mut());return;}
+    let Some(mut buffer)=Pixmap::new(pm.width(),pm.height())else{return;};
+    if fill>=1. && stroke>=1. {resvg::render(&layout.tree,xf,&mut buffer.as_mut());}
+    else {
+        if fill>0. && let Some(tree)=crate::text::svg_type::paint_tree(run,true){
+            if fill>=1. {resvg::render(&tree,xf,&mut buffer.as_mut());}
+            else if let Some(mut pixels)=Pixmap::new(pm.width(),pm.height()) && let Some(mut clip)=tiny_skia::Mask::new(pm.width(),pm.height()) {
+                let b=shape.world_bbox();if let Some(rect)=tiny_skia::Rect::from_xywh(b.min.x,b.max.y-b.height()*fill,b.width().max(0.001),(b.height()*fill).max(0.001)){clip.fill_path(&PathBuilder::from_rect(rect),FillRule::Winding,true,world);resvg::render(&tree,xf,&mut pixels.as_mut());buffer.draw_pixmap(0,0,pixels.as_ref(),&PixmapPaint::default(),Transform::identity(),Some(&clip));}
+            }
+        }
+        if stroke>0. && let Some(tree)=crate::text::svg_type::paint_tree(run,false){
+            if stroke>=1. {resvg::render(&tree,xf,&mut buffer.as_mut());}
+            else if let Some(path)=crate::motion::trimmed_stroke_path(shape,stroke) && let Some(outline)=path.stroke(&tiny_skia::Stroke{width:layout.stroke_width+2./world.get_scale().0.max(world.get_scale().1).max(0.001),line_cap:tiny_skia::LineCap::Round,..Default::default()},1.) && let Some(mut pixels)=Pixmap::new(pm.width(),pm.height()) && let Some(mut clip)=tiny_skia::Mask::new(pm.width(),pm.height()) {
+                clip.fill_path(&outline,FillRule::Winding,true,world);resvg::render(&tree,xf,&mut pixels.as_mut());buffer.draw_pixmap(0,0,pixels.as_ref(),&PixmapPaint::default(),Transform::identity(),Some(&clip));
+            }
+        }
+    }
+    pm.draw_pixmap(0,0,buffer.as_ref(),&PixmapPaint{opacity:op,blend_mode:blend,..Default::default()},Transform::identity(),mask);
+}
+
+/// Paint a vector pattern using the object's shared bounds and current clipping.
+/// Args: rotated path, whole shape, viewport, opacity/blend, reveal and parent mask.
+/// Returns after painting the clipped pattern without applying glyph coverage twice.
+fn draw_pattern_fill(
+    pm: &mut Pixmap,
+    pattern: &crate::svg_source::SvgPattern,
+    path: &tiny_skia::Path,
+    shape: &Shape,
+    xf: Transform,
+    opacity: f32,
+    blend: tiny_skia::BlendMode,
+    fill_reveal: f32,
+    mask: Option<&tiny_skia::Mask>,
+    winding: bool,
+) {
+    let center = shape.geom.bbox().center();
+    let rotation = Transform::from_rotate_at(shape.rotation.to_degrees(), center.x, center.y);
+    let Some(local_path) = path
+        .clone()
+        .transform(rotation.invert().unwrap_or_default())
+    else {
+        return;
+    };
+    let mut reveal = None;
+    if fill_reveal < 1. {
+        let bounds = shape.world_bbox();
+        if let Some(rect) = tiny_skia::Rect::from_xywh(
+            bounds.min.x,
+            bounds.max.y - bounds.height() * fill_reveal,
+            bounds.width().max(1e-5),
+            (bounds.height() * fill_reveal).max(1e-5),
+        ) {
+            reveal = mask
+                .cloned()
+                .or_else(|| tiny_skia::Mask::new(pm.width(), pm.height()));
+            if let Some(clip) = &mut reveal {
+                if mask.is_some() {
+                    clip.intersect_path(&PathBuilder::from_rect(rect), FillRule::Winding, true, xf);
+                } else {
+                    clip.fill_path(&PathBuilder::from_rect(rect), FillRule::Winding, true, xf);
+                }
+            }
+        }
+    }
+    pattern.draw(
+        pm,
+        &local_path,
+        shape.geom.bbox(),
+        xf.pre_concat(rotation),
+        opacity,
+        blend,
+        reveal.as_ref().or(mask),
+        winding,
+    );
+}
+
 fn draw_shape_inner(
     pm: &mut Pixmap,
     shape: &Shape,
@@ -1167,6 +1492,8 @@ fn draw_shape_inner(
     pose: Pose,
     mask: Option<&tiny_skia::Mask>,
 ) {
+    let painted_run=if let Geom::Text(run)=&shape.geom{run.svg_text.as_ref().filter(|svg|shape.style.fill!=svg.base_fill).map(|_|crate::text::svg_type::object_paint(run,&shape.style.fill))}else{None};
+    let rich=if let Geom::Text(run)=&shape.geom{let run=painted_run.as_ref().unwrap_or(run);run.svg_text.as_ref().and_then(|_|crate::text::svg_type::layout(run).map(|layout|(run,layout)))}else{None};
     let Some(path) = shape.get_cached_path(96) else {
         return;
     };
@@ -1178,7 +1505,29 @@ fn draw_shape_inner(
         t.pre_concat(pose.to_skia(shape.world_bbox().center()))
     };
     let fill_reveal = pose.fill_reveal.unwrap_or(1.0).clamp(0.0, 1.0);
-    if !shape.style.fill.is_none() && shape.geom.is_closed() && fill_reveal > 0.0 {
+    let painted=rich.is_none() && if let Geom::Text(run)=&shape.geom {crate::text::has_character_paint(run)}else{false};
+    if painted && fill_reveal>0. {
+        let Geom::Text(run)=&shape.geom else{unreachable!()};
+        for (fill,glyph_path) in crate::text::paint_paths(run,&shape.style.fill) {
+            if fill.is_none(){continue;}
+            let center=shape.geom.bbox().center();
+            let Some(glyph_path)=crate::geom::path_geom(&glyph_path,false)
+                .and_then(|geometry|crate::geom::curve_path(&geometry,center,shape.rotation))else{continue;};
+            if let Fill::Pattern(pattern) = &fill {
+                draw_pattern_fill(pm, pattern, &glyph_path, shape, xf, op, blend, fill_reveal, mask, true);
+                continue;
+            }
+            let Some(mut clip)=tiny_skia::Mask::new(pm.width(),pm.height())else{continue;};
+            clip.fill_path(&glyph_path,FillRule::Winding,true,xf);
+            if let Some(parent)=mask{for(a,b)in clip.data_mut().iter_mut().zip(parent.data()){*a=((u16::from(*a)*u16::from(*b)+127)/255)as u8;}}
+            if fill_reveal<1. {let bounds=shape.world_bbox();if let Some(rect)=tiny_skia::Rect::from_xywh(bounds.min.x,bounds.max.y-bounds.height()*fill_reveal,bounds.width().max(0.001),bounds.height()*fill_reveal){clip.intersect_path(&PathBuilder::from_rect(rect),FillRule::Winding,true,xf);}}
+            let texture=fill.gradient().and_then(|g|crate::gradient::texture(&g,shape,0.,xf.get_scale().0.max(xf.get_scale().1)));
+            let mut paint=fill_paint(&fill,&shape.geom,texture.as_ref());paint.blend_mode=blend;paint.shader.apply_opacity(op);
+            if shape.rotation.abs()>1e-5{let center=shape.geom.bbox().center();paint.shader.transform(Transform::from_rotate_at(shape.rotation.to_degrees(),center.x,center.y));}
+            let bounds=glyph_path.bounds();if let Some(rect)=tiny_skia::Rect::from_xywh(bounds.x()-1.,bounds.y()-1.,bounds.width()+2.,bounds.height()+2.){pm.fill_rect(rect,&paint,xf,Some(&clip));}
+        }
+    }
+    if !painted && rich.is_none() && !shape.style.fill.is_none() && shape.geom.is_closed() && fill_reveal > 0.0 {
         let texture = shape.style.fill.gradient().and_then(|g| {
             crate::gradient::texture(&g, shape, 0., xf.get_scale().0.max(xf.get_scale().1))
         });
@@ -1198,7 +1547,9 @@ fn draw_shape_inner(
             | crate::geom::Geom::Paths { winding: true, .. } => FillRule::Winding,
             _ => FillRule::EvenOdd,
         };
-        if fill_reveal < 1.0 {
+        if let Fill::Pattern(pattern) = &shape.style.fill {
+            draw_pattern_fill(pm, pattern, &path, shape, xf, op, blend, fill_reveal, mask, shape.geom.nonzero_winding());
+        } else if fill_reveal < 1.0 {
             let bounds = shape.world_bbox();
             if let Some(rect) = tiny_skia::Rect::from_xywh(
                 bounds.min.x,
@@ -1218,6 +1569,18 @@ fn draw_shape_inner(
             }
         } else {
             pm.fill_path(&path, &paint, rule, xf, mask);
+        }
+    }
+    if let Some((run,layout))=&rich{draw_svg_type(pm,shape,run,layout,t,opacity,blend,pose,mask);}
+    if let Geom::Text(run) = &shape.geom {
+        for (fill, path) in crate::text::inline_paths(run) {
+            if fill.is_none() {
+                continue;
+            }
+            let mut paint = fill_paint(&fill, &shape.geom, None);
+            paint.blend_mode = blend;
+            paint.shader.apply_opacity(op);
+            pm.fill_path(&path, &paint, FillRule::Winding, xf, mask);
         }
     }
     if shape.layout.image.is_some() {
@@ -1327,7 +1690,7 @@ fn fill_paint<'a>(
                 .map(crate::gradient::texture_shader)
                 .unwrap_or_else(|| gradient.skia(geom.bbox()));
         }
-        Fill::None => {}
+        Fill::None | Fill::Pattern(_) => {}
         Fill::Solid(c) => paint.set_color(c.to_skia()),
         Fill::Linear { from, to, c0, c1 } => {
             let b = geom.bbox();
@@ -1377,7 +1740,11 @@ fn fill_paint<'a>(
 }
 
 pub(crate) fn is_paper_raster(layer: &Layer) -> bool {
-    if layer.mask.is_some() || layer.parent.is_some() || layer.name != "Background" {
+    if layer.mask.is_some()
+        || !layer.artwork_masks.is_empty()
+        || layer.parent.is_some()
+        || layer.name != "Background"
+    {
         return false;
     }
     let LayerKind::Raster { pixels, size, .. } = &layer.kind else {
@@ -1502,6 +1869,78 @@ fn draw_checker(pm: &mut Pixmap, origin: Pt, size: Pt) {
 mod tests {
     use super::*;
     use crate::document::{Cmd, Document, Shape, Style, apply};
+
+    #[test]
+    fn svg_type_integer_pan_is_exact_for_filled_and_stroked_glyphs() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="110" height="64"><text x="6" y="43" font-family="DejaVu Sans" font-size="18" fill="#246" stroke="#ddd" stroke-width="0.3">Native Ω</text></svg>"##;
+        let (doc, _) = crate::formats::svg::read(source, "Integer text pan").unwrap();
+        let mut initial = Pixmap::new(110, 64).unwrap();
+        let mut moved = Pixmap::new(150, 90).unwrap();
+        groups::draw(&mut initial, &doc, Transform::identity(), &Draft::none(), None, None).unwrap();
+        groups::draw(&mut moved, &doc, Transform::from_translate(17., 11.), &Draft::none(), None, None).unwrap();
+        let cropped: Vec<_> = moved.data().chunks_exact(150 * 4).skip(11).take(64)
+            .flat_map(|row| row[17 * 4..127 * 4].iter().copied()).collect();
+        assert!(initial.data().chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert_eq!(initial.data(), cropped);
+    }
+
+    #[test]
+    fn svg_type_native_character_patterns_share_object_placement_opacity_and_clips() {
+        let pattern = Fill::Pattern(crate::svg_source::SvgPattern {
+            definitions: r##"<pattern id="tile" patternUnits="userSpaceOnUse" width="0.16" height="0.3"><rect width="0.16" height="0.3" fill="#0044ee"/><rect width="0.08" height="0.3" fill="#ee2200"/></pattern>"##.into(),
+            id: "tile".into(),
+            transform: [1., 0., 0., 1., 0., 0.],
+            opacity: 0.4,
+        });
+        let mut run = crate::geom::TypeRun {
+            content: "MMMM".into(),
+            origin: Pt::new(16., 24.),
+            px: 38.,
+            font: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/assets/fonts/EBGaramond.ttf").into(),
+            transform: Some([1., 0.1, 0.2, 1., 8., 3.]),
+            ..Default::default()
+        };
+        run.contours = crate::text::shape(&run);
+        let plain = Shape::new(Geom::Text(run.clone()), Style { fill: pattern.clone(), stroke: None });
+        run.set_character_style(0, 4, |span| span.fill = Some(pattern.clone()));
+        let ranged = Shape::new(Geom::Text(run), Style { fill: Fill::Solid(Rgba::rgb(0, 255, 0)), stroke: None });
+        let mut mask = tiny_skia::Mask::new(300, 180).unwrap();
+        for (index, value) in mask.data_mut().iter_mut().enumerate() {
+            *value = if index % 300 < 100 { 96 } else { 224 };
+        }
+        for rotation in [0., 0.23] {
+            for reveal in [1., 0.55] {
+                let render = |mut shape: Shape| {
+                    shape.rotation = rotation;
+                    let mut pixels = Pixmap::new(300, 180).unwrap();
+                    draw_shape_inner(
+                        &mut pixels, &shape, Transform::from_scale(1.3, 1.3), 0.7,
+                        tiny_skia::BlendMode::SourceOver,
+                        Pose { dx: 7., dy: 4., scale: 1.1, fill_reveal: Some(reveal), ..Pose::identity() },
+                        Some(&mask),
+                    );
+                    pixels
+                };
+                let expected = render(plain.clone());
+                let actual = render(ranged.clone());
+                let differences: Vec<_> = actual.data().iter().zip(expected.data()).map(|(a, b)| a.abs_diff(*b)).collect();
+                let mean = differences.iter().map(|v| *v as f64).sum::<f64>() / differences.len() as f64;
+                assert!(mean < 0.05 && *differences.iter().max().unwrap() <= 2, "rotation={rotation}, reveal={reveal}, mean={mean}");
+                assert!(actual.pixels().iter().filter(|p| u16::from(p.red()) > u16::from(p.blue()) * 2 && p.alpha() > 10).count() > 20);
+                assert!(actual.pixels().iter().filter(|p| u16::from(p.blue()) > u16::from(p.red()) * 2 && p.alpha() > 10).count() > 20);
+                assert!(actual.pixels().iter().map(|p| p.alpha()).max().unwrap() <= 64);
+            }
+        }
+    }
+
+    #[test]
+    fn svg_type_rich_fill_and_stroke_reveals_remain_independent() {
+        let source=r##"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><text x="20" y="75" font-family="DejaVu Sans" font-size="48" fill="#d24" stroke="#248" stroke-width="3" transform="rotate(8 20 75)">Type</text></svg>"##;
+        let(doc,_)=crate::formats::svg::read(source,"Reveal type").unwrap();let shape=doc.layers.iter().filter_map(|l|l.kind.shapes()).flatten().find(|s|matches!(&s.geom,Geom::Text(t) if t.svg_text.is_some())).unwrap();
+        let render=|fill,stroke|{let mut pixels=Pixmap::new(260,140).unwrap();draw_shape(&mut pixels,shape,Transform::identity(),1.,tiny_skia::BlendMode::SourceOver,Pose{dx:5.,dy:3.,fill_reveal:Some(fill),stroke_reveal:Some(stroke),..Pose::identity()});pixels};
+        let ink=|pixels:&Pixmap|pixels.pixels().iter().filter(|p|p.alpha()>0).count();
+        assert_eq!(ink(&render(0.,0.)),0);let fill=ink(&render(1.,0.));let stroke=ink(&render(0.,1.));assert!(fill>0 && stroke>0);let half_fill=ink(&render(0.5,0.));let half_stroke=ink(&render(0.,0.5));assert!(half_fill>0 && half_fill<fill);assert!(half_stroke>0 && half_stroke<stroke);assert!(ink(&render(1.,1.))>fill);
+    }
 
     #[test]
     fn reveal_channels_clip_fill_and_trim_stroke_independently_under_motion() {
@@ -1798,6 +2237,7 @@ mod tests {
     #[test]
     fn artboard_plate_follows_origin() {
         let mut doc = Document::new("t", 80.0, 80.0, 72.0);
+        doc.layers[0].visible = false;
         doc.width = 200.0;
         doc.artboards[0].origin = Pt::new(40.0, 0.0);
         doc.artboards[0].size = Pt::new(40.0, 80.0);
@@ -1824,6 +2264,7 @@ mod tests {
     #[test]
     fn export_images_preserve_dimensions_and_transparency() {
         let mut doc = Document::new("t", 64.0, 48.0, 72.0);
+        doc.layers[0].visible = false;
         apply(
             &mut doc,
             &Cmd::AddShape {
@@ -1891,6 +2332,30 @@ mod tests {
         let o = v.to_screen(Pt::ZERO);
         assert!(o.x >= 0.0 && o.x < 400.0, "origin x {o:?} left the canvas");
         assert!(o.y >= 0.0 && o.y < 300.0, "origin y {o:?} left the canvas");
+    }
+
+    #[test]
+    fn large_canvas_fit_and_zoom_keep_the_artwork_in_view() {
+        let mut view = View::default();
+        let size = Pt::new(100000., 80000.);
+        let viewport = crate::geom::Bounds::from_min_size(Pt::ZERO, Pt::new(1000., 800.));
+        view.fit(size, viewport);
+        assert!(view.scale < 0.02);
+        let first = view.to_screen(Pt::ZERO);
+        let last = view.to_screen(size);
+        assert!(first.x >= 0. && first.y >= 0.);
+        assert!(last.x <= viewport.max.x && last.y <= viewport.max.y);
+        let center = viewport.center();
+        let world = view.to_world(center);
+        let scale = view.scale;
+        view.zoom_at(center, 1.25);
+        view.zoom_at(center, 0.8);
+        assert!((view.scale - scale).abs() < 0.000001);
+        assert!((view.to_world(center) - world).length() < 0.01);
+        view.zoom_to(crate::geom::Bounds::from_min_size(Pt::ZERO, size), viewport);
+        assert!(view.scale < 0.02);
+        assert!(view.to_screen(size).x <= viewport.max.x);
+        assert!(view.to_screen(size).y <= viewport.max.y);
     }
 
     #[test]

@@ -84,6 +84,12 @@ fn chip(ui: &mut Ui, color: Rgba, size: egui::Vec2) -> egui::Response {
 }
 
 pub(crate) fn color_edit(ui: &mut Ui, salt: impl Hash + std::fmt::Debug, color: &mut Rgba) -> bool {
+    color_edit_named(ui, salt, color, "Edit color and alpha")
+}
+
+/// Open the native color picker with a property-specific keyboard name.
+/// Args: UI, stable owner, color and accessible property name. Returns true on an actual edit.
+pub(crate) fn color_edit_named(ui: &mut Ui, salt: impl Hash + std::fmt::Debug, color: &mut Rgba, name: &str) -> bool {
     let id = ui.make_persistent_id(("rgba-picker", salt));
     let popup = id.with("popup");
     let mut state = ui
@@ -105,6 +111,8 @@ pub(crate) fn color_edit(ui: &mut Ui, salt: impl Hash + std::fmt::Debug, color: 
     }
     let response = chip(ui, *color, vec2(26.0, 22.0))
         .on_hover_text(format!("{} · Edit color and alpha", color.hex()));
+    super::welcome::name_control(ui, &response, id.with("label"), name);
+    super::welcome::focus_control(ui, &response);
     if response.clicked() && !Popup::is_id_open(ui.ctx(), popup) {
         state.previous = *color;
     }
@@ -119,7 +127,100 @@ pub(crate) fn color_edit(ui: &mut Ui, salt: impl Hash + std::fmt::Debug, color: 
     *color != before
 }
 
+/// Draw one color plane and its native numeric controls inside the Color pane.
+/// Args: pane UI and selected paint color. Returns accepted edits recorded against their real responses.
+pub(super) fn inline(ui: &mut Ui, color: &mut Rgba) -> bool {
+    let id=ui.make_persistent_id("inline-color");
+    let mut state=ui.data(|d|d.get_temp::<PickerState>(id)).unwrap_or_else(||PickerState {
+        previous:*color,last:*color,hsv:egui::ecolor::Hsva::from_srgba_unmultiplied(color.to_array()),
+    });
+    if state.last!=*color {state.hsv=egui::ecolor::Hsva::from_srgba_unmultiplied(color.to_array());}
+    let before=*color;
+    let width=ui.available_width().clamp(40.0,360.0);
+    let (rect,response)=ui.allocate_exact_size(vec2(width,width*0.64),Sense::click_and_drag());
+    response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Slider,response.enabled(),"Saturation and brightness"));
+    let mut mesh=egui::Mesh::default();
+    for y in 0..=12 {for x in 0..=12 {
+        let s=x as f32/12.0;let v=1.0-y as f32/12.0;
+        mesh.colored_vertex(rect.min+vec2(s*rect.width(),(1.0-v)*rect.height()),egui::ecolor::Hsva::new(state.hsv.h,s,v,1.0).into());
+    }}
+    for y in 0..12 {for x in 0..12 {let a=y*13+x;mesh.add_triangle(a,a+1,a+13);mesh.add_triangle(a+1,a+14,a+13);}}
+    ui.painter().add(egui::Shape::mesh(mesh));
+    let old=state.hsv;
+    if response.enabled()&&(response.clicked()||response.dragged())&&let Some(pointer)=response.interact_pointer_pos(){
+        state.hsv.s=((pointer.x-rect.left())/rect.width()).clamp(0.0,1.0);
+        state.hsv.v=(1.0-(pointer.y-rect.top())/rect.height()).clamp(0.0,1.0);
+        response.request_focus();
+    }
+    if response.has_focus(){
+        let delta=ui.input(|i| {let down=|key| if i.key_pressed(key) {1.0} else {0.0};vec2(down(egui::Key::ArrowRight)-down(egui::Key::ArrowLeft),down(egui::Key::ArrowUp)-down(egui::Key::ArrowDown))});
+        state.hsv.s=(state.hsv.s+delta.x*0.01).clamp(0.0,1.0);state.hsv.v=(state.hsv.v+delta.y*0.01).clamp(0.0,1.0);
+    }
+    crate::app::input_history::record(response,old!=state.hsv);
+    let center=rect.min+vec2(state.hsv.s*rect.width(),(1.0-state.hsv.v)*rect.height());
+    ui.painter().circle_stroke(center,4.0,egui::Stroke::new(1.5,egui::Color32::WHITE));
+    let hue=ui.add(egui::Slider::new(&mut state.hsv.h,0.0..=1.0).text("Hue").show_value(false));
+    crate::app::input_history::changed(hue);
+    let alpha=ui.add(egui::Slider::new(&mut state.hsv.a,0.0..=1.0).text("Alpha").show_value(false));
+    crate::app::input_history::changed(alpha);
+    if state.hsv!=old {*color=Rgba::from_array(state.hsv.to_srgba_unmultiplied());}
+    let hex=id.with("hex");
+    let edited=hex_field(ui,hex,color,0.0,false);
+    if let Some(response)=ui.ctx().read_response(hex.with("edit")){crate::app::input_history::record(response,edited);}
+    if edited {state.hsv=egui::ecolor::Hsva::from_srgba_unmultiplied(color.to_array());}
+    state.last=*color;ui.data_mut(|d|d.insert_temp(id,state));
+    *color!=before
+}
+
+fn tag_id() -> Id {
+    Id::new("document-color-tag")
+}
+
+/// Remember the document's Gray/Lab tag for this frame's pickers.
+pub(crate) fn set_tag(ctx: &egui::Context, tag: Option<crate::deep_color::tagged::ColorTag>) {
+    ctx.data_mut(|d| d.insert_temp(tag_id(), tag));
+}
+
+/// Gray or L*a*b* fields for tagged documents. Returns true when the color changed.
+pub(crate) fn tagged_fields(ui: &mut Ui, tag: Option<crate::deep_color::tagged::ColorTag>, color: &mut Rgba) -> bool {
+    use crate::deep_color::tagged::{self as t, ColorTag};
+    let rgb = [color.r, color.g, color.b].map(|v| v as f32 / 255.);
+    let to8 = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
+    match tag {
+        Some(ColorTag::Gray) => {
+            let mut k = ((1. - t::gray_of(rgb)) * 100.).round();
+            let changed = ui.horizontal(|ui| { ui.label("Gray K%"); ui.add(egui::DragValue::new(&mut k).range(0.0..=100.0)).changed() }).inner;
+            if changed {
+                let v = to8(1. - k / 100.);
+                *color = Rgba::new(v, v, v, color.a);
+            }
+            changed
+        }
+        Some(ColorTag::Lab) => {
+            let mut lab = t::srgb_to_lab(rgb).map(|v| v.round());
+            let changed = ui.horizontal(|ui| {
+                let mut c = false;
+                for (i, (name, lo, hi)) in [("L", 0.0, 100.0), ("a", -128.0, 127.0), ("b", -128.0, 127.0)].into_iter().enumerate() {
+                    ui.label(name);
+                    c |= ui.add(egui::DragValue::new(&mut lab[i]).range(lo..=hi)).changed();
+                }
+                c
+            }).inner;
+            if changed {
+                let [r, g, b] = t::lab_to_srgb(lab).map(to8);
+                *color = Rgba::new(r, g, b, color.a);
+            }
+            changed
+        }
+        None => false,
+    }
+}
+
 fn picker_contents(ui: &mut Ui, id: Id, color: &mut Rgba, state: &mut PickerState) {
+    let tag = ui.data(|d| d.get_temp::<Option<crate::deep_color::tagged::ColorTag>>(tag_id())).flatten();
+    if tagged_fields(ui, tag, color) {
+        state.hsv = egui::ecolor::Hsva::from_srgba_unmultiplied(color.to_array());
+    }
     ui.spacing_mut().slider_width = 240.0;
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
@@ -207,44 +308,15 @@ pub(crate) fn hex_field(
             .desired_width(width)
             .hint_text("#RRGGBB"),
     );
+    super::welcome::name_control(ui, &response, id.with("label"), "Hex color");
     if response.changed()
-        && let Some(parsed) = Rgba::parse_hex(&text)
+        && let Some(parsed) = Rgba::parse_hex(text.trim())
     {
         *color = parsed;
-        text = color.hex();
         changed = true;
     }
-    if !response.has_focus() && Rgba::parse_hex(text.trim()).is_none() {
+    if !response.has_focus() {
         text = color.hex();
-    }
-    if response.has_focus() {
-        let paste = ui.input(|input| {
-            input.events.iter().find_map(|event| match event {
-                egui::Event::Paste(text) => Some(text.clone()),
-                _ => None,
-            })
-        });
-        let copy = ui.input(|input| {
-            input.events.iter().any(|event| matches!(event, egui::Event::Copy))
-                || input
-                    .events
-                    .iter()
-                    .any(|event| matches!(event, egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } if modifiers.command || modifiers.ctrl))
-        });
-        if copy {
-            ui.ctx().copy_text(if text.is_empty() {
-                color.hex()
-            } else {
-                text.clone()
-            });
-        }
-        if let Some(raw) = paste
-            && let Some(parsed) = Rgba::parse_hex(raw.trim())
-        {
-            *color = parsed;
-            text = color.hex();
-            changed = true;
-        }
     }
     if buttons {
         if icons::tiny_icon(ui, ph::COPY, "Copy hex", false) {

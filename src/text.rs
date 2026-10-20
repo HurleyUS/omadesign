@@ -7,6 +7,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
+pub(crate) mod font_inventory;
+pub mod variations;
+mod font_instances;
+pub(crate) mod font_export;
+pub(crate) mod webfonts;
+pub(crate) mod svg_fonts;
+pub(crate) mod font_catalog;
+pub(crate) mod font_recovery;
+
 const PREFERRED: &[&str] = &[
     "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
     "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
@@ -52,6 +61,7 @@ pub fn register_memory_font(id: &str, name: &str, bytes: Arc<Vec<u8>>) -> Result
         .lock()
         .map_err(|_| "Font cache is unavailable")?;
     let path = PathBuf::from(id);
+    let added = !cache.contains_key(&path);
     if let Some(old) = cache.get(&path) {
         if **old != *bytes {
             return Err("Project font fingerprint collision".into());
@@ -64,6 +74,8 @@ pub fn register_memory_font(id: &str, name: &str, bytes: Arc<Vec<u8>>) -> Result
         .lock()
         .map_err(|_| "Font labels are unavailable")?
         .insert(id.into(), name.into());
+    drop(cache);
+    if added { FONT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
     Ok(())
 }
 
@@ -218,6 +230,7 @@ fn scan_fonts() -> Vec<FontFace> {
             break;
         }
     }
+    walk_ttfs(&crate::project::data_dir().join("fonts"), &mut out, &mut seen, 0);
     out.sort_by_cached_key(|f| f.name.to_lowercase());
     out.truncate(FONT_CAP);
     out
@@ -262,6 +275,8 @@ pub fn fonts() -> &'static [FontFace] {
 
 static DYNAMIC_FONTS: OnceLock<Mutex<Vec<FontFace>>> = OnceLock::new();
 static FONT_LIST: OnceLock<Mutex<Option<Arc<[FontFace]>>>> = OnceLock::new();
+static RESCANNED_FONTS: OnceLock<Mutex<Option<Vec<FontFace>>>> = OnceLock::new();
+static INSTALLED_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static FONT_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn register_font(face: FontFace) {
@@ -283,7 +298,23 @@ pub fn register_font(face: FontFace) {
     {
         m.remove(&path);
     }
+    INSTALLED_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     FONT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Rescan installed font files without changing authored text or clearing document fonts.
+/// Args: none. Returns the current installed face count.
+pub(crate) fn refresh_fonts() -> usize {
+    let found = scan_fonts();
+    let count = found.len();
+    *RESCANNED_FONTS.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()) = Some(found);
+    if let Some(list) = FONT_LIST.get() { *list.lock().unwrap_or_else(|e| e.into_inner()) = None; }
+    if let Some(bytes) = BYTES.get() {
+        bytes.lock().unwrap_or_else(|e| e.into_inner()).retain(|path, _| path.to_string_lossy().starts_with("omatype:"));
+    }
+    INSTALLED_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    FONT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    count
 }
 
 pub fn all_fonts_cached() -> Arc<[FontFace]> {
@@ -292,11 +323,11 @@ pub fn all_fonts_cached() -> Arc<[FontFace]> {
     if let Some(list) = cached.as_ref() {
         return Arc::clone(list);
     }
-    let mut v = fonts().to_vec();
+    let mut v = RESCANNED_FONTS.get().and_then(|f| f.lock().ok()?.clone()).unwrap_or_else(|| fonts().to_vec());
     if let Some(m) = DYNAMIC_FONTS.get()
         && let Ok(g) = m.lock()
     {
-        for f in g.iter() {
+        for f in g.iter().filter(|f| f.path.is_file()) {
             if !v.iter().any(|e| e.path == f.path) {
                 v.push(f.clone());
             }
@@ -369,6 +400,21 @@ fn font_bytes(path: &Path) -> Option<Arc<Vec<u8>>> {
     Some(arc)
 }
 
+/// Share the composer's resolved font bytes with format writers.
+/// Args: text run. Returns cached font bytes, including project fonts, or None.
+pub(crate) fn font_bytes_for(run: &TypeRun) -> Option<Arc<Vec<u8>>> {
+    resolve_path(run).and_then(|path| font_bytes(&path))
+}
+
+/// Read the composer's font ascent, descent and line gap in design pixels.
+/// Args: authored text run. Returns real OpenType metrics, or None without a font.
+pub(crate) fn font_metrics_for(run: &TypeRun) -> Option<(f32, f32, f32)> {
+    let bytes = font_bytes_for(run)?;
+    let face = variations::shaping_face(&bytes, &run.font_variations)?;
+    let scale = run.px * character_metrics(run, 0).vscale.unwrap_or(100.0) / 100.0 / face.units_per_em() as f32;
+    Some((face.ascender() as f32 * scale, -(face.descender() as f32) * scale, face.line_gap() as f32 * scale))
+}
+
 fn ot_features(run: &TypeRun) -> Vec<rustybuzz::Feature> {
     let tag = |b: &[u8; 4]| rustybuzz::ttf_parser::Tag::from_bytes(b);
     let feat = |bytes: &[u8; 4], on: bool| rustybuzz::Feature::new(tag(bytes), u32::from(on), ..);
@@ -414,7 +460,7 @@ fn map_curves(
         .collect()
 }
 
-fn flatten_outline(curves: &[ab_glyph::OutlineCurve]) -> Vec<Vec<Pt>> {
+fn flatten_outline(curves: &[ab_glyph::OutlineCurve], tolerance: f32) -> Vec<Vec<Pt>> {
     use ab_glyph::OutlineCurve;
     let start_of = |c: &OutlineCurve| match c {
         OutlineCurve::Line(p0, _)
@@ -445,29 +491,11 @@ fn flatten_outline(curves: &[ab_glyph::OutlineCurve]) -> Vec<Vec<Pt>> {
         match c {
             OutlineCurve::Line(_, p1) => pts.push(Pt::new(p1.x, p1.y)),
             OutlineCurve::Quad(p0, p1, p2) => {
-                for i in 1..=8 {
-                    let t = i as f32 / 8.0;
-                    let a = (1.0 - t) * (1.0 - t);
-                    let b = 2.0 * (1.0 - t) * t;
-                    let d = t * t;
-                    pts.push(Pt::new(
-                        a * p0.x + b * p1.x + d * p2.x,
-                        a * p0.y + b * p1.y + d * p2.y,
-                    ));
-                }
+                let [p0, p1, p2] = [p0, p1, p2].map(|p| Pt::new(p.x, p.y));
+                flatten_type_curve([p0, p0.lerp(p1, 2. / 3.), p2.lerp(p1, 2. / 3.), p2], tolerance, 0, &mut pts);
             }
             OutlineCurve::Cubic(p0, p1, p2, p3) => {
-                for i in 1..=12 {
-                    let t = i as f32 / 12.0;
-                    let a = (1.0 - t) * (1.0 - t) * (1.0 - t);
-                    let b = 3.0 * (1.0 - t) * (1.0 - t) * t;
-                    let d = 3.0 * (1.0 - t) * t * t;
-                    let e = t * t * t;
-                    pts.push(Pt::new(
-                        a * p0.x + b * p1.x + d * p2.x + e * p3.x,
-                        a * p0.y + b * p1.y + d * p2.y + e * p3.y,
-                    ));
-                }
+                flatten_type_curve([p0, p1, p2, p3].map(|p| Pt::new(p.x, p.y)), tolerance, 0, &mut pts);
             }
         }
         last_end = Some(end_of(c));
@@ -476,6 +504,20 @@ fn flatten_outline(curves: &[ab_glyph::OutlineCurve]) -> Vec<Vec<Pt>> {
         out.push(pts);
     }
     out
+}
+
+/// Flatten a type curve within its document-space error budget.
+/// Args: cubic controls, local tolerance, bounded depth and output points. Returns nothing.
+fn flatten_type_curve(points: [Pt; 4], tolerance: f32, depth: u8, out: &mut Vec<Pt>) {
+    let [a, b, c, d] = points;
+    let error = crate::geom::seg_dist(b, a, d).max(crate::geom::seg_dist(c, a, d));
+    if depth == 10 || error <= tolerance.max(1e-6) {
+        out.push(d);
+        return;
+    }
+    let (left, right) = crate::geom::split_cubic(a, b, c, d, 0.5);
+    flatten_type_curve(left, tolerance, depth + 1, out);
+    flatten_type_curve(right, tolerance, depth + 1, out);
 }
 
 fn fallback_block(content: &str, px: f32, origin: Pt) -> Vec<Vec<Pt>> {
@@ -498,6 +540,7 @@ fn fallback_block(content: &str, px: f32, origin: Pt) -> Vec<Vec<Pt>> {
 
 /// Shape `run` into closed contours in world space.
 pub fn shape(run: &TypeRun) -> Vec<Vec<Pt>> {
+    if run.svg_text.is_some() {return svg_type::layout(run).map(|l|l.contours.clone()).unwrap_or_default();}
     if run.on_path.is_some() { return crate::text_geometry::shape_on_path(run); }
     if run.frame.is_some() { return crate::text_geometry::shape_frame(run); }
     let Some(path) = resolve_path(run) else {
@@ -506,15 +549,130 @@ pub fn shape(run: &TypeRun) -> Vec<Vec<Pt>> {
     let Some(bytes) = font_bytes(&path) else {
         return fallback_block(&run.content, run.px, run.origin);
     };
-    buzz_shape(&bytes, run).unwrap_or_else(|| fallback_block(&run.content, run.px, run.origin))
+    let mut contours=buzz_shape(&bytes, run).unwrap_or_else(|| fallback_block(&run.content, run.px, run.origin));
+    for point in contours.iter_mut().flatten(){*point=run.map_point(*point);}
+    contours
 }
 
 fn buzz_shape(_bytes: &[u8], run: &TypeRun) -> Option<Vec<Vec<Pt>>> {
     Some(compose(run).iter().flat_map(|line|line.glyphs.iter().flat_map(|g|glyph_contours(run,g))).collect())
 }
 
+/// Keep native glyph curves for painting ordinary editable text.
+/// Args: the composed text run. Returns its exact path, or no path for other layout routes.
+pub(crate) fn outline_path(run: &TypeRun) -> Option<tiny_skia::Path> {
+    if !has_outline_path(run) {
+        return None;
+    }
+    let mut path = tiny_skia::PathBuilder::new();
+    for line in compose(run).iter() {
+        for glyph in &line.glyphs {
+            append_glyph_outline(&mut path, run, glyph);
+        }
+    }
+    path.finish()
+}
+
+fn has_outline_path(run: &TypeRun) -> bool {
+    !run.content.is_empty() && run.frame.is_none() && run.on_path.is_none()
+        && run.svg_text.is_none() && run.contours == shape(run)
+}
+
+/// Append one positioned glyph using its original font curves.
+/// Args: output builder, semantic text run and composed glyph. Returns nothing.
+fn append_glyph_outline(path: &mut tiny_skia::PathBuilder, run: &TypeRun, glyph: &LayoutGlyph) {
+    use ab_glyph::OutlineCurve;
+    if run.inlines.iter().any(|item| item.at == glyph.cluster) {
+        return;
+    }
+    let Some((outline, scale)) = composer::glyph_outline(run, glyph) else { return; };
+    let center = if glyph.turn == 0 {
+        Pt::ZERO
+    } else {
+        composer::upright_center(run, glyph)
+    };
+    let map = |p: ab_glyph::Point| {
+        let local = Pt::new(p.x * scale * glyph.hscale, -p.y * scale * glyph.vscale);
+        let turned = if glyph.turn == 2 {
+            composer::turn_clockwise(local, center)
+        } else {
+            local
+        };
+        let placed = if glyph.turn == 0 {
+            Pt::new(glyph.x + local.x, glyph.y + local.y)
+        } else {
+            turned + (Pt::new(glyph.x, glyph.y) - center)
+        };
+        run.map_point(Pt::new(run.origin.x + placed.x, run.origin.y + placed.y))
+    };
+    let mut last = None;
+    for curve in &outline.curves {
+        let start = match *curve {
+            OutlineCurve::Line(a, _) | OutlineCurve::Quad(a, _, _) | OutlineCurve::Cubic(a, _, _, _) => a,
+        };
+        if last != Some(start) {
+            if last.is_some() { path.close(); }
+            let a = map(start);
+            path.move_to(a.x, a.y);
+        }
+        let end = match *curve {
+            OutlineCurve::Line(_, b) | OutlineCurve::Quad(_, _, b) | OutlineCurve::Cubic(_, _, _, b) => b,
+        };
+        match *curve {
+            OutlineCurve::Line(_, b) => {
+                let b = map(b);
+                path.line_to(b.x, b.y);
+            }
+            OutlineCurve::Quad(_, b, c) => {
+                let (b, c) = (map(b), map(c));
+                path.quad_to(b.x, b.y, c.x, c.y);
+            }
+            OutlineCurve::Cubic(_, b, c, d) => {
+                let (b, c, d) = (map(b), map(c), map(d));
+                path.cubic_to(b.x, b.y, c.x, c.y, d.x, d.y);
+            }
+        }
+        last = Some(end);
+    }
+    if last.is_some() { path.close(); }
+}
+
+/// Paint character ranges with the same glyph curves as whole-object text.
+/// Args: run and inherited object fill. Returns ordered fill paths in document coordinates.
+pub(crate) fn paint_paths(run: &TypeRun, inherited: &crate::document::Fill) -> Vec<(crate::document::Fill, tiny_skia::Path)> {
+    if !has_outline_path(run) {
+        return paint_groups(run, inherited).into_iter().filter_map(|(fill, contours)| {
+            let mut path = tiny_skia::PathBuilder::new();
+            for contour in contours {
+                if contour.len() < 2 { continue; }
+                path.move_to(contour[0].x, contour[0].y);
+                for p in &contour[1..] { path.line_to(p.x, p.y); }
+                path.close();
+            }
+            path.finish().map(|path| (fill, path))
+        }).collect();
+    }
+    let mut paths: Vec<(crate::document::Fill, tiny_skia::PathBuilder)> = Vec::new();
+    for line in compose(run).iter() {
+        for glyph in &line.glyphs {
+            let fill = run.character_style(glyph.cluster).fill.unwrap_or_else(|| inherited.clone());
+            if !paths.last().is_some_and(|(previous, _)| *previous == fill) {
+                paths.push((fill, tiny_skia::PathBuilder::new()));
+            }
+            append_glyph_outline(&mut paths.last_mut().unwrap().1, run, glyph);
+        }
+    }
+    paths.into_iter().filter_map(|(fill, path)| path.finish().map(|path| (fill, path))).collect()
+}
+
 mod composer;
+mod vertical;
+pub(crate) use vertical::layout_vertical_frame;
+mod inline;
+pub(crate) use inline::{hidden_marks, inline_paths, paint_run, refresh_document, HiddenMark};
+pub mod svg_type;
 mod edit;
+pub(crate) use edit::CharacterRewrite;
 mod metrics;
 pub use metrics::character_metrics;
 mod opentype;
@@ -523,39 +681,119 @@ pub mod hyphenation;
 pub use composer::{compose, compose_plain, glyph_contours, paragraph_style, LayoutGlyph, LayoutLine};
 
 pub fn fill_contours(geom: &mut crate::geom::Geom) { if let crate::geom::Geom::Text(run)=geom {run.contours=shape(run);} }
+
+pub(crate) fn has_character_paint(run:&TypeRun)->bool{run.spans.iter().any(|s|s.fill.is_some()) || run.layout.as_ref().is_some_and(|layout|layout.paint_ranges.iter().any(|(fill,_)|fill.is_some()))}
+
+pub(crate) fn paint_groups(run:&TypeRun,inherited:&crate::document::Fill)->Vec<(crate::document::Fill,Vec<Vec<Pt>>)> {
+    let mut groups:Vec<(crate::document::Fill,Vec<Vec<Pt>>)>=Vec::new();
+    if run.frame.is_some() || run.on_path.is_some(){
+        let computed;let layout=if let Some(layout)=&run.layout{layout}else{computed=if run.on_path.is_some(){crate::text_geometry::layout_on_path(run)}else{crate::text_geometry::layout_frame(run,run,0,&[],false)};&computed};
+        for (fill,range) in &layout.paint_ranges{let fill=fill.clone().unwrap_or_else(||inherited.clone());let contours=layout.contours[range.clone()].to_vec();if let Some((_,all))=groups.last_mut().filter(|(old,_)|*old==fill){all.extend(contours);}else{groups.push((fill,contours));}}return groups;
+    }
+    for line in compose(run).iter(){for glyph in &line.glyphs {
+        let fill=run.character_style(glyph.cluster).fill.unwrap_or_else(||inherited.clone());
+        let mut contours=glyph_contours(run,glyph);
+        for point in contours.iter_mut().flatten(){*point=run.map_point(*point);}
+        if let Some((_,all))=groups.last_mut().filter(|(old,_)|*old==fill){all.extend(contours);}else{groups.push((fill,contours));}
+    }}
+    groups
+}
+/// Point type written in a column. Area type, path type and SVG text keep their own layout.
+/// Args: text run. Returns whether carets, hits and measure use the column.
+fn vertical_point(run: &TypeRun) -> bool {
+    run.vertical && run.on_path.is_none() && run.frame.is_none() && run.svg_text.is_none()
+}
 pub fn measure(run:&TypeRun)->(f32,f32) {
-    let lines=compose(run);(run.wrap_width.unwrap_or_else(||lines.iter().map(|l|l.width).fold(0.,f32::max)),lines.iter().map(|l|l.height).sum())
+    let lines=compose(run);
+    if vertical_point(run) {
+        let pitch = run.px.max(1.);
+        let width = pitch * lines.len().max(1) as f32;
+        let height = lines.iter().map(|line| line.height).fold(0., f32::max);
+        return (width, height);
+    }
+    (run.wrap_width.unwrap_or_else(||lines.iter().map(|l|l.width).fold(0.,f32::max)),lines.iter().map(|l|l.height).sum())
 }
 pub fn caret_pt(run:&TypeRun,char_idx:usize)->Pt {
+    if run.svg_text.is_some() && let Some(layout)=svg_type::layout(run) && let Some(caret)=layout.carets.iter().min_by_key(|c|c.0.abs_diff(char_idx)){return caret.1;}
     if let Some((point,_)) = crate::text_geometry::caret_frame(run,char_idx) { return point; }
+    if vertical_point(run) {
+        let lines = compose(run);
+        let idx = char_idx.min(run.content.chars().count());
+        let line = &lines[lines.iter().rposition(|line| line.start <= idx).unwrap_or(0)];
+        return run.map_point(Pt::new(run.origin.x + line.offset, run.origin.y + line.caret_x(idx)));
+    }
     let lines=compose(run);let idx=char_idx.min(run.content.chars().count());
     let line=&lines[lines.iter().rposition(|l|l.start<=idx).unwrap_or(0)];
-    Pt::new(run.origin.x+line.caret_x(idx),run.origin.y+line.baseline-character_metrics(run,idx.min(run.content.chars().count().saturating_sub(1))).baseline_shift.unwrap())
+    run.map_point(Pt::new(run.origin.x+line.caret_x(idx),run.origin.y+line.baseline-character_metrics(run,idx.min(run.content.chars().count().saturating_sub(1))).baseline_shift.unwrap()))
+}
+
+/// Return both ends of the insertion caret in document coordinates.
+/// Args: text run and character index. Returns top and bottom after all type transforms.
+pub fn caret_segment(run:&TypeRun,index:usize)->(Pt,Pt) {
+    if run.svg_text.is_some(){return svg_type::caret_segment(run,index);}
+    let point=caret_pt(run,index);let height=caret_height(run,index);
+    let geometry=crate::text_geometry::caret_frame(run,index);
+    let tangent=if vertical_point(run){Pt::new(0.,1.)}else{geometry.map_or(Pt::new(1.,0.),|(_,t)|t)};
+    if run.transform.is_some(){let local=run.unmap_point(point);let tangent=geometry.map_or(Pt::new(1.,0.),|(_,t)|(run.unmap_point(point+t)-local).normalized());return (run.map_point(local-tangent.perp()*height*0.9),run.map_point(local+tangent.perp()*height*0.2));}
+    (point-tangent.perp()*height*0.9,point+tangent.perp()*height*0.2)
 }
 pub fn hit_char(run:&TypeRun,p:Pt)->usize {
+    if run.svg_text.is_some() && let Some(layout)=svg_type::layout(run){return layout.carets.iter().min_by(|a,b|(a.1-p).length_sq().total_cmp(&(b.1-p).length_sq())).map_or(0,|c|c.0);}
     if let Some(index) = crate::text_geometry::hit_char(run,p) { return index; }
+    let p=run.unmap_point(p);
+    if vertical_point(run) {
+        let mut best = (0usize, f32::MAX);
+        for line in compose(run).iter() {
+            for glyph in &line.glyphs {
+                let center = Pt::new(run.origin.x + glyph.x, run.origin.y + glyph.y);
+                let distance = (center - p).length_sq();
+                if distance < best.1 {
+                    best = (glyph.cluster, distance);
+                }
+            }
+        }
+        return best.0;
+    }
     let lines=compose(run);
     lines.iter().flat_map(|line|line.carets.iter().map(move |(index,x)| {
         let style=character_metrics(run,(*index).min(run.content.chars().count().saturating_sub(1)));
-        let y=run.origin.y+line.baseline-style.baseline_shift.unwrap();let height=run.px*style.vscale.unwrap()/100.;
+        let y=run.origin.y+line.baseline-style.baseline_shift.unwrap();let height=style.px.unwrap_or(run.px)*style.vscale.unwrap()/100.;
         let dy=if p.y<y-height*0.9 {y-height*0.9-p.y}else if p.y>y+height*0.25{p.y-y-height*0.25}else{0.};
         let dx=run.origin.x+x-p.x;(*index,dx*dx+dy*dy)
     })).min_by(|(_,a),(_,b)|a.total_cmp(b)).map_or(0,|(index,_)|index)
 }
 pub fn selection_rects(run:&TypeRun,a:usize,b:usize)->Vec<(Pt,Pt)> {
     let lo=a.min(b);let hi=a.max(b);let mut rects=Vec::new();
+    if vertical_point(run) {
+        let half = run.px.max(1.) * 0.5;
+        for line in compose(run).iter() {
+            let from = lo.max(line.start);
+            let end = hi.min(line.end);
+            if from >= end {
+                continue;
+            }
+            let y0 = line.caret_x(from);
+            let y1 = line.caret_x(end);
+            let x = run.origin.x + line.offset;
+            rects.push((
+                Pt::new(x - half, run.origin.y + y0.min(y1)),
+                Pt::new(x + half, run.origin.y + y0.max(y1)),
+            ));
+        }
+        return rects;
+    }
     for line in compose(run).iter() {
         let mut from=lo.max(line.start);let end=hi.min(line.end);
         while from<end {
             let style=character_metrics(run,from);let mut to=from+1;
-            while to<end {let next=character_metrics(run,to);if next.baseline_shift!=style.baseline_shift||next.vscale!=style.vscale{break;}to+=1;}
-            let y=run.origin.y+line.baseline-style.baseline_shift.unwrap();let px=run.px*style.vscale.unwrap()/100.;
+            while to<end {let next=character_metrics(run,to);if next.baseline_shift!=style.baseline_shift||next.vscale!=style.vscale||next.px!=style.px{break;}to+=1;}
+            let y=run.origin.y+line.baseline-style.baseline_shift.unwrap();let px=style.px.unwrap_or(run.px)*style.vscale.unwrap()/100.;
             rects.push((Pt::new(run.origin.x+line.caret_x(from),y-px*0.9),Pt::new(run.origin.x+line.caret_x(to),y+px*0.25)));from=to;
         }
     }
     rects
 }
-pub fn caret_height(run:&TypeRun,index:usize)->f32 {if let Some(layout)=&run.layout&&let Some((_,height))=layout.caret_heights.iter().min_by_key(|(i,_)|i.abs_diff(index)){return *height;}run.px*character_metrics(run,index.min(run.content.chars().count().saturating_sub(1))).vscale.unwrap()/100.}
+pub fn caret_height(run:&TypeRun,index:usize)->f32 {if let Some(layout)=&run.layout&&let Some((_,height))=layout.caret_heights.iter().min_by_key(|(i,_)|i.abs_diff(index)){return *height;}{let style=character_metrics(run,index.min(run.content.chars().count().saturating_sub(1)));style.px.unwrap_or(run.px)*style.vscale.unwrap()/100.}}
 pub fn char_to_byte(s:&str,char_idx:usize)->usize {s.char_indices().nth(char_idx).map(|(i,_)|i).unwrap_or(s.len())}
 pub fn paragraph_spacing_css(run: &TypeRun, style: &crate::geom::ParagraphStyle) -> String {
     // CSS word spacing adds to the font's space advance; the inspector stores
@@ -570,6 +808,9 @@ pub fn paragraph_spacing_css(run: &TypeRun, style: &crate::geom::ParagraphStyle)
 pub fn character_css(run:&TypeRun,style:&crate::geom::CharSpan)->String {
     use std::fmt::Write;
     let mut css=String::new();
+    if let Some(font)=&style.font {let _=write!(css,"font-family:'{}';",label_for(font).replace(['\'','"','<','>'],""));}
+    if let Some(px)=style.px {let _=write!(css,"font-size:{px}px;");}
+    if let Some(crate::document::Fill::Solid(color))=&style.fill {let _=write!(css,"color:{};",color.hex());}
     if let Some(value)=style.tracking{let _=write!(css,"letter-spacing:calc({}em + var(--oma-paragraph-letter-spacing, 0em));",value/1000.);}
     if let Some(value)=style.leading{let _=write!(css,"line-height:{}px;",value.pixels(run.px));}
     if let Some(mode)=style.kerning{let _=write!(css,"font-kerning:{};",if mode==crate::geom::KernMode::Metrics{"normal"}else{"none"});}
@@ -847,6 +1088,29 @@ mod tests {
             content: content.into(),
             px: 48.0,
             ..TypeRun::default()
+        }
+    }
+
+    #[test]
+    fn svg_type_outline_flattening_respects_curved_edge_error() {
+        use ab_glyph::{OutlineCurve, point};
+        let curves = [
+            OutlineCurve::Quad(point(0., 0.), point(0., 64.), point(64., 64.)),
+            OutlineCurve::Cubic(point(64., 64.), point(80., 64.), point(80., 0.), point(128., 0.)),
+            OutlineCurve::Line(point(128., 0.), point(0., 0.)),
+        ];
+        let tolerance = 1. / 64.;
+        let contours = flatten_outline(&curves, tolerance);
+        assert_eq!(contours.len(), 1);
+        assert!(contours[0].len() <= 2050);
+        for i in 0..=512 {
+            let t = i as f32 / 512.;
+            let quad = Pt::new(64. * t * t, 128. * t - 64. * t * t);
+            let cubic = crate::geom::eval_cubic(Pt::new(64., 64.), Pt::new(80., 64.), Pt::new(80., 0.), Pt::new(128., 0.), t);
+            for point in [quad, cubic] {
+                let error = contours[0].windows(2).map(|p| crate::geom::seg_dist(point, p[0], p[1])).fold(f32::INFINITY, f32::min);
+                assert!(error <= tolerance * 1.01, "curve edge error={error}");
+            }
         }
     }
 

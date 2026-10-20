@@ -1,4 +1,5 @@
 use super::*;
+use crate::artwork_mask::{ArtworkMask, MaskMode, MaskSource};
 use crate::document::Pixels;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -11,13 +12,13 @@ pub struct SelectionSpace {
 /// The same-space case borrows the source. A transformed mask shares one
 /// cached allocation across all dabs instead of resampling and copying it.
 pub(crate) enum SelectionMask<'a> {
-    Borrowed(&'a [u8]),
-    Mapped(std::sync::Arc<[u8]>),
+    Borrowed(&'a [f32]),
+    Mapped(std::sync::Arc<crate::resources::Allocation<f32>>),
 }
 
 impl std::ops::Deref for SelectionMask<'_> {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
+    type Target = [f32];
+    fn deref(&self) -> &[f32] {
         match self {
             Self::Borrowed(values) => values,
             Self::Mapped(values) => values,
@@ -36,7 +37,7 @@ struct SelectionKey {
 
 #[derive(Default)]
 pub(super) struct SelectionCache {
-    entry: std::cell::RefCell<Option<(SelectionKey, std::sync::Arc<[u8]>)>>,
+    entry: std::cell::RefCell<Option<(SelectionKey, std::sync::Arc<crate::resources::Allocation<f32>>)>>,
 }
 
 impl SelectionCache {
@@ -47,56 +48,127 @@ impl SelectionCache {
 
 #[derive(Clone)]
 pub struct ItemMask {
-    pub values: Vec<u8>,
+    pub values: std::sync::Arc<crate::resources::Allocation<f32>>,
     pub space: SelectionSpace,
 }
 
-pub(super) fn resample(
-    values: &[u8],
-    source: SelectionSpace,
-    target: SelectionSpace,
-) -> Option<Vec<u8>> {
-    if values.len() != source.w as usize * source.h as usize {
-        return None;
-    }
-    if source == target {
-        return Some(values.to_vec());
-    }
-    let data = values.iter().flat_map(|v| [255, 255, 255, *v]).collect();
-    let src = Pixels::from_rgba(source.w, source.h, data)?.to_pixmap()?;
-    let mut dest = tiny_skia::Pixmap::new(target.w, target.h)?;
-    let transform = target.transform.invert()?.pre_concat(source.transform);
-    dest.draw_pixmap(
-        0,
-        0,
-        src.as_ref(),
-        &tiny_skia::PixmapPaint {
-            quality: tiny_skia::FilterQuality::Bilinear,
-            ..Default::default()
-        },
-        transform,
-        None,
-    );
-    Some(dest.pixels().iter().map(|p| p.alpha()).collect())
-}
+pub(super) fn resample(values:&[f32],source:SelectionSpace,target:SelectionSpace)->Option<Vec<f32>> {resample_admitted(values,source,target).ok().map(|v|v.to_vec())}
+pub(super) fn resample_admitted(values:&[f32],source:SelectionSpace,target:SelectionSpace)->Result<std::sync::Arc<crate::resources::Allocation<f32>>,String>{crate::selection_coverage::resample(values,source,target,&crate::deep_color::storage::check)}
 
 impl Studio {
     /// Finish or restore an in-flight pixel edit before changing document context.
     /// Returning true lets Undo cancel the current gesture before touching history.
     pub(crate) fn end_pixel_stroke(&mut self, cancel: bool) -> bool {
-        let (layer, mask, before, buffer) = match self.op.take() {
+        if matches!(self.op, Some(Op::ChannelStroke(_))) {
+            return self.end_channel_stroke(cancel);
+        }
+        if matches!(
+            self.op,
+            Some(Op::NativeStroke { .. } | Op::NativeRetouch { .. })
+        ) {
+            let (layer, mask, before) = match self.op.take().unwrap() {
+                Op::NativeStroke {
+                    layer,
+                    mask,
+                    before,
+                    ..
+                } => (layer, mask, before),
+                Op::NativeRetouch { layer, before, .. } => (layer, false, before),
+                _ => unreachable!(),
+            };
+            let target = if mask {
+                self.doc.layers[layer].mask.as_mut()
+            } else {
+                self.doc.layers[layer].kind.pixels_mut()
+            };
+            if let Some(target) = target {
+                if cancel {
+                    *target = before;
+                } else {
+                    let after = target.clone();
+                    self.history.push(Cmd::NativePixels {
+                        layer,
+                        mask,
+                        before,
+                        after,
+                    });
+                    self.dirty = true;
+                }
+            }
+            self.paint_contact = None;
+            self.brush.pressure = 1.;
+            self.mark();
+            return true;
+        }
+        if matches!(self.op, Some(Op::Brush { .. })) {
+            let Some(Op::Brush {
+                layer,
+                before,
+                mut buf,
+                ..
+            }) = self.op.take()
+            else {
+                unreachable!()
+            };
+            self.paint_contact = None;
+            self.brush.pressure = 1.0;
+            if !cancel && let Some(selection) = self.cached_pixel_sel_mask(layer) {
+                paint::feather_overlay(&mut buf, &selection);
+            }
+            if let Some(target) = self.doc.layers.get_mut(layer) {
+                if cancel
+                    || self.brush.opacity <= 0.0
+                    || buf.pixels().iter().all(|p| p.alpha() == 0)
+                {
+                    before.restore(target);
+                } else if let Some(pixels) = target.kind.pixels_mut() {
+                    if pixels.native.is_some() {
+                        if let Err(error) = Pixels::from_pixmap(&buf)
+                            .and_then(|overlay| pixels.paint_overlay(&overlay, self.brush.opacity))
+                        {
+                            self.status = error;
+                            before.restore(target);
+                            return true;
+                        }
+                    } else if let Some(mut destination) = pixels.to_pixmap() {
+                        paint::blend_onto(&mut destination, &buf, self.brush.opacity);
+                        match Pixels::from_pixmap(&destination) {
+                            Ok(after) => *pixels = after,
+                            Err(error) => {
+                                self.status = error;
+                                before.restore(target);
+                                return true;
+                            }
+                        }
+                    }
+                    if pixels.native != before.kind.pixels().unwrap().native
+                        || pixels.data != before.kind.pixels().unwrap().data
+                        || target.kind.raster_xform() != before.kind.raster_xform()
+                    {
+                        let after = crate::document::RasterState::capture(target).unwrap();
+                        self.history.push(Cmd::PaintRaster {
+                            layer,
+                            before,
+                            after,
+                        });
+                        self.dirty = true;
+                    }
+                }
+            }
+            self.reset_snap_gesture();
+            self.mark();
+            return true;
+        }
+        let (layer, mask, before) = match self.op.take() {
             Some(Op::Retouch {
                 layer,
                 mask,
                 before,
                 ..
-            }) => (layer, mask, before, None),
+            }) => (layer, mask, before),
             Some(Op::Smudge { layer, before, .. } | Op::Clone { layer, before, .. }) => {
-                (layer, false, before, None)
+                (layer, false, before)
             }
-            Some(Op::Brush {
-                layer, before, buf, ..
-            }) => (layer, false, before, Some(buf)),
             other => {
                 self.op = other;
                 return false;
@@ -104,18 +176,6 @@ impl Studio {
         };
         self.paint_contact = None;
         self.brush.pressure = 1.0;
-        let buffer = if cancel {
-            // Undo/Escape discards the overlay; preparing its selection preview
-            // can scan millions of pixels that will never be displayed.
-            None
-        } else {
-            buffer.map(|mut buffer| {
-                if let Some(selection) = self.cached_pixel_sel_mask(layer) {
-                    paint::feather_overlay(&mut buffer, &selection);
-                }
-                buffer
-            })
-        };
         let Some(target) = self.doc.layers.get_mut(layer) else {
             return true;
         };
@@ -129,13 +189,7 @@ impl Studio {
                 pixels.data = before;
                 pixels.touch();
             } else {
-                if let Some(buffer) = buffer
-                    && let Some(mut destination) = pixels.to_pixmap()
-                {
-                    paint::blend_onto(&mut destination, &buffer, self.brush.opacity);
-                    *pixels = Pixels::from_pixmap(&destination);
-                }
-                if pixels.data != before {
+                if pixels.data.as_slice() != before.as_slice() {
                     self.history.push(Cmd::Pixels {
                         layer,
                         mask,
@@ -172,7 +226,7 @@ impl Studio {
         })
     }
 
-    pub fn pixel_sel_mask(&self, layer: usize) -> Option<std::borrow::Cow<'_, [u8]>> {
+    pub fn pixel_sel_mask(&self, layer: usize) -> Option<std::borrow::Cow<'_, [f32]>> {
         self.cached_pixel_sel_mask(layer).map(|mask| match mask {
             SelectionMask::Borrowed(values) => std::borrow::Cow::Borrowed(values),
             SelectionMask::Mapped(values) => std::borrow::Cow::Owned(values.to_vec()),
@@ -199,7 +253,7 @@ impl Studio {
             return Some(SelectionMask::Mapped(values.clone()));
         }
         self.pixel_sel_cache.clear();
-        let values: std::sync::Arc<[u8]> = resample(mask, source, target)?.into();
+        let values = resample_admitted(mask, source, target).ok()?;
         // Keep at most one derived mask, never one per open tab or layer. The
         // image size limit is 64M pixels; oversized inputs remain uncached.
         if values.len() <= 64 * 1024 * 1024 {
@@ -208,7 +262,17 @@ impl Studio {
         Some(SelectionMask::Mapped(values))
     }
 
+    /// Share a mapped selection with a worker instead of copying its full grid.
+    /// Args: target layer. Returns the existing admitted source or transformed owner.
+    pub(crate) fn owned_pixel_sel_mask(&self,layer:usize)->Option<std::sync::Arc<crate::resources::Allocation<f32>>>{
+        match self.cached_pixel_sel_mask(layer)?{SelectionMask::Borrowed(_)=>self.pixel_sel.clone(),SelectionMask::Mapped(values)=>Some(values)}
+    }
+
     pub fn set_pixel_sel(&mut self, mask: Option<Vec<u8>>) {
+        let mask = match mask.map(|values| crate::selection_coverage::from_bytes(&values,&crate::deep_color::storage::check)).transpose() {
+            Ok(mask) => mask,
+            Err(error) => { self.status=error; return; }
+        };
         self.pixel_sel_space = if mask.is_some() {
             self.raster_target()
                 .and_then(|i| self.layer_selection_space(i))
@@ -244,44 +308,46 @@ impl Studio {
     }
 
     pub fn nudge_pixel_sel(&mut self, dx: i32, dy: i32) {
-        self.retouch_pixel_sel(|mask, w, h| paint::shift_mask(mask, w, h, dx, dy));
-        self.status = "Selection moved".into();
+        if self.retouch_pixel_sel(|mask, w, h| crate::selection_coverage::warp(mask,w,h,|x,y|(x-dx as f32,y-dy as f32))) {
+            self.status = "Selection moved".into();
+        }
     }
 
     pub fn scale_pixel_sel(&mut self, sx: f32, sy: f32) {
-        self.retouch_pixel_sel(|mask, w, h| paint::scale_mask(mask, w, h, sx, sy));
-        self.status = "Selection resized".into();
+        if self.retouch_pixel_sel(|mask, w, h| crate::selection_coverage::warp(mask,w,h,|x,y|{let cx=w as f32/2.;let cy=h as f32/2.;(cx+(x-cx)/sx,cy+(y-cy)/sy)})) {
+            self.status = "Selection resized".into();
+        }
     }
 
     pub fn feather_pixel_sel(&mut self, radius: u32) {
-        self.retouch_pixel_sel(|mask, w, h| paint::feather_mask(mask, w, h, radius));
-        self.status = format!("Selection feathered {radius} px");
+        if self.retouch_pixel_sel(|mask, w, h| super::pixel_selection::edit_admitted(mask,SelectionSpace{w,h,transform:tiny_skia::Transform::identity()},super::pixel_selection::Edit::Feather{radius}).and_then(|result|result.map(|(v,_)|v).ok_or("Selection is empty".to_string()))) {
+            self.status = format!("Selection feathered {radius} px");
+        }
     }
 
     pub fn distort_pixel_sel(&mut self, kx: f32) {
-        self.retouch_pixel_sel(|mask, w, h| paint::shear_mask(mask, w, h, kx));
-        self.status = "Selection distorted".into();
+        if self.retouch_pixel_sel(|mask, w, h| crate::selection_coverage::warp(mask,w,h,|x,y|(x-kx*(y-h as f32/2.),y))) {
+            self.status = "Selection distorted".into();
+        }
     }
 
-    fn retouch_pixel_sel(&mut self, edit: impl FnOnce(&[u8], u32, u32) -> Vec<u8>) {
+    fn retouch_pixel_sel(&mut self, edit: impl FnOnce(&[f32], u32, u32) -> Result<std::sync::Arc<crate::resources::Allocation<f32>>,String>) -> bool {
         let Some(space) = self.pixel_sel_space else {
-            return;
+            return false;
         };
         let Some(mask) = self.pixel_sel.clone() else {
-            return;
+            return false;
         };
         if mask.len() != space.w as usize * space.h as usize {
-            return;
+            return false;
         }
-        self.pixel_sel = Some(edit(&mask, space.w, space.h));
-        self.pixel_sel_gen = self.pixel_sel_gen.wrapping_add(1);
-        self.pixel_sel_cache.clear();
+        match edit(&mask,space.w,space.h){Ok(values)=>self.replace_pixel_selection_admitted(values,space),Err(error)=>{self.status=error;false}}
     }
 
     pub fn merge_pixel_sel(&mut self, next: Vec<u8>, op: paint::PixelCombine) {
         let existing = self.raster_target().and_then(|li| self.pixel_sel_mask(li));
-        let combined = paint::combine_masks(existing.as_deref(), &next, op);
-        self.set_pixel_sel(Some(combined));
+        let Some(space)=self.selection_target_space() else{return;};
+        match crate::selection_coverage::combine_bytes(existing.as_deref(),&next,op){Ok(values)=>{self.replace_pixel_selection_admitted(values,space);},Err(error)=>self.status=error}
     }
 
     fn item_mask(&self, layer: usize, id: Option<u64>) -> Option<ItemMask> {
@@ -319,7 +385,7 @@ impl Studio {
             Transform::from_translate(bounds.min.x, bounds.min.y).pre_scale(1. / scale, 1. / scale);
         let values = compositor::item_alpha(&self.doc, layer, id, transform.invert()?, w, h)?;
         Some(ItemMask {
-            values,
+            values: crate::selection_coverage::from_bytes(&values,&crate::deep_color::storage::check).ok()?,
             space: SelectionSpace { w, h, transform },
         })
     }
@@ -350,7 +416,7 @@ impl Studio {
         }
         let target = self.pixel_sel_space.unwrap_or(mask.space);
         let next = if target == mask.space {
-            mask.values
+            mask.values.to_vec()
         } else {
             match resample(&mask.values, mask.space, target) {
                 Some(values) => values,
@@ -361,32 +427,149 @@ impl Studio {
             }
         };
         let existing = self
-            .pixel_sel
-            .as_deref()
+            .pixel_sel.as_ref().map(|values| values.as_slice())
             .filter(|_| self.pixel_sel_space == Some(target));
-        let combined = paint::combine_masks(existing, &next, op);
+        let combined = match crate::selection_coverage::combine(existing, &next, op){Ok(v)=>v,Err(error)=>{self.status=error;return;}};
         let count = paint::selected_count(&combined);
-        self.pixel_sel = Some(combined);
-        self.pixel_sel_space = Some(target);
-        self.pixel_sel_gen = self.pixel_sel_gen.wrapping_add(1);
-        self.pixel_sel_cache.clear();
+        if !self.replace_pixel_selection_admitted(combined, target) {return;}
         self.status = format!("{count} pixels selected");
     }
 
     pub fn begin_item_mask(&mut self, layer: usize, id: Option<u64>) {
         self.end_pixel_stroke(false);
-        self.pending_item_mask = self.item_mask(layer, id);
-        self.status = "Mask from item · click the target layer or object · Esc cancels".into();
+        self.pending_item_mask = self
+            .doc
+            .layers
+            .get(layer)
+            .filter(|l| {
+                id.is_none()
+                    || l.kind
+                        .shapes()
+                        .is_some_and(|ss| ss.iter().any(|s| Some(s.id) == id))
+            })
+            .map(|l| MaskSource {
+                layer: l.id,
+                shape: id,
+            });
+        self.status = "Use as mask · click the target layer or object · Esc cancels".into();
     }
 
     pub fn apply_pending_item_mask(&mut self, layer: usize, id: Option<u64>) -> bool {
-        let Some(mask) = self.pending_item_mask.clone() else {
+        let Some(mask) = self.pending_item_mask else {
             return false;
         };
-        if self.apply_item_mask(layer, id, &mask) {
+        if self.link_artwork_mask(layer, id, mask) {
             self.pending_item_mask = None;
         }
         true
+    }
+
+    fn link_artwork_mask(&mut self, layer: usize, id: Option<u64>, source: MaskSource) -> bool {
+        if !self.layer_unlocked(layer)
+            || id.is_some_and(|id| self.doc.find_shape(layer, id).is_none_or(|s| s.locked))
+        {
+            self.status = "Unlock the target to apply its mask".into();
+            return false;
+        }
+        if !self
+            .doc
+            .layers
+            .iter()
+            .any(|l| l.id == source.layer && source.shape.is_none_or(|id| l.find(id).is_some()))
+        {
+            self.status = "The mask source was removed".into();
+            return false;
+        }
+        let mut candidate = self.doc.clone();
+        let masks = if let Some(id) = id {
+            &mut candidate.find_shape_mut(layer, id).unwrap().artwork_masks
+        } else {
+            &mut candidate.layers[layer].artwork_masks
+        };
+        let before = masks.clone();
+        let after = vec![ArtworkMask::new(source)];
+        *masks = after.clone();
+        if let Err(error) = candidate.validate_artwork_masks() {
+            self.status = error;
+            return false;
+        }
+        self.commit(Cmd::SetArtworkMasks {
+            layer,
+            id,
+            before,
+            after,
+        });
+        self.status = "Live mask applied · edit its source in Layers".into();
+        true
+    }
+
+    pub fn remove_artwork_masks(&mut self, layer: usize, id: Option<u64>) {
+        if !self.layer_unlocked(layer) {
+            return;
+        }
+        let masks = if let Some(id) = id {
+            self.doc
+                .find_shape(layer, id)
+                .filter(|s| !s.locked)
+                .map(|s| &s.artwork_masks)
+        } else {
+            self.doc.layers.get(layer).map(|l| &l.artwork_masks)
+        };
+        if let Some(before) = masks.filter(|m| !m.is_empty()).cloned() {
+            self.commit(Cmd::SetArtworkMasks {
+                layer,
+                id,
+                before,
+                after: Vec::new(),
+            });
+            self.status = "Live mask released · source artwork restored".into();
+        }
+    }
+
+    pub fn set_artwork_mask_mode(&mut self, layer: usize, id: Option<u64>, mode: MaskMode) {
+        if !self.layer_unlocked(layer) {
+            return;
+        }
+        let masks = if let Some(id) = id {
+            self.doc
+                .find_shape(layer, id)
+                .filter(|s| !s.locked)
+                .map(|s| &s.artwork_masks)
+        } else {
+            self.doc.layers.get(layer).map(|l| &l.artwork_masks)
+        };
+        if let Some(before) = masks.filter(|m| !m.is_empty()).cloned() {
+            let mut after = before.clone();
+            for mask in &mut after {
+                mask.mode = mode;
+            }
+            self.commit(Cmd::SetArtworkMasks {
+                layer,
+                id,
+                before,
+                after,
+            });
+        }
+    }
+
+    pub fn select_mask_source(&mut self, source: MaskSource) {
+        let Some((index, _)) = source.resolve(&self.doc) else {
+            return;
+        };
+        if let Some(id) = source.shape {
+            self.selection = vec![(index, id)];
+            self.active_layer = Some(index);
+            self.selected_layer = None;
+        } else {
+            self.activate_layer_tree(index);
+        }
+        self.paint_mask = false;
+        self.node_sel.clear();
+        self.layer_expanded.insert(self.doc.layers[index].id);
+        for ancestor in self.doc.layer_ancestors(index) {
+            self.layer_expanded.insert(self.doc.layers[ancestor].id);
+        }
+        self.tool = Tool::Select;
     }
 
     pub fn mask_object_from_selection(&mut self, layer: usize, id: u64) {
@@ -451,11 +634,7 @@ impl Studio {
         let Some(values) = resample(&mask.values, mask.space, target) else {
             return false;
         };
-        let pixels = Pixels::from_rgba(
-            target.w,
-            target.h,
-            values.iter().flat_map(|v| [*v, *v, *v, 255]).collect(),
-        );
+        let pixels = match crate::selection_coverage::mask_pixels(&values,target.w,target.h){Ok(pixels)=>Some(pixels),Err(error)=>{self.status=error;return false;}};
         if let Some(id) = id {
             let before = self.doc.find_shape(layer, id).unwrap().mask.clone();
             self.commit(Cmd::SetShapeMask {
@@ -491,13 +670,17 @@ impl Studio {
     }
 
     pub fn clear_selected_pixels(&mut self) -> bool {
+        if self.channel_target.is_some() || self.quick_mask_painting() {
+            self.clear_channel_selection();
+            return true;
+        }
         let Some(layer) = self.raster_target() else {
             return false;
         };
-        let Some(mask) = self.pixel_sel_mask(layer).map(|mask| mask.to_vec()) else {
+        let Some(mask) = self.owned_pixel_sel_mask(layer) else {
             return false;
         };
-        if !mask.iter().any(|value| *value > 0) {
+        if !mask.iter().any(|value| *value > 0.) {
             return false;
         }
         let Some(pixels) = self
@@ -508,22 +691,48 @@ impl Studio {
         else {
             return false;
         };
+        if pixels.native.is_some() {
+            let before = pixels.clone();
+            let samples = crate::deep_color::storage::collect(
+                (0..pixels.w as usize * pixels.h as usize).flat_map(|i| {
+                    let p=pixels.sample(i);
+                    if mask[i]==1.{[0.;4]}else if mask[i]==0.{p}else{[p[0],p[1],p[2],p[3]*(1.-mask[i])]}
+                }),
+            );
+            let mut after = before.clone();
+            match samples.and_then(|samples| after.set_sample_allocation(samples)) {
+                Ok(()) => self.commit(Cmd::NativePixels {
+                    layer,
+                    mask: false,
+                    before,
+                    after,
+                }),
+                Err(error) => self.status = error,
+            };
+            return true;
+        }
         let before = pixels.data.clone();
-        let mut after = before.clone();
+        let mut after = match before.try_clone_now(&crate::deep_color::storage::check) {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = error;
+                return false;
+            }
+        };
         for (index, &selected) in mask.iter().enumerate() {
-            if selected != 0 {
+            if selected != 0. {
                 let offset = index * 4;
-                after[offset..offset + 4].fill(0);
+                if selected==1.{after.as_mut_slice()[offset..offset+4].fill(0);}else{after.as_mut_slice()[offset+3]=(before[offset+3] as f32*(1.-selected)).round() as u8;}
             }
         }
-        if after == before {
+        if after.as_slice() == before.as_slice() {
             return true;
         }
         self.commit(Cmd::Pixels {
             layer,
             mask: false,
             before,
-            after,
+            after: std::sync::Arc::new(after),
         });
         self.status = "Selected pixels cleared".into();
         true
@@ -572,6 +781,7 @@ impl Studio {
 
     pub fn set_mask_edit(&mut self, index: usize, enabled: bool) {
         self.end_pixel_stroke(false);
+        self.channel_target = None;
         self.end_deform(false);
         if !enabled {
             self.paint_mask = false;
@@ -597,8 +807,14 @@ impl Studio {
             return;
         };
         let value = if reveal { 255 } else { 0 };
-        let mut pixels = Pixels::new(w, h);
-        for pixel in pixels.data.as_chunks_mut::<4>().0 {
+        let mut pixels = match Pixels::new(w, h) {
+            Ok(pixels) => pixels,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        for pixel in pixels.bytes_mut().unwrap().as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&[value, value, value, 255]);
         }
         pixels.touch();
@@ -634,7 +850,30 @@ impl Studio {
         let Some(mut mask) = layer.mask.clone() else {
             return;
         };
-        for pixel in mask.data.as_chunks_mut::<4>().0 {
+        if mask.native.is_some() {
+            let samples = crate::deep_color::storage::collect(
+                (0..mask.w as usize * mask.h as usize).flat_map(|i| {
+                    let p = mask.sample(i);
+                    let v = 1. - (p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722) * p[3];
+                    [v, v, v, 1.]
+                }),
+            );
+            if let Err(error) = samples.and_then(|samples| mask.set_sample_allocation(samples)) {
+                self.status = error;
+                return;
+            }
+            self.replace_layer_mask(index, Some(mask));
+            self.status = "Mask inverted".into();
+            return;
+        }
+        let bytes = match mask.bytes_mut() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        for pixel in bytes.as_chunks_mut::<4>().0 {
             // Include alpha, so an erased/transparent mask pixel inverts to white.
             let amount = mask_amount(pixel);
             let value = 255 - amount;
@@ -678,9 +917,43 @@ impl Studio {
             self.status = "Mask size does not match its pixel layer".into();
             return;
         }
+        if pixels.native.is_some() || mask.native.is_some() {
+            let after = match pixels.masked(mask) {
+                Ok(after) => after,
+                Err(error) => {
+                    self.status = error;
+                    return;
+                }
+            };
+            let cmd = Cmd::NativePixels {
+                layer: index,
+                mask: false,
+                before: pixels.clone(),
+                after,
+            };
+            let old_mask = mask.clone();
+            self.commit(Cmd::Batch(vec![
+                cmd,
+                Cmd::SetLayerMask {
+                    index,
+                    before: Some(old_mask),
+                    after: None,
+                },
+            ]));
+            self.paint_mask = false;
+            self.status = "Native-precision mask applied".into();
+            return;
+        }
         let before = pixels.data.clone();
-        let mut after = before.clone();
+        let mut after = match before.try_clone_now(&crate::deep_color::storage::check) {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
         for (pixel, mask_pixel) in after
+            .as_mut_slice()
             .as_chunks_mut::<4>()
             .0
             .iter_mut()
@@ -695,7 +968,7 @@ impl Studio {
                 layer: index,
                 mask: false,
                 before,
-                after,
+                after: std::sync::Arc::new(after),
             },
             Cmd::SetLayerMask {
                 index,
@@ -763,8 +1036,13 @@ mod tests {
         let mut studio = Studio::new();
         studio.doc = Document::new("Mask", 4.0, 1.0, 96.0);
         studio.doc.transparent = true;
-        let mut layer = Layer::raster("Pixels", 4, 1);
-        layer.kind.pixels_mut().unwrap().data = [220, 50, 20, 255].repeat(4);
+        let mut layer = Layer::raster("Pixels", 4, 1).unwrap();
+        layer
+            .kind
+            .pixels_mut()
+            .unwrap()
+            .replace_bytes([220, 50, 20, 255].repeat(4))
+            .unwrap();
         layer.kind.pixels_mut().unwrap().touch();
         studio.doc.layers = vec![layer];
         studio.active_layer = Some(0);
@@ -788,7 +1066,7 @@ mod tests {
         studio.doc.height = 48.0;
         studio.doc.layers[0] = Layer::placed_raster(
             "Placed",
-            Pixels::new(16, 12),
+            Pixels::new(16, 12).unwrap(),
             Pt::new(5.0, 7.0),
             Pt::new(40.0, 30.0),
         );
@@ -808,7 +1086,7 @@ mod tests {
         studio
     }
 
-    fn mapped(studio: &Studio) -> std::sync::Arc<[u8]> {
+    fn mapped(studio: &Studio) -> std::sync::Arc<crate::resources::Allocation<f32>> {
         let SelectionMask::Mapped(values) = studio.cached_pixel_sel_mask(0).unwrap() else {
             panic!("transformed mask");
         };
@@ -818,7 +1096,7 @@ mod tests {
             studio.layer_selection_space(0).unwrap(),
         )
         .unwrap();
-        assert_eq!(&*values, expected);
+        assert_eq!(values.as_slice(), expected.as_slice());
         values
     }
 
@@ -828,7 +1106,7 @@ mod tests {
         let first = mapped(&studio);
         assert!(std::sync::Arc::ptr_eq(&first, &mapped(&studio)));
         // Preserve the public Cow API for callers that need an owned snapshot.
-        assert_eq!(&*studio.pixel_sel_mask(0).unwrap(), &*first);
+        assert_eq!(&*studio.pixel_sel_mask(0).unwrap(), first.as_slice());
         if let LayerKind::Raster { origin, .. } = &mut studio.doc.layers[0].kind {
             origin.x += 6.0;
         }
@@ -836,7 +1114,7 @@ mod tests {
         assert!(!std::sync::Arc::ptr_eq(&first, &moved));
         assert_ne!(first, moved);
         if let LayerKind::Raster { pixels, .. } = &mut studio.doc.layers[0].kind {
-            *pixels = Pixels::new(24, 8);
+            *pixels = Pixels::new(24, 8).unwrap();
         }
         let resized = mapped(&studio);
         assert_eq!(
@@ -863,8 +1141,8 @@ mod tests {
     #[test]
     fn cancelling_a_brush_restores_pixels_without_preparing_its_transformed_selection() {
         let mut studio = transformed_selection_studio();
-        let before = studio.doc.layers[0].kind.pixels().unwrap().data.clone();
-        let mut buf = tiny_skia::Pixmap::new(16, 12).unwrap();
+        let before = studio.doc.layers[0].kind.pixels().unwrap().data.to_vec();
+        let mut buf = crate::deep_color::surface::Surface::new(16, 12).unwrap();
         buf.fill(tiny_skia::Color::from_rgba8(200, 50, 20, 255));
         studio.op = Some(Op::Brush {
             layer: 0,
@@ -872,7 +1150,7 @@ mod tests {
             buf,
             preview: None,
             last: Some(Pt::new(4.0, 4.0)),
-            before: before.clone(),
+            before: crate::document::RasterState::capture(&studio.doc.layers[0]).unwrap(),
             selection_generation: studio.pixel_sel_gen,
         });
         assert!(studio.end_pixel_stroke(true));
@@ -880,7 +1158,10 @@ mod tests {
             studio.pixel_sel_cache.entry.borrow().is_none(),
             "discarded paint must not resample a selection"
         );
-        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data, before);
+        assert_eq!(
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+            before
+        );
         assert!(studio.op.is_none());
         assert_eq!(studio.history.len(), 0);
     }
@@ -907,7 +1188,7 @@ mod tests {
     #[test]
     fn selection_mask_survives_serialization_and_apply_is_one_undo() {
         let mut studio = pixels_studio();
-        studio.pixel_sel = Some(vec![0, 64, 128, 255]);
+        studio.pixel_sel = Some(crate::deep_color::storage::adopt(vec![0., 64./255., 128./255., 1.]).unwrap());
         studio.mask_from_selection(0);
         assert!(studio.paint_mask);
         let masked = alphas(&studio.doc);
@@ -924,7 +1205,7 @@ mod tests {
         studio.undo();
         assert_eq!(alphas(&studio.doc), masked);
 
-        let original = studio.doc.layers[0].kind.pixels().unwrap().data.clone();
+        let original = studio.doc.layers[0].kind.pixels().unwrap().data.to_vec();
         studio.apply_layer_mask(0);
         assert!(studio.doc.layers[0].mask.is_none());
         let applied = alphas(&studio.doc);
@@ -932,7 +1213,10 @@ mod tests {
             assert!(a.abs_diff(*b) <= 1);
         }
         studio.undo();
-        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data, original);
+        assert_eq!(
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+            original
+        );
         assert!(studio.doc.layers[0].mask.is_some());
         assert_eq!(alphas(&studio.doc), masked);
         studio.redo();
@@ -951,7 +1235,7 @@ mod tests {
         if let LayerKind::Raster { rotation, .. } = &mut studio.doc.layers[0].kind {
             *rotation = std::f32::consts::FRAC_PI_2;
         }
-        studio.pixel_sel = Some(vec![255, 255, 0, 0, 255, 255, 0, 0]);
+        studio.pixel_sel = Some(crate::deep_color::storage::adopt(vec![1., 1., 0., 0., 1., 1., 0., 0.]).unwrap());
         studio.mask_from_selection(0);
         let transform = compositor::layer_pixel_transform(&studio.doc.layers[0]);
         let png = compositor::export_png(&studio.doc, 1).unwrap();
@@ -990,5 +1274,20 @@ mod tests {
         assert_eq!(studio.history.len(), history);
         studio.active_layer = Some(30);
         assert_eq!(studio.mask_target(), None);
+    }
+}
+
+#[cfg(test)]
+mod precision_tests {
+    use super::*;
+    #[test]
+    fn craft_selection_precision_delete_uses_original_float_weight_and_one_undo() {
+        let mut s=Studio::new();s.doc=crate::document::Document::new("Selection clear",1.,1.,96.);
+        let original=Pixels::from_samples(1,1,crate::deep_color::Depth::F32,vec![0.25,0.5,0.75,0.5]).unwrap();
+        s.doc.layers=vec![crate::document::Layer::placed_raster("Native",original.clone(),Pt::ZERO,Pt::new(1.,1.))];s.active_layer=Some(0);
+        let weight=f32::from_bits(0x3eaa8001);s.replace_pixel_selection_float(vec![weight],SelectionSpace{w:1,h:1,transform:tiny_skia::Transform::identity()});
+        let before=crate::project::encode(&s.doc).unwrap();let history=s.history.len();assert!(s.clear_selected_pixels());
+        let actual=s.doc.layers[0].kind.pixels().unwrap().sample(0);assert_eq!(&actual[..3],&[0.25,0.5,0.75]);assert_eq!(actual[3].to_bits(),(0.5*(1.-weight)).to_bits());
+        assert_eq!(s.history.len(),history+1);s.undo();assert_eq!(crate::project::encode(&s.doc).unwrap(),before);s.redo();assert_eq!(s.doc.layers[0].kind.pixels().unwrap().sample(0),actual);
     }
 }

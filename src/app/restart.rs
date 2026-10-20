@@ -14,6 +14,8 @@ pub(super) struct RestartTab {
     pub individual_object: Option<(usize, u64)>,
     pub expanded: HashSet<u64>,
     pub pixel_selection: Option<Vec<u8>>,
+    #[serde(default)]
+    pub pixel_selection_float: Option<Vec<f32>>,
     pub selection_space: Option<(u32, u32, [f32; 6])>,
     #[serde(default)]
     pub selection_path: Option<Vec<crate::geom::Anchor>>,
@@ -86,9 +88,10 @@ impl Studio {
         self.photo.finish_edit();
         self.ensure_tabs();
         let (tabs, documents) = self.restart_tabs();
+        let format=if tabs.iter().any(|tab|tab.pixel_selection_float.is_some()){2}else{1};
         RestartSnapshot {
             session: RestartSession {
-                format: 1,
+                format,
                 tabs,
                 active: self.active_tab,
                 persona: self.persona,
@@ -114,7 +117,7 @@ impl Studio {
             return Err("Restart manifest must be in Omadesign's recovery directory".into());
         }
         let session: RestartSession = read_gzip(&manifest)?;
-        if session.format != 1
+        if !matches!(session.format,1|2)
             || session.tabs.is_empty()
             || session.active >= session.tabs.len()
             || session.tabs.len() > 1024
@@ -193,8 +196,8 @@ mod tests {
         assert_eq!(restored.persona, Persona::Photo);
         assert!(restored.photo.settings_dirty());
         assert_eq!(
-            restored.photo.images[0].full.data,
-            s.photo.images[0].full.data
+            restored.photo.images[0].full.data.as_slice(),
+            s.photo.images[0].full.data.as_slice()
         );
         assert_eq!(restored.photo.images[0].develop.exposure, 1.5);
         assert!(restored.libraries.personal.dirty);
@@ -219,11 +222,12 @@ mod tests {
         let raw = crate::formats::raw::RawImage {
             width: 2,
             height: 1,
-            pixels: vec![1, 256, 65535, 300, 400, 500],
+            pixels: vec![1, 256, 65535, 300, 400, 500].into(),
+                memory: None,
             metadata: Default::default(),
             warnings: vec![],
         };
-        let mut photo = crate::photo::PhotoImage::from_raw("Camera original".into(), raw);
+        let mut photo = crate::photo::PhotoImage::from_raw("Camera original".into(), raw).unwrap();
         photo.source = Some(root.join("missing-camera-file.dng"));
         s.photo.import_photo(photo);
         s.photo.selected_mut().unwrap().develop.exposure = 2.;
@@ -231,8 +235,8 @@ mod tests {
         let mut restored = Studio::new();
         restored.restore_restart_from(&manifest, &root).unwrap();
         assert_eq!(
-            restored.photo.images[0].raw.as_ref().unwrap().pixels,
-            vec![1, 256, 65535, 300, 400, 500]
+            restored.photo.images[0].raw.as_ref().unwrap().pixels.as_slice(),
+            &[1, 256, 65535, 300, 400, 500]
         );
         assert!(restored.photo.has_unsaved_settings());
         assert_eq!(restored.photo.images[0].develop.exposure, 2.);
@@ -251,4 +255,16 @@ mod tests {
         assert_eq!(s.doc.name, "Keep me");
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn craft_selection_precision_restart_keeps_float_bits_accepts_old_bytes_and_rejects_future() {
+        let root=std::env::var_os("OMADESIGN_SELECTION_PRECISION_QA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(format!("selection-restart-{}",crate::project::new_swap_id()));
+        let mut s=Studio::new();s.doc=crate::document::Document::new("Precise restart",4.,1.,96.);
+        let values=[-0.,f32::from_bits(0x3e800001),f32::from_bits(0x3eaa8001),1.];s.replace_pixel_selection_float(values.to_vec(),super::super::masking::SelectionSpace{w:4,h:1,transform:tiny_skia::Transform::identity()});
+        let manifest=s.restart_snapshot().write(&root).unwrap();let mut session:RestartSession=read_gzip(&manifest).unwrap();assert_eq!(session.format,2);
+        let mut restored=Studio::new();restored.restore_restart_from(&manifest,&root).unwrap();for(a,b)in restored.pixel_sel.as_ref().unwrap().iter().zip(values){assert_eq!(a.to_bits(),b.to_bits());}
+        session.format=1;session.tabs[0].pixel_selection_float=None;session.tabs[0].pixel_selection=Some(vec![0,64,128,255]);std::fs::write(&manifest,gzip_json(&session).unwrap()).unwrap();
+        restored.restore_restart_from(&manifest,&root).unwrap();assert_eq!(restored.pixel_sel.as_ref().unwrap().as_slice(),&[0.,64./255.,128./255.,1.]);
+        session.format=3;std::fs::write(&manifest,gzip_json(&session).unwrap()).unwrap();restored.doc.name="Keep current workspace".into();assert!(restored.restore_restart_from(&manifest,&root).is_err());assert_eq!(restored.doc.name,"Keep current workspace");std::fs::remove_dir_all(&root).unwrap();
+    }
+
 }

@@ -1,5 +1,16 @@
 //! Still-image export pipeline, shared by the dialog and real-model QA.
+mod density;
+#[cfg(test)]
+mod ownership_tests;
+mod photo;
+mod render_size;
+#[cfg(test)]
+mod sizing_tests;
+pub(crate) use render_size::RenderSize;
 pub mod target;
+
+/// Immutable encoded bytes whose shared admission lives through the final consumer.
+pub type EncodedBytes = std::sync::Arc<crate::resources::Allocation<u8>>;
 use crate::{document::Document, ml::Progress, photo::PhotoImage, upscale};
 use image::{DynamicImage, RgbaImage};
 use std::{io::Write, path::Path};
@@ -33,9 +44,10 @@ pub enum Format {
     Psb,
     Pdf,
     Ora,
+    Idml,
 }
 impl Format {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Png,
         Self::Jpeg,
         Self::Tiff,
@@ -44,6 +56,7 @@ impl Format {
         Self::Psb,
         Self::Pdf,
         Self::Ora,
+        Self::Idml,
     ];
     pub fn raster(self) -> bool {
         matches!(self, Self::Png | Self::Jpeg | Self::Tiff)
@@ -58,6 +71,7 @@ impl Format {
             Self::Psb => "psb",
             Self::Pdf => "pdf",
             Self::Ora => "ora",
+            Self::Idml => "idml",
         }
     }
     pub fn label(self) -> &'static str {
@@ -70,6 +84,7 @@ impl Format {
             Self::Psb => "PSB · layered",
             Self::Pdf => "PDF · layered",
             Self::Ora => "OpenRaster · layered",
+            Self::Idml => "IDML · publishing",
         }
     }
 }
@@ -78,6 +93,40 @@ pub struct Settings {
     pub format: Format,
     pub scale: u32,
     pub ai: Option<upscale::Settings>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RasterOptions {
+    pub scale: f64,
+    pub dpi: Option<f64>,
+}
+
+/// Resolve a document's requested fractional output without changing legacy integer options.
+/// Args: immutable source, format settings and explicit sizing. Returns codec pixel dimensions.
+pub fn dimensions_scaled(
+    source: &Source,
+    settings: Settings,
+    options: RasterOptions,
+) -> Result<(u32, u32), String> {
+    let Source::Document(doc) = source else {
+        return Err(
+            "Screen sizing applies to document artwork; Photo keeps its separate export route"
+                .into(),
+        );
+    };
+    if !settings.format.raster() || settings.ai.is_some() {
+        return Err("Custom screen sizes apply to PNG, JPEG or TIFF without AI upscaling".into());
+    }
+    if let Some(dpi) = options.dpi {
+        density::validate(settings.format, dpi)?;
+    }
+    let size = RenderSize::new(doc, options.scale)?;
+    if crate::deep_color::has_native(doc) {
+        crate::deep_color::storage::count(size.width, size.height, 4)?;
+        Ok((size.width, size.height))
+    } else {
+        upscale::dimensions(size.width, size.height, 1.)
+    }
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -96,6 +145,9 @@ pub fn dimensions(source: &Source, settings: Settings) -> Result<(u32, u32), Str
     if !(1..=8).contains(&settings.scale) {
         return Err("Choose a render scale between 1× and 8×".into());
     }
+    if let Source::Photo(photo) = source {
+        return photo::dimensions(photo, settings);
+    }
     let (w, h) = if let Source::Document(doc) = source {
         // Match compositor rounding for fractional document dimensions.
         (
@@ -105,88 +157,236 @@ pub fn dimensions(source: &Source, settings: Settings) -> Result<(u32, u32), Str
     } else {
         upscale::dimensions(w, h, settings.scale as f64)?
     };
+    if matches!(source, Source::Document(doc) if crate::deep_color::has_native(doc))
+        && settings.ai.is_none()
+    {
+        crate::deep_color::storage::count(w, h, 4)?;
+        return Ok((w, h));
+    }
     upscale::dimensions(w, h, settings.ai.map_or(1., |s| s.factor))
 }
 
+/// Export legacy transferred bytes without a retained admission owner.
+/// Args: source, settings and progress. Returns unleased bytes; use encode_admitted for retained output.
 pub fn encode(
     source: &Source,
     settings: Settings,
     progress: &dyn Progress,
 ) -> Result<(Vec<u8>, Vec<String>), String> {
-    dimensions(source, settings)?;
+    let (bytes, notes) = encode_admitted(source, settings, progress)?;
+    let bytes = std::sync::Arc::try_unwrap(bytes).map_err(|_| "Shared legacy export output")?;
+    let (bytes, _memory) = bytes.into_parts();
+    Ok((bytes, notes))
+}
+
+/// Encode output while retaining its shared allocation through the consumer's final write.
+/// Args: immutable source, export settings and cancellation-aware progress. Returns admitted bytes and notes.
+pub fn encode_admitted(
+    source: &Source,
+    settings: Settings,
+    progress: &dyn Progress,
+) -> Result<(EncodedBytes, Vec<String>), String> {
+    crate::formats::raw::Cancellation::with_progress(progress, |cancel| {
+        encode_inner_admitted(source, settings, progress, cancel, None, false)
+    })
+}
+
+/// Export SVG with the selected text portability through the existing admitted writer.
+/// Args: captured document, font embedding choice and progress. Returns owned SVG bytes and notes.
+pub fn encode_svg_admitted(source: &Source, embed_fonts: bool, progress: &dyn Progress) -> Result<(EncodedBytes, Vec<String>), String> {
+    if !matches!(source, Source::Document(_)) { return Err("SVG requires document artwork".into()); }
+    let settings = Settings {format: Format::Svg, ..Default::default()};
+    crate::formats::raw::Cancellation::with_progress(progress, |cancel| encode_inner_admitted(source, settings, progress, cancel, None, embed_fonts))
+}
+
+/// Encode custom document sizing through the same admitted still-image writer.
+/// Args: immutable source, settings, explicit scale/density and progress. Returns owned encoded bytes and notes.
+pub fn encode_scaled_admitted(
+    source: &Source,
+    settings: Settings,
+    options: RasterOptions,
+    progress: &dyn Progress,
+) -> Result<(EncodedBytes, Vec<String>), String> {
+    dimensions_scaled(source, settings, options)?;
+    crate::formats::raw::Cancellation::with_progress(progress, |cancel| {
+        encode_inner_admitted(source, settings, progress, cancel, Some(options), false)
+    })
+}
+fn encode_inner_admitted(
+    source: &Source,
+    settings: Settings,
+    progress: &dyn Progress,
+    cancel: &crate::formats::raw::Cancellation,
+    options: Option<RasterOptions>,
+    svg_fonts: bool,
+) -> Result<(EncodedBytes, Vec<String>), String> {
+    if let Some(options) = options {
+        dimensions_scaled(source, settings, options)?;
+    } else {
+        dimensions(source, settings)?;
+    }
     progress.check()?;
+    cancel.check()?;
+    if let Source::Photo(photo) = source {
+        return photo::encode_admitted(photo, settings, progress, cancel);
+    }
     progress.report("Rendering export", 0, 1);
     if !settings.format.raster() {
+        if let Source::Document(doc) = source
+            && matches!(
+                settings.format,
+                Format::Svg | Format::Pdf | Format::Ora | Format::Idml
+            )
+            && crate::deep_color::has_native(doc)
+        {
+            return Err("This exchange route cannot preserve native sample precision yet. Export .oma, PSD, PSB, TIFF or 16-bit RGB PNG, or convert an explicit document copy to 8-bit.".into());
+        }
         if settings.ai.is_some() {
             return Err("AI upscaling is available for PNG, TIFF and JPEG".into());
         }
         let Source::Document(doc) = source else {
             return Err("Photos export as PNG, TIFF or JPEG".into());
         };
+        if matches!(settings.format, Format::Psd | Format::Psb) {
+            let output = crate::formats::psd::encode_admitted(doc, settings.format == Format::Psb)?;
+            progress.check()?;
+            cancel.check()?;
+            return Ok((output.bytes, output.warnings));
+        }
         let output = match settings.format {
-            Format::Svg => (crate::svg::export(doc)?.into_bytes(), vec![]),
-            Format::Psd | Format::Psb => {
-                let out = crate::formats::psd::encode(doc, settings.format == Format::Psb)?;
-                (out.bytes, out.warnings)
-            }
+            Format::Svg => if svg_fonts { let report=crate::svg::export_embedded_report(doc)?;(report.svg.into_bytes(),report.warnings) } else { (crate::svg::export(doc)?.into_bytes(),vec![]) },
             Format::Pdf => crate::formats::pdf::write(doc)?,
             Format::Ora => crate::formats::openraster::write(doc)?,
+            Format::Idml => crate::formats::idml::write(doc)?,
             _ => unreachable!(),
         };
         progress.check()?;
-        return Ok(output);
+        cancel.check()?;
+        return Ok((crate::deep_color::storage::adopt(output.0)?, output.1));
     }
-    if let Source::Photo(photo) = source
-        && settings.ai.is_none()
-        && settings.scale == 1
+    if let Source::Document(doc) = source
+        && doc.color.model == crate::deep_color::cms::Model::Cmyk
     {
-        let bytes = photo.export_bytes(settings.format.extension())?;
+        if settings.format != Format::Tiff || settings.ai.is_some() {
+            return Err("CMYK authoring exports as PSD, PSB or TIFF. Convert the document to RGB explicitly for PNG/JPEG.".into());
+        }
+        let mut pixels = match options {
+            Some(options) => {
+                crate::deep_color::composite_scaled_with_cancel(doc, options.scale, cancel)?
+            }
+            None => crate::deep_color::composite_with_cancel(doc, settings.scale, cancel)?,
+        };
+        pixels.native.as_mut().unwrap().depth = crate::deep_color::document_depth(doc);
+        let bytes = crate::deep_color::tiff::encode_admitted_with_density(
+            &pixels,
+            options.and_then(|o| o.dpi),
+        )?;
         progress.check()?;
+        cancel.check()?;
         return Ok((bytes, vec![]));
     }
+    let _native_memory;
+    let _ai_memory;
     let mut raster = match source {
-        Source::Photo(photo) => {
-            let raster = if settings.ai.is_none() && photo.raw.is_some() {
-                image::load_from_memory(&photo.export_bytes("png")?).map_err(|e| e.to_string())?
-            } else {
-                let out = photo.render_full();
-                DynamicImage::ImageRgba8(
-                    RgbaImage::from_raw(out.w, out.h, out.data).ok_or("Invalid developed photo")?,
-                )
+        Source::Photo(_) => unreachable!("Photo sources dispatch before document encoding"),
+        Source::Document(doc) if crate::deep_color::has_native(doc) => {
+            if settings.ai.is_some() || settings.format == Format::Jpeg {
+                return Err("This export would reduce native document precision. Export PNG, TIFF or PSD without AI upscaling.".into());
+            }
+            let mut pixels = match options {
+                Some(options) => {
+                    crate::deep_color::composite_scaled_with_cancel(doc, options.scale, cancel)?
+                }
+                None => crate::deep_color::composite_with_cancel(doc, settings.scale, cancel)?,
             };
-            if settings.scale > 1 {
-                raster.resize_exact(
-                    raster.width() * settings.scale,
-                    raster.height() * settings.scale,
-                    image::imageops::FilterType::CatmullRom,
+            let depth = crate::deep_color::document_depth(doc);
+            if depth == crate::deep_color::Depth::F32 && settings.format != Format::Tiff {
+                return Err(
+                    "Floating-point export requires TIFF or PSD to retain float samples".into(),
+                );
+            }
+            let (w, h) = (pixels.w, pixels.h);
+            let samples = pixels
+                .native
+                .take()
+                .ok_or("Missing native export samples")?
+                .samples;
+            drop(pixels);
+            if depth == crate::deep_color::Depth::F32 {
+                let samples = std::sync::Arc::try_unwrap(samples)
+                    .map_err(|_| "Native export unexpectedly shares working samples")?;
+                let (data, memory) = samples.into_parts();
+                _native_memory = Some(memory);
+                DynamicImage::ImageRgba32F(
+                    image::ImageBuffer::from_raw(w, h, data).ok_or("Invalid float export")?,
                 )
             } else {
-                raster
+                let mut data = crate::resources::global()
+                    .allocate_now::<u16, _>(samples.len(), &crate::deep_color::storage::check)?;
+                for (dst, &src) in data.as_mut_slice().iter_mut().zip(samples.iter()) {
+                    *dst = (src.clamp(0., 1.) * 65535.).round() as u16;
+                }
+                let (data, memory) = data.into_parts();
+                _native_memory = Some(memory);
+                DynamicImage::ImageRgba16(
+                    image::ImageBuffer::from_raw(w, h, data).ok_or("Invalid native export")?,
+                )
             }
         }
         Source::Document(doc) => {
             // The compositor returns premultiplied RGBA; models and encoders
             // require straight RGB, especially around translucent artwork.
-            let pm = crate::compositor::render_export(doc, settings.scale)?;
-            let bytes = pm
-                .pixels()
-                .iter()
-                .flat_map(|p| {
-                    let p = p.demultiply();
-                    [p.red(), p.green(), p.blue(), p.alpha()]
-                })
-                .collect();
-            DynamicImage::ImageRgba8(RgbaImage::from_raw(pm.width(), pm.height(), bytes).unwrap())
+            let (w, h) = match options {
+                Some(options) => dimensions_scaled(source, settings, options)?,
+                None => dimensions(source, settings)?,
+            };
+            let _surface_memory = crate::resources::global().reserve_now(
+                crate::deep_color::storage::count(w, h, 4)? as u64,
+                &crate::deep_color::storage::check,
+            )?;
+            let pm = match options {
+                Some(options) => crate::compositor::render_export_sized(
+                    doc,
+                    RenderSize::new(doc, options.scale)?,
+                )?,
+                None => crate::compositor::render_export(doc, settings.scale)?,
+            };
+            let bytes = crate::deep_color::storage::collect(pm.pixels().iter().flat_map(|p| {
+                let p = p.demultiply();
+                [p.red(), p.green(), p.blue(), p.alpha()]
+            }))?;
+            let bytes =
+                std::sync::Arc::try_unwrap(bytes).map_err(|_| "Shared export raster storage")?;
+            let (bytes, memory) = bytes.into_parts();
+            _native_memory = Some(memory);
+            DynamicImage::ImageRgba8(
+                RgbaImage::from_raw(pm.width(), pm.height(), bytes)
+                    .ok_or("Invalid export raster")?,
+            )
         }
     };
     progress.check()?;
     if let Some(settings) = settings.ai {
+        let (w, h) = upscale::dimensions(raster.width(), raster.height(), settings.factor)?;
+        _ai_memory = Some(crate::resources::global().reserve_now(
+            crate::deep_color::storage::count(w, h, 4)? as u64,
+            &crate::deep_color::storage::check,
+        )?);
         raster =
             DynamicImage::ImageRgba8(upscale::upscale(&raster.into_rgba8(), settings, progress)?);
     }
+    let (raster_width, raster_height) = (raster.width(), raster.height());
     progress.report("Encoding export", 0, 1);
-    let mut bytes = std::io::Cursor::new(Vec::new());
+    let mut bytes = EncodedWriter {
+        encoded: crate::deep_color::storage::Encoded::new()?,
+        progress,
+        cancel,
+    };
     if settings.format == Format::Jpeg {
+        let _rgb_memory = crate::resources::global().reserve_now(
+            crate::deep_color::storage::count(raster.width(), raster.height(), 3)? as u64,
+            &crate::deep_color::storage::check,
+        )?;
         let mut rgba = raster.into_rgba8();
         for p in rgba.pixels_mut() {
             let a = p[3] as u32;
@@ -195,9 +395,56 @@ pub fn encode(
             }
             p[3] = 255;
         }
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95)
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95);
+        if let Some(dpi) = options.and_then(|o| o.dpi) {
+            encoder.set_pixel_density(image::codecs::jpeg::PixelDensity::dpi(dpi.round() as u16));
+        }
+        encoder
             .encode_image(&DynamicImage::ImageRgba8(rgba).into_rgb8())
             .map_err(|e| e.to_string())?;
+    } else if let Some(dpi) = options.and_then(|o| o.dpi) {
+        let profile = match source {
+            Source::Document(doc) if crate::deep_color::has_native(doc) => {
+                doc.color.icc_profile.as_slice()
+            }
+            _ => &[],
+        };
+        if settings.format == Format::Png {
+            density::png(&mut bytes, &raster, profile, dpi, cancel)?;
+        } else {
+            crate::deep_color::tiff::write_rgb_with_density(
+                &mut bytes,
+                &raster,
+                profile,
+                Some(dpi),
+            )?;
+        }
+    } else if let Source::Document(doc) = source
+        && crate::deep_color::has_native(doc)
+    {
+        use image::ImageEncoder;
+        let _profile_memory = crate::resources::global().reserve_now(
+            doc.color.icc_profile.len() as u64,
+            &crate::deep_color::storage::check,
+        )?;
+        if settings.format == Format::Png {
+            let mut encoder = image::codecs::png::PngEncoder::new(&mut bytes);
+            if !doc.color.icc_profile.is_empty() {
+                encoder
+                    .set_icc_profile(doc.color.icc_profile.clone())
+                    .map_err(|e| e.to_string())?;
+            }
+            encoder
+                .write_image(
+                    raster.as_bytes(),
+                    raster.width(),
+                    raster.height(),
+                    raster.color().into(),
+                )
+                .map_err(|e| e.to_string())?;
+        } else {
+            crate::deep_color::tiff::write_rgb(&mut bytes, &raster, &doc.color.icc_profile)?;
+        }
     } else {
         raster
             .write_to(
@@ -211,7 +458,23 @@ pub fn encode(
             .map_err(|e| e.to_string())?;
     }
     progress.check()?;
-    Ok((bytes.into_inner(), vec![]))
+    cancel.check()?;
+    let notes = options
+        .and_then(|o| o.dpi)
+        .map(|dpi| {
+            let recorded = match settings.format {
+                Format::Png => (dpi / 0.0254).round() * 0.0254,
+                Format::Jpeg => dpi.round(),
+                _ => (dpi * 10_000.).round() / 10_000.,
+            };
+            format!(
+                "{} × {} px · {recorded} PPI recorded",
+                raster_width, raster_height
+            )
+        })
+        .into_iter()
+        .collect();
+    Ok((bytes.encoded.finish()?, notes))
 }
 
 pub fn save(
@@ -237,9 +500,46 @@ pub fn save(
             }
         }
     }
-    let (bytes, notes) = encode(source, settings, progress)?;
-    write_atomic(path, &bytes, progress)?;
+    let (bytes, notes) = encode_admitted(source, settings, progress)?;
+    write_atomic(path, bytes.as_slice(), progress)?;
     Ok(notes)
+}
+
+/// Save custom document sizing while retaining its admitted encoded owner through atomic publication.
+/// Args: immutable source, settings, sizing, destination and progress. Returns the existing writer's notes.
+pub fn save_scaled(
+    source: &Source,
+    settings: Settings,
+    options: RasterOptions,
+    path: &Path,
+    progress: &dyn Progress,
+) -> Result<Vec<String>, String> {
+    let (bytes, notes) = encode_scaled_admitted(source, settings, options, progress)?;
+    write_atomic(path, bytes.as_slice(), progress)?;
+    Ok(notes)
+}
+
+struct EncodedWriter<'a> {
+    encoded: crate::deep_color::storage::Encoded,
+    progress: &'a dyn Progress,
+    cancel: &'a crate::formats::raw::Cancellation,
+}
+impl Write for EncodedWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.progress.check().map_err(std::io::Error::other)?;
+        self.cancel.check().map_err(std::io::Error::other)?;
+        self.encoded.write(bytes)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.encoded.flush()
+    }
+}
+impl std::io::Seek for EncodedWriter<'_> {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.progress.check().map_err(std::io::Error::other)?;
+        self.cancel.check().map_err(std::io::Error::other)?;
+        std::io::Seek::seek(&mut self.encoded, position)
+    }
 }
 
 pub(crate) fn write_atomic(
@@ -257,12 +557,23 @@ pub(crate) fn write_atomic(
         std::process::id(),
         crate::document::next_id()
     ));
+    write_atomic_temp(path, &temp, bytes, progress)
+}
+
+/// Commit an export using a temporary file owned by this operation.
+/// Args: destination, temporary path, bytes and progress. Returns without deleting any pre-existing file on creation failure.
+fn write_atomic_temp(
+    path: &Path,
+    temp: &Path,
+    bytes: &[u8],
+    progress: &dyn Progress,
+) -> Result<(), String> {
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(temp)
+        .map_err(|e| e.to_string())?;
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp)
-            .map_err(|e| e.to_string())?;
         for (i, chunk) in bytes.chunks(256 * 1024).enumerate() {
             progress.check()?;
             file.write_all(chunk).map_err(|e| e.to_string())?;
@@ -275,7 +586,7 @@ pub(crate) fn write_atomic(
         file.sync_all().map_err(|e| e.to_string())?;
         drop(file);
         progress.check()?;
-        std::fs::rename(&temp, path).map_err(|e| e.to_string())
+        std::fs::rename(temp, path).map_err(|e| e.to_string())
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(temp);

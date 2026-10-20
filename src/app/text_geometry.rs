@@ -2,6 +2,48 @@
 use super::*;
 use crate::text_geometry::{TextOnPath, guide_path};
 impl Studio {
+    /// Check every frame whose story bindings a structural text command can change.
+    /// Args: concrete layer/object target. Returns false for busy, missing, locked or hidden owners.
+    pub(crate) fn text_structure_editable(&self, hit: (usize, u64)) -> bool {
+        if self.file_dialog_pending() || self.updates.freezing || self.pending_nav.is_some()
+            || self.op.is_some() || self.free_transform.is_some() || self.deformation.is_some()
+            || self.channel_target.is_some() || self.quick_mask_painting()
+        { return false; }
+        let editable = |layer, shape: &Shape| self.doc.layer_editable(layer) && shape.visible && !shape.locked;
+        let Some(shape) = self.doc.find_shape(hit.0, hit.1) else { return false; };
+        if !editable(hit.0, shape) { return false; }
+        let Geom::Text(run) = &shape.geom else { return true; };
+        let Some(thread) = &run.thread else { return true; };
+        let members: Vec<_> = self.doc.layers.iter().enumerate().flat_map(|(layer, value)| {
+            value.kind.shapes().unwrap_or(&[]).iter().filter_map(move |shape| {
+                let Geom::Text(run) = &shape.geom else { return None; };
+                (shape.id == thread.story || run.thread.as_ref().is_some_and(|t| t.story == thread.story))
+                    .then_some((layer, shape, run))
+            })
+        }).collect();
+        let ids: HashSet<_> = members.iter().map(|(_, shape, _)| shape.id).collect();
+        ids.contains(&thread.story) && members.iter().all(|(layer, shape, run)| {
+            editable(*layer, shape) && run.thread.as_ref().is_none_or(|t| {
+                t.prev.is_none_or(|id| ids.contains(&id)) && t.next.is_none_or(|id| ids.contains(&id))
+            })
+        })
+    }
+
+    /// Keep a compound text command's existing edits together in ordinary history.
+    /// Args: synchronous validated edit. Returns nothing; one Undo reverses its accepted commands.
+    pub(super) fn text_structure_transaction(&mut self, edit: impl FnOnce(&mut Self)) {
+        let original = std::mem::replace(&mut self.history, History::staging());
+        let field = self.field_history_context.take();
+        self.field_history_generation = None;
+        edit(self);
+        let commands = std::mem::take(&mut self.history).into_commands();
+        self.history = original;
+        self.field_history_context = field;
+        if !commands.is_empty() {
+            self.history.finish_field();
+            self.history.push(Cmd::Batch(commands));
+        }
+    }
     pub fn text_path_target(&self, point: Pt, slack: f32) -> Option<(usize, u64)> {
         self.doc
             .layers
@@ -53,6 +95,7 @@ impl Studio {
     }
     pub fn can_attach_text_path(&self) -> bool {
         self.selection.len() == 2
+            && self.selection.iter().all(|&hit| self.text_structure_editable(hit))
             && self
                 .selection
                 .iter()
@@ -67,10 +110,13 @@ impl Studio {
                 .any(|s| guide_path(s).is_some())
     }
     pub fn attach_text_path(&mut self) {
-        self.commit_type_edit();
         if !self.can_attach_text_path() {
             return;
         }
+        self.commit_type_edit();
+        self.text_structure_transaction(|studio| studio.attach_text_path_command());
+    }
+    fn attach_text_path_command(&mut self) {
         let selected = self.selection.clone();
         if let Some(hit) = selected.iter().copied().find(|&(layer, id)| {
             self.doc
@@ -117,6 +163,10 @@ impl Studio {
         self.status = "text attached to path".into();
     }
     pub fn release_text_path(&mut self) {
+        if !self.primary().is_some_and(|hit| self.text_structure_editable(hit)) {
+            self.status = "Unlock the text and its story before changing text geometry".into();
+            return;
+        }
         self.commit_type_edit();
         self.patch_type(|run| crate::text_geometry::release(run));
         self.status = "released as editable point text".into();
@@ -139,7 +189,14 @@ impl Studio {
         self.status = "area text — resize the frame to reflow".into();
     }
     pub fn convert_text_frame(&mut self, area: bool) {
+        if !self.primary().is_some_and(|hit| self.text_structure_editable(hit)) {
+            self.status = "Unlock the text and its story before changing text geometry".into();
+            return;
+        }
         self.commit_type_edit();
+        self.text_structure_transaction(|studio| studio.convert_text_frame_command(area));
+    }
+    fn convert_text_frame_command(&mut self, area: bool) {
         if !area && let Some(hit) = self.primary() {
             let previous = self.doc.find_shape(hit.0, hit.1).and_then(|s| {
                 if let Geom::Text(t) = &s.geom {
@@ -179,6 +236,7 @@ impl Studio {
                 run.wrap_width = None;
             }
             run.layout = None;
+            if !area { run.contours = crate::text::shape(run); }
         });
         self.mark();
     }
@@ -202,6 +260,9 @@ impl Studio {
         if a.frame.is_none() || b.frame.is_none() {
             return Err("Threads need area text frames".into());
         }
+        if !self.text_structure_editable(from) || !self.text_structure_editable(to) {
+            return Err("Unlock both text frames and their stories before threading".into());
+        }
         if a.thread.as_ref().and_then(|t| t.next).is_some() {
             return Err("Break the outgoing thread first".into());
         }
@@ -218,7 +279,7 @@ impl Studio {
         // Fonts, sizes and paint belong to the whole run/shape. Range attributes
         // can preserve spacing and features, but cannot encode these differences.
         // Validate before ending an edit session or adding anything to history.
-        if !b.content.is_empty() && (head_run.font != b.font || head_run.px != b.px
+        if !b.content.is_empty() && (head_run.font != b.font || head_run.font_variations != b.font_variations || head_run.px != b.px
             || head.style != target.style || head.opacity != target.opacity
             || head.fill_opacity != target.fill_opacity || head.blend != target.blend
             || head.blend_interior != target.blend_interior || head.filters != target.filters)
@@ -298,6 +359,10 @@ impl Studio {
         Ok(())
     }
     pub fn break_text_thread(&mut self, at: (usize, u64)) {
+        if !self.text_structure_editable(at) {
+            self.status = "Unlock the text and its story before breaking its thread".into();
+            return;
+        }
         self.commit_type_edit();
         let Some(shape) = self.doc.find_shape(at.0, at.1) else {
             return;
@@ -645,10 +710,10 @@ mod readiness_tests {
     }
     #[test]
     fn populated_merge_rejects_unrepresentable_defaults_without_mutating_edit_or_history() {
-        for mismatch in 0..3 {
+        for mismatch in 0..4 {
             let (mut studio,head,target)=fixture(run("Source"),run("Target"));
             let shape=studio.doc.find_shape_mut(target.0,target.1).unwrap();
-            match mismatch {0=>if let Geom::Text(t)=&mut shape.geom {t.font="different-font.ttf".into();},1=>if let Geom::Text(t)=&mut shape.geom {t.px=31.;},_=>shape.style.fill=crate::document::Fill::Solid(crate::color::Rgba::from_hex(0xff0033))}
+            match mismatch {0=>if let Geom::Text(t)=&mut shape.geom {t.font="different-font.ttf".into();},1=>if let Geom::Text(t)=&mut shape.geom {t.px=31.;},2=>shape.style.fill=crate::document::Fill::Solid(crate::color::Rgba::from_hex(0xff0033)),_=>if let Geom::Text(t)=&mut shape.geom {t.font_variations=crate::text::variations::FontVariations::new(vec![(*b"wght",700.)]).unwrap();}}
             studio.begin_type_edit(head,Pt::new(50.,60.));studio.type_insert("Editing");
             let before=crate::project::encode(&studio.doc).unwrap();let history=studio.history.len();let caret=studio.type_edit.as_ref().unwrap().caret;
             let error=studio.thread_text_frames(head,target).unwrap_err();assert!(error.contains("empty frame"));

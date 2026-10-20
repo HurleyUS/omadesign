@@ -1,79 +1,123 @@
 use super::{
-    Document, Layer, LayerKind, MAX_DECODED_BYTES, MAX_LAYERS, Pixels, PsdExport, Rect, dimensions,
+    Document, Layer, LayerKind, MAX_LAYERS, Pixels, PsdExport, Rect, dimensions,
     encode_blend, warn,
 };
 use crate::color::Blend;
 use std::collections::HashSet;
 use std::io::Write;
+use std::sync::Arc;
+use crate::{resources::{self, Allocation}, deep_color::storage};
 
 struct Record {
     rect: Rect,
     name: String,
     blend: [u8; 4],
     opacity: u8,
+    clipping: bool,
     flags: u8,
     section: u32,
     mask_rect: Option<Rect>,
-    channels: Vec<(i16, Vec<u8>)>,
+    channels: Vec<(i16, Arc<Allocation<u8>>)>,
     overlay: Option<super::effects::Overlay>,
+    type_data: Option<Vec<u8>>,
+    smart_data: Option<Vec<u8>>,
+    smart_blocks: Vec<([u8; 4], Vec<u8>)>,
 }
 
-fn u16(out: &mut Vec<u8>, value: u16) {
-    out.extend_from_slice(&value.to_be_bytes());
+fn u16(out: &mut impl Write, value: u16) -> Result<(), String> {out.write_all(&value.to_be_bytes()).map_err(|e| e.to_string())}
+fn u32(out: &mut impl Write, value: u32) -> Result<(), String> {out.write_all(&value.to_be_bytes()).map_err(|e| e.to_string())}
+fn i32(out: &mut impl Write, value: i32) -> Result<(), String> {out.write_all(&value.to_be_bytes()).map_err(|e| e.to_string())}
+fn rect(out: &mut impl Write, value: Rect) -> Result<(), String> {
+    for v in [value.top, value.left, value.bottom, value.right] {i32(out, v)?;} Ok(())
 }
-fn u32(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_be_bytes());
+fn length(out: &mut impl Write, n: usize, large: bool) -> Result<(), String> {
+    if large {out.write_all(&(n as u64).to_be_bytes()).map_err(|e| e.to_string())?;} else {u32(out, u32::try_from(n).map_err(|_| "Photoshop section exceeds PSD's 4 GiB limit; export PSB")?)?;} Ok(())
 }
-fn i32(out: &mut Vec<u8>, value: i32) {
-    out.extend_from_slice(&value.to_be_bytes());
+fn section(out: &mut impl Write, data: &[u8], large: bool) -> Result<(), String> {
+    length(out, data.len(), large)?;out.write_all(data).map_err(|e| e.to_string())
 }
-fn rect(out: &mut Vec<u8>, value: Rect) {
-    for v in [value.top, value.left, value.bottom, value.right] {
-        i32(out, v);
-    }
-}
-fn length(out: &mut Vec<u8>, n: usize, large: bool) -> Result<(), String> {
-    if large {
-        out.extend_from_slice(&(n as u64).to_be_bytes());
-    } else {
-        u32(
-            out,
-            u32::try_from(n)
-                .map_err(|_| "Photoshop section exceeds PSD's 4 GiB limit; export PSB")?,
-        );
-    }
-    Ok(())
-}
-fn section(out: &mut Vec<u8>, data: &[u8], large: bool) -> Result<(), String> {
-    length(out, data.len(), large)?;
-    out.extend_from_slice(data);
-    Ok(())
-}
-fn tagged(out: &mut Vec<u8>, key: &[u8; 4], data: &[u8]) -> Result<(), String> {
-    out.extend_from_slice(b"8BIM");
-    out.extend_from_slice(key);
-    // Layer-record tagged lengths include their even-byte padding. There is no
-    // separate inter-block pad (global tagged blocks use a different rule).
+fn tagged(out: &mut impl Write, key: &[u8; 4], data: &[u8]) -> Result<(), String> {
+    out.write_all(b"8BIM").map_err(|e| e.to_string())?;
+    out.write_all(key).map_err(|e| e.to_string())?;
     length(out, data.len() + data.len() % 2, false)?;
-    out.extend_from_slice(data);
-    if !data.len().is_multiple_of(2) {
-        out.push(0);
-    }
-    Ok(())
+    out.write_all(data).map_err(|e| e.to_string())?;
+    if !data.len().is_multiple_of(2) {out.write_all(&[0]).map_err(|e| e.to_string())?;} Ok(())
 }
-fn zip_channel(data: &[u8]) -> Result<Vec<u8>, String> {
-    let mut out = vec![0, 2];
-    let mut zip = flate2::write::ZlibEncoder::new(&mut out, flate2::Compression::fast());
-    zip.write_all(data)
-        .map_err(|e| format!("Could not encode Photoshop channel: {e}"))?;
-    zip.finish()
-        .map_err(|e| format!("Could not finish Photoshop channel: {e}"))?;
-    Ok(out)
+fn zip_channel(data: &[u8]) -> Result<Arc<Allocation<u8>>, String> {
+    let _codec = resources::global().reserve_now(64 * 1024, &storage::check)?;
+    let mut out = storage::Builder::new()?;out.extend(&[0, 2])?;
+    let mut zip = flate2::write::ZlibEncoder::new(out, flate2::Compression::fast());
+    zip.write_all(data).map_err(|e| format!("Could not encode Photoshop channel: {e}"))?;
+    zip.finish().map_err(|e| format!("Could not finish Photoshop channel: {e}"))?.finish()
 }
 
-/// Export a standards-compliant RGB/8 PSD or PSB, with a compatibility composite.
-/// Vectors and native filters are rendered per layer; groups and pixel masks stay separate.
+/// Export legacy Photoshop bytes without a retained admission owner.
+/// Args: document and PSB flag. Returns unleased bytes and notes; use encode_admitted for retained output.
 pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
+    let output = encode_admitted(doc, large)?;
+    let allocation = Arc::try_unwrap(output.bytes).map_err(|_| "Shared legacy Photoshop output")?;
+    let (bytes, _memory) = allocation.into_parts();
+    Ok(PsdExport { bytes, warnings: output.warnings })
+}
+
+/// Retain standard PSD/PSB bytes through the final caller or queued file write.
+/// Args: editable document and PSB flag. Returns admitted encoded bytes and appearance notes.
+pub fn encode_admitted(doc: &Document, large: bool) -> Result<super::AdmittedPsdExport, String> {
+    doc.validate_sources()?;
+    if crate::motion::compositions::documents(doc)?.iter().any(|document| document.quick_mask.is_some()) {
+        return Err("QuickMaskUnsupported: Photoshop Quick Mask export is not implemented yet; save .oma to retain it".into());
+    }
+    if crate::motion::compositions::documents(doc)?.iter().any(|document| !std::ptr::eq(*document, doc) && !document.channels.is_empty()) {
+        return Err("SavedChannelsUnsupported: Photoshop export keeps saved channels only on the root document, not inside compositions. Save .oma to retain them.".into());
+    }
+    if doc.layers.iter().any(|l| {
+        l.kind.shapes().is_some_and(|ss| {
+            ss.len() > 1
+                && ss
+                    .iter()
+                    .any(|s| matches!(s.geom, crate::geom::Geom::Text(_)))
+        })
+    }) {
+        let mut prepared = doc.clone();
+        prepared.layers.clear();
+        for layer in &doc.layers {
+            if let Some(shapes) = layer.kind.shapes().filter(|ss| {
+                ss.len() > 1
+                    && ss
+                        .iter()
+                        .any(|s| matches!(s.geom, crate::geom::Geom::Text(_)))
+            }) {
+                let mut group = layer.clone();
+                group.kind = LayerKind::Vector { shapes: vec![] };
+                group.is_group = true;
+                group.pass_through = false;
+                for shape in shapes {
+                    let mut child = Layer::vector(&shape.name);
+                    child.parent = Some(group.id);
+                    child.kind = LayerKind::Vector {
+                        shapes: vec![shape.clone()],
+                    };
+                    prepared.layers.push(child);
+                }
+                prepared.layers.push(group);
+            } else {
+                prepared.layers.push(layer.clone());
+            }
+        }
+        return encode_admitted(&prepared, large);
+    }
+    if !doc.mask_sources().is_empty() {
+        if doc.layers.iter().any(|l| {
+            l.kind.pixels().is_some_and(|p| p.native.is_some())
+                || l.mask.as_ref().is_some_and(|p| p.native.is_some())
+        }) {
+            return Err("High-depth artwork masks cannot be flattened by the 8-bit compatibility renderer. Export .oma to retain original samples and editable artwork masks.".into());
+        }
+        let prepared = crate::compositor::raster_export_document(doc)?;
+        let mut result = encode_admitted(&prepared, large)?;
+        result.warnings.push("Live artwork masks were rendered into their affected layers or groups. Save .oma or export SVG to retain editable mask sources.".into());
+        return Ok(result);
+    }
     if !doc.width.is_finite() || !doc.height.is_finite() || doc.width < 1.0 || doc.height < 1.0 {
         return Err("Photoshop export needs a finite, nonempty canvas".into());
     }
@@ -90,6 +134,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
     if doc.layers.len() > MAX_LAYERS {
         return Err("Photoshop export exceeds the 8192 layer limit".into());
     }
+    let depth = crate::deep_color::document_depth(doc).bits();
     let mut warnings = Vec::new();
     if doc.layers.iter().any(|l| {
         l.filters.independent()
@@ -125,13 +170,22 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             name: "Document paper".into(),
             blend: *b"norm",
             opacity: 255,
+            clipping: false,
             flags: 9,
             section: 0,
             mask_rect: None,
             channels: Vec::new(),
             overlay: None,
+            type_data: None,
+            smart_data: None,
+            smart_blocks: Vec::new(),
         };
-        add_pixels(&mut record, pixels.as_raw())?;
+        add_pixels(
+            &mut record,
+            &Pixels::from_rgba(w, h, pixels.into_raw()).ok_or("Invalid paper")?,
+            depth,
+            &doc.color,
+        )?;
         records.push(record);
         used = dimensions(w, h)? * 8;
         warn(
@@ -147,6 +201,7 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
         &mut visited,
         &mut used,
         &mut warnings,
+        depth,
     )?;
     if visited.len() != doc.layers.len() {
         return Err("Cannot export Photoshop: layer groups contain duplicate IDs, missing parents, or cycles".into());
@@ -161,77 +216,106 @@ pub fn encode(doc: &Document, large: bool) -> Result<PsdExport, String> {
             name: "Layer 1".into(),
             blend: *b"norm",
             opacity: 255,
+            clipping: false,
             flags: 8,
             section: 0,
             mask_rect: None,
             channels: Vec::new(),
             overlay: None,
+            type_data: None,
+            smart_data: None,
+            smart_blocks: Vec::new(),
         });
     }
-    let mut layer_info = Vec::new();
-    u16(&mut layer_info, (-(records.len() as i16)) as u16);
+    let mut layer_info = storage::Builder::new()?;
+    u16(&mut layer_info, (-(records.len() as i16)) as u16)?;
     for record in &records {
         write_record(&mut layer_info, record, large)?;
     }
     for record in &records {
         for (_, channel) in &record.channels {
-            layer_info.extend_from_slice(channel);
+            layer_info.extend(channel)?;
         }
     }
-    if layer_info.len() % 2 != 0 {
-        layer_info.push(0);
-    }
-    let mut layer_mask = Vec::new();
-    section(&mut layer_mask, &layer_info, large)?;
-    u32(&mut layer_mask, 0); // Global mask.
-    let mut out = Vec::new();
-    out.extend_from_slice(b"8BPS");
-    u16(&mut out, if large { 2 } else { 1 });
-    out.extend_from_slice(&[0; 6]);
-    u16(&mut out, 4);
-    u32(&mut out, h);
-    u32(&mut out, w);
-    u16(&mut out, 8);
-    u16(&mut out, 3);
-    u32(&mut out, 0); // RGB color-mode data.
+    if layer_info.len() % 2 != 0 {layer_info.extend(&[0])?;}
+    let layer_info = layer_info.finish()?;
+    drop(records);
+    let mut out = storage::Encoded::new()?;
+    out.write_all(b"8BPS").map_err(|e| e.to_string())?;
+    u16(&mut out, if large { 2 } else { 1 })?;
+    out.write_all(&[0; 6]).map_err(|e| e.to_string())?;
+    let extra = super::channels::extra_planes(doc, w, h, depth)?;
+    let base_channels: u16 = if doc.color.model == crate::deep_color::cms::Model::Cmyk {5} else {4};
+    u16(&mut out, base_channels + u16::try_from(extra.len()).map_err(|_| "Too many saved channels for Photoshop")?)?;
+    u32(&mut out, h)?;
+    u32(&mut out, w)?;
+    u16(&mut out, depth)?;
+    u16(&mut out, if doc.color.model == crate::deep_color::cms::Model::Cmyk {4} else {3})?;
+    u32(&mut out, 0)?; // RGB color-mode data.
     let mut resources = Vec::new();
     resources.extend_from_slice(b"8BIM");
-    u16(&mut resources, 1005); // ResolutionInfo.
+    u16(&mut resources, 1005)?; // ResolutionInfo.
     resources.extend_from_slice(&[0, 0]);
-    u32(&mut resources, 16);
+    u32(&mut resources, 16)?;
     let dpi = if doc.dpi.is_finite() {
         doc.dpi.clamp(1.0, 65_535.0)
     } else {
         72.0
     };
     for _ in 0..2 {
-        u32(&mut resources, (dpi * 65536.0).round() as u32);
-        u16(&mut resources, 1);
-        u16(&mut resources, 1);
+        u32(&mut resources, (dpi * 65536.0).round() as u32)?;
+        u16(&mut resources, 1)?;
+        u16(&mut resources, 1)?;
     }
+    if !doc.color.icc_profile.is_empty() {
+        crate::deep_color::cms::validate_profile(&doc.color.icc_profile, doc.color.model)?;
+        resources.extend_from_slice(b"8BIM");
+        u16(&mut resources, 1039)?;
+        resources.extend_from_slice(&[0, 0]);
+        section(&mut resources, &doc.color.icc_profile, false)?;
+        if doc.color.icc_profile.len() % 2 != 0 {
+            resources.push(0);
+        }
+    }
+    super::channels::write_resources(&mut resources, &doc.channels)?;
     section(&mut out, &resources, false)?;
-    section(&mut out, &layer_mask, large)?;
-    let png = crate::compositor::export_png(doc, 1)?;
-    let merged = image::load_from_memory(&png)
-        .map_err(|e| format!("Could not create Photoshop composite: {e}"))?
-        .into_rgba8();
-    if merged.width() != w || merged.height() != h {
-        return Err("Photoshop composite dimensions do not match the canvas".into());
+    let (embedded, external) = super::smart::write_links(doc)?;
+    let links = [(b"lnk2",embedded,large),(b"lnkE",external,false)];
+    let mut mask_size = layer_info.len().checked_add(if large {12} else {8}).ok_or("Photoshop layer section size overflows")?;
+    for (_,data,wide) in &links {
+        if !data.is_empty() {mask_size = mask_size.checked_add(if *wide {16} else {12}).and_then(|n| n.checked_add(data.len())).and_then(|n|n.checked_add((4-data.len()%4)%4)).ok_or("Photoshop linked source section size overflows")?;}
     }
-    u16(&mut out, 2);
-    let mut zipper = flate2::write::ZlibEncoder::new(&mut out, flate2::Compression::fast());
-    let data = merged.as_raw();
-    for ch in 0..4 {
-        let plane: Vec<u8> = data.as_chunks::<4>().0.iter().map(|p| p[ch]).collect();
-        zipper
-            .write_all(&plane)
-            .map_err(|e| format!("Could not encode Photoshop composite: {e}"))?;
+    length(&mut out, mask_size, large)?;
+    section(&mut out, &layer_info, large)?;
+    u32(&mut out, 0)?;
+    drop(layer_info);
+    for (key,data,wide) in links {
+        if data.is_empty() {continue;}
+        out.write_all(b"8BIM").map_err(|e|e.to_string())?;
+        out.write_all(key).map_err(|e|e.to_string())?;
+        length(&mut out,data.len(),wide)?;
+        out.write_all(&data).map_err(|e|e.to_string())?;
+        out.write_all(&[0;3][..(4-data.len()%4)%4]).map_err(|e|e.to_string())?;
     }
-    zipper
-        .finish()
-        .map_err(|e| format!("Could not finish Photoshop composite: {e}"))?;
-    Ok(PsdExport {
-        bytes: out,
+    let merged = if depth == 8 && doc.color.model == crate::deep_color::cms::Model::Rgb && doc.color.icc_profile.is_empty() {
+        let png = crate::compositor::export_png(doc, 1)?;
+        let image = image::load_from_memory(&png)
+            .map_err(|e| e.to_string())?
+            .into_rgba8();
+        Pixels::from_rgba(w, h, image.into_raw()).ok_or("Invalid merged image")?
+    } else {
+        crate::deep_color::composite(doc, 1)?
+    };
+    u16(&mut out, 0)?;
+    let merged = merged.in_document_color(&doc.color)?;
+    for ch in 0..if doc.color.model == crate::deep_color::cms::Model::Cmyk {5} else {4} {
+        out.write_all(&plane(&merged, ch, depth, doc.color.model == crate::deep_color::cms::Model::Rgb)?).map_err(|e| e.to_string())?;
+    }
+    for data in &extra {
+        out.write_all(data).map_err(|e| e.to_string())?;
+    }
+    Ok(super::AdmittedPsdExport {
+        bytes: out.finish()?,
         warnings,
     })
 }
@@ -244,6 +328,7 @@ fn collect(
     visited: &mut HashSet<u64>,
     used: &mut usize,
     warnings: &mut Vec<String>,
+    sample_depth: u16,
 ) -> Result<(), String> {
     if depth > 64 {
         return Err("Photoshop export exceeds the 64 level group nesting limit".into());
@@ -258,11 +343,15 @@ fn collect(
                 name: "</Layer group>".into(),
                 blend: *b"norm",
                 opacity: 255,
+                clipping: false,
                 flags: 8,
                 section: 3,
                 mask_rect: None,
                 channels: Vec::new(),
                 overlay: None,
+                type_data: None,
+                smart_data: None,
+                smart_blocks: Vec::new(),
             });
             collect(
                 doc,
@@ -272,6 +361,7 @@ fn collect(
                 visited,
                 used,
                 warnings,
+                sample_depth,
             )?;
         }
         let mut record = Record {
@@ -292,11 +382,34 @@ fn collect(
                 * 255.0)
                 .round() as u8,
             flags: 8 | if layer.visible { 0 } else { 2 } | u8::from(layer.locked),
+            clipping: layer.clipped,
             section: if layer.is_group { 1 } else { 0 },
             mask_rect: None,
             channels: Vec::new(),
             overlay: super::effects::overlay(&layer.filters),
+            type_data: None,
+            smart_data: None,
+            smart_blocks: Vec::new(),
         };
+        if let Some(shape) = layer
+            .kind
+            .shapes()
+            .filter(|ss| ss.len() == 1)
+            .and_then(|ss| ss.first())
+            .filter(|s| matches!(s.geom, crate::geom::Geom::Text(_)))
+        {
+            record.type_data = Some(super::type_layer::encode(
+                shape,
+                layer.psd_type.as_ref(),
+                warnings,
+            )?);
+            record.opacity =
+                (record.opacity as f32 * shape.opacity * shape.fill_opacity).round() as u8;
+        }
+        if layer.psd_smart.is_some() {
+            record.smart_data = Some(super::smart::encode(layer)?);
+            record.smart_blocks = layer.psd_smart.as_ref().unwrap().retained_blocks.clone();
+        }
         if layer.is_group {
             if layer.filters.active() && record.overlay.is_none() {
                 warn(
@@ -309,12 +422,7 @@ fn collect(
                 *used = used
                     .checked_add(pixels.data.len())
                     .ok_or("Photoshop mask export size overflow")?;
-                if *used > MAX_DECODED_BYTES {
-                    return Err(
-                        "Photoshop export masks exceed the 512 MiB working size limit".into(),
-                    );
-                }
-                add_mask(&mut record, &pixels, bounds)?;
+                add_mask(&mut record, &pixels, bounds, sample_depth)?;
             }
         } else if !matches!(&layer.kind, LayerKind::Vector { shapes } if shapes.is_empty())
             || layer.mask.is_some()
@@ -330,13 +438,10 @@ fn collect(
             *used = used
                 .checked_add(amount)
                 .ok_or("Photoshop export size overflow")?;
-            if *used > MAX_DECODED_BYTES {
-                return Err("Photoshop export layers exceed the 512 MiB working size limit".into());
-            }
             record.rect = bounds;
-            add_pixels(&mut record, &pixels.data)?;
+            add_pixels(&mut record, &pixels, sample_depth, &doc.color)?;
             if let Some(mask) = mask {
-                add_mask(&mut record, &mask, bounds)?;
+                add_mask(&mut record, &mask, bounds, sample_depth)?;
             }
         }
         records.push(record);
@@ -344,16 +449,33 @@ fn collect(
     Ok(())
 }
 
-fn add_pixels(record: &mut Record, rgba: &[u8]) -> Result<(), String> {
-    for ch in [-1i16, 0, 1, 2] {
-        let component = if ch == -1 { 3 } else { ch as usize };
-        let data: Vec<u8> = rgba
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|p| p[component])
-            .collect();
-        record.channels.push((ch, zip_channel(&data)?));
+fn plane(pixels: &Pixels, component: usize, depth: u16, white_matte: bool) -> Result<Arc<Allocation<u8>>, String> {
+    let count = dimensions(pixels.w, pixels.h)?.checked_mul(depth as usize / 8).ok_or("Photoshop channel byte size overflows")?;
+    let mut out = resources::global().allocate_now::<u8, _>(count, &storage::check)?;
+    for (i, bytes) in out.as_mut_slice().chunks_exact_mut(depth as usize / 8).enumerate() {
+        let sample = pixels.sample(i);
+        let value = if let Some(inks) = pixels.native.as_ref().and_then(|n| n.cmyk.as_ref()) {if component == 4 {inks[i*5+4]} else {1. - inks[i*5+component]}} else if white_matte && component < 3 {sample[component] * sample[3] + (1. - sample[3])} else {sample[component]};
+        match depth {8 => bytes[0] = crate::deep_color::byte(value),16 => bytes.copy_from_slice(&((value.clamp(0., 1.) * 65535.).round() as u16).to_be_bytes()),_ => bytes.copy_from_slice(&value.to_be_bytes())}
+    } Ok(Arc::new(out))
+}
+
+fn add_pixels(record: &mut Record, pixels: &Pixels, depth: u16, color: &crate::deep_color::cms::DocumentColor) -> Result<(), String> {
+    let pixels = pixels.in_document_color(color)?;
+    let cmyk = color.model == crate::deep_color::cms::Model::Cmyk;
+    for &ch in if cmyk {&[-1i16, 0, 1, 2, 3][..]} else {&[-1i16, 0, 1, 2][..]} {
+        record.channels.push((
+            ch,
+            zip_channel(&plane(
+                &pixels,
+                if ch == -1 {
+                    if cmyk { 4 } else { 3 }
+                } else {
+                    ch as usize
+                },
+                depth,
+                false,
+            )?)?,
+        ));
     }
     Ok(())
 }
@@ -408,8 +530,10 @@ fn placed_group_mask(
     }
     let pixels = if (mask.w, mask.h) == (w, h) {
         mask.clone()
+    } else if mask.native.is_some() {
+        mask.resized(w, h)?
     } else {
-        let image = image::RgbaImage::from_raw(mask.w, mask.h, mask.data.clone())
+        let image = image::RgbaImage::from_raw(mask.w, mask.h, mask.data.to_vec())
             .ok_or("Invalid native group mask")?;
         let resized = image::imageops::resize(&image, w, h, image::imageops::FilterType::Triangle);
         Pixels::from_rgba(w, h, resized.into_raw()).ok_or("Invalid resized group mask")?
@@ -417,25 +541,23 @@ fn placed_group_mask(
     Ok((pixels, bounds))
 }
 
-fn add_mask(record: &mut Record, mask: &Pixels, bounds: Rect) -> Result<(), String> {
+fn add_mask(record: &mut Record, mask: &Pixels, bounds: Rect, depth: u16) -> Result<(), String> {
     if mask.data.len() != dimensions(mask.w, mask.h)? * 4 {
         return Err("Invalid native pixel mask buffer".into());
     }
     record.mask_rect = Some(bounds);
-    // The compositor uses premultiplied luminance; match it for colored masks too.
-    let values: Vec<u8> = mask
-        .data
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|p| {
-            let luminance = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32)
-                * p[3] as f32
-                / 255.0;
-            luminance.round() as u8
-        })
-        .collect();
-    record.channels.push((-2, zip_channel(&values)?));
+    let mut values = storage::Builder::with_capacity(dimensions(mask.w, mask.h)?.checked_mul(depth as usize / 8).ok_or("Photoshop mask byte size overflows")?)?;
+    for i in 0..mask.w as usize * mask.h as usize {
+        let p = mask.sample(i);
+        let gray = if p[0] == p[1] && p[1] == p[2] { p[0] } else { p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722 };
+        let value = (gray * p[3]).clamp(0., 1.);
+        match depth {
+            8 => values.extend(&[crate::deep_color::byte(value)])?,
+            16 => values.extend(&((value * 65535.).round() as u16).to_be_bytes())?,
+            _ => values.extend(&value.to_be_bytes())?,
+        };
+    }
+    record.channels.push((-2, zip_channel(&values.finish()?)?));
     Ok(())
 }
 
@@ -492,7 +614,8 @@ fn layer_pixels(
             }
         }
     }
-    if matches!(layer.kind, LayerKind::Vector { .. }) {
+    if matches!(&layer.kind, LayerKind::Vector { shapes } if !shapes.iter().all(|s|matches!(s.geom,crate::geom::Geom::Text(_))))
+    {
         warn(
             warnings,
             "Vector artwork and text are rasterized individually in Photoshop export; save .oma to retain native editing.",
@@ -504,6 +627,7 @@ fn layer_pixels(
         );
     }
     let mut single = Document::new("Photoshop layer", 1.0, 1.0, doc.dpi);
+    single.color = doc.color.clone();
     single.width = doc.width;
     single.height = doc.height;
     single.artboards = doc.artboards.clone();
@@ -517,14 +641,22 @@ fn layer_pixels(
         isolated.filters = Default::default();
     }
     single.layers = vec![isolated];
-    let png = crate::compositor::export_png(&single, 1)?;
-    let rgba = image::load_from_memory(&png)
-        .map_err(|e| format!("Could not render Photoshop layer: {e}"))?
-        .into_rgba8();
-    let w = rgba.width();
-    let h = rgba.height();
-    let pixels =
-        Pixels::from_rgba(w, h, rgba.into_raw()).ok_or("Invalid rendered Photoshop layer")?;
+    let pixels = if doc
+        .layers
+        .iter()
+        .any(|l| l.kind.pixels().is_some_and(|p| p.native.is_some()))
+    {
+        crate::deep_color::composite(&single, 1)?
+    } else {
+        let png = crate::compositor::export_png(&single, 1)?;
+        let rgba = image::load_from_memory(&png)
+            .map_err(|e| e.to_string())?
+            .into_rgba8();
+        Pixels::from_rgba(rgba.width(), rgba.height(), rgba.into_raw())
+            .ok_or("Invalid layer render")?
+    };
+    let w = pixels.w;
+    let h = pixels.h;
     Ok((
         pixels,
         Rect {
@@ -537,25 +669,25 @@ fn layer_pixels(
     ))
 }
 
-fn write_record(out: &mut Vec<u8>, record: &Record, large: bool) -> Result<(), String> {
-    rect(out, record.rect);
-    u16(out, record.channels.len() as u16);
+fn write_record(out: &mut impl Write, record: &Record, large: bool) -> Result<(), String> {
+    rect(out, record.rect)?;
+    u16(out, record.channels.len() as u16)?;
     for (id, data) in &record.channels {
-        u16(out, *id as u16);
+        u16(out, *id as u16)?;
         length(out, data.len(), large)?;
     }
-    out.extend_from_slice(b"8BIM");
-    out.extend_from_slice(&record.blend);
-    out.extend_from_slice(&[record.opacity, 0, record.flags, 0]);
+    out.write_all(b"8BIM").map_err(|e| e.to_string())?;
+    out.write_all(&record.blend).map_err(|e| e.to_string())?;
+    out.write_all(&[record.opacity, u8::from(record.clipping), record.flags, 0]).map_err(|e| e.to_string())?;
     let mut extra = Vec::new();
     if let Some(bounds) = record.mask_rect {
-        u32(&mut extra, 20);
-        rect(&mut extra, bounds);
+        u32(&mut extra, 20)?;
+        rect(&mut extra, bounds)?;
         extra.extend_from_slice(&[0, 0, 0, 0]);
     } else {
-        u32(&mut extra, 0);
+        u32(&mut extra, 0)?;
     }
-    u32(&mut extra, 0); // Blend ranges.
+    u32(&mut extra, 0)?; // Blend ranges.
     let legacy: Vec<u8> = record
         .name
         .chars()
@@ -567,9 +699,9 @@ fn write_record(out: &mut Vec<u8>, record: &Record, large: bool) -> Result<(), S
     extra.resize(extra.len() + (4 - (legacy.len() + 1) % 4) % 4, 0);
     let units: Vec<u16> = record.name.encode_utf16().take(32_768).collect();
     let mut unicode = Vec::new();
-    u32(&mut unicode, units.len() as u32);
+    u32(&mut unicode, units.len() as u32)?;
     for unit in units {
-        u16(&mut unicode, unit);
+        u16(&mut unicode, unit)?;
     }
     tagged(&mut extra, b"luni", &unicode)?;
     if record.flags & 1 != 0 {
@@ -582,10 +714,17 @@ fn write_record(out: &mut Vec<u8>, record: &Record, large: bool) -> Result<(), S
     }
     if record.section != 0 {
         let mut divider = Vec::new();
-        u32(&mut divider, record.section);
+        u32(&mut divider, record.section)?;
         divider.extend_from_slice(b"8BIM");
         divider.extend_from_slice(&record.blend);
         tagged(&mut extra, b"lsct", &divider)?;
     }
+    if let Some(data) = &record.type_data {
+        tagged(&mut extra, b"TySh", data)?;
+    }
+    if let Some(data) = &record.smart_data {
+        tagged(&mut extra, b"SoLd", data)?;
+    }
+    for (key, data) in &record.smart_blocks { tagged(&mut extra, key, data)?; }
     section(out, &extra, false)
 }

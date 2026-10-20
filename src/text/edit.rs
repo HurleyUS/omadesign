@@ -1,6 +1,154 @@
 //! Character-indexed edits preserve paragraph styles and normalized range overrides.
 use crate::geom::{CharSpan, ParagraphStyle, TypeRun};
+
+/// Replace characters without changing paragraph breaks.
+/// Args: original character range and replacement. The first replaced character supplies its style.
+pub(crate) struct CharacterRewrite {
+    pub start: usize,
+    pub end: usize,
+    pub text: String,
+}
+
 impl TypeRun {
+    /// Apply ordered character rewrites in one content/style pass.
+    /// Args: disjoint, nonempty original ranges without paragraph breaks. Returns whether text changed, or an error before mutation.
+    pub(crate) fn rewrite_characters(
+        &mut self,
+        edits: &[CharacterRewrite],
+    ) -> Result<bool, String> {
+        self.rewrite_ranges(edits, false)
+    }
+
+    /// Replace ordered text ranges, retaining character and paragraph ownership.
+    /// Args: disjoint nonempty original ranges and literal replacements. Returns changed status or a pre-mutation error.
+    pub(crate) fn rewrite_text_ranges(&mut self, edits: &[CharacterRewrite]) -> Result<bool, String> {
+        self.rewrite_ranges(edits, true)
+    }
+
+    fn rewrite_ranges(&mut self, edits: &[CharacterRewrite], paragraph_edits: bool) -> Result<bool, String> {
+        if edits.is_empty() { return Ok(false); }
+        let bytes: Vec<_> = self
+            .content
+            .char_indices()
+            .map(|(at, _)| at)
+            .chain(std::iter::once(self.content.len()))
+            .collect();
+        let count = bytes.len() - 1;
+        let mut previous = 0;
+        let mut size = self.content.len();
+        let mut mapped = Vec::with_capacity(edits.len());
+        let mut written = 0usize;
+        for edit in edits {
+            if edit.start < previous || edit.start >= edit.end || edit.end > count {
+                return Err(
+                    "Text rewrite ranges must be ordered, disjoint and inside the text".into(),
+                );
+            }
+            if !paragraph_edits && (self.content[bytes[edit.start]..bytes[edit.end]].contains('\n')
+                || edit.text.contains('\n'))
+            {
+                return Err("Character rewrites cannot replace paragraph breaks".into());
+            }
+            size = size
+                .checked_sub(bytes[edit.end] - bytes[edit.start])
+                .and_then(|n| n.checked_add(edit.text.len()))
+                .ok_or("Text rewrite is too large")?;
+            let start = written
+                .checked_add(edit.start - previous)
+                .ok_or("Text rewrite is too large")?;
+            written = start
+                .checked_add(edit.text.chars().count())
+                .ok_or("Text rewrite is too large")?;
+            mapped.push((edit.start, edit.end, start, written));
+            previous = edit.end;
+        }
+        let mut content = String::new();
+        content
+            .try_reserve_exact(size)
+            .map_err(|_| "Not enough memory to rewrite text")?;
+        let mut cursor = 0;
+        for edit in edits {
+            content.push_str(&self.content[cursor..bytes[edit.start]]);
+            content.push_str(&edit.text);
+            cursor = bytes[edit.end];
+        }
+        content.push_str(&self.content[cursor..]);
+        if content == self.content {
+            return Ok(false);
+        }
+        let position = |at: usize| {
+            let next = mapped.partition_point(|&(_, end, _, _)| end <= at);
+            if let Some(&(start, _, a, b)) = mapped.get(next)
+                && at >= start
+            {
+                return if at == start { a } else { b };
+            }
+            if let Some(&(_, old, _, new)) = next.checked_sub(1).and_then(|i| mapped.get(i)) {
+                new + at - old
+            } else {
+                at
+            }
+        };
+        if self.paragraphs.iter().any(|p| p.start > count)
+            || self.manual_kern.keys().any(|&at| at > count)
+        {
+            return Err("Text has paragraph or kerning metadata outside its contents".into());
+        }
+        let spans = self
+            .character_style_runs(0, count)
+            .into_iter()
+            .map(|mut span| {
+                span.start = position(span.start);
+                span.end = position(span.end);
+                span
+            })
+            .collect();
+        let paragraphs = if paragraph_edits {
+            let old_starts: Vec<_> = std::iter::once(0).chain(self.content.chars().enumerate().filter_map(|(i,c)| (c=='\n').then_some(i+1))).collect();
+            let explicit: std::collections::BTreeMap<_,_> = self.paragraphs.iter().map(|p|(p.start,p)).collect();
+            let mut current = 0;
+            std::iter::once(0).chain(content.chars().enumerate().filter_map(|(i,c)| (c=='\n').then_some(i+1))).filter_map(|at| {
+                while current < mapped.len() && mapped[current].3 <= at { current += 1; }
+                let old = if let Some(&(start,_,a,b)) = mapped.get(current).filter(|&&(_,_,a,b)| a<=at && at<b) { let _=(a,b); start }
+                else if current>0 { let (_,end,_,b)=mapped[current-1]; end+at-b }
+                else { at };
+                let start = old_starts[old_starts.partition_point(|&i| i<=old).saturating_sub(1)];
+                let mut style = explicit.get(&start).map(|p|(*p).clone()).unwrap_or(ParagraphStyle{start,align:self.align,..Default::default()});
+                style.start=at;
+                (style != ParagraphStyle{start:at,align:self.align,..Default::default()}).then_some(style)
+            }).collect()
+        } else { self
+            .paragraphs
+            .iter()
+            .map(|p| ParagraphStyle {
+                start: position(p.start),
+                ..p.clone()
+            })
+            .collect() };
+        let kern = self
+            .manual_kern
+            .iter()
+            .filter_map(|(&at, &value)| {
+                let i = mapped.partition_point(|&(_, end, _, _)| end < at);
+                if mapped.get(i).is_some_and(|&(start, _, _, _)| start <= at) {
+                    return None;
+                }
+                Some((position(at), value))
+            })
+            .collect();
+        if let Some(svg) = &mut self.svg_text {
+            for edit in edits.iter().rev() {
+                svg.replace_range(edit.start, edit.end, edit.text.chars().count());
+            }
+        }
+        self.content = content;
+        self.assign_character_spans(spans);
+        self.paragraphs = paragraphs;
+        self.manual_kern = kern;
+        super::inline::shift_rewrites(&mut self.inlines, &mapped, position);
+        self.layout = None;
+        Ok(true)
+    }
     pub fn character_style(&self, index: usize) -> CharSpan {
         let mut style = self
             .spans
@@ -8,9 +156,30 @@ impl TypeRun {
             .find(|s| s.start <= index && index < s.end)
             .cloned()
             .unwrap_or_default();
+        if self.svg_text.is_some() && let Some(layout)=super::svg_type::layout(self) && let Some((_,source))=layout.styles.iter().find(|(at,_)|*at==index){
+            if style.font.is_none(){style.font=source.font.clone();}
+            if style.px.is_none(){style.px=source.px;}
+            if style.fill.is_none(){style.fill=source.fill.clone();}
+            if style.tracking.is_none(){style.tracking=source.tracking;}
+            if style.kerning.is_none(){style.kerning=source.kerning;}
+            if style.baseline_shift.is_none(){style.baseline_shift=source.baseline_shift;}
+            if style.hscale.is_none(){style.hscale=source.hscale;}
+            if style.vscale.is_none(){style.vscale=source.vscale;}
+            if style.leading.is_none() && self.leading<=0.5 {style.leading=source.leading;}
+        }
         style.start = 0;
+        if style.leading.is_none() {
+            style.leading = super::svg_type::leading(self, index);
+        }
         style.end = 0;
         style
+    }
+    /// Inherit authored SVG styles without freezing a computed fallback onto newly typed text.
+    /// Args: logical character index. Returns the native override or ordinary native text style.
+    pub(crate) fn typing_style(&self,index:usize)->CharSpan {
+        if self.svg_text.is_none(){return self.character_style(index);}
+        let mut style=self.spans.iter().find(|s|s.start<=index && index<s.end).cloned().unwrap_or_default();
+        style.start=0;style.end=0;style
     }
     /// Normalized, complete style intervals, including inherited gaps. The number
     /// of intervals follows style changes rather than the number of characters.
@@ -153,7 +322,7 @@ impl TypeRun {
         };
         let inserted_paragraph = old_style(start);
         let paragraph_styles: Vec<_> = old_starts.iter().map(|&at| old_style(at)).collect();
-        let inherited = pending.unwrap_or_else(|| self.character_style(start.saturating_sub(1)));
+        let inherited = pending.unwrap_or_else(|| self.typing_style(start.saturating_sub(1)));
         let n = text.chars().count();
         if n > 0 {
             chars.push(CharSpan {
@@ -173,6 +342,7 @@ impl TypeRun {
         );
         let a = super::char_to_byte(&self.content, start);
         let b = super::char_to_byte(&self.content, end);
+        if let Some(svg)=&mut self.svg_text {svg.replace_range(start,end,n);}
         self.manual_kern=std::mem::take(&mut self.manual_kern).into_iter().filter_map(|(at,value)| {
             if start<end && at>=start && at<=end {None} else {Some((if at>=end{at-(end-start)+n}else{at},value))}
         }).filter(|(at,_)|*at>0).collect();
@@ -208,6 +378,7 @@ impl TypeRun {
                 self.paragraphs.push(p);
             }
         }
+        super::inline::shift_replacement(&mut self.inlines, start, end, n);
     }
     /// Font size already follows the vertical scale. Apply the remaining
     /// horizontal ratio to glyph widths and explicit em spacing. Inherited
@@ -225,6 +396,7 @@ impl TypeRun {
     }
     pub fn scale_character_metrics(&mut self,ratio:f32) {
         for span in &mut self.spans {
+            if let Some(px)=&mut span.px {*px*=ratio.abs();}
             if let Some(crate::geom::Leading::Fixed(value))=&mut span.leading {*value*=ratio.abs();}
             if let Some(shift)=&mut span.baseline_shift {*shift*=ratio;}
         }

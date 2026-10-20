@@ -124,8 +124,8 @@ impl Tool {
             Tool::Crop => "C",
             Tool::Marquee => "Shift+M",
             Tool::EllipseMarquee => "Shift+O",
-            Tool::Lasso => "Q",
-            Tool::BezierLasso => "Shift+Q",
+            Tool::Lasso => "L",
+            Tool::BezierLasso => "Shift+L",
             Tool::Wand => "W",
             Tool::Hand => "H",
             Tool::Zoom => "Z",
@@ -339,6 +339,18 @@ pub struct ShortcutRow {
 
 pub fn shortcut_groups() -> &'static [(&'static str, &'static [ShortcutRow])] {
     &[
+        (
+            "Keyboard artwork",
+            &[
+                ShortcutRow { action: "Create artwork", keys: "Ctrl+Shift+K" },
+                ShortcutRow { action: "Create with current tool / edit selected text", keys: "Enter" },
+                ShortcutRow { action: "Previous / next artwork", keys: "Page Up / Page Down" },
+                ShortcutRow { action: "Extend artwork selection", keys: "Shift+Page Up / Page Down" },
+                ShortcutRow { action: "Focus canvas", keys: "F8" },
+                ShortcutRow { action: "Use current tool at typed coordinates", keys: "F9" },
+                ShortcutRow { action: "New pixel layer (Pixel)", keys: "Ctrl+Shift+N" },
+            ],
+        ),
         (
             "File",
             &[

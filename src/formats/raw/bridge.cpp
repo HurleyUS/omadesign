@@ -2,12 +2,17 @@
 // its complete, unchanged source and license are in vendor/libraw.
 #include "libraw/libraw.h"
 #include <chrono>
+#include <atomic>
+#include <condition_variable>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <memory>
 #include <new>
+#include <mutex>
+#include <thread>
 
 struct OmaRawImage {
     void *owner;
@@ -21,16 +26,43 @@ struct OmaRawImage {
 };
 
 namespace {
-constexpr uint64_t max_pixels = 64000000;
-constexpr size_t max_input = 512ull * 1024 * 1024;
 struct DecodeState {
     std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
     bool damaged = false;
+    int (*cancelled)(const void *) = nullptr;
+    const void *context = nullptr;
+    void (*report)(const void *, uint32_t) = nullptr;
+    bool stop_requested() const {
+        return (cancelled && cancelled(context)) ||
+            std::chrono::steady_clock::now() - started > std::chrono::seconds(120);
+    }
 };
 
-int progress(void *context, LibRaw_progress, int, int) {
+// Poll LibRaw's atomic fast-cancel flag as well as its coarse stage callbacks.
+// The monitor is joined before either the decoder or Rust-owned context dies.
+struct CancelMonitor {
+    std::mutex mutex;
+    std::condition_variable wake;
+    bool done = false;
+    std::thread worker;
+    CancelMonitor(LibRaw &raw, const DecodeState &state) : worker([this, &raw, &state] {
+        std::unique_lock<std::mutex> lock(mutex);
+        while (!done) {
+            if (state.stop_requested()) raw.setCancelFlag();
+            wake.wait_for(lock, std::chrono::milliseconds(2), [this] { return done; });
+        }
+    }) {}
+    ~CancelMonitor() {
+        { std::lock_guard<std::mutex> lock(mutex); done = true; }
+        wake.notify_one();
+        worker.join();
+    }
+};
+
+int progress(void *context, LibRaw_progress stage, int, int) {
     const auto *state = static_cast<DecodeState *>(context);
-    return std::chrono::steady_clock::now() - state->started > std::chrono::seconds(120);
+    if (state->report) state->report(state->context, static_cast<uint32_t>(stage));
+    return state->stop_requested();
 }
 void damaged(void *context, const char *, INT64) {
     static_cast<DecodeState *>(context)->damaged = true;
@@ -45,7 +77,7 @@ int failure(OmaRawImage *output, int code) {
     return fail(output, libraw_strerror(code));
 }
 bool bounded(unsigned width, unsigned height) {
-    return width > 0 && height > 0 && uint64_t(width) * height <= max_pixels;
+    return width > 0 && height > 0 && width <= 65535 && height <= 65535;
 }
 template <size_t N, size_t M> void copy_text(char (&to)[N], const char (&from)[M]) {
     // Camera metadata is not guaranteed to terminate within its fixed field.
@@ -54,20 +86,50 @@ template <size_t N, size_t M> void copy_text(char (&to)[N], const char (&from)[M
     std::memcpy(to, from, count);
     to[count] = 0;
 }
+
+// Bound the simultaneously live buffers in the fixed unpacked Bayer/AHD path.
+// Args: opened decoder and full output geometry. Returns zero for other layouts.
+uint64_t unpacked_bayer_demand(LibRaw &raw, uint64_t width, uint64_t height) {
+    libraw_decoder_info_t decoder{};
+    if (raw.get_decoder_info(&decoder) || !decoder.decoder_name ||
+        std::strcmp(decoder.decoder_name, "unpacked_load_raw()")) return 0;
+    const auto &id = raw.imgdata.idata;
+    const auto &sizes = raw.imgdata.sizes;
+    const auto *internal = raw.get_internal_data_pointer();
+    if (id.filters <= 1000 || id.colors != 3 || id.is_foveon || id.raw_count != 1 ||
+        sizes.pixel_aspect != 1.0 || internal->internal_output_params.fuji_width ||
+        internal->unpacker_data.fuji_layout ||
+        uint64_t(internal->unpacker_data.meta_length) > 32ull * 1024 * 1024 ||
+        (sizes.raw_pitch && sizes.raw_pitch != uint64_t(sizes.raw_width) * 2) ||
+        width > sizes.raw_width || height > sizes.raw_height) return 0;
+    const uint64_t sensor = uint64_t(sizes.raw_width) * (uint64_t(sizes.raw_height) + 8) * 2;
+    const uint64_t image = (width + 2) * (height + 2) * 8;
+    const uint64_t output = width * height * 6;
+    const uint64_t native = sensor + image + output;
+    const uint64_t copying = output * 2;
+    return (native > copying ? native : copying) + 64ull * 1024 * 1024;
+}
 }
 
 extern "C" int oma_raw_decode(const unsigned char *bytes, size_t length,
-                              OmaRawImage *output) noexcept {
+                              OmaRawImage *output, int (*cancelled)(const void *),
+                              const void *context, void (*report)(const void *, uint32_t),
+                              int (*reserve)(const void *, uint64_t),
+                              const void *memory_context, uint64_t memory_limit, int sensor_only) noexcept {
     if (!output) return 1;
     *output = OmaRawImage{};
-    if (!bytes || !length || length > max_input)
-        return fail(output, "RAW input must contain between 1 byte and 512 MiB");
+    if (!bytes || !length)
+        return fail(output, "RAW input must not be empty");
     try {
         DecodeState state;
+        state.cancelled = cancelled;
+        state.context = context;
+        state.report = report;
         LibRaw raw(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK);
+        CancelMonitor monitor(raw, state);
         raw.set_progress_handler(progress, &state);
         raw.set_dataerror_handler(damaged, &state);
-        raw.imgdata.rawparams.max_raw_memory_mb = 1024;
+        raw.imgdata.rawparams.max_raw_memory_mb = static_cast<unsigned>(memory_limit / (1024 * 1024));
         raw.imgdata.rawparams.use_rawspeed = 0;
         raw.imgdata.rawparams.use_dngsdk = 0;
         raw.imgdata.rawparams.options |= LIBRAW_RAWOPTIONS_CAMERAWB_FALLBACK_TO_DAYLIGHT;
@@ -86,7 +148,7 @@ extern "C" int oma_raw_decode(const unsigned char *bytes, size_t length,
         if (code) return failure(output, code);
         if (!bounded(raw.imgdata.sizes.width, raw.imgdata.sizes.height) ||
             !bounded(raw.imgdata.sizes.raw_width, raw.imgdata.sizes.raw_height))
-            return fail(output, "RAW images are limited to 64 megapixels");
+            return fail(output, "RAW sensor dimensions are invalid");
         // LibRaw stretches non-square sensor pixels during processing. Check
         // that output before it allocates the stretched image, not just after.
         const double aspect = raw.imgdata.sizes.pixel_aspect;
@@ -94,9 +156,15 @@ extern "C" int oma_raw_decode(const unsigned char *bytes, size_t length,
             return fail(output, "The RAW image has an invalid pixel aspect ratio");
         const double expanded_width = std::ceil(raw.imgdata.sizes.width * (aspect > 1 ? aspect : 1));
         const double expanded_height = std::ceil(raw.imgdata.sizes.height / (aspect < 1 ? aspect : 1));
-        if (expanded_width > 65535 || expanded_height > 65535 ||
-            expanded_width * expanded_height > max_pixels)
-            return fail(output, "RAW images after pixel-aspect correction are limited to 64 megapixels");
+        if (expanded_width > 65535 || expanded_height > 65535)
+            return fail(output, "RAW pixel-aspect correction exceeds the decoder dimension range");
+        const uint64_t sensor_pixels = uint64_t(raw.imgdata.sizes.raw_width) * raw.imgdata.sizes.raw_height;
+        const uint64_t output_pixels = uint64_t(expanded_width) * uint64_t(expanded_height);
+        const uint64_t unpacked = sensor_only ? 0 : unpacked_bayer_demand(raw, uint64_t(expanded_width), uint64_t(expanded_height));
+        const uint64_t demand = sensor_only ? sensor_pixels * 4 + 64ull * 1024 * 1024 :
+            unpacked ? unpacked : sensor_pixels * 8 + output_pixels * 32 + 64ull * 1024 * 1024;
+        if (!reserve || reserve(memory_context, demand))
+            return fail(output, "Not enough shared memory for this RAW sensor and output geometry");
         if (!raw.imgdata.idata.raw_count)
             return fail(output, "This file does not contain a supported camera RAW image");
         copy_text(output->make, raw.imgdata.idata.make);
@@ -121,12 +189,42 @@ extern "C" int oma_raw_decode(const unsigned char *bytes, size_t length,
         if (code) return failure(output, code);
         if (state.damaged)
             return fail(output, "RAW sensor data is truncated or damaged");
+        if (sensor_only) {
+            const auto &sizes = raw.imgdata.sizes;
+            const uint64_t size = sensor_pixels * 2;
+            if (!raw.imgdata.rawdata.raw_image || raw.imgdata.idata.filters == 0 ||
+                sizes.raw_pitch < uint64_t(sizes.raw_width) * 2 || size > UINT32_MAX)
+                return fail(output, "This sensor reference needs an unpacked integer mosaic including masked borders");
+            std::unique_ptr<libraw_processed_image_t, decltype(&LibRaw::dcraw_clear_mem)> plane(
+                static_cast<libraw_processed_image_t *>(std::malloc(sizeof(libraw_processed_image_t) + size)),
+                LibRaw::dcraw_clear_mem);
+            if (!plane) return fail(output, "Not enough memory for the sensor reference plane");
+            plane->type = LIBRAW_IMAGE_BITMAP;
+            plane->width = sizes.raw_width;
+            plane->height = sizes.raw_height;
+            plane->bits = 16;
+            plane->colors = 1;
+            plane->data_size = static_cast<unsigned>(size);
+            for (unsigned y = 0; y < sizes.raw_height; ++y) {
+                if (state.stop_requested()) return fail(output, "Sensor reference cancelled");
+                const auto *row = reinterpret_cast<const unsigned char *>(raw.imgdata.rawdata.raw_image) + uint64_t(y) * sizes.raw_pitch;
+                std::memcpy(plane->data + uint64_t(y) * sizes.raw_width * 2, row, uint64_t(sizes.raw_width) * 2);
+            }
+            output->width = plane->width;
+            output->height = plane->height;
+            output->colors = 1;
+            output->bits = 16;
+            output->data_size = plane->data_size;
+            output->data = plane->data;
+            output->owner = plane.release();
+            return 0;
+        }
         code = raw.dcraw_process();
         if (code) return failure(output, code);
         if (state.damaged)
             return fail(output, "RAW sensor data is truncated or damaged");
         if (!bounded(raw.imgdata.sizes.width, raw.imgdata.sizes.height))
-            return fail(output, "Developed RAW images are limited to 64 megapixels");
+            return fail(output, "Developed RAW dimensions are invalid");
         std::unique_ptr<libraw_processed_image_t, decltype(&LibRaw::dcraw_clear_mem)> image(
             raw.dcraw_make_mem_image(&code), LibRaw::dcraw_clear_mem);
         if (!image) return failure(output, code);

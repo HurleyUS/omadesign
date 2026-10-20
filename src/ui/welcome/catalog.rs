@@ -685,7 +685,7 @@ fn index_entry(
             if !recovered
                 && header
                     .version
-                    .is_none_or(|v| !(1..=crate::project::VERSION).contains(&v))
+                    .is_none_or(|v| !crate::project::supports_version(v))
             {
                 entry.error = Some("Unsupported omadesign document version".into());
                 return entry;
@@ -1177,7 +1177,7 @@ mod tests {
         let start = render_document_at(&doc,Some(0.)).unwrap();
         let end = render_document_at(&doc,Some(2.)).unwrap();
         assert_eq!((start.w,start.h),(end.w,end.h));
-        assert_ne!(start.data,end.data);
+        assert_ne!(start.data.as_slice(),end.data.as_slice());
         assert_eq!(fs::read(path).unwrap(),before);
     }
 
@@ -1536,7 +1536,7 @@ mod tests {
                 .mask
                 .as_ref()
                 .unwrap()
-                .data,
+                .data.as_slice(),
             mask
         );
         let packed: serde_json::Value =

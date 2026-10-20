@@ -7,19 +7,38 @@ use crate::layout::FrameLayout;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::cell::RefCell;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// Selection id for a raster layer treated as an object (placed image).
 pub const RASTER_ID: u64 = 0;
 
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static IDS: OnceLock<Mutex<(u64, std::collections::HashSet<u64>)>> = OnceLock::new();
 
+/// Allocate an object ID independently of other editing processes.
+/// Args: none. Returns a nonzero, JSON-safe ID not loaded or issued here before.
 pub fn next_id() -> u64 {
-    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    let mut ids = IDS.get_or_init(|| {
+        use std::io::Read;
+        let mut bytes = [0; 8];
+        let seed = if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)).is_ok() {
+            u64::from_le_bytes(bytes)
+        } else {
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64 ^ u64::from(std::process::id())
+        };
+        Mutex::new((seed, std::collections::HashSet::new()))
+    }).lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        ids.0 = ids.0.wrapping_add(0x0013_79b9_7f4a_7c15) & ((1 << 53) - 1);
+        let id = ids.0;
+        if id != 0 && ids.1.insert(id) { return id; }
+    }
 }
 
+/// Reserve an ID read from a native file without sharing a process counter.
+/// Args: existing ID. Returns nothing; subsequent allocations exclude this ID.
 pub fn bump_id(seen: u64) {
-    NEXT_ID.fetch_max(seen.saturating_add(1), Ordering::Relaxed);
+    if IDS.get().is_none() { next_id(); }
+    IDS.get().unwrap().lock().unwrap_or_else(|e| e.into_inner()).1.insert(seen);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +91,7 @@ impl Join {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Fill {
+    Pattern(crate::svg_source::SvgPattern),
     Gradient(crate::gradient::Gradient),
     None,
     Solid(Rgba),
@@ -119,7 +139,7 @@ impl Fill {
             Fill::Solid(c) => c,
             Fill::Gradient(g) => g.sample(0.),
             Fill::Linear { c0, .. } | Fill::Radial { c0, .. } => c0,
-            Fill::None => fallback,
+            Fill::None | Fill::Pattern(_) => fallback,
         }
     }
 }
@@ -228,9 +248,14 @@ pub struct Shape {
     /// Mask pixels mapped to the object's local geometry bounds, following transforms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<Pixels>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artwork_masks: Vec<crate::artwork_mask::ArtworkMask>,
     #[serde(default, skip_serializing_if = "FrameLayout::is_empty")]
     pub layout: FrameLayout,
-    #[serde(default, skip_serializing_if = "crate::text_geometry::TextWrap::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::text_geometry::TextWrap::is_none"
+    )]
     pub text_wrap: crate::text_geometry::TextWrap,
     #[serde(skip)]
     cached_path: RefCell<Option<Arc<CachedPath>>>,
@@ -262,8 +287,8 @@ impl PartialEq for Shape {
             && self.guide == other.guide
             && self.filters == other.filters
             && self.corners == other.corners
-            && self.mask.as_ref().map(|p| (p.w, p.h, &p.data))
-                == other.mask.as_ref().map(|p| (p.w, p.h, &p.data))
+            && self.mask == other.mask
+            && self.artwork_masks == other.artwork_masks
             && self.layout == other.layout
             && self.text_wrap == other.text_wrap
     }
@@ -289,6 +314,7 @@ impl Shape {
             filters: self.filters.clone(),
             corners: self.corners,
             mask,
+            artwork_masks: self.artwork_masks.clone(),
             layout: self.layout.clone(),
             text_wrap: self.text_wrap.clone(),
             cached_path: self.cached_path.clone(),
@@ -313,6 +339,7 @@ impl Shape {
             filters: crate::filter::FilterStack::default(),
             corners: [0.0; 4],
             mask: None,
+            artwork_masks: Vec::new(),
             layout: FrameLayout::default(),
             text_wrap: Default::default(),
             cached_path: RefCell::new(None),
@@ -436,29 +463,14 @@ impl Shape {
                 }
             }
         }
+        if let Geom::Text(run) = &geometry
+            && let Some(path) = crate::text::outline_path(run)
+        {
+            geometry = crate::geom::path_geom(&path, false)?;
+        }
         if matches!(geometry, Geom::Path { .. } | Geom::Paths { .. }) {
-            // Path bounds sample every contour. Compute the unchanged rotation
-            // center once, not once for every cubic control point (quadratic on
-            // detailed imported paths). Keep world_point's exact arithmetic.
-            let center = self.geom.bbox().center();
-            let world_point = |point: Pt| point.rotate_about(center, self.rotation);
-            for (anchors, closed) in geometry.path_contours() {
-                let segments = crate::geom::path_cubics(anchors, closed);
-                if let Some(first) = segments.first() {
-                    let p = world_point(first[0]);
-                    pb.move_to(p.x, p.y);
-                    for [a, c1, c2, b] in segments {
-                        let [a, c1, c2, b] = [a, c1, c2, b].map(world_point);
-                        if (c1 - a).length_sq() < 1e-10 && (c2 - b).length_sq() < 1e-10 {
-                            pb.line_to(b.x, b.y);
-                        } else {
-                            pb.cubic_to(c1.x, c1.y, c2.x, c2.y, b.x, b.y);
-                        }
-                    }
-                    if closed {
-                        pb.close();
-                    }
-                }
+            if let Some(path) = crate::geom::curve_path(&geometry, self.geom.bbox().center(), self.rotation) {
+                pb.push_path(&path);
             }
         } else {
             for contour in self.world_contours(segs) {
@@ -488,15 +500,46 @@ impl Shape {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Pixels {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<crate::deep_color::NativePixels>,
     pub w: u32,
     pub h: u32,
-    pub data: Vec<u8>,
+    #[serde(with = "crate::deep_color::storage::bytes")]
+    pub data: Arc<crate::resources::Allocation<u8>>,
     #[serde(skip)]
     pub version: u64,
     #[serde(skip)]
-    pub(crate) cached_pm: RefCell<Option<(u64, tiny_skia::Pixmap)>>,
+    pub(crate) cached_pm: RefCell<Option<(u64, crate::deep_color::surface::Surface)>>,
     #[serde(skip)]
     pub(crate) cached_uniform: RefCell<Option<(u64, Option<Rgba>)>>,
+}
+
+impl PartialEq for Pixels {
+    fn eq(&self, other: &Self) -> bool {
+        if (self.w, self.h) != (other.w, other.h) {
+            return false;
+        }
+        let samples = |a: &[f32], b: &[f32]| {
+            a.len() == b.len()
+                && (a.as_ptr() == b.as_ptr()
+                    || a.iter().zip(b).all(|(a,b)| a.to_bits() == b.to_bits()))
+        };
+        match (&self.native, &other.native) {
+            (None, None) => self.data.as_slice() == other.data.as_slice(),
+            (Some(a), Some(b)) => {
+                a.depth == b.depth
+                    && a.intent == b.intent
+                    && a.icc_profile.as_slice() == b.icc_profile.as_slice()
+                    && samples(&a.samples, &b.samples)
+                    && match (&a.cmyk, &b.cmyk) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => samples(a,b),
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+    }
 }
 
 impl Clone for Pixels {
@@ -505,6 +548,7 @@ impl Clone for Pixels {
             w: self.w,
             h: self.h,
             data: self.data.clone(),
+            native: self.native.clone(),
             version: self.version,
             cached_pm: RefCell::new(None),
             cached_uniform: RefCell::new(*self.cached_uniform.borrow()),
@@ -513,29 +557,57 @@ impl Clone for Pixels {
 }
 
 impl Pixels {
-    pub fn new(w: u32, h: u32) -> Self {
-        Self {
-            w: w.max(1),
-            h: h.max(1),
-            data: vec![0u8; w.max(1) as usize * h.max(1) as usize * 4],
-            version: 0,
-            cached_pm: RefCell::new(None),
-            cached_uniform: RefCell::new(Some((0, Some(Rgba::TRANSPARENT)))),
-        }
+    /// Allocate an explicit pixel canvas under shared working-memory admission.
+    /// Args: positive dimensions. Returns transparent pixels or an allocation error.
+    pub fn new(w: u32, h: u32) -> Result<Self, String> {
+        let count = crate::deep_color::storage::count(w, h, 4)?;
+        let data = crate::resources::global()
+            .allocate_now::<u8, _>(count, &crate::deep_color::storage::check)?;
+        Self::from_byte_allocation(w, h, Arc::new(data))
     }
 
     pub fn from_rgba(w: u32, h: u32, data: Vec<u8>) -> Option<Self> {
-        if data.len() != w as usize * h as usize * 4 {
-            return None;
+        Self::from_byte_allocation(w, h, crate::deep_color::storage::adopt(data).ok()?).ok()
+    }
+
+    pub fn from_byte_allocation(
+        w: u32,
+        h: u32,
+        data: Arc<crate::resources::Allocation<u8>>,
+    ) -> Result<Self, String> {
+        if data.len() != crate::deep_color::storage::count(w, h, 4)? {
+            return Err("Pixel dimensions do not match byte storage".into());
         }
-        Some(Self {
+        Ok(Self {
             w,
             h,
+            native: None,
             data,
             version: 1,
             cached_pm: RefCell::new(None),
             cached_uniform: RefCell::new(None),
         })
+    }
+
+    /// Admit a cache copy before mutating legacy byte pixels.
+    /// Args: self. Returns writable RGBA8 only for an image whose bytes are authoritative.
+    pub fn bytes_mut(&mut self) -> Result<&mut [u8], String> {
+        if self.native.is_some() {
+            return Err("Edit authoritative native samples instead of the display cache".into());
+        }
+        crate::deep_color::storage::make_mut(&mut self.data, &crate::deep_color::storage::check)
+    }
+
+    pub fn replace_bytes(&mut self, data: Vec<u8>) -> Result<(), String> {
+        if self.native.is_some() {
+            return Err("Edit authoritative native samples instead of the display cache".into());
+        }
+        if data.len() != crate::deep_color::storage::count(self.w, self.h, 4)? {
+            return Err("Invalid replacement pixel dimensions".into());
+        }
+        self.data = crate::deep_color::storage::adopt(data)?;
+        self.touch();
+        Ok(())
     }
 
     pub fn touch(&mut self) {
@@ -544,34 +616,34 @@ impl Pixels {
         self.cached_uniform.borrow_mut().take();
     }
 
-    fn build_pm(&self) -> Option<tiny_skia::Pixmap> {
-        crate::color::rgba_to_pixmap(self.w, self.h, &self.data)
-    }
-
-    fn ensure_pm(&self) {
+    fn ensure_pm(&self) -> Result<(), String> {
         let mut slot = self.cached_pm.borrow_mut();
-        if let Some((v, pm)) = slot.as_ref()
-            && *v == self.version
-            && pm.width() == self.w
-            && pm.height() == self.h
-        {
-            return;
+        if slot.as_ref().is_some_and(|(version, pixels)| {
+            *version == self.version && pixels.width() == self.w && pixels.height() == self.h
+        }) {
+            return Ok(());
         }
-        *slot = self.build_pm().map(|pm| (self.version, pm));
+        let pixels = crate::deep_color::surface::Surface::from_rgba(self.w, self.h, &self.data)?;
+        *slot = Some((self.version, pixels));
+        Ok(())
     }
-
     pub fn with_pm<R>(&self, f: impl FnOnce(&tiny_skia::Pixmap) -> R) -> Option<R> {
-        self.ensure_pm();
-        let slot = self.cached_pm.borrow();
-        slot.as_ref().map(|(_, pm)| f(pm))
+        self.ensure_pm().ok()?;
+        self.cached_pm.borrow().as_ref().map(|(_, pm)| f(pm))
     }
-
-    pub fn to_pixmap(&self) -> Option<tiny_skia::Pixmap> {
-        self.with_pm(|pm| pm.clone())
+    pub fn try_to_pixmap(&self) -> Result<crate::deep_color::surface::Surface, String> {
+        self.ensure_pm()?;
+        self.cached_pm.borrow().as_ref().unwrap().1.try_clone()
+    }
+    pub fn to_pixmap(&self) -> Option<crate::deep_color::surface::Surface> {
+        self.try_to_pixmap().ok()
     }
 
     /// Every pixel has alpha 0.
     pub fn is_invisible(&self) -> bool {
+        if let Some(native) = &self.native {
+            return native.samples.chunks_exact(4).all(|p| p[3] <= 0.);
+        }
         self.data.is_empty() || self.data.chunks_exact(4).all(|p| p[3] == 0)
     }
 
@@ -592,20 +664,17 @@ impl Pixels {
         color
     }
 
-    pub fn from_pixmap(pm: &tiny_skia::Pixmap) -> Self {
-        let mut data = vec![0u8; pm.data().len()];
-        for (dst, src) in data.chunks_exact_mut(4).zip(pm.pixels()) {
+    pub fn from_pixmap(pm: &tiny_skia::Pixmap) -> Result<Self, String> {
+        Self::try_from_pixmap(pm)
+    }
+    pub fn try_from_pixmap(pm: &tiny_skia::Pixmap) -> Result<Self, String> {
+        let mut data = crate::resources::global()
+            .allocate_now::<u8, _>(pm.data().len(), &crate::deep_color::storage::check)?;
+        for (dst, src) in data.as_mut_slice().chunks_exact_mut(4).zip(pm.pixels()) {
             let color = src.demultiply();
             dst.copy_from_slice(&[color.red(), color.green(), color.blue(), color.alpha()]);
         }
-        Self {
-            w: pm.width(),
-            h: pm.height(),
-            data,
-            version: 1,
-            cached_pm: RefCell::new(Some((1, pm.clone()))),
-            cached_uniform: RefCell::new(None),
-        }
+        Self::from_byte_allocation(pm.width(), pm.height(), Arc::new(data))
     }
 }
 
@@ -780,7 +849,15 @@ impl LayerKind {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub svg_filter: Option<crate::svg_source::SvgFilterGraph>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub psd_smart: Option<crate::formats::psd::smart::SmartObject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub psd_type: Option<crate::formats::psd::type_layer::TypeData>,
     pub id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_attachment: Option<String>,
     pub name: String,
     pub visible: bool,
     pub locked: bool,
@@ -790,7 +867,11 @@ pub struct Layer {
     #[serde(default)]
     pub blend_interior: bool,
     pub blend: Blend,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clipped: bool,
     pub mask: Option<Pixels>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artwork_masks: Vec<crate::artwork_mask::ArtworkMask>,
     /// Optional placed mask geometry for vector layers and groups.
     #[serde(default)]
     pub mask_origin: Pt,
@@ -804,7 +885,10 @@ pub struct Layer {
     pub is_group: bool,
     #[serde(default)]
     pub pass_through: bool,
-    #[serde(default, skip_serializing_if = "crate::text_geometry::TextWrap::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::text_geometry::TextWrap::is_none"
+    )]
     pub text_wrap: crate::text_geometry::TextWrap,
     #[serde(default)]
     pub filters: crate::filter::FilterStack,
@@ -821,6 +905,7 @@ impl Layer {
     pub fn vector(name: impl Into<String>) -> Self {
         Self {
             id: next_id(),
+            source_attachment: None,
             name: name.into(),
             visible: true,
             locked: false,
@@ -828,11 +913,16 @@ impl Layer {
             fill_opacity: 1.0,
             blend_interior: false,
             blend: Blend::Normal,
+            clipped: false,
+            svg_filter: None,
             parent: None,
             is_group: false,
             pass_through: false,
+            psd_type: None,
+            psd_smart:None,
             text_wrap: Default::default(),
             mask: None,
+            artwork_masks: Vec::new(),
             mask_origin: Pt::ZERO,
             mask_size: Pt::ZERO,
             kind: LayerKind::Vector { shapes: vec![] },
@@ -840,37 +930,21 @@ impl Layer {
         }
     }
 
-    pub fn raster(name: impl Into<String>, w: u32, h: u32) -> Self {
-        Self {
-            id: next_id(),
-            name: name.into(),
-            visible: true,
-            locked: false,
-            opacity: 1.0,
-            fill_opacity: 1.0,
-            blend_interior: false,
-            blend: Blend::Normal,
-            parent: None,
-            is_group: false,
-            pass_through: false,
-            text_wrap: Default::default(),
-            mask: None,
-            mask_origin: Pt::ZERO,
-            mask_size: Pt::ZERO,
-            kind: LayerKind::Raster {
-                pixels: Pixels::new(w, h),
-                origin: Pt::ZERO,
-                size: Pt::ZERO,
-                rotation: 0.0,
-                shear: 0.0,
-            },
-            filters: crate::filter::FilterStack::default(),
-        }
+    /// Allocate an explicit pixel layer without imposing a megapixel ceiling.
+    /// Args: layer name and dimensions. Returns a layer or a shared-memory admission error.
+    pub fn raster(name: impl Into<String>, w: u32, h: u32) -> Result<Self, String> {
+        Ok(Self::placed_raster(
+            name,
+            Pixels::new(w, h)?,
+            Pt::ZERO,
+            Pt::ZERO,
+        ))
     }
 
     pub fn placed_raster(name: impl Into<String>, pixels: Pixels, origin: Pt, size: Pt) -> Self {
         Self {
             id: next_id(),
+            source_attachment: None,
             name: name.into(),
             visible: true,
             locked: false,
@@ -878,11 +952,16 @@ impl Layer {
             fill_opacity: 1.0,
             blend_interior: false,
             blend: Blend::Normal,
+            clipped: false,
+            svg_filter: None,
             parent: None,
             is_group: false,
             pass_through: false,
+            psd_type:None,
+            psd_smart:None,
             text_wrap: Default::default(),
             mask: None,
+            artwork_masks: Vec::new(),
             mask_origin: Pt::ZERO,
             mask_size: Pt::ZERO,
             kind: LayerKind::Raster {
@@ -1182,6 +1261,25 @@ fn deserialize_artboards<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Artboard
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Document {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_mask: Option<crate::channels::quick_mask::QuickMask>,
+    /// The ordinary active pixel selection, written only while saving and
+    /// moved back into the editor on open. Never part of history or Live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_selection: Option<crate::channels::Plane>,
+    #[serde(default, rename = "saved_channels", skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<crate::channels::Channel>,
+    #[serde(default, skip_serializing_if = "crate::screen_export::Catalog::is_empty")]
+    pub screen_export: crate::screen_export::Catalog,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linked_styles: Vec<crate::linked_styles::LinkedStyle>,
+    #[serde(default, skip_serializing_if = "crate::publishing::Publishing::is_empty")]
+    pub publishing: crate::publishing::Publishing,
+    #[serde(default)]
+    pub color: crate::deep_color::cms::DocumentColor,
+    /// Gray or Lab authoring tag over the RGB working space (edges convert).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_tag: Option<crate::deep_color::tagged::ColorTag>,
     #[serde(default)]
     pub text_wrap_above_only: bool,
     pub name: String,
@@ -1195,6 +1293,8 @@ pub struct Document {
     /// Conversion changes stay with the saved project for later inspection.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub import_notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<crate::source_attachment::SourceAttachment>,
     pub guides: Vec<Guide>,
     #[serde(default)]
     pub ruler: RulerSettings,
@@ -1217,6 +1317,8 @@ pub struct Document {
     pub motion: crate::motion::Motion,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud: Option<CloudLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collaboration: Option<crate::collaboration::Replica>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<CommentPin>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1224,6 +1326,41 @@ pub struct Document {
 }
 
 impl Document {
+    /// Retain original format data once for all referencing objects.
+    /// Args: source attachment. Returns its stable UUID.
+    pub fn retain_source(&mut self, source: crate::source_attachment::SourceAttachment) -> String {
+        let id = source.id.clone();
+        if self.source(&id).is_none() { self.sources.push(source); }
+        id
+    }
+
+    /// Find the original data referenced by an imported object.
+    /// Args: attachment UUID. Returns the retained source if present.
+    pub fn source(&self, id: &str) -> Option<&crate::source_attachment::SourceAttachment> {
+        self.sources.iter().find(|s| s.id == id)
+    }
+
+    /// Validate retained original data and object references.
+    /// Args: none. Returns an error for damaged, duplicate, missing or oversized sources.
+    pub fn validate_sources(&self) -> Result<(), String> {
+        let mut bytes = 0usize;
+        let mut ids = std::collections::HashSet::new();
+        for source in &self.sources {
+            source.validate()?;
+            bytes = bytes.checked_add(source.bytes().len()).ok_or("Retained sources exceed 512 MiB")?;
+            if bytes > 512 * 1024 * 1024 { return Err("Retained sources exceed 512 MiB".into()); }
+            if !ids.insert(&source.id) { return Err("Duplicate retained source UUID".into()); }
+        }
+        for layer in &self.layers {
+            if let Some(id) = &layer.source_attachment && self.source(id).is_none() {
+                return Err(format!("Layer {} references a missing original source", layer.name));
+            }
+        }
+        if let Some(replica) = &self.collaboration {
+            crate::collaboration::resources::validate(replica)?;
+        }
+        Ok(())
+    }
     /// Editing layout needs vector state only. Preserve layer indices without
     /// copying image buffers or mask data into temporary solver documents.
     pub fn layout_snapshot(&self) -> Self {
@@ -1235,6 +1372,7 @@ impl Document {
         mut clone_shape: impl FnMut(&Shape) -> Shape,
     ) -> Self {
         let mut copy = Self::new(&self.name, 1.0, 1.0, self.dpi);
+        copy.color = self.color.clone();
         copy.width = self.width;
         copy.height = self.height;
         copy.artboards = self.artboards.clone();
@@ -1242,6 +1380,9 @@ impl Document {
         copy.workspace = self.workspace;
         copy.layout_tokens = self.layout_tokens.clone();
         copy.text_wrap_above_only = self.text_wrap_above_only;
+        copy.publishing = self.publishing.clone();
+        copy.screen_export = self.screen_export.clone();
+        copy.channels = self.channels.clone();
         copy.layers = self
             .layers
             .iter()
@@ -1254,8 +1395,13 @@ impl Document {
                 out.locked = layer.locked;
                 out.opacity = layer.opacity;
                 out.blend = layer.blend;
-                out.text_wrap = layer.text_wrap.clone();                if let Some(shapes) = layer.kind.shapes() {
-                    out.kind.shapes_mut().unwrap().extend(shapes.iter().map(&mut clone_shape));
+                out.artwork_masks = layer.artwork_masks.clone();
+                out.text_wrap = layer.text_wrap.clone();
+                if let Some(shapes) = layer.kind.shapes() {
+                    out.kind
+                        .shapes_mut()
+                        .unwrap()
+                        .extend(shapes.iter().map(&mut clone_shape));
                 }
                 out
             })
@@ -1283,6 +1429,7 @@ impl Document {
         self.layers
             .get(index)
             .is_some_and(|l| l.visible && !l.locked && !l.is_group)
+            && self.layer_visible(index)
             && self
                 .layer_ancestors(index)
                 .iter()
@@ -1291,6 +1438,7 @@ impl Document {
 
     pub fn layer_visible(&self, index: usize) -> bool {
         self.layers.get(index).is_some_and(|l| l.visible)
+            && self.clipping_bases(index).all(|base| self.layers[base].visible)
             && self
                 .layer_ancestors(index)
                 .iter()
@@ -1323,8 +1471,12 @@ impl Document {
                 parent = target.parent;
             }
         }
+        self.validate_artwork_masks()?;
         crate::layout::validate_hierarchy(self)?;
-        crate::layout_tokens::validate_tokens(self)
+        crate::layout_tokens::validate_tokens(self)?;
+        crate::channels::validate_metadata(&self.channels)?;
+        if let Some(mask) = &self.quick_mask { mask.validate_metadata(&self.channels)?; }
+        self.screen_export.validate()
     }
 
     pub fn new(name: impl Into<String>, width: f32, height: f32, dpi: f32) -> Self {
@@ -1350,17 +1502,35 @@ impl Document {
         } else {
             page_w
         };
-        let w = total_w.round().max(1.0) as u32;
-        let h = page_h.round().max(1.0) as u32;
+        let mut background = Layer::vector("Background");
+        if !transparent {
+            background.kind.shapes_mut().unwrap().push(Shape::new(
+                Geom::Rect {
+                    origin: Pt::ZERO,
+                    size: Pt::new(total_w, page_h),
+                    radius: 0.0,
+                },
+                Style {
+                    fill: Fill::Solid(Rgba::WHITE),
+                    stroke: None,
+                },
+            ));
+        }
         let mut doc = Self {
+            quick_mask: None,
+            active_selection: None,
+            channels: vec![],
+            publishing: Default::default(),
+            color: Default::default(),
             text_wrap_above_only: false,
             name: name.into(),
             workspace: None,
             width: total_w,
             height: page_h,
             dpi,
-            layers: vec![Layer::raster("Background", w, h), Layer::vector("Layer 1")],
+            layers: vec![background, Layer::vector("Layer 1")],
             import_notes: vec![],
+            sources: vec![],
             guides: vec![],
             ruler: RulerSettings::default(),
             grid: Grid::default(),
@@ -1372,20 +1542,13 @@ impl Document {
             bleed: 36.0, // 0.125" at 300dpi or 0.5" at 72dpi ~ 36px
             motion: crate::motion::Motion::default(),
             cloud: None,
+            collaboration: None,
             comments: vec![],
             layout_tokens: vec![],
+            screen_export: Default::default(),
+            linked_styles: vec![],
+            color_tag: None,
         };
-        // Fill background white when not transparent
-        if !transparent && let Some(px) = doc.layers[0].kind.pixels_mut() {
-            let white = crate::color::Rgba::WHITE;
-            for chunk in px.data.chunks_mut(4) {
-                chunk[0] = white.r;
-                chunk[1] = white.g;
-                chunk[2] = white.b;
-                chunk[3] = 255;
-            }
-            px.touch();
-        }
         if show_bleed {
             // Outer bleed rect guides
             let b = doc.bleed;
@@ -1498,7 +1661,13 @@ impl Document {
     }
 
     /// Convert a pointer through the ancestor frames and reject clipped content.
-    pub fn layout_hit_point(&self, layer: usize, id: u64, mut point: Pt) -> Option<Pt> {
+    pub fn layout_hit_point(&self, layer: usize, id: u64, point: Pt) -> Option<Pt> {
+        self.layout_hit_point_with(layer, id, point, |_| crate::motion::Pose::identity())
+    }
+
+    /// Recover a pointer through the currently painted frame hierarchy.
+    /// Args: layer, shape ID, document point and pose sampler. Returns unclipped coordinates in the shape's parent.
+    pub(crate) fn layout_hit_point_with(&self, layer: usize, id: u64, mut point: Pt, pose: impl Fn(u64) -> crate::motion::Pose) -> Option<Pt> {
         let mut ancestors = Vec::new();
         let mut parent = self.find_shape(layer, id)?.layout.parent;
         while let Some(id) = parent {
@@ -1510,6 +1679,10 @@ impl Document {
         }
         for id in ancestors.into_iter().rev() {
             let frame = self.find_shape(layer, id)?;
+            let transform = pose(id).to_skia(frame.world_bbox().center()).invert()?;
+            let mut mapped = tiny_skia::Point::from_xy(point.x, point.y);
+            transform.map_point(&mut mapped);
+            point = Pt::new(mapped.x, mapped.y);
             if !frame.visible || frame.locked || (frame.layout.clip && !frame.contains_world(point))
             {
                 return None;
@@ -1519,7 +1692,7 @@ impl Document {
         Some(point)
     }
 
-    fn layout_paint_order(&self, layer: usize) -> Vec<usize> {
+    pub(crate) fn layout_paint_order(&self, layer: usize) -> Vec<usize> {
         let Some(shapes) = self.layers.get(layer).and_then(|l| l.kind.shapes()) else {
             return Vec::new();
         };
@@ -1545,14 +1718,17 @@ impl Document {
     }
 
     pub fn hit_test(&self, p: Pt, stroke_slack: f32) -> Option<(usize, u64)> {
+        let mask_sources = self.mask_sources();
         for (li, layer) in self.layers.iter().enumerate().rev() {
-            if !self.layer_editable(li) {
+            if !self.layer_editable(li) || self.mask_source_member(li, None, &mask_sources) {
                 continue;
             }
+            if !crate::compositor::clipping_visible_at(self, li, p, None, None) { continue; }
             if let Some(shapes) = layer.kind.shapes() {
                 for index in self.layout_paint_order(li).into_iter().rev() {
                     let shape = &shapes[index];
-                    if !shape.visible
+                    if self.mask_source_member(li, Some(shape.id), &mask_sources)
+                        || !shape.visible
                         || shape.locked
                         || (shape.guide && (!self.ruler.guides_visible || self.ruler.guides_locked))
                     {
@@ -1576,20 +1752,30 @@ impl Document {
     }
 
     pub fn hits_in_rect(&self, r: Bounds) -> Vec<(usize, u64)> {
+        let mask_sources = self.mask_sources();
         let mut out = vec![];
         for (li, layer) in self.layers.iter().enumerate() {
-            if !self.layer_editable(li) {
+            if !self.layer_editable(li) || self.mask_source_member(li, None, &mask_sources) {
                 continue;
             }
             if let Some(shapes) = layer.kind.shapes() {
                 for shape in shapes {
-                    if !shape.visible
+                    if self.mask_source_member(li, Some(shape.id), &mask_sources)
+                        || !shape.visible
                         || shape.locked
                         || (shape.guide && (!self.ruler.guides_visible || self.ruler.guides_locked))
                     {
                         continue;
                     }
-                    if shape.world_bbox().intersects(r) {
+                    let transform = crate::compositor::shape_parent_transform(self, li, shape.id);
+                    let mut bounds = None;
+                    for p in shape.world_contours(32).into_iter().flatten() {
+                        let mut p = tiny_skia::Point::from_xy(p.x, p.y);
+                        transform.map_point(&mut p);
+                        let p = Pt::new(p.x, p.y);
+                        bounds.get_or_insert_with(|| Bounds::from_pt(p)).union_pt(p);
+                    }
+                    if bounds.is_some_and(|bounds| bounds.intersects(r)) {
                         out.push((li, shape.id));
                     }
                 }
@@ -1607,21 +1793,34 @@ impl Document {
     pub fn ensure_ids(&mut self) -> Result<(), String> {
         let mut max = 0u64;
         for l in &self.layers {
+            bump_id(l.id);
             max = max.max(l.id);
             if let Some(ss) = l.kind.shapes() {
                 for s in ss {
+                    bump_id(s.id);
                     max = max.max(s.id);
                 }
             }
         }
         for a in &self.artboards {
+            bump_id(a.id);
             max = max.max(a.id);
         }
         for pin in &self.comments {
+            bump_id(pin.id);
             max = max.max(pin.id);
         }
         for token in &self.layout_tokens {
+            bump_id(token.id);
             max = max.max(token.id);
+        }
+        for channel in &self.channels {
+            bump_id(channel.id);
+            max = max.max(channel.id);
+        }
+        for id in self.screen_export.assets.iter().map(|a|a.id).chain(self.screen_export.rows.iter().map(|r|r.id)) {
+            bump_id(id);
+            max = max.max(id);
         }
         // Brand asset import rejects the same range: ids at the top of u64
         // would overflow or wrap the id allocator, colliding with new objects.
@@ -1645,14 +1844,64 @@ pub struct CanvasSettings {
 }
 impl CanvasSettings {
     pub fn read(doc: &Document) -> Self {
-        Self { name: doc.name.clone(), width: doc.width, height: doc.height,
-            dpi: doc.dpi, transparent: doc.transparent }
+        Self {
+            name: doc.name.clone(),
+            width: doc.width,
+            height: doc.height,
+            dpi: doc.dpi,
+            transparent: doc.transparent,
+        }
+    }
+}
+
+/// A paint layer's pixels, placement, and aligned mask.
+#[derive(Clone, Debug)]
+pub struct RasterState {
+    pub kind: LayerKind,
+    pub mask: Option<Pixels>,
+}
+
+impl RasterState {
+    /// Capture paint content before a stroke.
+    /// Takes a layer; returns its raster content, or None for a vector layer.
+    pub fn capture(layer: &Layer) -> Option<Self> {
+        layer.kind.pixels()?;
+        Some(Self {
+            kind: layer.kind.clone(),
+            mask: layer.mask.clone(),
+        })
+    }
+
+    /// Restore paint content without changing layer settings.
+    /// Takes the destination layer; returns nothing.
+    pub fn restore(self, layer: &mut Layer) {
+        layer.kind = self.kind;
+        if let Some(pixels) = layer.kind.pixels_mut() {
+            pixels.touch();
+        }
+        layer.mask = self.mask;
     }
 }
 
 #[derive(Clone, Debug)]
 pub enum Cmd {
-    SetCanvas { before: CanvasSettings, after: CanvasSettings },
+    SetLayerClipping { index: usize, before: bool, after: bool },
+    SetQuickMask {
+        before: Option<crate::channels::quick_mask::QuickMask>,
+        after: Option<crate::channels::quick_mask::QuickMask>,
+        selection: Option<Box<crate::channels::quick_mask::SelectionChange>>,
+    },
+    SetChannels { before: Vec<crate::channels::Channel>, after: Vec<crate::channels::Channel> },
+    SetSvgFilter { index: usize, before: Option<crate::svg_source::SvgFilterGraph>, after: Option<crate::svg_source::SvgFilterGraph> },
+    SetSmartLayer {index:usize,before:Box<Layer>,after:Box<Layer>},
+    SetDocumentColor {
+        before: crate::deep_color::cms::DocumentColor,
+        after: crate::deep_color::cms::DocumentColor,
+    },
+    SetCanvas {
+        before: CanvasSettings,
+        after: CanvasSettings,
+    },
     SetFillOpacity {
         layer: usize,
         id: Option<u64>,
@@ -1680,13 +1929,25 @@ pub enum Cmd {
         before: Vec<String>,
         after: Vec<String>,
     },
+    SetSources {
+        before: Vec<crate::source_attachment::SourceAttachment>,
+        after: Vec<crate::source_attachment::SourceAttachment>,
+    },
     SetGroupPassThrough {
         index: usize,
         before: bool,
         after: bool,
     },
-    SetTextWrap { layer:usize, id:Option<u64>, before:crate::text_geometry::TextWrap, after:crate::text_geometry::TextWrap },
-    SetTextWrapAbove {before:bool,after:bool},
+    SetTextWrap {
+        layer: usize,
+        id: Option<u64>,
+        before: crate::text_geometry::TextWrap,
+        after: crate::text_geometry::TextWrap,
+    },
+    SetTextWrapAbove {
+        before: bool,
+        after: bool,
+    },
     SetShapeGuide {
         layer: usize,
         id: u64,
@@ -1694,6 +1955,12 @@ pub enum Cmd {
         after: bool,
     },
     Batch(Vec<Cmd>),
+    SetArtworkMasks {
+        layer: usize,
+        id: Option<u64>,
+        before: Vec<crate::artwork_mask::ArtworkMask>,
+        after: Vec<crate::artwork_mask::ArtworkMask>,
+    },
     SetShapeMask {
         layer: usize,
         id: u64,
@@ -1780,11 +2047,22 @@ pub enum Cmd {
         blend: Blend,
         before: (String, bool, bool, f32, Blend),
     },
+    NativePixels {
+        layer: usize,
+        mask: bool,
+        before: Pixels,
+        after: Pixels,
+    },
     Pixels {
         layer: usize,
         mask: bool,
-        before: Vec<u8>,
-        after: Vec<u8>,
+        before: Arc<crate::resources::Allocation<u8>>,
+        after: Arc<crate::resources::Allocation<u8>>,
+    },
+    PaintRaster {
+        layer: usize,
+        before: RasterState,
+        after: RasterState,
     },
     AddGuide {
         guide: Guide,
@@ -1865,6 +2143,18 @@ pub enum Cmd {
         before: Vec<crate::layout_tokens::DesignToken>,
         after: Vec<crate::layout_tokens::DesignToken>,
     },
+    SetScreenExport {
+        before: crate::screen_export::Catalog,
+        after: crate::screen_export::Catalog,
+    },
+    SetColorTag {
+        before: Option<crate::deep_color::tagged::ColorTag>,
+        after: Option<crate::deep_color::tagged::ColorTag>,
+    },
+    SetLinkedStyles {
+        before: Vec<crate::linked_styles::LinkedStyle>,
+        after: Vec<crate::linked_styles::LinkedStyle>,
+    },
     SetCloud {
         before: Option<CloudLink>,
         after: Option<CloudLink>,
@@ -1877,23 +2167,44 @@ pub enum Cmd {
 
 const MAX_HISTORY: usize = 200;
 
+#[path = "document/history_target.rs"]
+mod history_target;
+pub(crate) use history_target::HistoryTarget;
+use history_target::HistoryEntry;
+
 #[derive(Default, Clone)]
 pub struct History {
-    undo: Vec<Cmd>,
-    redo: Vec<Cmd>,
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
+    field: Option<u64>,
+    sealed: bool,
+    staging: bool,
 }
 
+#[path = "document/input_history.rs"]
+mod input_history;
+
 impl History {
+    /// Retain every command while a single atomic action is being evaluated.
+    /// Args: none. Returns an isolated history without the normal completed-entry limit.
+    pub(crate) fn staging() -> Self { Self { staging: true, sealed: true, ..Default::default() } }
+
+    /// Take the actual commands accepted by a completed action.
+    /// Args: this staging history. Returns commands in their original apply order.
+    pub(crate) fn into_commands(self) -> Vec<Cmd> { self.undo.into_iter().map(|entry| entry.command).collect() }
+
     pub fn push(&mut self, cmd: Cmd) {
-        if let Some(prev) = self.undo.last_mut()
-            && coalesce(prev, &cmd)
+        self.field = None;
+        if !std::mem::take(&mut self.sealed)
+            && let Some(prev) = self.undo.last_mut()
+            && coalesce(&mut prev.command, &cmd)
         {
             self.redo.clear();
             return;
         }
-        self.undo.push(cmd);
+        self.undo.push(HistoryEntry::new(cmd));
         self.redo.clear();
-        if self.undo.len() > MAX_HISTORY {
+        if !self.staging && self.undo.len() > MAX_HISTORY {
             self.undo.remove(0);
         }
     }
@@ -1906,25 +2217,28 @@ impl History {
     }
 
     pub fn undo(&mut self) -> Option<Cmd> {
-        let cmd = self.undo.pop()?;
-        let inv = invert_cmd(cmd.clone());
-        self.redo.push(cmd);
-        Some(inv)
+        self.undo_targeted().map(|(command, _)| command)
     }
 
     pub fn redo(&mut self) -> Option<Cmd> {
-        let cmd = self.redo.pop()?;
-        self.undo.push(cmd.clone());
-        Some(cmd)
+        self.redo_targeted().map(|(command, _)| command)
     }
 
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
+        self.field = None;
+        self.sealed = false;
     }
 
     pub fn len(&self) -> usize {
         self.undo.len()
+    }
+
+    /// Inspect the actual committed edit sequence without copying document data.
+    /// Args: none. Returns commands from oldest to newest.
+    pub fn entries(&self) -> impl DoubleEndedIterator<Item = &Cmd> + ExactSizeIterator {
+        self.undo.iter().map(|entry| &entry.command)
     }
 }
 
@@ -2100,7 +2414,18 @@ fn coalesce(prev: &mut Cmd, next: &Cmd) -> bool {
 
 pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
     match cmd {
-        Cmd::SetCanvas { before, after } => Cmd::SetCanvas { before: after, after: before },
+        Cmd::SetLayerClipping {index,before,after} => Cmd::SetLayerClipping {index,before:after,after:before},
+        Cmd::SetQuickMask {before,after,selection} => Cmd::SetQuickMask {before:after,after:before,selection:selection.map(|s| Box::new(crate::channels::quick_mask::SelectionChange {before:s.after,after:s.before}))},
+        Cmd::SetChannels {before,after} => Cmd::SetChannels {before:after,after:before},
+        Cmd::SetSmartLayer{index,before,after}=>Cmd::SetSmartLayer{index,before:after,after:before},
+        Cmd::SetDocumentColor { before, after } => Cmd::SetDocumentColor {
+            before: after,
+            after: before,
+        },
+        Cmd::SetCanvas { before, after } => Cmd::SetCanvas {
+            before: after,
+            after: before,
+        },
         Cmd::SetFillOpacity {
             layer,
             id,
@@ -2134,6 +2459,7 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
             before: after,
             after: before,
         },
+        Cmd::SetSvgFilter { index, before, after } => Cmd::SetSvgFilter { index, before: after, after: before },
         Cmd::SetLayerParent {
             index,
             before,
@@ -2147,6 +2473,7 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
             before: after,
             after: before,
         },
+        Cmd::SetSources { before, after } => Cmd::SetSources { before: after, after: before },
         Cmd::SetGroupPassThrough {
             index,
             before,
@@ -2156,14 +2483,38 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
             before: after,
             after: before,
         },
-        Cmd::SetTextWrap {layer,id,before,after} => Cmd::SetTextWrap {layer,id,before:after,after:before},
-        Cmd::SetTextWrapAbove {before,after} => Cmd::SetTextWrapAbove {before:after,after:before},
+        Cmd::SetTextWrap {
+            layer,
+            id,
+            before,
+            after,
+        } => Cmd::SetTextWrap {
+            layer,
+            id,
+            before: after,
+            after: before,
+        },
+        Cmd::SetTextWrapAbove { before, after } => Cmd::SetTextWrapAbove {
+            before: after,
+            after: before,
+        },
         Cmd::SetShapeGuide {
             layer,
             id,
             before,
             after,
         } => Cmd::SetShapeGuide {
+            layer,
+            id,
+            before: after,
+            after: before,
+        },
+        Cmd::SetArtworkMasks {
+            layer,
+            id,
+            before,
+            after,
+        } => Cmd::SetArtworkMasks {
             layer,
             id,
             before: after,
@@ -2285,6 +2636,17 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
             blend: before.4,
             before: (name, visible, locked, opacity, blend),
         },
+        Cmd::NativePixels {
+            layer,
+            mask,
+            before,
+            after,
+        } => Cmd::NativePixels {
+            layer,
+            mask,
+            before: after,
+            after: before,
+        },
         Cmd::Pixels {
             layer,
             mask,
@@ -2293,6 +2655,15 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
         } => Cmd::Pixels {
             layer,
             mask,
+            before: after,
+            after: before,
+        },
+        Cmd::PaintRaster {
+            layer,
+            before,
+            after,
+        } => Cmd::PaintRaster {
+            layer,
             before: after,
             after: before,
         },
@@ -2402,6 +2773,15 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
             before: after,
             after: before,
         },
+        Cmd::SetScreenExport { before, after } => Cmd::SetScreenExport {
+            before: after,
+            after: before,
+        },
+        Cmd::SetColorTag { before, after } => Cmd::SetColorTag { before: after, after: before },
+        Cmd::SetLinkedStyles { before, after } => Cmd::SetLinkedStyles {
+            before: after,
+            after: before,
+        },
         Cmd::SetVectorShapes {
             layer,
             before,
@@ -2424,13 +2804,16 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
 
 pub fn apply(doc: &mut Document, cmd: &Cmd) {
     match cmd {
+        Cmd::SetLayerClipping {index,after,..} => {if let Some(layer)=doc.layers.get_mut(*index){layer.clipped=*after;}}
+        Cmd::SetSmartLayer{index,after,..}=>{if let Some(layer)=doc.layers.get_mut(*index){*layer=(**after).clone();}}
+        Cmd::SetDocumentColor { after, .. } => doc.color = after.clone(),
         Cmd::SetCanvas { after, .. } => {
             doc.name = after.name.clone();
             doc.width = after.width;
             doc.height = after.height;
             doc.dpi = after.dpi;
             doc.transparent = after.transparent;
-        },
+        }
         Cmd::SetFillOpacity {
             layer, id, after, ..
         } => {
@@ -2460,24 +2843,47 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
                 shape.blend = *after;
             }
         }
+        Cmd::SetSvgFilter { index, after, .. } => { if let Some(layer) = doc.layers.get_mut(*index) { layer.svg_filter = after.clone(); } },
         Cmd::SetLayerParent { index, after, .. } => {
             if let Some(layer) = doc.layers.get_mut(*index) {
                 layer.parent = *after;
             }
         }
         Cmd::SetImportNotes { after, .. } => doc.import_notes = after.clone(),
+        Cmd::SetSources { after, .. } => doc.sources = after.clone(),
         Cmd::SetGroupPassThrough { index, after, .. } => {
             if let Some(layer) = doc.layers.get_mut(*index) {
                 layer.pass_through = *after;
             }
         }
-        Cmd::SetTextWrap {layer,id,after,..} => { if let Some(id)=id {if let Some(s)=doc.find_shape_mut(*layer,*id){s.text_wrap=after.clone();}}else if let Some(l)=doc.layers.get_mut(*layer){l.text_wrap=after.clone();} },
-        Cmd::SetTextWrapAbove {after,..} => doc.text_wrap_above_only=*after,
+        Cmd::SetTextWrap {
+            layer, id, after, ..
+        } => {
+            if let Some(id) = id {
+                if let Some(s) = doc.find_shape_mut(*layer, *id) {
+                    s.text_wrap = after.clone();
+                }
+            } else if let Some(l) = doc.layers.get_mut(*layer) {
+                l.text_wrap = after.clone();
+            }
+        }
+        Cmd::SetTextWrapAbove { after, .. } => doc.text_wrap_above_only = *after,
         Cmd::SetShapeGuide {
             layer, id, after, ..
         } => {
             if let Some(shape) = doc.find_shape_mut(*layer, *id) {
                 shape.guide = *after;
+            }
+        }
+        Cmd::SetArtworkMasks {
+            layer, id, after, ..
+        } => {
+            if let Some(id) = id {
+                if let Some(shape) = doc.find_shape_mut(*layer, *id) {
+                    shape.artwork_masks = after.clone();
+                }
+            } else if let Some(layer) = doc.layers.get_mut(*layer) {
+                layer.artwork_masks = after.clone();
             }
         }
         Cmd::SetShapeMask {
@@ -2505,6 +2911,17 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
         Cmd::Batch(commands) => {
             for command in commands {
                 apply(doc, command);
+            }
+            if commands.iter().any(|cmd| {
+                matches!(
+                    cmd,
+                    Cmd::SetVectorShapes { .. }
+                        | Cmd::AddLayer { .. }
+                        | Cmd::RemoveLayer { .. }
+                        | Cmd::MoveShapes { .. }
+                )
+            }) {
+                doc.refresh_artwork_mask_layers();
             }
         }
         Cmd::AddShape { layer, shape } => {
@@ -2616,9 +3033,25 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
                 }
                 return;
             };
+            let moved_ids: std::collections::HashSet<_> = moved.iter().map(|s| s.id).collect();
             let at = (*to_index).min(dest.len());
             for (offset, shape) in moved.into_iter().enumerate() {
                 dest.insert(at + offset, shape);
+            }
+            let destination = doc.layers[*to_layer].id;
+            for layer in &mut doc.layers {
+                for mask in layer.artwork_masks.iter_mut().chain(
+                    layer
+                        .kind
+                        .shapes_mut()
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|s| &mut s.artwork_masks),
+                ) {
+                    if mask.source.shape.is_some_and(|id| moved_ids.contains(&id)) {
+                        mask.source.layer = destination;
+                    }
+                }
             }
         }
         Cmd::SetGeoms { items } => {
@@ -2646,12 +3079,35 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
                 l.blend = *blend;
             }
         }
+        Cmd::PaintRaster { layer, after, .. } => {
+            if let Some(layer) = doc.layers.get_mut(*layer) {
+                after.clone().restore(layer);
+            }
+        }
+        Cmd::NativePixels {
+            layer, mask, after, ..
+        } => {
+            if let Some(l) = doc.layers.get_mut(*layer) {
+                let target = if *mask {
+                    l.mask.as_mut()
+                } else {
+                    l.kind.pixels_mut()
+                };
+                if let Some(target) = target {
+                    *target = after.clone();
+                    target.touch();
+                }
+            }
+        }
         Cmd::Pixels {
             layer, mask, after, ..
         } => {
             let apply_px = |px: &mut Pixels| {
                 if px.data.len() == after.len() {
-                    px.data.copy_from_slice(after);
+                    if px.native.is_some() {
+                        return;
+                    }
+                    px.data = after.clone();
                     px.touch();
                 }
             };
@@ -2735,6 +3191,11 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
             }
         }
         Cmd::SetLayoutTokens { after, .. } => doc.layout_tokens.clone_from(after),
+        Cmd::SetScreenExport { after, .. } => doc.screen_export.clone_from(after),
+        Cmd::SetLinkedStyles { after, .. } => doc.linked_styles.clone_from(after),
+        Cmd::SetColorTag { after, .. } => doc.color_tag = *after,
+        Cmd::SetQuickMask {after,..} => doc.quick_mask.clone_from(after),
+        Cmd::SetChannels {after,..} => doc.channels.clone_from(after),
         Cmd::SetVectorShapes { layer, after, .. } => {
             if let Some(shapes) = doc.layers.get_mut(*layer).and_then(|l| l.kind.shapes_mut()) {
                 shapes.clone_from(after);
@@ -2766,20 +3227,20 @@ mod tests {
         let pixels = Pixels::from_rgba(3, 1, rgba.clone()).unwrap();
         let pm = pixels.to_pixmap().unwrap();
         assert_eq!(&pm.data()[..8], &[128, 0, 0, 128, 0, 64, 0, 64]);
-        let mut restored = Pixels::from_pixmap(&pm);
-        assert_eq!(restored.data, rgba);
+        let mut restored = Pixels::from_pixmap(&pm).unwrap();
+        assert_eq!(restored.data.as_slice(), rgba);
         restored.touch();
         assert_eq!(restored.to_pixmap().unwrap().data(), pm.data());
     }
 
     #[test]
     fn raster_uniform_cache_follows_edits_and_clones_without_render_cache() {
-        let mut pixels = Pixels::new(2, 1);
+        let mut pixels = Pixels::new(2, 1).unwrap();
         assert_eq!(pixels.is_uniform(), Some(Rgba::TRANSPARENT));
-        pixels.data[..4].copy_from_slice(&[255, 0, 0, 255]);
+        pixels.bytes_mut().unwrap()[..4].copy_from_slice(&[255, 0, 0, 255]);
         pixels.touch();
         assert_eq!(pixels.is_uniform(), None);
-        pixels.data[4..].copy_from_slice(&[255, 0, 0, 255]);
+        pixels.bytes_mut().unwrap()[4..].copy_from_slice(&[255, 0, 0, 255]);
         pixels.touch();
         pixels.to_pixmap().unwrap();
         assert_eq!(pixels.is_uniform(), Some(Rgba::rgb(255, 0, 0)));
@@ -2819,6 +3280,7 @@ mod tests {
     #[test]
     fn hit_test_finds_rect() {
         let mut doc = Document::new("t", 200.0, 100.0, 72.0);
+        doc.layers[0].visible = false;
         let s = Shape::new(
             Geom::Rect {
                 origin: Pt::new(10.0, 10.0),
@@ -3005,6 +3467,12 @@ mod tests {
                 winding: false,
             },
             Geom::Text(crate::geom::TypeRun {
+                content: "A".into(),
+                font: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/assets/fonts/EBGaramond.ttf").into(),
+                contours: contours.clone(),
+                ..Default::default()
+            }),
+            Geom::Text(crate::geom::TypeRun {
                 contours,
                 ..Default::default()
             }),
@@ -3076,6 +3544,7 @@ mod tests {
     #[test]
     fn placed_raster_hit_test() {
         let mut doc = Document::new("t", 200.0, 100.0, 72.0);
+        doc.layers[0].visible = false;
         let mut data = vec![0u8; 8 * 8 * 4];
         for px in data.chunks_mut(4) {
             px[0] = 255;
@@ -3130,12 +3599,50 @@ mod id_migration_regression {
     #[test]
     fn legacy_artboards_allocate_ids_after_loaded_shapes() {
         let mut doc = Document::new("Legacy IDs", 64., 64., 72.);
-        let mut shape = Shape::new(Geom::Rect { origin: Pt::ZERO, size: Pt::splat(10.), radius: 0. }, Style::default());
+        let mut shape = Shape::new(
+            Geom::Rect {
+                origin: Pt::ZERO,
+                size: Pt::splat(10.),
+                radius: 0.,
+            },
+            Style::default(),
+        );
         doc.artboards[0].id = 0;
         let loaded_id = next_id() + 1;
         shape.id = loaded_id;
         doc.layers[1].kind.shapes_mut().unwrap().push(shape);
         doc.ensure_ids().unwrap();
         assert_ne!(doc.artboards[0].id, loaded_id);
+    }
+}
+
+#[cfg(test)]
+mod canvas_storage_tests {
+    use super::*;
+    #[test]
+    fn large_vector_canvas_retains_geometry_without_a_pixel_background() {
+        for transparent in [false, true] {
+            let doc = Document::new_with_options(
+                "Large",
+                3_000_000.,
+                2_000_000.,
+                72.,
+                transparent,
+                1,
+                false,
+                false,
+            );
+            assert_eq!((doc.width, doc.height), (3_000_000., 2_000_000.));
+            assert!(doc.layers.iter().all(|l| l.kind.pixels().is_none()));
+            let shapes = doc.layers[0].kind.shapes().unwrap();
+            assert_eq!(shapes.len(), usize::from(!transparent));
+            if let Some(shape) = shapes.first() {
+                assert_eq!(shape.geom.bbox().size(), Pt::new(3_000_000., 2_000_000.));
+            }
+            let encoded = crate::project::encode(&doc).unwrap();
+            assert!(encoded.len() < 16_384);
+            let reopened = crate::project::decode(&encoded).unwrap();
+            assert_eq!(reopened.width, doc.width);
+        }
     }
 }

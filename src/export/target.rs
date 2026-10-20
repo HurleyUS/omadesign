@@ -13,6 +13,49 @@ pub enum Scope {
     Selection,
 }
 
+/// Bound the cached artwork and stroke that the existing renderer paints.
+/// Args: concrete shape. Returns its exact path extents with ordinary effect padding.
+fn paint_bounds(shape: &crate::document::Shape) -> Result<Bounds, String> {
+    let path = shape.get_cached_path(96);
+    let mut bounds = path
+        .as_ref()
+        .map(|path| {
+            let b = path.compute_tight_bounds().unwrap_or_else(|| path.bounds());
+            Bounds {
+                min: Pt::new(b.left(), b.top()),
+                max: Pt::new(b.right(), b.bottom()),
+            }
+        })
+        .unwrap_or_else(|| shape.world_bbox());
+    if let Some(stroke) = &shape.style.stroke
+        && stroke.width > 0.
+        && !(shape.geom.is_closed() && stroke.alignment == crate::document::StrokeAlignment::Inside)
+    {
+        let path = path.ok_or("Could not bound the selected stroke")?;
+        let aligned =
+            shape.geom.is_closed() && stroke.alignment == crate::document::StrokeAlignment::Outside;
+        let outline = path
+            .stroke(
+                &tiny_skia::Stroke {
+                    width: stroke.width * if aligned { 2. } else { 1. },
+                    line_cap: stroke.cap.to_skia(),
+                    line_join: stroke.join.to_skia(),
+                    ..Default::default()
+                },
+                1.,
+            )
+            .ok_or("Could not bound the selected stroke")?;
+        let b = outline
+            .compute_tight_bounds()
+            .unwrap_or_else(|| outline.bounds());
+        bounds = bounds.union(Bounds {
+            min: Pt::new(b.left(), b.top()),
+            max: Pt::new(b.right(), b.bottom()),
+        });
+    }
+    Ok(bounds.inflate(crate::filter::svg_pad(&shape.filters)))
+}
+
 pub fn artboard(doc: &Document, id: u64) -> Result<Document, String> {
     let board = doc
         .artboards
@@ -43,33 +86,51 @@ pub fn selection(doc: &Document, selected: &[(usize, u64)]) -> Result<Document, 
         let next = if id == 0 {
             item.kind.raster_bounds()
         } else {
-            doc.find_shape(layer, id).map(|shape| {
-                let b = shape.world_bbox();
-                let mut points = [
-                    tiny_skia::Point::from_xy(b.min.x, b.min.y),
-                    tiny_skia::Point::from_xy(b.max.x, b.min.y),
-                    tiny_skia::Point::from_xy(b.max.x, b.max.y),
-                    tiny_skia::Point::from_xy(b.min.x, b.max.y),
-                ];
-                crate::compositor::shape_parent_transform(doc, layer, id).map_points(&mut points);
-                let mut b = Bounds::from_pt(Pt::new(points[0].x, points[0].y));
-                for point in &points[1..] {
-                    b.union_pt(Pt::new(point.x, point.y));
-                }
-                let mut parent = shape.layout.parent;
-                for _ in 0..64 {
-                    let Some(parent_id) = parent else { break };
-                    if !containers.insert((layer, parent_id)) {
-                        break;
+            doc.find_shape(layer, id)
+                .map(|shape| -> Result<Bounds, String> {
+                    let b = paint_bounds(shape)?;
+                    let mut points = [
+                        tiny_skia::Point::from_xy(b.min.x, b.min.y),
+                        tiny_skia::Point::from_xy(b.max.x, b.min.y),
+                        tiny_skia::Point::from_xy(b.max.x, b.max.y),
+                        tiny_skia::Point::from_xy(b.min.x, b.max.y),
+                    ];
+                    crate::compositor::shape_parent_transform(doc, layer, id)
+                        .map_points(&mut points);
+                    let mut b = Bounds::from_pt(Pt::new(points[0].x, points[0].y));
+                    for point in &points[1..] {
+                        b.union_pt(Pt::new(point.x, point.y));
                     }
-                    parent = doc
-                        .find_shape(layer, parent_id)
-                        .and_then(|s| s.layout.parent);
-                }
-                b
-            })
+                    let mut parent = shape.layout.parent;
+                    for _ in 0..64 {
+                        let Some(parent_id) = parent else { break };
+                        if !containers.insert((layer, parent_id)) {
+                            break;
+                        }
+                        parent = doc
+                            .find_shape(layer, parent_id)
+                            .and_then(|s| s.layout.parent);
+                    }
+                    Ok(b)
+                })
+                .transpose()?
         };
-        if let Some(next) = next {
+        if let Some(mut next) = next {
+            let mut pad = crate::filter::svg_pad(&item.filters);
+            for index in doc.layer_ancestors(layer) {
+                pad += crate::filter::svg_pad(&doc.layers[index].filters);
+            }
+            if id != 0 {
+                let mut parent = doc.find_shape(layer, id).and_then(|s| s.layout.parent);
+                for _ in 0..64 {
+                    let Some(shape) = parent.and_then(|id| doc.find_shape(layer, id)) else {
+                        break;
+                    };
+                    pad += crate::filter::svg_pad(&shape.filters);
+                    parent = shape.layout.parent;
+                }
+            }
+            next = next.inflate(pad);
             bounds = Some(bounds.map_or(next, |b| b.union(next)));
             layers.insert(layer);
             layers.extend(doc.layer_ancestors(layer));
@@ -108,6 +169,18 @@ pub fn selection(doc: &Document, selected: &[(usize, u64)]) -> Result<Document, 
     Ok(output)
 }
 
+/// Grow the export area by a bleed on every side, keeping artwork in place.
+/// Args: cropped scope and bleed in document units. Returns the enlarged document.
+pub fn bleed(doc: &Document, amount: f32) -> Result<Document, String> {
+    if !amount.is_finite() || amount < 0. {
+        return Err("Export bleed must be zero or positive".into());
+    }
+    crop(
+        doc.clone(),
+        Bounds { min: crate::geom::Pt::new(-amount, -amount), max: crate::geom::Pt::new(doc.width + amount, doc.height + amount) },
+    )
+}
+
 fn crop(mut doc: Document, bounds: Bounds) -> Result<Document, String> {
     if !bounds.min.x.is_finite()
         || !bounds.min.y.is_finite()
@@ -142,9 +215,9 @@ fn crop(mut doc: Document, bounds: Bounds) -> Result<Document, String> {
 
 /// A pixel selection clips the native layer tree through a placed group mask.
 /// Feathered coverage and rotated/scaled selection spaces stay intact.
-pub fn pixels(
+pub fn pixels<T:crate::selection_coverage::Sample>(
     doc: &Document,
-    coverage: &[u8],
+    coverage: &[T],
     w: u32,
     h: u32,
     transform: tiny_skia::Transform,
@@ -177,29 +250,14 @@ pub fn pixels(
     if mw as u64 * mh as u64 > 64_000_000 {
         return Err("The pixel selection export exceeds 64 megapixels".into());
     }
-    let source = crate::document::Pixels::from_rgba(
-        w,
-        h,
-        coverage.iter().flat_map(|a| [255, 255, 255, *a]).collect(),
-    )
-    .and_then(|p| p.to_pixmap())
-    .ok_or("Invalid selection coverage")?;
-    let mut mask = tiny_skia::Pixmap::new(mw, mh).ok_or("Could not allocate selection mask")?;
-    mask.draw_pixmap(
-        0,
-        0,
-        source.as_ref(),
-        &tiny_skia::PixmapPaint {
-            quality: tiny_skia::FilterQuality::Bilinear,
-            ..Default::default()
-        },
-        tiny_skia::Transform::from_translate(-bounds.min.x, -bounds.min.y).pre_concat(transform),
-        None,
-    );
+    let coverage=crate::deep_color::storage::collect(coverage.iter().map(|v|v.unit()))?;
+    let source=crate::app::masking::SelectionSpace{w,h,transform};
+    let target=crate::app::masking::SelectionSpace{w:mw,h:mh,transform:tiny_skia::Transform::from_translate(bounds.min.x,bounds.min.y)};
+    let mask=crate::selection_coverage::resample(&coverage,source,target,&crate::deep_color::storage::check)?;
     let mut output = doc.clone();
     let mut group = crate::document::Layer::group("Export selection");
     group.pass_through = false;
-    group.mask = Some(crate::document::Pixels::from_pixmap(&mask));
+    group.mask = Some(crate::selection_coverage::mask_pixels(&mask,mw,mh)?);
     group.mask_origin = bounds.min;
     group.mask_size = Pt::new(mw as f32, mh as f32);
     for layer in &mut output.layers {
@@ -280,8 +338,13 @@ mod tests {
     #[test]
     fn export_pixel_selection_preserves_feather_and_native_layers() {
         let mut doc = Document::new("Mask", 8., 8., 96.);
-        let mut layer = Layer::raster("Pixels", 8, 8);
-        layer.kind.pixels_mut().unwrap().data = [220, 60, 30, 255].repeat(64);
+        let mut layer = Layer::raster("Pixels", 8, 8).unwrap();
+        layer
+            .kind
+            .pixels_mut()
+            .unwrap()
+            .replace_bytes([220, 60, 30, 255].repeat(64))
+            .unwrap();
         doc.layers = vec![layer];
         let mut coverage = vec![0; 64];
         coverage[2 * 8 + 3] = 128;

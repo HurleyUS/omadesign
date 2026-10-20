@@ -1,0 +1,1812 @@
+use super::*;
+use crate::{
+    color::Rgba,
+    document::{Document, Layer, Pixels},
+    geom::TypeRun,
+};
+
+fn fixture() -> (Studio, (usize, u64)) {
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = Document::new("Painted outlines", 480., 220., 96.);
+    studio.doc.transparent = true;
+    studio.doc.workspace = Some(Persona::Layout);
+    studio.doc.layers = vec![Layer::vector("Editable lettering")];
+    let mut run = TypeRun {
+        origin: Pt::new(40., 105.),
+        content: "Colour & curves".into(),
+        px: 38.,
+        font: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/assets/fonts/EBGaramond.ttf"
+        )
+        .into(),
+        ..Default::default()
+    };
+    run.set_character_style(0, 6, |span| {
+        span.fill = Some(Fill::Solid(Rgba::rgb(220, 40, 75)));
+        span.tracking = Some(25.);
+    });
+    run.set_character_style(9, 15, |span| {
+        span.fill = Some(Fill::Solid(Rgba::rgb(20, 140, 210)));
+        span.px = Some(42.);
+    });
+    let mut shape = Shape::new(
+        Geom::Text(run),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(30, 80, 40)),
+            stroke: None,
+        },
+    );
+    shape.name = "Painted title".into();
+    crate::text::fill_contours(&mut shape.geom);
+    let hit = (0, shape.id);
+    studio.doc.layers[0].kind.shapes_mut().unwrap().push(shape);
+    studio.active_layer = Some(0);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    (studio, hit)
+}
+fn wire(studio: &Studio) -> String {
+    crate::project::encode(&studio.doc).unwrap()
+}
+fn image(doc: &Document) -> tiny_skia::Pixmap {
+    crate::compositor::render_export(doc, 1).unwrap()
+}
+fn same_paint(before: &tiny_skia::Pixmap, after: &tiny_skia::Pixmap) {
+    let mut sum = 0usize;
+    let mut count = 0usize;
+    let mut max = 0u8;
+    for (a, b) in before
+        .data()
+        .chunks_exact(4)
+        .zip(after.data().chunks_exact(4))
+    {
+        if a[3] == 0 && b[3] == 0 {
+            continue;
+        }
+        for (a, b) in a.iter().zip(b) {
+            let d = a.abs_diff(*b);
+            sum += usize::from(d);
+            max = max.max(d);
+            count += 1;
+        }
+    }
+    let mean = sum as f64 / count.max(1) as f64;
+    if let Some(root) = std::env::var_os("OMADESIGN_OUTLINES_QA") {
+        std::fs::create_dir_all(&root).unwrap();
+        let name = std::thread::current()
+            .name()
+            .unwrap_or("outline")
+            .replace("::", "-");
+        before
+            .save_png(std::path::Path::new(&root).join(format!("{name}-before.png")))
+            .unwrap();
+        after
+            .save_png(std::path::Path::new(&root).join(format!("{name}-after.png")))
+            .unwrap();
+    }
+    assert!(
+        mean <= 0.1 && max <= 16,
+        "visible outline paint changed: mean={mean}, max={max}, components={count}"
+    );
+}
+fn reopen(studio: &Studio) {
+    let saved = wire(studio);
+    let doc = crate::project::decode(&saved).unwrap();
+    assert_eq!(crate::project::encode(&doc).unwrap(), saved);
+    assert_eq!(image(&doc).data(), image(&studio.doc).data());
+    assert!(
+        doc.layers
+            .iter()
+            .filter_map(|l| l.kind.shapes())
+            .flatten()
+            .all(|s| !matches!(s.geom, Geom::Text(_)))
+    );
+}
+fn emit(name: &str, bytes: &[u8]) {
+    if let Some(root) = std::env::var_os("OMADESIGN_OUTLINES_QA") {
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(std::path::Path::new(&root).join(name), bytes).unwrap();
+    }
+}
+
+#[test]
+fn craft_painted_outlines_keep_colours_stroke_parent_rotation_and_one_undo() {
+    let (mut studio, hit) = fixture();
+    let root = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+    root.rotation = 0.23;
+    root.style.stroke = Some(Stroke {
+        width: 1.25,
+        color: Rgba::rgb(30, 20, 60),
+        ..Default::default()
+    });
+    let mut parent = crate::layout::make_frame(Pt::new(10., 10.), Pt::new(450., 190.));
+    parent.style.fill = Fill::None;
+    parent.style.stroke = None;
+    parent.rotation = -0.13;
+    parent.layout.clip = false;
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .layout
+        .parent = Some(parent.id);
+    studio.doc.layers[0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .insert(0, parent);
+    studio.mark();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    emit("colours-before.oma", before.as_bytes());
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame);
+    assert_eq!(root.rotation, 0.23);
+    assert!(root.style.fill.is_none());
+    let children: Vec<_> = studio.doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|s| s.layout.parent == Some(hit.1))
+        .collect();
+    assert!(children.len() >= 4);
+    assert_eq!(
+        children.iter().filter(|s| s.style.stroke.is_some()).count(),
+        1
+    );
+    assert!(children.last().unwrap().style.stroke.is_some());
+    assert!(children.iter().all(|s| !matches!(s.geom, Geom::Text(_))));
+    same_paint(&picture, &image(&studio.doc));
+    let after = wire(&studio);
+    reopen(&studio);
+    emit("colours-outlined.oma", after.as_bytes());
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_painted_outlines_preserve_relative_linear_radial_conic_and_pattern_space() {
+    let mut radial = Gradient::new(
+        GradientKind::Radial,
+        Rgba::rgb(240, 70, 30),
+        Rgba::rgb(20, 80, 230),
+    );
+    radial.from = [0.2, 0.4];
+    radial.to = [0.9, 0.55];
+    radial.radial_axis = Some([-0.1, 0.85]);
+    radial.spread = crate::gradient::Spread::Reflect;
+    radial.focal = [0.2, 0.1];
+    radial.inner_radius = 0.1;
+    let pattern = crate::svg_source::SvgPattern {
+        definitions: std::sync::Arc::from(
+            r##"<pattern id="stripes" patternUnits="userSpaceOnUse" width=".05" height=".2"><rect width=".025" height=".2" fill="#dd2255"/><rect x=".025" width=".025" height=".2" fill="#22aadd"/></pattern>"##,
+        ),
+        id: "stripes".into(),
+        transform: [1., 0., 0., 1., 0., 0.],
+        opacity: 0.85,
+    };
+    for (index, fill) in [
+        Fill::Linear {
+            from: [-0.2, 0.1],
+            to: [0.9, 0.8],
+            c0: Rgba::rgb(220, 20, 40),
+            c1: Rgba::rgb(20, 130, 230),
+        },
+        Fill::Radial {
+            c0: Rgba::rgb(240, 30, 60),
+            c1: Rgba::rgb(20, 130, 230),
+        },
+        Fill::Gradient(radial),
+        Fill::Gradient(Gradient::new(
+            GradientKind::Conic,
+            Rgba::rgb(240, 30, 60),
+            Rgba::rgb(20, 130, 230),
+        )),
+        Fill::Pattern(pattern),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (mut studio, hit) = fixture();
+        let Geom::Text(run) = &mut studio.doc.find_shape_mut(hit.0, hit.1).unwrap().geom else {
+            unreachable!()
+        };
+        run.spans.clear();
+        run.set_character_style(0, 6, |span| span.fill = Some(fill.clone()));
+        studio.mark();
+        let before = image(&studio.doc);
+        studio.create_text_outlines();
+        assert_eq!(studio.history.len(), 1, "fill{index}: {}", studio.status);
+        same_paint(&before, &image(&studio.doc));
+        reopen(&studio);
+        emit(&format!("paint-{index}.oma"), wire(&studio).as_bytes());
+    }
+}
+
+#[test]
+fn craft_painted_outlines_keep_object_mask_opacity_and_effects_together() {
+    let (mut studio, hit) = fixture();
+    let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+    shape.opacity = 0.6;
+    shape.fill_opacity = 0.8;
+    shape
+        .filters
+        .items
+        .push(crate::filter::Fx::Blur { std: 1.25 });
+    shape.mask = Some(Pixels::from_rgba(2, 1, vec![255, 255, 255, 255, 90, 90, 90, 255]).unwrap());
+    studio.mark();
+    let before = image(&studio.doc);
+    let original = studio.doc.find_shape(hit.0, hit.1).unwrap().clone();
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1);
+    same_paint(&before, &image(&studio.doc));
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert_eq!(root.opacity, original.opacity);
+    assert_eq!(root.fill_opacity, original.fill_opacity);
+    assert_eq!(root.filters, original.filters);
+    assert_eq!(
+        root.mask.as_ref().unwrap().data,
+        original.mask.as_ref().unwrap().data
+    );
+    assert!(
+        studio.doc.layers[0]
+            .kind
+            .shapes()
+            .unwrap()
+            .iter()
+            .filter(|s| s.id != hit.1)
+            .all(|s| s.filters.is_empty() && s.mask.is_none() && s.opacity == 1.)
+    );
+    reopen(&studio);
+}
+
+#[test]
+fn craft_painted_outlines_split_linked_story_without_changing_other_frames() {
+    let (mut studio, head) = fixture();
+    let Geom::Text(run) = &mut studio.doc.find_shape_mut(head.0, head.1).unwrap().geom else {
+        unreachable!()
+    };
+    run.px = 22.;
+    run.content = "Every character remains editable in the other frames. ".repeat(4);
+    run.frame = Some(crate::text_geometry::TextFrame {
+        size: Pt::new(110., 120.),
+        ..Default::default()
+    });
+    let mut ids = vec![head];
+    for i in 1..3 {
+        let mut shape = studio.doc.find_shape(head.0, head.1).unwrap().clone();
+        shape.id = crate::document::next_id();
+        let Geom::Text(run) = &mut shape.geom else {
+            unreachable!()
+        };
+        run.content.clear();
+        run.origin.x += i as f32 * 140.;
+        let id = shape.id;
+        studio.doc.layers[0].kind.shapes_mut().unwrap().push(shape);
+        ids.push((0, id));
+    }
+    studio.mark();
+    studio.thread_text_frames(ids[0], ids[1]).unwrap();
+    studio.thread_text_frames(ids[1], ids[2]).unwrap();
+    studio.selection = vec![ids[1]];
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1);
+    same_paint(&picture, &image(&studio.doc));
+    assert!(
+        studio
+            .doc
+            .find_shape(ids[1].0, ids[1].1)
+            .unwrap()
+            .layout
+            .frame
+    );
+    assert!(matches!(
+        &studio.doc.find_shape(ids[0].0, ids[0].1).unwrap().geom,
+        Geom::Text(_)
+    ));
+    assert!(matches!(
+        &studio.doc.find_shape(ids[2].0, ids[2].1).unwrap().geom,
+        Geom::Text(_)
+    ));
+    let after = wire(&studio);
+    let reopened = crate::project::decode(&after).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), after);
+    assert_eq!(image(&reopened).data(), image(&studio.doc).data());
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+    emit("linked-outlined.oma", after.as_bytes());
+}
+
+#[test]
+fn craft_painted_outlines_reject_unsupported_or_locked_owners_before_draft_and_redo() {
+    for mode in [0, 2] {
+        let (mut studio, hit) = fixture();
+        studio.commit(Cmd::SetOpacity {
+            layer: hit.0,
+            id: hit.1,
+            before: 1.,
+            after: 0.7,
+        });
+        studio.undo();
+        studio.begin_type_edit(hit, Pt::new(60., 105.));
+        studio.type_insert("draft");
+        let draft = studio
+            .type_edit
+            .as_ref()
+            .map(|edit| (edit.caret, edit.anchor));
+        assert!(draft.is_some());
+        assert!(studio.history.can_redo());
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        if mode == 0 {
+            shape.locked = true;
+        }
+        if mode == 2 {
+            studio.updates.freezing = true;
+        }
+        studio.mark();
+        let before = wire(&studio);
+        studio.create_text_outlines();
+        assert_eq!(wire(&studio), before);
+        assert_eq!(studio.history.len(), 0);
+        assert_eq!(
+            studio
+                .type_edit
+                .as_ref()
+                .map(|edit| (edit.caret, edit.anchor)),
+            draft
+        );
+        assert!(studio.history.can_redo());
+    }
+}
+
+#[test]
+fn craft_painted_outlines_multi_object_keeps_non_text_and_all_exports_are_vector() {
+    let (mut studio, hit) = fixture();
+    let mut second = studio.doc.find_shape(hit.0, hit.1).unwrap().clone();
+    second.id = crate::document::next_id();
+    second.geom.translate(Pt::new(0., 70.));
+    let other = second.id;
+    studio.doc.layers[0].kind.shapes_mut().unwrap().push(second);
+    let rect = Shape::new(
+        Geom::Rect {
+            origin: Pt::new(420., 20.),
+            size: Pt::new(15., 15.),
+            radius: 0.,
+        },
+        Style {
+            fill: Fill::Solid(Rgba::rgb(30, 180, 50)),
+            stroke: None,
+        },
+    );
+    let rect_id = rect.id;
+    studio.doc.layers[0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .push(rect.clone());
+    studio.selection = vec![hit, (0, other), (0, rect_id)];
+    studio.mark();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    emit("multi-before.oma", before.as_bytes());
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1);
+    assert_eq!(studio.doc.find_shape(0, rect_id), Some(&rect));
+    same_paint(&picture, &image(&studio.doc));
+    let svg = crate::svg::export(&studio.doc).unwrap();
+    assert!(!svg.contains("<text"));
+    assert!(svg.contains("<path"));
+    assert!(!svg.contains("<image"));
+    let (pdf, _) = crate::formats::pdf::write(&studio.doc).unwrap();
+    let p = lopdf::Document::load_mem(&pdf).unwrap();
+    assert!(!p.objects.values().any(|o| {
+        o.as_stream()
+            .ok()
+            .and_then(|s| s.dict.get(b"Subtype").ok())
+            .and_then(|o| o.as_name().ok())
+            == Some(b"Image".as_slice())
+    }));
+    let (idml, _) = crate::formats::idml::write(&studio.doc).unwrap();
+    emit("outlines.svg", svg.as_bytes());
+    emit("outlines.pdf", &pdf);
+    emit("outlines.idml", &idml);
+    emit("outlines.oma", wire(&studio).as_bytes());
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+}
+
+#[test]
+fn craft_painted_outlines_keep_unpainted_glyphs_editable() {
+    let (mut studio, hit) = fixture();
+    let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+    let Geom::Text(run) = &mut shape.geom else {
+        unreachable!()
+    };
+    run.spans.clear();
+    run.set_character_style(0, 6, |s| s.fill = Some(Fill::None));
+    shape.style.fill = Fill::None;
+    crate::text::fill_contours(&mut shape.geom);
+    studio.mark();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1);
+    assert!(image(&studio.doc).pixels().iter().all(|p| p.alpha() == 0));
+    let paths: Vec<_> = studio.doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|s| s.layout.parent == Some(hit.1))
+        .collect();
+    assert!(!paths.is_empty());
+    assert!(paths.iter().all(|s| s.geom.anchors().next().is_some()));
+    let id = paths[0].id;
+    let saved = wire(&studio);
+    studio.doc.find_shape_mut(0, id).unwrap().style.fill = Fill::Solid(Rgba::BLACK);
+    assert!(image(&studio.doc).pixels().iter().any(|p| p.alpha() > 0));
+    studio.doc = crate::project::decode(&saved).unwrap();
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+}
+
+#[test]
+fn craft_painted_outlines_keep_transform_animation_and_original_owner() {
+    let (mut studio, hit) = fixture();
+    for (prop, first, last) in [
+        (crate::motion::Prop::X, 0., 12.),
+        (crate::motion::Prop::Y, 0., -8.),
+        (crate::motion::Prop::Rotation, 0., 0.15),
+        (crate::motion::Prop::Scale, 1., 0.95),
+        (crate::motion::Prop::Width, 1., 0.8),
+        (crate::motion::Prop::Height, 1., 1.2),
+        (crate::motion::Prop::Opacity, 1., 0.6),
+    ] {
+        for (time, value) in [(0., first), (1., last)] {
+            studio
+                .doc
+                .motion
+                .set_key(hit.1, prop, time, value, crate::motion::Ease::Linear);
+        }
+    }
+    studio.mark();
+    let before = studio.doc.clone();
+    let before_wire = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.doc.motion, before.motion);
+    assert!(studio.doc.find_shape(hit.0, hit.1).unwrap().layout.frame);
+    for time in [0., 0.5, 1.] {
+        same_paint(
+            &crate::compositor::render_export_at(&before, 1., time, true).unwrap(),
+            &crate::compositor::render_export_at(&studio.doc, 1., time, true).unwrap(),
+        );
+    }
+    let after = wire(&studio);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before_wire);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_painted_outlines_native_path_text_keeps_visible_curves_and_paint() {
+    let (mut studio, hit) = fixture();
+    let guide = Shape::new(
+        Geom::Line {
+            a: Pt::new(30., 160.),
+            b: Pt::new(440., 80.),
+        },
+        Style {
+            fill: Fill::None,
+            stroke: None,
+        },
+    );
+    let guide_id = guide.id;
+    studio.doc.layers[0].kind.shapes_mut().unwrap().push(guide);
+    studio.selection = vec![hit, (0, guide_id)];
+    studio.attach_text_path();
+    studio.selection = vec![hit];
+    studio.history.clear();
+    assert!(studio.selected_type().unwrap().on_path.is_some());
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1);
+    same_paint(&picture, &image(&studio.doc));
+    reopen(&studio);
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+    emit("path-outlined.oma", after.as_bytes());
+}
+
+fn imported_svg_text() -> (Studio, (usize, u64)) {
+    let (studio, _) = fixture();
+    let svg = crate::svg::export_embedded(&studio.doc).unwrap();
+    let (doc, notes) = crate::formats::svg::read(&svg, "Painted SVG text").unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = doc;
+    studio.doc.workspace = Some(Persona::Layout);
+    let hit = studio
+        .doc
+        .layers
+        .iter()
+        .enumerate()
+        .find_map(|(layer, item)| {
+            item.kind
+                .shapes()
+                .unwrap_or(&[])
+                .iter()
+                .find_map(|shape| match &shape.geom {
+                    Geom::Text(run) if run.svg_text.is_some() => Some((layer, shape.id)),
+                    _ => None,
+                })
+        })
+        .expect("imported SVG text");
+    studio.active_layer = Some(hit.0);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    (studio, hit)
+}
+
+fn paint_delta(before: &tiny_skia::Pixmap, after: &tiny_skia::Pixmap) -> (f64, u8, usize, f64, u8) {
+    let mut edge_sum = 0usize;
+    let mut edge_count = 0usize;
+    let mut edge_max = 0u8;
+    let mut body_sum = 0usize;
+    let mut body_count = 0usize;
+    let mut body_max = 0u8;
+    for (a, b) in before
+        .data()
+        .chunks_exact(4)
+        .zip(after.data().chunks_exact(4))
+    {
+        if a[3] == 0 && b[3] == 0 {
+            continue;
+        }
+        let body = a[3] >= 200 && b[3] >= 200;
+        for (a, b) in a.iter().zip(b) {
+            let d = a.abs_diff(*b);
+            if body {
+                body_sum += usize::from(d);
+                body_max = body_max.max(d);
+                body_count += 1;
+            } else {
+                edge_sum += usize::from(d);
+                edge_max = edge_max.max(d);
+                edge_count += 1;
+            }
+        }
+    }
+    (
+        body_sum as f64 / body_count.max(1) as f64,
+        body_max,
+        body_count,
+        edge_sum as f64 / edge_count.max(1) as f64,
+        edge_max,
+    )
+}
+
+#[test]
+fn craft_svg_text_outlines_keep_authored_fills_and_one_undo() {
+    let (mut studio, hit) = imported_svg_text();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame, "{}", studio.status);
+    assert!(matches!(root.geom, Geom::Rect { .. }));
+    let children: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.parent == Some(hit.1))
+        .collect();
+    assert!(children.len() >= 3, "{:?}", children.len());
+    assert!(
+        children
+            .iter()
+            .all(|shape| !matches!(shape.geom, Geom::Text(_)))
+    );
+    let solids: Vec<_> = children
+        .iter()
+        .filter_map(|shape| match shape.style.fill {
+            Fill::Solid(color) => Some(color),
+            _ => None,
+        })
+        .collect();
+    assert!(solids.contains(&Rgba::rgb(220, 40, 75)), "{solids:?}");
+    assert!(solids.contains(&Rgba::rgb(20, 140, 210)), "{solids:?}");
+    assert!(solids.contains(&Rgba::rgb(30, 80, 40)), "{solids:?}");
+    assert!(children.iter().all(|shape| shape.style.stroke.is_none()));
+    let (body_mean, body_max, body_count, edge_mean, edge_max) =
+        paint_delta(&picture, &image(&studio.doc));
+    assert!(
+        body_count > 0 && body_mean <= 0.5 && body_max <= 16,
+        "letter bodies changed: mean={body_mean}, max={body_max}, components={body_count}"
+    );
+    assert!(
+        edge_mean <= 8. && edge_max <= 96,
+        "outline edges changed: mean={edge_mean}, max={edge_max}"
+    );
+    let after = wire(&studio);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_svg_text_outlines_keep_rotation_and_object_stroke() {
+    let (mut studio, hit) = imported_svg_text();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.rotation = 0.2;
+        shape.style.stroke = Some(Stroke {
+            width: 1.25,
+            color: Rgba::rgb(30, 20, 60),
+            ..Default::default()
+        });
+    }
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame);
+    assert_eq!(root.rotation, 0.2);
+    let children: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.parent == Some(hit.1))
+        .collect();
+    assert_eq!(
+        children
+            .iter()
+            .filter(|shape| shape.style.stroke.is_some())
+            .count(),
+        1
+    );
+    assert!(children.last().unwrap().style.stroke.is_some());
+    let (body_mean, body_max, body_count, edge_mean, edge_max) =
+        paint_delta(&picture, &image(&studio.doc));
+    assert!(
+        body_count > 0 && body_mean <= 1.2 && body_max <= 48,
+        "rotated stroke bodies changed: mean={body_mean}, max={body_max}, components={body_count}"
+    );
+    assert!(
+        edge_mean <= 8. && edge_max <= 96,
+        "rotated stroke edges changed: mean={edge_mean}, max={edge_max}"
+    );
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_contour_wrap_keeps_imported_bounding_box() {
+    let (mut studio, hit) = imported_svg_text();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .text_wrap
+        .mode = crate::text_geometry::WrapMode::BoundingBox;
+    let before = wire(&studio);
+    let bounds = studio.doc.find_shape(hit.0, hit.1).unwrap().world_bbox();
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(!matches!(root.geom, Geom::Text(_)));
+    assert_eq!(
+        root.text_wrap.mode,
+        crate::text_geometry::WrapMode::BoundingBox
+    );
+    assert_eq!(root.world_bbox().min, bounds.min);
+    assert_eq!(root.world_bbox().max, bounds.max);
+    assert!(
+        studio.doc.layers[hit.0]
+            .kind
+            .shapes()
+            .unwrap()
+            .iter()
+            .filter(|shape| shape.id != hit.1)
+            .all(|shape| shape.text_wrap.is_none())
+    );
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_svg_outline_shape_distance_keeps_the_shared_field_and_one_undo() {
+    let (mut studio, hit) = imported_svg_text();
+    studio.doc.find_shape_mut(hit.0, hit.1).unwrap().style.fill =
+        Fill::Gradient(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE));
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let children: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.parent == Some(hit.1))
+        .collect();
+    let painted = children
+        .iter()
+        .find(|shape| {
+            shape
+                .style
+                .fill
+                .gradient()
+                .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
+        })
+        .expect("imported shape-distance path");
+    let silhouette = painted
+        .style
+        .fill
+        .gradient()
+        .and_then(|gradient| gradient.silhouette)
+        .expect("shared silhouette");
+    assert!(silhouette.geom().bbox().width() > painted.geom.bbox().width() + 8.);
+    let (body_mean, body_max, body_count, edge_mean, edge_max) =
+        paint_delta(&picture, &image(&studio.doc));
+    assert!(
+        body_count > 0 && body_mean <= 3. && body_max <= 96,
+        "imported shape-distance bodies changed: mean={body_mean}, max={body_max}, components={body_count}"
+    );
+    assert!(
+        edge_mean <= 8. && edge_max <= 96,
+        "imported shape-distance edges changed: mean={edge_mean}, max={edge_max}"
+    );
+    reopen(&studio);
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_svg_outline_shape_distance_keeps_the_object_stroke_and_one_undo() {
+    let (mut studio, hit) = imported_svg_text();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .style
+        .stroke = Some(Stroke {
+        width: 1.25,
+        gradient: Some(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE)),
+        color: Rgba::rgb(30, 20, 60),
+        ..Default::default()
+    });
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let children: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.parent == Some(hit.1))
+        .collect();
+    let stroke = children
+        .iter()
+        .find(|shape| {
+            shape
+                .style
+                .stroke
+                .as_ref()
+                .and_then(|stroke| stroke.gradient.as_ref())
+                .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
+        })
+        .expect("imported shape-distance stroke");
+    assert!(stroke.style.stroke.as_ref().unwrap().width > 0.);
+    let (body_mean, body_max, body_count, edge_mean, edge_max) =
+        paint_delta(&picture, &image(&studio.doc));
+    assert!(
+        body_count > 0 && body_mean <= 3. && body_max <= 96,
+        "imported shape-distance stroke bodies changed: mean={body_mean}, max={body_max}, components={body_count}"
+    );
+    assert!(
+        edge_mean <= 8. && edge_max <= 96,
+        "imported shape-distance stroke edges changed: mean={edge_mean}, max={edge_max}"
+    );
+    reopen(&studio);
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_svg_outline_shape_distance_refuses_locked_text_without_history() {
+    let (mut studio, hit) = imported_svg_text();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.style.fill =
+            Fill::Gradient(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE));
+        shape.locked = true;
+    }
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+    assert_eq!(wire(&studio), before);
+}
+
+#[test]
+fn craft_outline_shape_distance_keeps_the_shared_fill_and_one_undo() {
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        let Geom::Text(run) = &mut shape.geom else {
+            unreachable!()
+        };
+        run.spans.clear();
+        shape.style.fill =
+            Fill::Gradient(Gradient::new(GradientKind::Shape, Rgba::BLACK, Rgba::WHITE));
+    }
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let shape = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(!matches!(shape.geom, Geom::Text(_)));
+    assert_eq!(
+        shape.style.fill.gradient().map(|gradient| gradient.kind),
+        Some(GradientKind::Shape)
+    );
+    same_paint(&picture, &image(&studio.doc));
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_shape_distance_character_keeps_the_shared_field_and_one_undo() {
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        let Geom::Text(run) = &mut shape.geom else {
+            unreachable!()
+        };
+        run.set_character_style(0, 6, |span| {
+            span.fill = Some(Fill::Gradient(Gradient::new(
+                GradientKind::Shape,
+                Rgba::BLACK,
+                Rgba::WHITE,
+            )))
+        });
+    }
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let children: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.parent == Some(hit.1))
+        .collect();
+    let painted = children
+        .iter()
+        .find(|shape| {
+            shape
+                .style
+                .fill
+                .gradient()
+                .is_some_and(|gradient| gradient.kind == GradientKind::Shape)
+        })
+        .expect("character shape-distance path");
+    let silhouette = painted
+        .style
+        .fill
+        .gradient()
+        .and_then(|gradient| gradient.silhouette)
+        .expect("shared silhouette");
+    assert!(silhouette.geom().bbox().width() > painted.geom.bbox().width() + 8.);
+    same_paint(&picture, &image(&studio.doc));
+    reopen(&studio);
+    let after = wire(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_shape_distance_character_refuses_locked_text_without_history() {
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        let Geom::Text(run) = &mut shape.geom else {
+            unreachable!()
+        };
+        run.set_character_style(0, 6, |span| {
+            span.fill = Some(Fill::Gradient(Gradient::new(
+                GradientKind::Shape,
+                Rgba::BLACK,
+                Rgba::WHITE,
+            )))
+        });
+        shape.locked = true;
+    }
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+    assert_eq!(wire(&studio), before);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+}
+
+fn at(doc: &Document, time: f32) -> tiny_skia::Pixmap {
+    crate::compositor::render_export_at(doc, 1., time, true).unwrap()
+}
+
+fn track_ids(doc: &Document, prop: crate::motion::Prop) -> Vec<u64> {
+    doc.motion
+        .tracks
+        .iter()
+        .filter(|track| track.prop == prop && !track.keys.is_empty())
+        .map(|track| track.shape)
+        .collect()
+}
+
+#[test]
+fn craft_outline_animated_paint_keeps_fill_color_across_undo() {
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .motion
+        .set_color_key(hit.1, 0., Rgba::BLACK, crate::motion::Ease::Linear);
+    studio.doc.motion.set_color_key(
+        hit.1,
+        1.,
+        Rgba::rgb(240, 220, 40),
+        crate::motion::Ease::Linear,
+    );
+    studio.mark();
+    let before = studio.doc.clone();
+    let before_wire = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    assert!(studio.doc.find_shape(hit.0, hit.1).unwrap().layout.frame);
+    assert!(!track_ids(&studio.doc, crate::motion::Prop::Fill).contains(&hit.1));
+    let inherited = Fill::Solid(Rgba::rgb(30, 80, 40));
+    let carriers: Vec<u64> = studio.doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.style.fill == inherited)
+        .map(|shape| shape.id)
+        .collect();
+    assert_eq!(carriers.len(), 1);
+    assert_eq!(track_ids(&studio.doc, crate::motion::Prop::Fill), carriers);
+    same_paint(&image(&before), &image(&studio.doc));
+    for time in [0., 0.5, 1.] {
+        same_paint(&at(&before, time), &at(&studio.doc, time));
+    }
+    let after = wire(&studio);
+    let saved = crate::project::decode(&after).unwrap();
+    for time in [0., 0.5, 1.] {
+        same_paint(&at(&studio.doc, time), &at(&saved, time));
+    }
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before_wire);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_animated_paint_keeps_reveal_stroke_and_expression() {
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .style
+        .stroke = Some(crate::document::Stroke {
+        color: Rgba::rgb(16, 16, 16),
+        width: 3.,
+        dash: Some((5., 3.)),
+        ..crate::document::Stroke::default()
+    });
+    studio.doc.motion.set_key(
+        hit.1,
+        crate::motion::Prop::FillReveal,
+        0.,
+        0.42,
+        crate::motion::Ease::Linear,
+    );
+    studio.doc.motion.set_key(
+        hit.1,
+        crate::motion::Prop::FillReveal,
+        1.,
+        1.,
+        crate::motion::Ease::Linear,
+    );
+    studio.doc.motion.set_key(
+        hit.1,
+        crate::motion::Prop::StrokeWidth,
+        1.,
+        7.,
+        crate::motion::Ease::Linear,
+    );
+    studio
+        .doc
+        .motion
+        .set_expression(hit.1, crate::motion::Prop::Gap, Some("10".into()))
+        .unwrap();
+    studio.mark();
+    let before = studio.doc.clone();
+    let before_wire = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    assert!(!track_ids(&studio.doc, crate::motion::Prop::FillReveal).contains(&hit.1));
+    assert!(!track_ids(&studio.doc, crate::motion::Prop::StrokeWidth).contains(&hit.1));
+    let shapes = studio.doc.layers[0].kind.shapes().unwrap();
+    let fills: Vec<u64> = shapes
+        .iter()
+        .filter(|shape| !shape.style.fill.is_none())
+        .map(|shape| shape.id)
+        .collect();
+    let strokes: Vec<u64> = shapes
+        .iter()
+        .filter(|shape| shape.style.stroke.is_some())
+        .map(|shape| shape.id)
+        .collect();
+    assert!(fills.len() > 1);
+    assert_eq!(strokes.len(), 1);
+    assert_eq!(
+        track_ids(&studio.doc, crate::motion::Prop::FillReveal),
+        fills
+    );
+    assert_eq!(
+        track_ids(&studio.doc, crate::motion::Prop::StrokeWidth),
+        strokes
+    );
+    assert!(studio.doc.motion.expressions.iter().any(|expression| {
+        expression.prop == crate::motion::Prop::Gap
+            && expression.enabled
+            && strokes.contains(&expression.shape)
+    }));
+    assert!(studio.doc.motion.expressions.iter().all(|expression| {
+        expression.prop != crate::motion::Prop::Gap || expression.shape != hit.1
+    }));
+    same_paint(&image(&before), &image(&studio.doc));
+    for time in [0., 0.5, 1.] {
+        same_paint(&at(&before, time), &at(&studio.doc, time));
+    }
+    let after = wire(&studio);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before_wire);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_animated_paint_refuses_locked_text_before_history() {
+    let (mut studio, hit) = fixture();
+    studio.commit(Cmd::SetOpacity {
+        layer: hit.0,
+        id: hit.1,
+        before: 1.,
+        after: 0.7,
+    });
+    studio.undo();
+    studio.begin_type_edit(hit, Pt::new(60., 105.));
+    studio.type_insert("draft");
+    let draft = studio
+        .type_edit
+        .as_ref()
+        .map(|edit| (edit.caret, edit.anchor));
+    assert!(draft.is_some());
+    assert!(studio.history.can_redo());
+    studio.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    studio
+        .doc
+        .motion
+        .set_color_key(hit.1, 0., Rgba::BLACK, crate::motion::Ease::Linear);
+    studio.mark();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(wire(&studio), before);
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+    assert_eq!(
+        studio
+            .type_edit
+            .as_ref()
+            .map(|edit| (edit.caret, edit.anchor)),
+        draft
+    );
+    assert!(studio.history.can_redo());
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+}
+
+fn story(studio: &Studio, hit: (usize, u64)) -> TypeRun {
+    let Geom::Text(run) = &studio.doc.find_shape(hit.0, hit.1).unwrap().geom else {
+        panic!("flowing story missing");
+    };
+    run.clone()
+}
+
+fn wrapping_stories() -> (Studio, (usize, u64), (usize, u64)) {
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = Document::new("Contour wrap", 480., 240., 96.);
+    studio.doc.transparent = true;
+    studio.doc.workspace = Some(Persona::Layout);
+    studio.doc.layers = vec![Layer::vector("Editable lettering")];
+    let font = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/assets/fonts/EBGaramond.ttf"
+    );
+    let mut flow = TypeRun {
+        origin: Pt::new(24., 48.),
+        content:
+            "Words flow around the obstacle and keep every line after the letters become paths. "
+                .repeat(4),
+        px: 18.,
+        font: font.into(),
+        frame: Some(crate::text_geometry::TextFrame {
+            size: Pt::new(360., 150.),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    flow.wrap_width = Some(360.);
+    let mut flow_shape = Shape::new(Geom::Text(flow), Style::default());
+    flow_shape.name = "Flow".into();
+    let flow_hit = (0, flow_shape.id);
+    let obstacle = TypeRun {
+        origin: Pt::new(150., 100.),
+        content: "WRAP".into(),
+        px: 42.,
+        font: font.into(),
+        ..Default::default()
+    };
+    let mut obstacle_shape = Shape::new(
+        Geom::Text(obstacle),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(20, 40, 80)),
+            stroke: None,
+        },
+    );
+    obstacle_shape.name = "Obstacle".into();
+    obstacle_shape.text_wrap = crate::text_geometry::TextWrap {
+        mode: crate::text_geometry::WrapMode::ObjectShape,
+        offset: [4., 6., 8., 2.],
+        ignore_locked: true,
+        ..Default::default()
+    };
+    crate::text::fill_contours(&mut obstacle_shape.geom);
+    let obstacle_hit = (0, obstacle_shape.id);
+    studio.doc.layers[0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .extend([flow_shape, obstacle_shape]);
+    studio.active_layer = Some(0);
+    studio.selection = vec![obstacle_hit];
+    studio.mark();
+    studio.history.clear();
+    (studio, flow_hit, obstacle_hit)
+}
+
+#[test]
+fn craft_outline_contour_wrap_keeps_object_shape_flow() {
+    let (mut studio, flow_hit, obstacle_hit) = wrapping_stories();
+    let wrapped = story(&studio, flow_hit);
+    assert!(!wrapped.contours.is_empty());
+    let mut bare = studio.doc.clone();
+    bare.find_shape_mut(obstacle_hit.0, obstacle_hit.1)
+        .unwrap()
+        .text_wrap
+        .mode = crate::text_geometry::WrapMode::None;
+    crate::text_geometry::reflow(&mut bare);
+    let Geom::Text(open) = &bare.find_shape(flow_hit.0, flow_hit.1).unwrap().geom else {
+        panic!("open flow missing");
+    };
+    assert_ne!(open.contours, wrapped.contours);
+    let contours = studio
+        .doc
+        .find_shape(obstacle_hit.0, obstacle_hit.1)
+        .unwrap()
+        .world_contours(96);
+    assert!(!contours.is_empty());
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    assert_eq!(story(&studio, flow_hit), wrapped);
+    let carriers: Vec<_> = studio.doc.layers[0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.text_wrap.mode == crate::text_geometry::WrapMode::ObjectShape)
+        .collect();
+    assert_eq!(carriers.len(), 1);
+    let carrier = carriers[0];
+    assert_eq!(carrier.world_contours(96), contours);
+    assert_eq!(carrier.text_wrap.offset, [4., 6., 8., 2.]);
+    assert!(carrier.text_wrap.ignore_locked);
+    assert!(carrier.style.fill.is_none());
+    assert!(carrier.style.stroke.is_none());
+    assert!(carrier.layout.parent.is_none());
+    assert!(
+        studio.doc.layers[0]
+            .kind
+            .shapes()
+            .unwrap()
+            .iter()
+            .filter(|shape| shape.id != carrier.id)
+            .all(|shape| shape.text_wrap.is_none())
+    );
+    assert!(!matches!(
+        studio
+            .doc
+            .find_shape(obstacle_hit.0, obstacle_hit.1)
+            .unwrap()
+            .geom,
+        Geom::Text(_)
+    ));
+    let saved = wire(&studio);
+    let reopened = crate::project::decode(&saved).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), saved);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), saved);
+
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .text_wrap
+        .mode = crate::text_geometry::WrapMode::ObjectShape;
+    studio.mark();
+    studio.history.clear();
+    let contours = studio
+        .doc
+        .find_shape(hit.0, hit.1)
+        .unwrap()
+        .world_contours(96);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let carrier = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .find(|shape| shape.text_wrap.mode == crate::text_geometry::WrapMode::ObjectShape)
+        .expect("framed object shape carrier");
+    assert_eq!(carrier.layout.parent, Some(hit.1));
+    assert!(studio.doc.find_shape(hit.0, hit.1).unwrap().layout.frame);
+    assert_eq!(carrier.world_contours(96), contours);
+    assert!(carrier.style.fill.is_none());
+    let saved = wire(&studio);
+    let reopened = crate::project::decode(&saved).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), saved);
+}
+
+#[test]
+fn craft_outline_contour_wrap_keeps_box_and_jump_on_the_frame() {
+    for mode in [
+        crate::text_geometry::WrapMode::BoundingBox,
+        crate::text_geometry::WrapMode::JumpObject,
+    ] {
+        let (mut studio, hit) = fixture();
+        studio.doc.find_shape_mut(hit.0, hit.1).unwrap().text_wrap =
+            crate::text_geometry::TextWrap {
+                mode,
+                offset: [3., 5., 7., 1.],
+                invert: true,
+                ..Default::default()
+            };
+        studio.mark();
+        studio.history.clear();
+        let bounds = studio.doc.find_shape(hit.0, hit.1).unwrap().world_bbox();
+        let before = wire(&studio);
+        studio.create_text_outlines();
+        assert_eq!(studio.history.len(), 1, "{}", studio.status);
+        let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+        assert!(root.layout.frame);
+        assert_eq!(root.text_wrap.mode, mode);
+        assert_eq!(root.text_wrap.offset, [3., 5., 7., 1.]);
+        assert!(root.text_wrap.invert);
+        assert_eq!(root.world_bbox().min, bounds.min);
+        assert_eq!(root.world_bbox().max, bounds.max);
+        assert!(
+            studio.doc.layers[hit.0]
+                .kind
+                .shapes()
+                .unwrap()
+                .iter()
+                .filter(|shape| shape.id != hit.1)
+                .all(|shape| shape.text_wrap.is_none())
+        );
+        let after = wire(&studio);
+        studio.undo();
+        assert_eq!(wire(&studio), before);
+        studio.redo();
+        assert_eq!(wire(&studio), after);
+    }
+}
+
+#[test]
+fn craft_outline_contour_wrap_refuses_locked_text() {
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .text_wrap
+        .mode = crate::text_geometry::WrapMode::ObjectShape;
+    studio.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(wire(&studio), before);
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+}
+
+fn placed_image() -> crate::layout_images::ImageFill {
+    let mut pixmap = tiny_skia::Pixmap::new(8, 4).unwrap();
+    for (index, pixel) in pixmap.pixels_mut().iter_mut().enumerate() {
+        *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
+            if index % 2 == 0 { 220 } else { 20 },
+            40,
+            if index % 2 == 0 { 30 } else { 200 },
+            255,
+        )
+        .unwrap();
+    }
+    crate::layout_images::from_bytes(&pixmap.encode_png().unwrap()).unwrap()
+}
+
+fn point_image() -> (Studio, (usize, u64)) {
+    let mut studio = Studio::new();
+    studio.show_welcome = false;
+    studio.persona = Persona::Layout;
+    studio.doc = Document::new("Image outlines", 320., 180., 96.);
+    studio.doc.transparent = true;
+    studio.doc.workspace = Some(Persona::Layout);
+    studio.doc.layers = vec![Layer::vector("Editable lettering")];
+    let mut shape = Shape::new(
+        Geom::Text(TypeRun {
+            origin: Pt::new(36., 110.),
+            content: "Image".into(),
+            px: 64.,
+            font: concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/assets/fonts/EBGaramond.ttf"
+            )
+            .into(),
+            ..Default::default()
+        }),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(10, 20, 30)),
+            stroke: None,
+        },
+    );
+    crate::text::fill_contours(&mut shape.geom);
+    shape.layout.image = Some(placed_image());
+    let hit = (0, shape.id);
+    studio.doc.layers[0].kind.shapes_mut().unwrap().push(shape);
+    studio.active_layer = Some(0);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    (studio, hit)
+}
+
+#[test]
+fn craft_outline_text_image_keeps_the_picture_on_point_type() {
+    let (mut studio, hit) = point_image();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let outlined = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(!matches!(outlined.geom, Geom::Text(_)));
+    assert!(outlined.layout.image.is_some());
+    same_paint(&picture, &image(&studio.doc));
+    let saved = wire(&studio);
+    let reopened = crate::project::decode(&saved).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), saved);
+    assert_eq!(image(&reopened).data(), image(&studio.doc).data());
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), saved);
+}
+
+#[test]
+fn craft_outline_text_image_keeps_one_picture_on_painted_letters() {
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .layout
+        .image = Some(placed_image());
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame);
+    assert!(root.layout.image.is_none());
+    let images: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| shape.layout.image.is_some())
+        .collect();
+    assert_eq!(images.len(), 1);
+    assert!(images[0].style.fill.is_none());
+    assert!(images[0].style.stroke.is_none());
+    assert_eq!(images[0].layout.parent, Some(hit.1));
+    same_paint(&picture, &image(&studio.doc));
+    let saved = wire(&studio);
+    let reopened = crate::project::decode(&saved).unwrap();
+    assert_eq!(crate::project::encode(&reopened).unwrap(), saved);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), saved);
+}
+
+#[test]
+fn craft_outline_text_image_refuses_locked_text() {
+    let (mut studio, hit) = point_image();
+    studio.doc.find_shape_mut(hit.0, hit.1).unwrap().locked = true;
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(wire(&studio), before);
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+}
+
+fn child_rect(parent: u64, origin: Pt, size: Pt, absolute: bool) -> Shape {
+    let mut child = Shape::new(
+        Geom::Rect {
+            origin,
+            size,
+            radius: 0.,
+        },
+        Style {
+            fill: Fill::None,
+            stroke: None,
+        },
+    );
+    child.layout.parent = Some(parent);
+    child.layout.absolute = absolute;
+    child
+}
+
+#[test]
+fn craft_outline_layout_frame_keeps_clip_stack_and_children() {
+    let (mut studio, hit) = fixture();
+    let bounds = studio.doc.find_shape(hit.0, hit.1).unwrap().geom.bbox();
+    let absolute = child_rect(hit.1, bounds.min + Pt::new(6., 4.), Pt::new(12., 8.), true);
+    let flow = child_rect(
+        hit.1,
+        bounds.min + Pt::new(24., 10.),
+        Pt::new(10., 6.),
+        false,
+    );
+    let absolute_id = absolute.id;
+    let flow_id = flow.id;
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.layout.frame = true;
+        shape.layout.clip = true;
+        shape.layout.stack = Some(crate::layout::AutoStack {
+            gap: 0.,
+            padding: [0.; 4],
+            ..Default::default()
+        });
+    }
+    studio.doc.layers[hit.0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .extend([absolute, flow]);
+    crate::layout::reflow_roots(&mut studio.doc, hit.0);
+    studio.mark();
+    studio.history.clear();
+    let absolute_geom = studio
+        .doc
+        .find_shape(hit.0, absolute_id)
+        .unwrap()
+        .geom
+        .clone();
+    let flow_geom = studio.doc.find_shape(hit.0, flow_id).unwrap().geom.clone();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame);
+    assert!(root.layout.clip);
+    assert_eq!(root.layout.stack.as_ref().map(|stack| stack.gap), Some(0.));
+    assert_eq!(
+        root.layout.stack.as_ref().map(|stack| stack.padding),
+        Some([1.; 4])
+    );
+    assert!(matches!(root.geom, Geom::Rect { .. }));
+    assert!(!matches!(root.geom, Geom::Text(_)));
+    assert_eq!(
+        studio.doc.find_shape(hit.0, absolute_id).unwrap().geom,
+        absolute_geom
+    );
+    assert_eq!(
+        studio.doc.find_shape(hit.0, flow_id).unwrap().geom,
+        flow_geom
+    );
+    assert_eq!(
+        studio
+            .doc
+            .find_shape(hit.0, absolute_id)
+            .unwrap()
+            .layout
+            .parent,
+        Some(hit.1)
+    );
+    assert_eq!(
+        studio.doc.find_shape(hit.0, flow_id).unwrap().layout.parent,
+        Some(hit.1)
+    );
+    let letters: Vec<_> = studio.doc.layers[hit.0]
+        .kind
+        .shapes()
+        .unwrap()
+        .iter()
+        .filter(|shape| {
+            shape.layout.parent == Some(hit.1) && shape.id != absolute_id && shape.id != flow_id
+        })
+        .collect();
+    assert!(letters.len() >= 2, "{}", studio.status);
+    assert!(
+        letters
+            .iter()
+            .all(|shape| !matches!(shape.geom, Geom::Text(_)))
+    );
+    same_paint(&picture, &image(&studio.doc));
+    let after = wire(&studio);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_layout_frame_outlines_nested_text_in_one_step() {
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.layout.frame = true;
+        shape.layout.clip = false;
+    }
+    let mut nested = Shape::new(
+        Geom::Text(TypeRun {
+            origin: Pt::new(48., 150.),
+            content: "Nest".into(),
+            px: 18.,
+            font: concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/assets/fonts/EBGaramond.ttf"
+            )
+            .into(),
+            ..Default::default()
+        }),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(12, 18, 28)),
+            stroke: None,
+        },
+    );
+    crate::text::fill_contours(&mut nested.geom);
+    nested.layout.parent = Some(hit.1);
+    let nested_id = nested.id;
+    studio.doc.layers[hit.0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .push(nested);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    let picture = image(&studio.doc);
+    studio.create_text_outlines();
+    assert_eq!(studio.history.len(), 1, "{}", studio.status);
+    let root = studio.doc.find_shape(hit.0, hit.1).unwrap();
+    assert!(root.layout.frame);
+    assert!(!root.layout.clip);
+    assert!(!matches!(root.geom, Geom::Text(_)));
+    let nested = studio.doc.find_shape(hit.0, nested_id).unwrap();
+    assert_eq!(nested.layout.parent, Some(hit.1));
+    assert!(!matches!(nested.geom, Geom::Text(_)));
+    same_paint(&picture, &image(&studio.doc));
+    let after = wire(&studio);
+    reopen(&studio);
+    studio.undo();
+    assert_eq!(wire(&studio), before);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, nested_id).unwrap().geom,
+        Geom::Text(_)
+    ));
+    studio.redo();
+    assert_eq!(wire(&studio), after);
+}
+
+#[test]
+fn craft_outline_layout_frame_refuses_locked_text() {
+    let (mut studio, hit) = fixture();
+    {
+        let shape = studio.doc.find_shape_mut(hit.0, hit.1).unwrap();
+        shape.layout.frame = true;
+        shape.layout.clip = true;
+        shape.locked = true;
+    }
+    let child = child_rect(hit.1, Pt::new(50., 80.), Pt::new(14., 8.), true);
+    let child_id = child.id;
+    studio.doc.layers[hit.0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .push(child);
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(wire(&studio), before);
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+    assert_eq!(
+        studio
+            .doc
+            .find_shape(hit.0, child_id)
+            .unwrap()
+            .layout
+            .parent,
+        Some(hit.1)
+    );
+
+    let (mut studio, hit) = fixture();
+    studio
+        .doc
+        .find_shape_mut(hit.0, hit.1)
+        .unwrap()
+        .layout
+        .frame = true;
+    let mut nested = Shape::new(
+        Geom::Text(TypeRun {
+            origin: Pt::new(48., 150.),
+            content: "Nest".into(),
+            px: 18.,
+            font: concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/assets/fonts/EBGaramond.ttf"
+            )
+            .into(),
+            ..Default::default()
+        }),
+        Style {
+            fill: Fill::Solid(Rgba::rgb(12, 18, 28)),
+            stroke: None,
+        },
+    );
+    crate::text::fill_contours(&mut nested.geom);
+    nested.layout.parent = Some(hit.1);
+    nested.locked = true;
+    let nested_id = nested.id;
+    studio.doc.layers[hit.0]
+        .kind
+        .shapes_mut()
+        .unwrap()
+        .push(nested);
+    studio.selection = vec![hit];
+    studio.mark();
+    studio.history.clear();
+    let before = wire(&studio);
+    studio.create_text_outlines();
+    assert_eq!(wire(&studio), before);
+    assert_eq!(studio.history.len(), 0);
+    assert!(studio.status.contains("Unlock"), "{}", studio.status);
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, hit.1).unwrap().geom,
+        Geom::Text(_)
+    ));
+    assert!(matches!(
+        studio.doc.find_shape(hit.0, nested_id).unwrap().geom,
+        Geom::Text(_)
+    ));
+}

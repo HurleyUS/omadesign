@@ -190,3 +190,35 @@ fn project_fonts_copy_reopen_and_edit_without_an_installed_font_path() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn svg_type_native_span_only_portable_faces_are_validated_and_archived(){
+    let bytes=Arc::new(include_bytes!("../tests/assets/fonts/EBGaramond.ttf").to_vec());let id=format!("omatype:{:032x}",fingerprint(&bytes));crate::text::register_memory_font(&id,"Span face",bytes).unwrap();
+    let mut doc=Document::new("Span fonts",100.,100.,96.);doc.layers.clear();let mut layer=Layer::vector("Type");let mut run=TypeRun{content:"A B".into(),..Default::default()};run.set_character_style(2,3,|s|s.font=Some(id.clone()));layer.kind.shapes_mut().unwrap().push(Shape::new(Geom::Text(run),Style::default()));doc.layers.push(layer);
+    validate_document_fonts(&doc).unwrap();let archive=document_fonts(&doc).unwrap();assert_eq!(archive.len(),1);assert_eq!(archive[0].id,id);
+    let Geom::Text(run)=&mut doc.layers[0].kind.shapes_mut().unwrap()[0].geom else{unreachable!()};run.set_character_style(2,3,|s|s.font=Some("omatype:missing-span-face".into()));assert!(validate_document_fonts(&doc).is_err());
+}
+
+#[test]
+fn svg_unused_fallback_faces_and_missing_instance_baselines_use_the_same_native_font_archive() {
+    use base64::Engine;
+    let p=fs::read("/usr/share/fonts/liberation/LiberationSerif-Regular.ttf").unwrap();
+    let f=fs::read("/usr/share/fonts/liberation/LiberationSans-Regular.ttf").unwrap();
+    let source=format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="80"><style>@font-face{{font-family:ArchivePrimary;src:url(data:font/ttf;base64,{})}}@font-face{{font-family:ArchiveUnused;src:url(data:font/ttf;base64,{})}}</style><text x="10" y="50" font-size="32" font-family="ArchivePrimary,ArchiveUnused">AV</text></svg>"#,base64::engine::general_purpose::STANDARD.encode(&p),base64::engine::general_purpose::STANDARD.encode(&f));
+    let (mut doc,notes)=crate::formats::svg::read(&source,"Unused fallback").unwrap();assert!(notes.is_empty(),"{notes:?}");
+    let expected:HashSet<_>=[p.as_slice(),f.as_slice()].into_iter().map(|b|format!("omatype:{:032x}",fingerprint(b))).collect();assert_eq!(document_font_ids(&doc).unwrap(),expected);
+    let temp=Temp::new();let path=temp.0.join("unused.oma");crate::project::save_to(&doc,&path).unwrap();
+    for id in &expected {let name=id.trim_start_matches("omatype:");assert!(fs::read_dir(temp.0.join(".omabrand/fonts")).unwrap().any(|f|f.unwrap().file_name().to_string_lossy().starts_with(name)));}
+    let library=Temp::new();assert_eq!(copy_document_fonts(&path,&library.0).unwrap().len(),2);
+    let mut empty=Document::new("Retained fallback",160.,80.,72.);empty.layers.clear();
+    let mut replica=crate::collaboration::Replica::new("retained-fallback".into(),"b".repeat(64),crate::collaboration::snapshot(&empty).unwrap());replica.record(&doc).unwrap();assert!(replica.undo());empty.collaboration=Some(replica);
+    let retained=temp.0.join("retained.oma");crate::project::save_to(&empty,&retained).unwrap();
+    let copied=Temp::new();assert_eq!(copy_document_fonts(&retained,&copied.0).unwrap().len(),2);
+    let li=doc.layers.iter().position(|l|l.kind.shapes().is_some_and(|s|s.iter().any(|s|matches!(s.geom,Geom::Text(_))))).unwrap();
+    let baseline=doc.layers[li].kind.shapes().unwrap().iter().find(|s|matches!(s.geom,Geom::Text(_))).unwrap().clone();
+    doc.layers[li].kind.shapes_mut().unwrap().clear();
+    let mut instance=Shape::new(Geom::Rect{origin:Pt::ZERO,size:Pt::new(10.,10.),radius:0.},Style::default());
+    instance.layout.component=Some(crate::layout_components::ComponentBinding::Instance{main:987650,nodes:vec![crate::layout_components::InstanceNode{source:987651,instance:987652,slot:987653,nested_main:Some(987654),baseline:Box::new(baseline)}]});
+    doc.layers[li].kind.shapes_mut().unwrap().push(instance);assert_eq!(document_font_ids(&doc).unwrap(),expected);
+    let separate=Temp::new();let output=separate.0.join("baseline");fs::create_dir_all(&output).unwrap();assert_eq!(archive_document_fonts(&doc,&output).unwrap().len(),2);
+}

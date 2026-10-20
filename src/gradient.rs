@@ -1,7 +1,7 @@
 //! Editable multi-stop gradients shared by fills, strokes and portable exports.
 use crate::color::Rgba;
 use crate::document::Shape;
-use crate::geom::{Bounds, Geom, Pt};
+use crate::geom::{Bounds, Geom, PathContour, Pt};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::VecDeque, sync::Arc};
 
@@ -28,6 +28,33 @@ pub struct GradientStop {
     pub offset: f32,
     pub color: Rgba,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Spread {
+    #[default]
+    Pad,
+    Repeat,
+    Reflect,
+}
+impl Spread {
+    /// Select the native shader tiling rule.
+    /// Returns the drawing mode corresponding to this saved spread mode.
+    pub fn skia(self) -> tiny_skia::SpreadMode {
+        match self {
+            Self::Pad => tiny_skia::SpreadMode::Pad,
+            Self::Repeat => tiny_skia::SpreadMode::Repeat,
+            Self::Reflect => tiny_skia::SpreadMode::Reflect,
+        }
+    }
+    /// Name the portable SVG spread mode.
+    /// Returns its standards-defined attribute value.
+    pub fn svg(self) -> &'static str {
+        match self {
+            Self::Pad => "pad",
+            Self::Repeat => "repeat",
+            Self::Reflect => "reflect",
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Gradient {
     pub kind: GradientKind,
@@ -35,6 +62,68 @@ pub struct Gradient {
     pub from: [f32; 2],
     pub to: [f32; 2],
     pub stops: Vec<GradientStop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radial_axis: Option<[f32; 2]>,
+    #[serde(default)]
+    pub spread: Spread,
+    #[serde(default)]
+    pub focal: [f32; 2],
+    #[serde(default)]
+    pub inner_radius: f32,
+    /// Distance-field silhouette when it is not this object's own path.
+    /// Absent means the filled object supplies the silhouette.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silhouette: Option<DistanceSilhouette>,
+}
+
+/// Contours a shape-distance fill measures when they are not the filled object.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DistanceSilhouette {
+    pub paths: Vec<PathContour>,
+    pub winding: bool,
+}
+
+impl DistanceSilhouette {
+    /// Capture the outline a shape-distance fill measures.
+    /// Args: the full story outline. Returns those contours, or nothing when the outline is empty.
+    pub fn from_geom(geom: &Geom) -> Option<Self> {
+        let silhouette = match geom {
+            Geom::Paths { paths, winding } => Self {
+                paths: paths.clone(),
+                winding: *winding,
+            },
+            Geom::Path { anchors, closed } => Self {
+                paths: vec![PathContour {
+                    anchors: anchors.clone(),
+                    closed: *closed,
+                }],
+                winding: false,
+            },
+            _ => return None,
+        };
+        if silhouette.paths.is_empty() {
+            None
+        } else {
+            Some(silhouette)
+        }
+    }
+
+    /// Rebuild the measured outline as editable geometry.
+    /// Args: none. Returns the stored contours.
+    pub fn geom(&self) -> Geom {
+        if self.paths.len() == 1 && !self.winding {
+            let path = &self.paths[0];
+            Geom::Path {
+                anchors: path.anchors.clone(),
+                closed: path.closed,
+            }
+        } else {
+            Geom::Paths {
+                paths: self.paths.clone(),
+                winding: self.winding,
+            }
+        }
+    }
 }
 impl Gradient {
     pub fn new(kind: GradientKind, first: Rgba, last: Rgba) -> Self {
@@ -46,6 +135,11 @@ impl Gradient {
                 [0.5, 0.5]
             },
             to: [1., 0.5],
+            radial_axis: None,
+            spread: Spread::Pad,
+            focal: [0., 0.],
+            inner_radius: 0.,
+            silhouette: None,
             stops: vec![
                 GradientStop {
                     offset: 0.,
@@ -81,7 +175,11 @@ impl Gradient {
         let Some(first) = self.stops.first() else {
             return Rgba::TRANSPARENT;
         };
-        let position = position.clamp(0., 1.);
+        let position = match self.spread {
+            Spread::Pad => position.clamp(0., 1.),
+            Spread::Repeat => position.rem_euclid(1.),
+            Spread::Reflect => 1. - (position.rem_euclid(2.) - 1.).abs(),
+        };
         if position < first.offset {
             return first.color;
         }
@@ -139,6 +237,18 @@ impl Gradient {
                 (center.y + d.y * 0.5 - bounds.min.y) / bounds.height().max(1e-3),
             ];
         } else {
+            if let Some(axis) = &mut self.radial_axis {
+                let delta = degrees.to_radians() - (b.y - a.y).atan2(b.x - a.x);
+                let rotated = Pt::new(
+                    axis[0] * bounds.width().max(1e-3),
+                    axis[1] * bounds.height().max(1e-3),
+                )
+                .rotate(delta);
+                *axis = [
+                    rotated.x / bounds.width().max(1e-3),
+                    rotated.y / bounds.height().max(1e-3),
+                ];
+            }
             self.to = [
                 (a.x + d.x - bounds.min.x) / bounds.width().max(1e-3),
                 (a.y + d.y - bounds.min.y) / bounds.height().max(1e-3),
@@ -151,11 +261,45 @@ impl Gradient {
         let p = point - a;
         match self.kind {
             GradientKind::Linear => (p.x * d.x + p.y * d.y) / (d.x * d.x + d.y * d.y).max(1e-9),
-            GradientKind::Radial | GradientKind::Shape => p.length() / d.length().max(1e-6),
+            GradientKind::Radial => {
+                let mut q = tiny_skia::Point::from_xy(point.x, point.y);
+                let Some(inverse) = self.radial_transform(bounds).invert() else {
+                    return 0.;
+                };
+                inverse.map_point(&mut q);
+                let p = Pt::new(q.x - self.focal[0], q.y - self.focal[1]);
+                let f = Pt::from_array(self.focal);
+                let r = self.inner_radius;
+                let a = f.length_sq() - (1. - r).powi(2);
+                let b = 2. * (p.dot(f) - r * (1. - r));
+                let c = p.length_sq() - r * r;
+                if a.abs() < 1e-6 {
+                    return -c / b;
+                }
+                let root = (b * b - 4. * a * c).max(0.).sqrt();
+                ((-b - root) / (2. * a)).max((-b + root) / (2. * a))
+            }
+            GradientKind::Shape => p.length() / d.length().max(1e-6),
             GradientKind::Conic => {
                 ((p.y.atan2(p.x) - d.y.atan2(d.x)) / std::f32::consts::TAU).rem_euclid(1.)
             }
         }
+    }
+    /// Place the two radial circles in object space.
+    /// Args: current object bounds. Returns the affine map from unit-radius paint coordinates.
+    pub fn radial_transform(&self, bounds: Bounds) -> tiny_skia::Transform {
+        let (a, b) = self.endpoints(bounds);
+        let d = b - a;
+        let y = self
+            .radial_axis
+            .map(|v| {
+                Pt::new(
+                    v[0] * bounds.width().max(1e-3),
+                    v[1] * bounds.height().max(1e-3),
+                )
+            })
+            .unwrap_or_else(|| d.perp());
+        tiny_skia::Transform::from_row(d.x, d.y, y.x, y.y, a.x, a.y)
     }
     pub fn skia(&self, bounds: Bounds) -> tiny_skia::Shader<'static> {
         let mut normalized = self.clone();
@@ -173,17 +317,17 @@ impl Gradient {
                 a,
                 b,
                 stops,
-                tiny_skia::SpreadMode::Pad,
+                self.spread.skia(),
                 tiny_skia::Transform::identity(),
             ),
             _ => tiny_skia::RadialGradient::new(
-                a,
-                0.,
-                a,
-                ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt().max(1e-3),
+                tiny_skia::Point::from_xy(self.focal[0], self.focal[1]),
+                self.inner_radius.max(0.),
+                tiny_skia::Point::from_xy(0., 0.),
+                1.,
                 stops,
-                tiny_skia::SpreadMode::Pad,
-                tiny_skia::Transform::identity(),
+                self.spread.skia(),
+                self.radial_transform(bounds),
             ),
         };
         shader.unwrap_or(tiny_skia::Shader::SolidColor(self.sample(0.).to_skia()))
@@ -207,7 +351,13 @@ pub fn texture(gradient: &Gradient, shape: &Shape, padding: f32, scale: f32) -> 
     if !matches!(gradient.kind, GradientKind::Conic | GradientKind::Shape) {
         return None;
     }
-    let geom = &shape.geom;
+    let owned;
+    let geom = if let Some(silhouette) = &gradient.silhouette {
+        owned = silhouette.geom();
+        &owned
+    } else {
+        &shape.geom
+    };
     let bounds = geom.bbox();
     let tile = bounds.inflate(padding.max(1.));
     // Resolution follows the actual canvas/export transform, with bounded memory.
@@ -236,16 +386,57 @@ pub fn texture(gradient: &Gradient, shape: &Shape, padding: f32, scale: f32) -> 
         return Some(cached);
     }
     let mut pm = tiny_skia::Pixmap::new(w, h)?;
-    let mut field = if gradient.kind == GradientKind::Shape {
-        vec![0.; (w * h) as usize]
+    let field = if gradient.kind == GradientKind::Shape {
+        distance_field(shape, geom, w, h, tile)?
     } else {
         Vec::new()
     };
-    if gradient.kind == GradientKind::Shape {
+    let mut normalized = gradient.clone();
+    normalized.normalize();
+    for (i, pixel) in pm.pixels_mut().iter_mut().enumerate() {
+        let p = Pt::new(
+            tile.min.x + ((i % w as usize) as f32 + 0.5) / w as f32 * tile.width(),
+            tile.min.y + ((i / w as usize) as f32 + 0.5) / h as f32 * tile.height(),
+        );
+        let c = normalized.sample(if gradient.kind == GradientKind::Shape {
+            field[i]
+        } else {
+            gradient.position(bounds, p)
+        });
+        *pixel = tiny_skia::ColorU8::from_rgba(c.r, c.g, c.b, c.a).premultiply();
+    }
+    let texture = (Arc::new(pm), tile);
+    TEXTURES.with(|entries| {
+        let mut entries = entries.borrow_mut();
+        entries.push_front(TextureEntry {
+            gradient: gradient.clone(),
+            geom: geom.clone(),
+            corners: shape.corners,
+            w,
+            h,
+            tile,
+            texture: texture.clone(),
+        });
+        let mut bytes = 0;
+        entries.retain(|entry| {
+            bytes += entry.w as usize * entry.h as usize * 4;
+            bytes <= 64 * 1024 * 1024
+        });
+        entries.truncate(24);
+    });
+    Some(texture)
+}
+
+/// Normalized inside-distance field (0 at the deepest point, 1 at the edge) of
+/// a shape-gradient silhouette over `tile` at `w`×`h` samples.
+fn distance_field(shape: &Shape, geom: &Geom, w: u32, h: u32, tile: Bounds) -> Option<Vec<f32>> {
+    let mut field = vec![0.; (w * h) as usize];
+    {
         let mut mask = tiny_skia::Mask::new(w, h)?;
         if let Some(path) = {
             let mut local = shape.clone();
             local.rotation = 0.;
+            local.geom = geom.clone();
             local.get_cached_path(96)
         } {
             let xf = tiny_skia::Transform::from_row(
@@ -296,40 +487,48 @@ pub fn texture(gradient: &Gradient, shape: &Shape, padding: f32, scale: f32) -> 
             *distance = 1. - *distance / maximum;
         }
     }
-    let mut normalized = gradient.clone();
-    normalized.normalize();
-    for (i, pixel) in pm.pixels_mut().iter_mut().enumerate() {
-        let p = Pt::new(
-            tile.min.x + ((i % w as usize) as f32 + 0.5) / w as f32 * tile.width(),
-            tile.min.y + ((i / w as usize) as f32 + 0.5) / h as f32 * tile.height(),
-        );
-        let c = normalized.sample(if gradient.kind == GradientKind::Shape {
-            field[i]
+    Some(field)
+}
+
+/// Float shape-distance field for the precise compositor.
+pub struct ShapeField {
+    data: Vec<f32>,
+    w: u32,
+    h: u32,
+    tile: Bounds,
+}
+impl ShapeField {
+    /// Build the field at the 8-bit texture's resolution. Args: gradient, shape, render scale.
+    pub fn new(gradient: &Gradient, shape: &Shape, scale: f32) -> Option<Self> {
+        let owned;
+        let geom = if let Some(silhouette) = &gradient.silhouette {
+            owned = silhouette.geom();
+            &owned
         } else {
-            gradient.position(bounds, p)
-        });
-        *pixel = tiny_skia::ColorU8::from_rgba(c.r, c.g, c.b, c.a).premultiply();
+            &shape.geom
+        };
+        let tile = geom.bbox().inflate(1.);
+        let longest = tile.width().max(tile.height()).max(1.);
+        let resolution = ((longest * scale.max(0.1)).ceil().clamp(16., 4096.) as u32).next_power_of_two().min(4096);
+        let k = resolution as f32 / longest;
+        let w = (tile.width() * k).ceil().max(2.) as u32;
+        let h = (tile.height() * k).ceil().max(2.) as u32;
+        Some(Self { data: distance_field(shape, geom, w, h, tile)?, w, h, tile })
     }
-    let texture = (Arc::new(pm), tile);
-    TEXTURES.with(|entries| {
-        let mut entries = entries.borrow_mut();
-        entries.push_front(TextureEntry {
-            gradient: gradient.clone(),
-            geom: geom.clone(),
-            corners: shape.corners,
-            w,
-            h,
-            tile,
-            texture: texture.clone(),
-        });
-        let mut bytes = 0;
-        entries.retain(|entry| {
-            bytes += entry.w as usize * entry.h as usize * 4;
-            bytes <= 64 * 1024 * 1024
-        });
-        entries.truncate(24);
-    });
-    Some(texture)
+    /// Bilinear field value at an object-space point (0 outside).
+    pub fn sample(&self, p: Pt) -> f32 {
+        let fx = (p.x - self.tile.min.x) / self.tile.width() * self.w as f32 - 0.5;
+        let fy = (p.y - self.tile.min.y) / self.tile.height() * self.h as f32 - 0.5;
+        let x0 = fx.floor().clamp(0., (self.w - 1) as f32) as usize;
+        let y0 = fy.floor().clamp(0., (self.h - 1) as f32) as usize;
+        let x1 = (x0 + 1).min(self.w as usize - 1);
+        let y1 = (y0 + 1).min(self.h as usize - 1);
+        let (tx, ty) = ((fx - x0 as f32).clamp(0., 1.), (fy - y0 as f32).clamp(0., 1.));
+        let v = |x: usize, y: usize| self.data[y * self.w as usize + x];
+        let top = v(x0, y0) * (1. - tx) + v(x1, y0) * tx;
+        let bottom = v(x0, y1) * (1. - tx) + v(x1, y1) * tx;
+        top * (1. - ty) + bottom * ty
+    }
 }
 
 pub fn texture_shader<'a>(texture: &'a (Arc<tiny_skia::Pixmap>, Bounds)) -> tiny_skia::Shader<'a> {

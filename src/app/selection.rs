@@ -27,12 +27,26 @@ impl Studio {
 
     /// Explicit outlining may discard live text; entering the Node tool must not.
     pub fn convert_object_to_path(&mut self, layer: usize, id: u64) {
+        let selected = self.selection.iter().position(|p| *p == (layer, id));
+        if selected.is_none() && self.actions.depth == 0 {
+            self.actions.pause("This outline target is outside the recorded selection");
+        }
+        self.with_action_step(crate::actions::Step::Outline { selected }, |studio| studio.convert_object_to_path_command(layer, id));
+    }
+
+    fn convert_object_to_path_command(&mut self, layer: usize, id: u64) {
         if !self.doc.layer_editable(layer)
             || !self.doc.find_shape(layer, id).is_some_and(|shape| {
                 shape.visible && !shape.locked && (!shape.guide || self.doc.ruler.guides_visible)
             })
         {
             self.status = "Select an unlocked vector object to convert".into();
+            return;
+        }
+        if self.doc.find_shape(layer, id).is_some_and(|shape| matches!(&shape.geom, Geom::Text(run)
+            if crate::text::has_character_paint(run) || run.frame.is_some() || run.on_path.is_some() || run.svg_text.is_some()))
+        {
+            self.outline_text_targets(&[(layer, id)]);
             return;
         }
         self.commit_type_edit();
@@ -45,15 +59,17 @@ impl Studio {
                 self.status = "This text has no outlines to convert".into();
                 return;
             }
-            // Keep every glyph and counter, plus the existing bounds/rotation pivot.
+            let after = crate::text::outline_path(run)
+                .and_then(|path| crate::formats::svg::path_geom(&path, false))
+                .unwrap_or_else(|| Geom::Poly {
+                    contours: run.contours.clone(),
+                    winding: false,
+                });
             self.commit(Cmd::SetGeom {
                 layer,
                 id,
                 before: shape.geom.clone(),
-                after: Geom::Poly {
-                    contours: run.contours.clone(),
-                    winding: false,
-                },
+                after,
                 rot_before: shape.rotation,
                 rot_after: shape.rotation,
             });
@@ -65,7 +81,7 @@ impl Studio {
         self.reset_snap_gesture();
     }
 
-    fn selectable_objects(&self) -> Vec<(usize, u64)> {
+    pub(crate) fn selectable_objects(&self) -> Vec<(usize, u64)> {
         self.doc
             .layers
             .iter()
@@ -95,6 +111,7 @@ impl Studio {
 
     pub(super) fn selected_objects(&mut self, objects: Vec<(usize, u64)>) {
         self.selected_layer = None;
+        self.layer_rows = None;
         self.individual_object = None;
         self.end_deform(true);
         self.reset_snap_gesture();
@@ -628,8 +645,8 @@ mod text_outline_tests {
             assert_eq!(studio.history.len(), 1);
             assert!(studio.can_flip_selection());
             let outlined = studio.doc.find_shape(1, id).unwrap().clone();
-            let Geom::Poly { contours, winding } = &outlined.geom else {
-                panic!("all-contour outline")
+            let Geom::Paths { paths, winding } = &outlined.geom else {
+                panic!("all-curve outline")
             };
             let Geom::Text(run) = &original.geom else {
                 unreachable!()
@@ -638,7 +655,11 @@ mod text_outline_tests {
                 !*winding,
                 "preserve live text's even-odd overlapping-glyph appearance"
             );
-            assert_eq!(contours, &run.contours);
+            assert_eq!(paths.len(), run.contours.len());
+            assert!(paths.iter().all(|path| path.closed));
+            assert!(paths.iter().flat_map(|path| &path.anchors).any(|anchor| {
+                anchor.h_in.length_sq() > 0. || anchor.h_out.length_sq() > 0.
+            }));
             assert_eq!(outlined.style, original.style);
             assert_eq!(outlined.rotation, original.rotation);
             assert_eq!(outlined.geom.bbox(), original.geom.bbox());

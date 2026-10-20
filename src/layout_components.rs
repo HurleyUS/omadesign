@@ -1,6 +1,9 @@
 //! Reusable design components. Instances retain stable object IDs and track
 //! property overrides against the last received definition, including after save.
 
+mod properties;
+pub use properties::*;
+
 use crate::document::{Document, Shape, next_id};
 use crate::geom::{Geom, Pt};
 use serde::{Deserialize, Serialize};
@@ -14,6 +17,8 @@ pub enum ComponentBinding {
         /// Local shape ID -> identity shared by corresponding variant children.
         #[serde(default)]
         slots: BTreeMap<u64, u64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        properties: Vec<ComponentProperty>,
     },
     Instance {
         main: u64,
@@ -151,6 +156,7 @@ pub fn make_component(doc: &mut Document, layer: usize, root: u64) -> Result<(),
         family: root,
         variant: "Default".into(),
         slots,
+        properties: Vec::new(),
     });
     Ok(())
 }
@@ -182,7 +188,15 @@ pub fn remap_duplicate(shape: &mut Shape, ids: &HashMap<u64, u64>) {
         return;
     };
     match binding {
-        ComponentBinding::Main { family, slots, .. } => {
+        ComponentBinding::Main {
+            family,
+            slots,
+            properties,
+            ..
+        } => {
+            for property in properties {
+                property.slot = ids.get(&property.slot).copied().unwrap_or(property.slot);
+            }
             *family = ids.get(family).copied().unwrap_or(shape.id);
             *slots = std::mem::take(slots)
                 .into_iter()
@@ -338,18 +352,46 @@ pub fn insert_instance(
 /// Duplicate a definition as a named variant. Shared slots retain overrides
 /// when switching variants, even after variant children have been reordered.
 pub fn add_variant(doc: &mut Document, main: u64, name: &str, origin: Pt) -> Result<u64, String> {
+    copy_definition(doc, main, name, origin, false)
+}
+
+/// Copy a definition with its own family, slots and exposed property bindings.
+/// Args: document, source definition, new name and finite origin. Returns the new definition ID.
+pub fn duplicate_definition(
+    doc: &mut Document,
+    main: u64,
+    name: &str,
+    origin: Pt,
+) -> Result<u64, String> {
+    copy_definition(doc, main, name, origin, true)
+}
+
+fn copy_definition(
+    doc: &mut Document,
+    main: u64,
+    name: &str,
+    origin: Pt,
+    independent: bool,
+) -> Result<u64, String> {
     let name = name.trim();
-    if name.is_empty() {
-        return Err("Give the variant a name".into());
+    if name.is_empty() || !origin.x.is_finite() || !origin.y.is_finite() {
+        return Err("Give the copy a name and a finite position".into());
     }
     let (layer, source) = locate(doc, main).ok_or("Component is missing")?;
-    let Some(ComponentBinding::Main { family, slots, .. }) = &source.layout.component else {
+    let Some(ComponentBinding::Main {
+        family,
+        slots,
+        properties,
+        ..
+    }) = &source.layout.component
+    else {
         return Err("Select a main component".into());
     };
-    let (family, slots) = (*family, slots.clone());
-    if definitions(doc)
-        .iter()
-        .any(|(_, id, _, variant)| family_of_main(doc, *id) == Some(family) && variant == name)
+    let (family, slots, mut properties) = (*family, slots.clone(), properties.clone());
+    if !independent
+        && definitions(doc)
+            .iter()
+            .any(|(_, id, _, variant)| family_of_main(doc, *id) == Some(family) && variant == name)
     {
         return Err("A variant with that name already exists".into());
     }
@@ -357,9 +399,29 @@ pub fn add_variant(doc: &mut Document, main: u64, name: &str, origin: Pt) -> Res
     let source = subtree(doc, layer, main);
     let ids: HashMap<u64, u64> = source.iter().map(|s| (s.id, next_id())).collect();
     let root = ids[&main];
+    if independent {
+        for property in &mut properties {
+            let source = slots
+                .iter()
+                .find_map(|(id, slot)| (*slot == property.slot).then_some(id));
+            property.slot = source
+                .and_then(|id| ids.get(id))
+                .copied()
+                .ok_or("The definition has a missing property binding")?;
+        }
+    }
     let new_slots = source
         .iter()
-        .map(|s| (ids[&s.id], slots.get(&s.id).copied().unwrap_or(s.id)))
+        .map(|s| {
+            (
+                ids[&s.id],
+                if independent {
+                    ids[&s.id]
+                } else {
+                    slots.get(&s.id).copied().unwrap_or(s.id)
+                },
+            )
+        })
         .collect();
     let mut shapes: Vec<_> = source
         .into_iter()
@@ -382,11 +444,20 @@ pub fn add_variant(doc: &mut Document, main: u64, name: &str, origin: Pt) -> Res
         })
         .collect();
     let frame = shapes.iter_mut().find(|s| s.id == root).unwrap();
-    frame.name = format!("{} / {}", frame.name, name);
+    frame.name = if independent {
+        name.into()
+    } else {
+        format!("{} / {}", frame.name, name)
+    };
     frame.layout.component = Some(ComponentBinding::Main {
-        family,
-        variant: name.into(),
+        family: if independent { root } else { family },
+        variant: if independent {
+            "Default".into()
+        } else {
+            name.into()
+        },
         slots: new_slots,
+        properties,
     });
     doc.layers[layer].kind.shapes_mut().unwrap().extend(shapes);
     Ok(root)
@@ -463,6 +534,8 @@ fn inherit(base: &Shape, local: &Shape, inherited: &Shape, reset: bool) -> Shape
     out.name = preserve(&base.name, &local.name, &inherited.name, reset);
     out.style = merge_serialized(&base.style, &local.style, &inherited.style, reset);
     out.opacity = preserve(&base.opacity, &local.opacity, &inherited.opacity, reset);
+    out.fill_opacity = preserve(&base.fill_opacity, &local.fill_opacity, &inherited.fill_opacity, reset);
+    out.blend_interior = preserve(&base.blend_interior, &local.blend_interior, &inherited.blend_interior, reset);
     out.blend = preserve(&base.blend, &local.blend, &inherited.blend, reset);
     out.rotation = preserve(&base.rotation, &local.rotation, &inherited.rotation, reset);
     out.corners = preserve(&base.corners, &local.corners, &inherited.corners, reset);
@@ -470,6 +543,9 @@ fn inherit(base: &Shape, local: &Shape, inherited: &Shape, reset: bool) -> Shape
     out.visible = preserve(&base.visible, &local.visible, &inherited.visible, reset);
     out.locked = preserve(&base.locked, &local.locked, &inherited.locked, reset);
     out.guide = preserve(&base.guide, &local.guide, &inherited.guide, reset);
+    out.mask = preserve(&base.mask, &local.mask, &inherited.mask, reset);
+    out.artwork_masks = preserve(&base.artwork_masks, &local.artwork_masks, &inherited.artwork_masks, reset);
+    out.text_wrap = preserve(&base.text_wrap, &local.text_wrap, &inherited.text_wrap, reset);
     let (mut base_layout, mut local_layout, mut inherited_layout) = (
         base.layout.clone(),
         local.layout.clone(),
@@ -697,6 +773,15 @@ fn sync_to(
             inherited.layout.parent.and_then(|p| ids.get(&p).copied())
         };
         remap_interactions(&mut inherited, &ids);
+        if !inherited.artwork_masks.is_empty() {
+            let layers = HashMap::from([(doc.layers[source_layer].id, doc.layers[layer].id)]);
+            let placement = tiny_skia::Transform::from_translate(origin.x-source_origin.x, origin.y-source_origin.y);
+            for mask in &mut inherited.artwork_masks {
+                if mask.source.shape.is_some() {
+                    mask.remap(&layers, &ids, placement);
+                }
+            }
+        }
         let locally_deleted = !reset
             && source_id != main
             && previous

@@ -106,12 +106,16 @@ fn prepare(
             let (mut doc, notes) = crate::formats::svg::read(&svg, "Pasted SVG")?;
             let mut bounds: Option<Bounds> = None;
             for (index, layer) in doc.layers.iter().enumerate() {
-                if !doc.layer_visible(index) || layer.is_group {
+                if !doc.layer_visible(index) || layer.is_group || doc.is_mask_source(index, None) {
                     continue;
                 }
                 match &layer.kind {
                     LayerKind::Vector { shapes } => {
-                        for shape in shapes.iter().filter(|shape| shape.visible && !shape.guide) {
+                        for shape in shapes.iter().filter(|shape| {
+                            shape.visible
+                                && !shape.guide
+                                && !doc.is_mask_source(index, Some(shape.id))
+                        }) {
                             let b = shape.world_bbox();
                             bounds = Some(bounds.map_or(b, |bounds| bounds.union(b)));
                         }
@@ -136,7 +140,17 @@ fn prepare(
                 .iter()
                 .map(|layer| (layer.id, next_id()))
                 .collect();
+            let shape_ids: HashMap<_, _> = doc
+                .layers
+                .iter()
+                .flat_map(|l| l.kind.shapes().unwrap_or(&[]))
+                .map(|s| (s.id, next_id()))
+                .collect();
+            let placement = tiny_skia::Transform::from_translate(delta.x, delta.y);
             for layer in &mut doc.layers {
+                for mask in &mut layer.artwork_masks {
+                    mask.remap(&ids, &shape_ids, placement);
+                }
                 layer.id = ids[&layer.id];
                 layer.parent = layer.parent.and_then(|id| ids.get(&id).copied());
                 match &mut layer.kind {
@@ -151,7 +165,14 @@ fn prepare(
                             layer.mask_origin += delta;
                         }
                         for shape in shapes {
-                            shape.id = next_id();
+                            for mask in &mut shape.artwork_masks {
+                                mask.remap(&ids, &shape_ids, placement);
+                            }
+                            shape.id = shape_ids[&shape.id];
+                            shape.layout.parent = shape
+                                .layout
+                                .parent
+                                .and_then(|id| shape_ids.get(&id).copied());
                             shape.geom.translate(delta);
                         }
                     }
@@ -235,7 +256,12 @@ impl Studio {
         }
         self.commit_type_edit();
         self.commit(Cmd::Batch(commands));
-        selection.retain(|(index, _)| self.doc.layer_editable(*index));
+        selection.retain(|(index, id)| {
+            self.doc.layer_editable(*index)
+                && !self
+                    .doc
+                    .is_mask_source(*index, (*id != RASTER_ID).then_some(*id))
+        });
         self.selection = selection;
         self.selected_layer = None;
         self.active_layer = self
@@ -333,7 +359,7 @@ mod tests {
         let restored = crate::project::decode(&encoded).unwrap();
         assert_center(restored.layers[1].kind.raster_bounds().unwrap(), center);
         assert_eq!(
-            restored.layers[1].kind.pixels().unwrap().data,
+            restored.layers[1].kind.pixels().unwrap().data.as_slice(),
             [231, 42, 80, 255].repeat(300 * 160)
         );
         studio.undo();
@@ -389,21 +415,19 @@ mod tests {
         let visible = studio.selection.clone();
         assert_eq!(visible.len(), 1);
         let shape = studio.doc.find_shape(visible[0].0, visible[0].1).unwrap();
-        assert!(matches!(shape.geom, Geom::Path { .. }));
+        assert!(matches!(shape.geom, Geom::Path { .. } | Geom::Paths { .. }));
+        assert_eq!(shape.geom.path_contours().len(), 1);
         assert!(matches!(shape.style.fill, Fill::Solid(color) if color == Rgba::rgb(255, 0, 0)));
         assert_center(shape.world_bbox(), center);
         let group = studio
             .doc
             .layers
             .iter()
-            .find(|layer| layer.mask.is_some())
+            .find(|layer| !layer.artwork_masks.is_empty())
             .unwrap();
-        assert_eq!(group.mask_size, Pt::new(100.0, 80.0));
-        assert_eq!(group.mask_origin, center - Pt::new(30.0, 30.0));
-        let transform = crate::compositor::layer_pixel_transform(group);
-        let mut pt = [tiny_skia::Point::from_xy(30.0, 30.0)];
-        transform.map_points(&mut pt);
-        assert_eq!(Pt::new(pt[0].x, pt[0].y), center);
+        assert!(group.mask.is_none());
+        let mask = &group.artwork_masks[0];
+        assert!(studio.doc.layers.iter().any(|l| l.id == mask.source.layer));
         let ids: HashSet<_> = studio.doc.layers.iter().map(|layer| layer.id).collect();
         assert_eq!(ids.len(), studio.doc.layers.len());
         let count = studio.doc.layers.len();
@@ -423,7 +447,7 @@ mod tests {
             restored
                 .layers
                 .iter()
-                .filter(|layer| layer.mask.is_some())
+                .filter(|layer| !layer.artwork_masks.is_empty())
                 .count(),
             1
         );

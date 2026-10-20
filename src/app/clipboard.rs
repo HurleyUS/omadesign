@@ -148,7 +148,7 @@ mod tests {
         let bounds = source.doc.find_shape(shape.0, shape.1).unwrap().geom.bbox();
         let raster = Layer::placed_raster(
             "Image",
-            crate::document::Pixels::new(3, 2),
+            crate::document::Pixels::new(3, 2).unwrap(),
             Pt::new(98., 142.),
             Pt::new(60., 40.),
         );
@@ -529,7 +529,7 @@ mod tests {
         let index = source.doc.layers.len();
         source.doc.layers.push(Layer::placed_raster(
             "Photo",
-            crate::document::Pixels::new(2, 2),
+            crate::document::Pixels::new(2, 2).unwrap(),
             Pt::new(140.0, 50.0),
             Pt::new(40.0, 40.0),
         ));
@@ -575,6 +575,10 @@ impl Studio {
     const OBJECT_CLIP_PREFIX: &'static str = "omadesign-objects:";
 
     pub fn copy_selection(&mut self, ctx: &egui::Context) {
+        if self.channel_target.is_some() || self.quick_mask_painting() {
+            self.status = "Saved-channel clipboard transfer is not available yet; choose RGB for artwork".into();
+            return;
+        }
         let mut ids: HashSet<_> = self.selection.iter().copied().collect();
         for &(li, id) in &self.selection {
             ids.extend(
@@ -729,6 +733,10 @@ impl Studio {
     }
 
     pub fn request_clipboard_paste(&mut self, ctx: &egui::Context, payload: Option<&str>) {
+        if self.channel_target.is_some() || self.quick_mask_painting() {
+            self.status = "Saved-channel clipboard transfer is not available yet; choose RGB for artwork".into();
+            return;
+        }
         if let Some(text) = payload.filter(|p| Self::internal_clipboard(p)) {
             self.paste_clipboard(Some(text));
             return;

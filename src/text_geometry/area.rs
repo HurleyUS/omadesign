@@ -75,10 +75,12 @@ impl TextWrap {
 
 pub fn frame_bounds(run: &TypeRun) -> Option<Bounds> {
     let frame = run.frame.as_ref()?;
-    Some(Bounds::from_min_size(
+    let bounds=Bounds::from_min_size(
         Pt::new(run.origin.x, run.origin.y - run.px * 0.85),
         frame.size,
-    ))
+    );
+    let points=[bounds.min,Pt::new(bounds.max.x,bounds.min.y),bounds.max,Pt::new(bounds.min.x,bounds.max.y)].map(|p|run.map_point(p));
+    let mut result=Bounds::from_pt(points[0]);for p in &points[1..]{result.union_pt(*p);}Some(result)
 }
 
 #[derive(Clone)]
@@ -232,6 +234,7 @@ fn sliced_run(story: &TypeRun, start: usize) -> TypeRun {
     run.frame = None;
     run.thread = None;
     run.on_path = None;
+    run.vertical = false;
     run.layout = None;
     run.contours.clear();
     run.content = story.content.chars().skip(start).collect();
@@ -368,6 +371,7 @@ fn layout_frame_continued(
     has_next: bool,
     initial_hyphens: usize,
 ) -> TextGeometryLayout {
+    if frame_run.transform.is_some(){let mut local=frame_run.clone();local.transform=None;local.layout=None;let mut story=story.clone();story.transform=None;story.layout=None;let obstacles:Vec<_>=obstacles.iter().map(|o|{let mut o=o.clone();let points=[o.bounds.min,Pt::new(o.bounds.max.x,o.bounds.min.y),o.bounds.max,Pt::new(o.bounds.min.x,o.bounds.max.y)].map(|p|frame_run.unmap_point(p));let mut bounds=Bounds::from_pt(points[0]);for p in &points[1..]{bounds.union_pt(*p);}o.bounds=bounds;for p in o.contours.iter_mut().flatten(){*p=frame_run.unmap_point(*p);}let zero=frame_run.unmap_point(Pt::ZERO);let scale=(frame_run.unmap_point(Pt::new(1.,0.))-zero).length().max((frame_run.unmap_point(Pt::new(0.,1.))-zero).length());for padding in &mut o.wrap.offset{*padding*=scale;}o}).collect();return super::map_layout(layout_frame_continued(&local,&story,start,&obstacles,has_next,initial_hyphens),frame_run);}
     let mut metrics=FlowMetrics::default();
     let Some(frame)=frame_run.frame.as_ref() else { return TextGeometryLayout::default(); };
     if frame.valign==VAlign::Top || (obstacles.is_empty() && frame.contour.is_none()) {
@@ -432,6 +436,9 @@ fn layout_frame_pass(
     let Some(frame) = frame_run.frame.as_ref() else {
         return TextGeometryLayout::default();
     };
+    if story.vertical {
+        return crate::text::layout_vertical_frame(frame_run, story, start);
+    }
     let bounds = frame_bounds(frame_run).unwrap();
     let inner = Bounds {
         min: bounds.min + Pt::new(frame.inset[3], frame.inset[0]),
@@ -730,11 +737,13 @@ fn layout_frame_pass(
         };
         let base = Pt::new(placed.x, placed.y + dy - placed.line.baseline);
         for glyph in &placed.line.glyphs {
+            let paint_start=layout.contours.len();
             for contour in crate::text::glyph_contours(&placed.run, glyph) {
                 layout
                     .contours
                     .push(contour.into_iter().map(|p| p + base).collect());
             }
+            layout.paint_ranges.push((placed.run.character_style(glyph.cluster).fill,paint_start..layout.contours.len()));
         }
         for &(i, x) in &placed.line.carets {
             let metrics = crate::text::character_metrics(
@@ -743,7 +752,7 @@ fn layout_frame_pass(
             );
             layout
                 .caret_heights
-                .push((placed.start + i, story.px * metrics.vscale.unwrap() / 100.));
+                .push((placed.start + i, metrics.px.unwrap_or(story.px) * metrics.vscale.unwrap() / 100.));
             layout.carets.push((
                 (placed.start + i).min(placed.end),
                 Pt::new(
@@ -757,7 +766,7 @@ fn layout_frame_pass(
             let (a, x) = pair[0];
             let (b, z) = pair[1];
             let metrics = crate::text::character_metrics(story, placed.start + a);
-            let height = story.px * metrics.vscale.unwrap() / 100.;
+            let height = metrics.px.unwrap_or(story.px) * metrics.vscale.unwrap() / 100.;
             let baseline = placed.y + dy - metrics.baseline_shift.unwrap();
             let top = baseline - height * 0.9;
             let bottom = baseline + height * 0.2;
@@ -782,14 +791,19 @@ fn layout_frame_pass(
         if placed.line.hyphenated {
             layout.visible_text.push('-');
         }
+        let mut line_run=placed.run;
+        line_run.content=line_run.content.chars().take(placed.line.end).collect();
+        line_run.spans.retain(|span|span.start<placed.line.end);
+        for span in &mut line_run.spans {span.end=span.end.min(placed.line.end);}
+        line_run.spans.shrink_to_fit();
+        line_run.paragraphs.retain(|p|p.start<placed.line.end);
+        line_run.paragraphs.shrink_to_fit();
+        line_run.manual_kern.retain(|&i,_|i<placed.line.end);
+        layout.export_lines.push(PositionedTextLine {run:Box::new(line_run),line:placed.line,origin:base});
     }
     if mode != Overflow::Visible {
-        layout.contours = layout
-            .contours
-            .into_iter()
-            .map(|contour| clip_contour(contour, bounds))
-            .filter(|c| c.len() >= 3)
-            .collect();
+        let contours=std::mem::take(&mut layout.contours);
+        for (_,range) in &mut layout.paint_ranges{let start=layout.contours.len();layout.contours.extend(contours[range.clone()].iter().cloned().map(|c|clip_contour(c,bounds)).filter(|c|c.len()>=3));*range=start..layout.contours.len();}
     }
     if layout.carets.is_empty() {
         layout.carets.push((
@@ -1061,15 +1075,11 @@ pub fn reflow_areas(doc: &mut Document) {
         if let Some(s) = doc.find_shape_mut(layer, id)
             && let Geom::Text(t) = &mut s.geom
         {
+            let local_bottom=layout.contours.iter().flatten().map(|p|t.unmap_point(*p).y).fold(t.origin.y,f32::max);
             if let Some(frame) = &mut t.frame {
                 t.wrap_width = Some((frame.size.x - frame.inset[1] - frame.inset[3]).max(1.));
                 if frame.auto_height && frame.contour.is_none() {
-                    let bottom = layout
-                        .contours
-                        .iter()
-                        .flatten()
-                        .map(|p| p.y)
-                        .fold(t.origin.y, f32::max);
+                    let bottom=local_bottom;
                     frame.size.y = (bottom - (t.origin.y - t.px * 0.85) + frame.inset[2]).max(t.px);
                 }
             }
@@ -1468,9 +1478,10 @@ mod tests {
         assert_eq!(text(&studio, ids[0]).thread.unwrap().next, Some(ids[1].1));
         let encoded = crate::project::encode(&studio.doc).unwrap();
         let restored = crate::project::decode(&encoded).unwrap();
-        // These populated placeholder targets now retain explicit inherited
-        // character metrics, which are correctly gated by existing version 12.
-        assert!(encoded.contains("\"version\":12"));
+        assert!(ids.iter().any(|id| text(&studio, *id).spans.iter().any(|span| {
+            span.font.is_some() || span.px.is_some() || span.fill.is_some()
+        })));
+        assert!(encoded.contains("\"version\":14"));
         assert!(
             matches!(&restored.find_shape(ids[0].0,ids[0].1).unwrap().geom,Geom::Text(t) if t.content==source)
         );
@@ -1748,10 +1759,10 @@ mod shape_frame_tests {
         let mut nested = Layer::group("Nested");
         nested.parent = Some(group_id);
         let nested_id = nested.id;
-        let mut pixels = Pixels::new(10, 10);
+        let mut pixels = Pixels::new(10, 10).unwrap();
         for y in 0..10 {
             for x in 4..6 {
-                pixels.data[((y * 10 + x) * 4 + 3) as usize] = 255;
+                pixels.bytes_mut().unwrap()[((y * 10 + x) * 4 + 3) as usize] = 255;
             }
         }
         let mut raster =

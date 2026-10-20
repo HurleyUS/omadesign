@@ -190,16 +190,33 @@ fn gradient_reference(
                 "x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"",
                 a.x, a.y, b.x, b.y
             )
-        } else {
+        } else if gradient.radial_axis.is_none()
+            && gradient.focal == [0., 0.]
+            && gradient.inner_radius == 0.
+        {
             format!(
                 "cx=\"{}\" cy=\"{}\" r=\"{}\"",
                 a.x,
                 a.y,
                 (b - a).length().max(0.001)
             )
+        } else {
+            format!(
+                "cx=\"0\" cy=\"0\" r=\"1\" fx=\"{}\" fy=\"{}\" fr=\"{}\" gradientTransform=\"matrix({} {} {} {} {} {})\"",
+                gradient.focal[0],
+                gradient.focal[1],
+                gradient.inner_radius,
+                gradient.radial_transform(shape.geom.bbox()).sx,
+                gradient.radial_transform(shape.geom.bbox()).ky,
+                gradient.radial_transform(shape.geom.bbox()).kx,
+                gradient.radial_transform(shape.geom.bbox()).sy,
+                a.x,
+                a.y
+            )
         };
         defs.push_str(&format!(
-            "<{tag} id=\"{id}\" gradientUnits=\"userSpaceOnUse\" {geometry}>"
+            "<{tag} id=\"{id}\" gradientUnits=\"userSpaceOnUse\" spreadMethod=\"{}\" {geometry}>",
+            gradient.spread.svg()
         ));
         for stop in &gradient.stops {
             defs.push_str(&format!(
@@ -211,6 +228,122 @@ fn gradient_reference(
         defs.push_str(&format!("</{tag}>\n"));
     }
     format!("url(#{id})")
+}
+
+fn fill_reference(defs: &mut String, grad_id: &mut usize, fill: &Fill, shape: &Shape) -> String {
+    use crate::gradient::{Gradient, GradientKind};
+    match fill {
+        Fill::Pattern(pattern) => {
+            *grad_id += 1;
+            pattern.append_definition(defs, &format!("g{grad_id}-"), shape.geom.bbox())
+        }
+        Fill::Solid(color) => svg_color(*color),
+        Fill::None => "none".into(),
+        Fill::Gradient(gradient) => gradient_reference(defs, grad_id, gradient, shape, 0.),
+        Fill::Linear { from, to, c0, c1 } => {
+            let mut gradient = Gradient::new(GradientKind::Linear, *c0, *c1);
+            gradient.from = *from;
+            gradient.to = *to;
+            gradient_reference(defs, grad_id, &gradient, shape, 0.)
+        }
+        Fill::Radial { c0, c1 } => {
+            let mut gradient = Gradient::new(GradientKind::Radial, *c0, *c1);
+            if shape.geom.bbox().height() > shape.geom.bbox().width() {
+                gradient.to = [0.5, 1.];
+            }
+            gradient_reference(defs, grad_id, &gradient, shape, 0.)
+        }
+    }
+}
+
+/// Keep paint opacity separate from its vector definitions.
+/// Args: native paint. Returns its opacity multiplier outside color stops.
+pub(crate) fn paint_opacity(fill: &Fill) -> f32 {
+    match fill {
+        Fill::Pattern(pattern) => pattern.opacity.clamp(0., 1.),
+        _ => 1.,
+    }
+}
+
+/// Encode native character paint through the shared SVG gradient writer.
+/// Args: native fill, document bounds, unique ID, document-to-type matrix and glyph contours. Returns local SVG definitions.
+pub(crate) fn type_paint_definition(
+    fill: &Fill,
+    bounds: Bounds,
+    id: &str,
+    inverse: tiny_skia::Transform,
+    contours: &[Vec<Pt>],
+) -> String {
+    let geom = if contours.is_empty() {
+        Geom::Rect {
+            origin: bounds.min,
+            size: bounds.size(),
+            radius: 0.,
+        }
+    } else {
+        Geom::Poly {
+            contours: contours.to_vec(),
+            winding: true,
+        }
+    };
+    let shape = Shape::new(
+        geom,
+        crate::document::Style {
+            fill: fill.clone(),
+            stroke: None,
+        },
+    );
+    let mut definitions = String::new();
+    let reference = fill_reference(&mut definitions, &mut 0, fill, &shape);
+    let Some(generated) = reference
+        .strip_prefix("url(#")
+        .and_then(|s| s.strip_suffix(')'))
+    else {
+        return definitions;
+    };
+    let header = r#"<svg xmlns:xlink="http://www.w3.org/1999/xlink">"#;
+    let wrapped = format!("{header}{definitions}</svg>");
+    let Ok(xml) = roxmltree::Document::parse(&wrapped) else {
+        return definitions;
+    };
+    let Some(node) = xml
+        .descendants()
+        .find(|n| n.attribute("id") == Some(generated))
+    else {
+        return definitions;
+    };
+    let attribute = if node.tag_name().name() == "pattern" {
+        "patternTransform"
+    } else {
+        "gradientTransform"
+    };
+    let matrix = crate::svg_source::matrix(inverse);
+    let escape = |value: &str| {
+        value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('"', "&quot;")
+    };
+    let local =
+        |range: std::ops::Range<usize>| range.start - header.len()..range.end - header.len();
+    let mut edits = Vec::new();
+    if let Some(attr) = node.attributes().find(|a| a.name() == "id") {
+        edits.push((local(attr.range_value()), escape(id)));
+    }
+    if let Some(attr) = node.attributes().find(|a| a.name() == attribute) {
+        edits.push((
+            local(attr.range_value()),
+            escape(&format!("{matrix} {}", attr.value())),
+        ));
+    } else {
+        let position = node.range().start + 1 + node.tag_name().name().len() - header.len();
+        edits.push((position..position, format!(" {attribute}=\"{matrix}\"")));
+    }
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    for (range, replacement) in edits {
+        definitions.replace_range(range, &replacement);
+    }
+    definitions
 }
 
 fn object_mask_definition(defs: &mut String, shape: &Shape) -> Option<String> {
@@ -231,12 +364,14 @@ fn write_shape(
     shape: &Shape,
     extra: &str,
     text_as_paths: bool,
+    embedded: Option<&crate::text::svg_fonts::Embedded>,
 ) {
+    let text_as_paths=text_as_paths || embedded.is_some_and(|fonts|fonts.outlined.contains(&shape.id));
     if shape.mask.is_some() {
         let mut plain = shape.clone();
         plain.mask = None;
         let mut nested = String::new();
-        write_shape(&mut nested, defs, grad_id, &plain, "", text_as_paths);
+        write_shape(&mut nested, defs, grad_id, &plain, "", text_as_paths, embedded);
         if let Some(id) = object_mask_definition(defs, shape) {
             body.push_str(&format!(
                 "<g{extra}><g mask=\"url(#{id})\">{nested}</g></g>"
@@ -270,7 +405,7 @@ fn write_shape(
         plain.opacity = 1.;
         plain.blend = crate::color::Blend::Normal;
         let mut fill = String::new();
-        write_shape(&mut fill, defs, grad_id, &plain, "", text_as_paths);
+        write_shape(&mut fill, defs, grad_id, &plain, "", text_as_paths, embedded);
         plain.style.fill = Fill::None;
         plain.layout.image = None;
         let mut centered = stroke.clone();
@@ -284,7 +419,7 @@ fn write_shape(
             grad_id,
             &plain,
             &format!(" mask=\"url(#{id})\""),
-            text_as_paths,
+            text_as_paths, embedded,
         );
         edge = edge.replace(
             &format!("id=\"oma-{}\"", shape.id),
@@ -322,7 +457,7 @@ fn write_shape(
                     " visibility=\"hidden\""
                 }
             ));
-            write_shape(body, defs, grad_id, &background, "", text_as_paths);
+            write_shape(body, defs, grad_id, &background, "", text_as_paths, embedded);
             let clip_id = format!("oma-image-clip-{}", shape.id);
             defs.push_str(&format!("<clipPath id=\"{clip_id}\" clipPathUnits=\"userSpaceOnUse\"><path d=\"{}\"/></clipPath>",path_data(&background)));
             body.push_str(&format!("<image href=\"data:image/png;base64,{}\" x=\"{:.4}\" y=\"{:.4}\" width=\"{:.4}\" height=\"{:.4}\" preserveAspectRatio=\"none\" clip-path=\"url(#{clip_id})\"/>",image.data,placed.min.x,placed.min.y,placed.width(),placed.height()));
@@ -330,7 +465,7 @@ fn write_shape(
                 background.style.fill = Fill::None;
                 background.style.stroke = shape.style.stroke.clone();
                 let mut stroke = String::new();
-                write_shape(&mut stroke, defs, grad_id, &background, "", text_as_paths);
+                write_shape(&mut stroke, defs, grad_id, &background, "", text_as_paths, embedded);
                 body.push_str(&stroke.replace(
                     &format!("id=\"oma-{}\"", shape.id),
                     &format!("id=\"oma-image-stroke-{}\"", shape.id),
@@ -351,11 +486,39 @@ fn write_shape(
         },
         extra
     );
+    if let Geom::Text(run)=&shape.geom && !embedded.is_some_and(|fonts|fonts.fragments.contains_key(&shape.id)) && run.svg_text.is_some() {
+        let painted;let run=if shape.style.fill!=run.svg_text.as_ref().unwrap().base_fill{painted=crate::text::svg_type::object_paint(run,&shape.style.fill);&painted}else{run};
+        body.push_str(&format!("<g opacity=\"{}\"{extra}>",shape.opacity));
+        if let Some(fragment)=crate::text::svg_type::export_fragment(run,shape.id,text_as_paths || !run.font_variations.is_empty() || run.spans.iter().any(|s|s.font_variations.as_ref().is_some_and(|v|!v.is_empty()))){body.push_str(&fragment);}
+        if shape.style.stroke.is_some(){let mut native=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());native.style.fill=Fill::None;write_shape(body,defs,grad_id,&native,"",true, embedded);}
+        body.push_str("</g>");return;
+    }
+    if let Geom::Text(run)=&shape.geom && !embedded.is_some_and(|fonts|fonts.fragments.contains_key(&shape.id)) && crate::text::has_character_paint(run) {
+        body.push_str(&format!("<g opacity=\"{}\"{extra}>",shape.opacity));
+        for (index,(fill,contours)) in crate::text::paint_groups(run,&shape.style.fill).into_iter().enumerate() {
+            if fill.is_none(){continue;}
+            let part=Shape::new(Geom::Poly{contours,winding:true},shape.style.clone());
+            let id=format!("oma-type-paint-{}-{index}",shape.id);
+            defs.push_str(&format!("<clipPath id=\"{id}\" clipPathUnits=\"userSpaceOnUse\"><path d=\"{}\" clip-rule=\"nonzero\"/></clipPath>",path_data(&part)));
+            let bounds=part.geom.bbox();let paint=fill_reference(defs,grad_id,&fill,shape);body.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{paint}\" fill-opacity=\"{}\" clip-path=\"url(#{id})\"/>",bounds.min.x-1.,bounds.min.y-1.,bounds.width()+2.,bounds.height()+2.,paint_opacity(&fill)));
+        }
+        if shape.style.stroke.is_some(){let mut stroke=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());stroke.style.fill=Fill::None;write_shape(body,defs,grad_id,&stroke,"",true, embedded);}
+        body.push_str("</g>");return;
+    }
     let fill_attr = match &shape.style.fill {
         Fill::Gradient(g) => format!(
             "fill=\"{}\"",
             gradient_reference(defs, grad_id, g, shape, 0.)
         ),
+        Fill::Pattern(pattern) => {
+            *grad_id += 1;
+            let reference = pattern.append_definition(
+                defs,
+                &format!("oma-pattern-{grad_id}-"),
+                shape.geom.bbox(),
+            );
+            format!("fill=\"{reference}\" fill-opacity=\"{}\"", pattern.opacity)
+        }
         Fill::None => "fill=\"none\"".to_string(),
         Fill::Solid(c) => format!("fill=\"{}\"", svg_color(*c)),
         Fill::Linear { from, to, c0, c1 } => {
@@ -411,26 +574,46 @@ fn write_shape(
         }
         _ => String::new(),
     };
+    if let Some(fragment) = embedded.and_then(|fonts| fonts.fragments.get(&shape.id)) {
+        body.push_str(&format!("<g id=\"oma-{}\" {fill_attr} opacity=\"{}\"{extra}>{fragment}", shape.id, shape.opacity));
+        if let Geom::Text(run)=&shape.geom && shape.style.stroke.is_some(){
+            let mut stroke=Shape::new(Geom::Poly{contours:run.contours.clone(),winding:true},shape.style.clone());stroke.style.fill=Fill::None;write_shape(body,defs,grad_id,&stroke,"",true,None);
+        }
+        body.push_str("</g>");
+        return;
+    }
     // Animation and portable project faces use glyph outlines: an SVG recipient
     // may not have the brand font. Text stays editable in the original document.
     if let Geom::Text(run) = &shape.geom
         && !text_as_paths
+        && run.transform.is_none()
         && run.on_path.is_none()
         && run.frame.is_none()
         && !run.font.starts_with("omatype:")
         && run.paragraphs.is_empty()
-        && !matches!(run.align,crate::geom::TextAlign::Justify{..})
+        && !matches!(run.align, crate::geom::TextAlign::Justify { .. })
         && !run.content.contains('\u{ad}')
         && run.spans.is_empty()
         && run.features.is_empty()
         && run.manual_kern.is_empty()
+        && run.font_variations.is_empty()
     {
         let family = crate::text::label_for(&run.font);
         body.push_str(&format!("  <text id=\"oma-{}\" font-family=\"{}\" font-size=\"{:.2}\" {fill_attr}{stroke_attr} opacity=\"{:.3}\"{extra} xml:space=\"preserve\">",shape.id,xml_escape(&family),run.px,shape.opacity));
         for line in crate::text::compose(run).iter() {
             // Absolute character positions preserve wrapping and justification.
-            let positions=line.text.chars().enumerate().map(|(i,_)|format!("{:.3}",run.origin.x+line.caret_x(line.start+i))).collect::<Vec<_>>().join(" ");
-            body.push_str(&format!("<tspan x=\"{positions}\" y=\"{:.3}\">{}</tspan>",run.origin.y+line.baseline,xml_escape(&line.text.replace('\u{ad}',""))));
+            let positions = line
+                .text
+                .chars()
+                .enumerate()
+                .map(|(i, _)| format!("{:.3}", run.origin.x + line.caret_x(line.start + i)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            body.push_str(&format!(
+                "<tspan x=\"{positions}\" y=\"{:.3}\">{}</tspan>",
+                run.origin.y + line.baseline,
+                xml_escape(&line.text.replace('\u{ad}', ""))
+            ));
         }
         body.push_str("</text>\n");
         return;
@@ -485,19 +668,43 @@ fn xml_escape(s: &str) -> String {
 }
 
 pub fn export(doc: &Document) -> Result<String, String> {
-    export_inner(doc, false, false)
+    if crate::deep_color::has_native(doc) { return Err("This exchange writer cannot preserve native pixel or mask samples. Export PSD, PSB, TIFF or an explicit 8-bit document copy.".into()); }
+    if !doc.motion.compositions.is_empty() || doc.motion.scene3d.is_some() {
+        return Err("CompositionUnsupported: SVG cannot preserve nested composition timing; use Lottie, motion project or raster animation".into());
+    }
+    export_inner(doc, false, false, false)
+}
+
+/// Export editable Unicode text with its permitted OpenType fonts included.
+/// Args: immutable artwork. Returns portable SVG or a named error when text needs outlines.
+pub fn export_embedded(doc: &Document) -> Result<String, String> {
+    let output=export_embedded_report(doc)?;
+    if !output.warnings.is_empty(){return Err(format!("SvgReduction: {}",output.warnings.join("; ")));}
+    Ok(output.svg)
+}
+
+/// Keep editable supported text and name every appearance-preserving outline fallback.
+/// Args: immutable artwork. Returns portable SVG and explicit reductions.
+pub fn export_embedded_report(doc: &Document) -> Result<SvgExport, String> {
+    if crate::deep_color::has_native(doc) { return Err("SVG cannot preserve native pixel or mask samples".into()); }
+    crate::motion::require_flat_artwork(doc, "SVG")?;
+    export_inner_report(doc, false, false, true)
 }
 
 pub fn export_frame(doc: &Document, layer: usize, frame_id: u64) -> Result<String, String> {
     export_inner(
         &crate::layout_export::frame_document(doc, layer, frame_id)?,
         false,
-        true,
+        true, false,
     )
 }
 
 pub fn export_animated(doc: &Document) -> Result<String, String> {
-    Ok(animated_export(doc)?.svg)
+    let report = animated_export(doc)?;
+    if !report.warnings.is_empty() {
+        return Err(format!("SvgReduction: {}", report.warnings.join("; ")));
+    }
+    Ok(report.svg)
 }
 
 /// Animated SVG plus every effect the file cannot carry.
@@ -518,8 +725,19 @@ pub struct SvgExport {
 /// Apple glass, turbulence, displacement, color matrix, and a pixel layer that
 /// is flattened into the file. A rotating linear or radial gradient is not a warning.
 pub fn animated_export(doc: &Document) -> Result<SvgExport, String> {
+    if !doc.motion.compositions.is_empty() || doc.motion.scene3d.is_some() {
+        return Err("CompositionUnsupported: SVG cannot preserve nested composition timing; use Lottie, motion project or raster animation".into());
+    }
+    crate::motion::compositions::validate(doc)?;
+    for id in doc.motion.shapes() {
+        for time in doc.motion.sample_times(id) {
+            doc.motion
+                .evaluate_frame(time, &mut || true)
+                .map_err(|e| e.to_string())?;
+        }
+    }
     Ok(SvgExport {
-        svg: export_inner(doc, true, true)?,
+        svg: export_inner(doc, true, true, false)?,
         warnings: export_warnings(doc),
     })
 }
@@ -571,91 +789,149 @@ fn svg_gradient(kind: crate::gradient::GradientKind) -> bool {
     )
 }
 
-fn spin_placement(shape: &Shape) -> Option<(SpinTarget, Pt)> {
-    let bounds = shape.geom.bbox();
-    let center_of = |gradient: &crate::gradient::Gradient| {
-        let (start, end) = gradient.endpoints(bounds);
-        if gradient.kind == crate::gradient::GradientKind::Linear {
-            (start + end) * 0.5
-        } else {
-            start
-        }
-    };
-    match &shape.style.fill {
-        Fill::Gradient(gradient) if svg_gradient(gradient.kind) => {
-            Some((SpinTarget::Fill, center_of(gradient)))
-        }
-        Fill::Linear { .. } | Fill::Radial { .. } => {
-            let gradient = shape.style.fill.gradient()?;
-            Some((SpinTarget::Fill, center_of(&gradient)))
-        }
-        Fill::Gradient(_) => None,
-        _ => {
-            let gradient = shape.style.stroke.as_ref()?.gradient.as_ref()?;
-            svg_gradient(gradient.kind).then(|| (SpinTarget::Stroke, center_of(gradient)))
-        }
-    }
-}
-
 fn gradient_turns(motion: &crate::motion::Motion, shape: u64, times: &[f32]) -> bool {
     motion.tracks.iter().any(|track| {
         track.shape == shape
             && track.prop == crate::motion::Prop::GradientAngle
             && !track.keys.is_empty()
-    }) || times.iter().any(|time| {
-        motion
-            .pose(shape, *time)
-            .gradient_angle
-            .is_some_and(|angle| angle.abs() > 1e-3)
-    })
+    }) || motion
+        .expressions
+        .iter()
+        .any(|e| e.enabled && e.shape == shape && e.prop == crate::motion::Prop::GradientAngle)
+        || times.iter().any(|time| {
+            motion
+                .pose(shape, *time)
+                .gradient_angle
+                .is_some_and(|angle| angle.abs() > 1e-3)
+        })
 }
 
+fn paint_gradient(shape: &Shape, target: SpinTarget) -> Option<crate::gradient::Gradient> {
+    match target {
+        SpinTarget::Fill => (shape.layout.frame || shape.geom.is_closed())
+            .then(|| shape.style.fill.gradient())
+            .flatten(),
+        SpinTarget::Stroke => shape
+            .style
+            .stroke
+            .as_ref()
+            .filter(|s| s.width > 0.)?
+            .gradient
+            .clone(),
+    }
+}
+
+fn gradient_motion_error(shape: &Shape, target: SpinTarget) -> Option<&'static str> {
+    let g = paint_gradient(shape, target)?;
+    if !svg_gradient(g.kind) {
+        return Some("this gradient kind cannot preserve angle animation");
+    }
+    if matches!(&shape.geom, Geom::Text(run) if crate::text::has_character_paint(run)) {
+        return Some("character paint angle animation is not representable");
+    }
+    if g.kind == crate::gradient::GradientKind::Radial
+        && g.radial_transform(shape.geom.bbox()).invert().is_none()
+    {
+        return Some("singular affine radial field cannot preserve angle animation");
+    }
+    if g.kind == crate::gradient::GradientKind::Radial
+        && (g.radial_axis.is_some() || g.focal != [0., 0.] || g.inner_radius != 0.)
+    {
+        let (a, b) = g.endpoints(shape.geom.bbox());
+        if (b - a).length() < 1. {
+            return Some(
+                "sub-unit affine radial field changes native radius during angle animation",
+            );
+        }
+    }
+    None
+}
+
+/// Rotate the complete native field, then restore its constant affine factors.
+/// Args: motion sample times and one fill/stroke. Returns SVG1.1 SMIL or an empty unsupported channel.
 fn gradient_motion(
     motion: &crate::motion::Motion,
     shape: &Shape,
     times: &[f32],
-) -> (Option<SpinTarget>, String) {
-    let Some((target, center)) = spin_placement(shape) else {
-        return (None, String::new());
+    target: SpinTarget,
+) -> String {
+    let Some(mut gradient) = paint_gradient(shape, target).filter(|g| svg_gradient(g.kind)) else {
+        return String::new();
     };
-    if !gradient_turns(motion, shape.id, times) {
-        return (Some(target), String::new());
+    if !gradient_turns(motion, shape.id, times) || gradient_motion_error(shape, target).is_some() {
+        return String::new();
     }
+    let bounds = shape.geom.bbox();
+    let (a, b) = gradient.endpoints(bounds);
+    let center = if gradient.kind == crate::gradient::GradientKind::Linear {
+        (a + b) * 0.5
+    } else {
+        a
+    };
     let values = times
         .iter()
         .map(|time| {
-            let offset = motion
-                .pose(shape.id, *time)
-                .gradient_angle
-                .unwrap_or(0.0);
-            format!("{offset:.6} {:.4} {:.4}", center.x, center.y)
+            let angle = motion.pose(shape.id, *time).gradient_angle.unwrap_or(0.);
+            format!("{angle:.8} {:.8} {:.8}", center.x, center.y)
         })
         .collect::<Vec<_>>()
         .join(";");
-    (
-        Some(target),
-        animate_tag(
-            "animateTransform",
-            "gradientTransform",
-            " type=\"rotate\"",
-            motion,
-            times,
-            &values,
-        ),
-    )
+    let mut out = animate_tag(
+        "animateTransform",
+        "gradientTransform",
+        " type=\"rotate\"",
+        motion,
+        times,
+        &values,
+    );
+    if gradient.kind == crate::gradient::GradientKind::Radial
+        && (gradient.radial_axis.is_some()
+            || gradient.focal != [0., 0.]
+            || gradient.inner_radius != 0.)
+    {
+        gradient.set_angle(gradient.angle(bounds), bounds);
+        let m = gradient.radial_transform(bounds);
+        let (a, b, c, d) = (m.sx as f64, m.ky as f64, m.kx as f64, m.sy as f64);
+        let sx = a.hypot(b);
+        let sy = (a * d - b * c) / sx;
+        let rotation = b.atan2(a).to_degrees();
+        let skew = ((a * c + b * d) / (sx * sx)).atan().to_degrees();
+        for (kind, value) in [
+            ("translate", format!("{} {}", m.tx, m.ty)),
+            ("rotate", rotation.to_string()),
+            ("scale", format!("{sx} {sy}")),
+            ("skewX", skew.to_string()),
+        ] {
+            out.push_str(&animate_tag(
+                "animateTransform",
+                "gradientTransform",
+                &format!(" type=\"{kind}\" additive=\"sum\""),
+                motion,
+                &[0., motion.duration.max(0.05)],
+                &format!("{value};{value}"),
+            ));
+        }
+    }
+    out
 }
 
-fn insert_gradient_motion(defs: &mut String, start: usize, motion: &str) {
+fn insert_gradient_motion(defs: &mut String, start: usize, motion: &str, gradient_id: usize) {
     if motion.is_empty() || start > defs.len() {
         return;
     }
     let region = &defs[start..];
-    let linear = region.find("</linearGradient>");
-    let radial = region.find("</radialGradient>");
-    let Some(at) = linear.into_iter().chain(radial).min() else {
+    let Some(id) = region.find(&format!("id=\"g{gradient_id}\"")) else {
         return;
     };
-    defs.insert_str(start + at, motion);
+    let suffix = &region[id..];
+    if let Some(at) = suffix
+        .find("</linearGradient>")
+        .into_iter()
+        .chain(suffix.find("</radialGradient>"))
+        .min()
+    {
+        defs.insert_str(start + id + at, motion);
+    }
 }
 
 fn svg_fx(fx: &crate::filter::Fx) -> bool {
@@ -689,20 +965,14 @@ fn motion_exported(shape: &Shape, prop: crate::motion::Prop) -> bool {
                     .as_ref()
                     .is_some_and(|stroke| stroke.width > 0.0)
         }
-        Prop::GradientAngle => match spin_placement(shape) {
-            Some((SpinTarget::Fill, _)) => {
-                shape.layout.frame || (shape.geom.is_closed() && !shape.style.fill.is_none())
-            }
-            Some((SpinTarget::Stroke, _)) => {
-                shape.layout.frame
-                    || shape
-                        .style
-                        .stroke
-                        .as_ref()
-                        .is_some_and(|stroke| stroke.width > 0.0)
-            }
-            None => false,
-        },
+        Prop::GradientAngle => {
+            [SpinTarget::Fill, SpinTarget::Stroke]
+                .into_iter()
+                .any(|target| paint_gradient(shape, target).is_some())
+                && [SpinTarget::Fill, SpinTarget::Stroke]
+                    .into_iter()
+                    .all(|target| gradient_motion_error(shape, target).is_none())
+        }
         Prop::StrokeWidth | Prop::Fill | Prop::Dash | Prop::Gap | Prop::DashLength => false,
     }
 }
@@ -710,6 +980,9 @@ fn motion_exported(shape: &Shape, prop: crate::motion::Prop) -> bool {
 fn export_warnings(doc: &Document) -> Vec<String> {
     let mut warnings = Vec::new();
     for layer in &doc.layers {
+        if let Some(graph) = &layer.svg_filter {
+            warnings.extend(graph.reductions.iter().cloned());
+        }
         if layer.filters.active() {
             warnings.extend(
                 crate::filter::export_notes(&layer.filters)
@@ -757,16 +1030,33 @@ fn export_warnings(doc: &Document) -> Vec<String> {
                             }
                         }
                     }
-                    for track in doc
+                    let props: std::collections::HashSet<_> = doc
                         .motion
                         .tracks
                         .iter()
-                        .filter(|track| track.shape == shape.id && !track.keys.is_empty())
-                    {
-                        if !motion_exported(shape, track.prop) {
+                        .filter(|t| t.shape == shape.id && !t.keys.is_empty())
+                        .map(|t| t.prop)
+                        .chain(
+                            doc.motion
+                                .expressions
+                                .iter()
+                                .filter(|e| e.enabled && e.shape == shape.id)
+                                .map(|e| e.prop),
+                        )
+                        .collect();
+                    for prop in props {
+                        if !motion_exported(shape, prop) {
+                            let reason = if prop == crate::motion::Prop::GradientAngle {
+                                [SpinTarget::Fill, SpinTarget::Stroke]
+                                    .into_iter()
+                                    .find_map(|target| gradient_motion_error(shape, target))
+                                    .unwrap_or("no representable gradient angle channel")
+                            } else {
+                                "channel is not representable"
+                            };
                             warnings.push(format!(
-                                "{} on \"{}\" in layer \"{}\" is not in the animated SVG",
-                                track.prop.name(),
+                                "SvgReduction: {} on \"{}\" in layer \"{}\": {reason}",
+                                prop.name(),
                                 shape.name,
                                 layer.name
                             ));
@@ -790,7 +1080,7 @@ fn write_animated_shape(
     let times = motion.sample_times(shape.id);
     let bounds = shape.world_bbox();
     let center = bounds.center();
-    let (spin_target, spin) = gradient_motion(motion, shape, &times);
+
     body.push_str(&format!(
         "<g class=\"oma-a\" style=\"animation-name: oma-{}; transform-origin: {:.4}px {:.4}px\">\n",
         shape.id, center.x, center.y
@@ -840,11 +1130,10 @@ fn write_animated_shape(
             grad_id,
             &component,
             &xf_attr(&component),
-            true,
+            true, None,
         );
-        if spin_target == Some(SpinTarget::Fill) {
-            insert_gradient_motion(defs, defs_at, &spin);
-        }
+        let spin = gradient_motion(motion, &component, &times, SpinTarget::Fill);
+        insert_gradient_motion(defs, defs_at, &spin, *grad_id);
         body.push_str(&part.replacen(
             &format!("id=\"oma-{}\"", shape.id),
             &format!("id=\"oma-{}-fill\"", shape.id),
@@ -955,11 +1244,10 @@ fn write_animated_shape(
             grad_id,
             &component,
             &xf_attr(&component),
-            true,
+            true, None,
         );
-        if spin_target == Some(SpinTarget::Stroke) {
-            insert_gradient_motion(defs, defs_at, &spin);
-        }
+        let spin = gradient_motion(motion, &component, &times, SpinTarget::Stroke);
+        insert_gradient_motion(defs, defs_at, &spin, *grad_id);
         body.push_str(&part.replacen(
             &format!("id=\"oma-{}\"", shape.id),
             &format!("id=\"oma-{}-stroke\"", shape.id),
@@ -984,7 +1272,7 @@ pub(crate) fn shape_fragment(shape: &Shape) -> String {
         &mut (shape.id as usize),
         shape,
         &xf_attr(shape),
-        true,
+        true, None,
     );
     body = body.replace(
         &format!("id=\"oma-{}\"", shape.id),
@@ -999,7 +1287,76 @@ pub(crate) fn shape_fragment(shape: &Shape) -> String {
     )
 }
 
+fn artwork_mask_wrap(
+    defs: &mut String,
+    doc: &Document,
+    masks: &[crate::artwork_mask::ArtworkMask],
+    content: String,
+    key: &str,
+    parent: tiny_skia::Transform,
+) -> String {
+    let mut content = content;
+    for (index, mask) in masks.iter().enumerate() {
+        let id = format!("oma-live-mask-{key}-{index}");
+        let source = mask.source.shape.map_or_else(
+            || format!("oma-source-layer-{}", mask.source.layer),
+            |id| format!("oma-source-shape-{id}"),
+        );
+        let t = parent
+            .invert()
+            .unwrap_or_default()
+            .pre_concat(mask.placement());
+        let local = mask.region.unwrap_or_else(|| {
+            doc.layers
+                .iter()
+                .filter_map(layer_bounds)
+                .fold(
+                    Bounds::from_min_size(Pt::ZERO, Pt::new(doc.width, doc.height)),
+                    |a, b| a.union(b),
+                )
+                .inflate(2.)
+        });
+        let mut points = [
+            tiny_skia::Point::from_xy(local.min.x, local.min.y),
+            tiny_skia::Point::from_xy(local.max.x, local.min.y),
+            tiny_skia::Point::from_xy(local.max.x, local.max.y),
+            tiny_skia::Point::from_xy(local.min.x, local.max.y),
+        ];
+        t.pre_concat(if mask.region.is_some() {
+            mask.region_placement()
+        } else {
+            tiny_skia::Transform::identity()
+        })
+        .map_points(&mut points);
+        let min_x = points.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+        let min_y = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        let max_x = points.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+        let max_y = points.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+        let min_x = min_x - 2.;
+        let min_y = min_y - 2.;
+        let max_x = max_x + 2.;
+        let max_y = max_y + 2.;
+        let kind = if mask.mode == crate::artwork_mask::MaskMode::Luminance {
+            "luminance"
+        } else {
+            "alpha"
+        };
+        let mut source_content = format!("<use href=\"#{source}\"/>");
+        if let Some(region) = mask.region {
+            let clip = format!("{id}-region");
+            let r = mask.region_placement();
+            defs.push_str(&format!("<clipPath id=\"{clip}\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" transform=\"matrix({} {} {} {} {} {})\"/></clipPath>",region.min.x,region.min.y,region.width(),region.height(),r.sx,r.ky,r.kx,r.sy,r.tx,r.ty));
+            source_content = format!("<g clip-path=\"url(#{clip})\">{source_content}</g>");
+        }
+        defs.push_str(&format!("<mask id=\"{id}\" maskUnits=\"userSpaceOnUse\" maskContentUnits=\"userSpaceOnUse\" mask-type=\"{}\" color-interpolation=\"sRGB\" x=\"{min_x}\" y=\"{min_y}\" width=\"{}\" height=\"{}\"><g transform=\"matrix({} {} {} {} {} {})\">{source_content}</g></mask>",kind,(max_x-min_x).max(0.001),(max_y-min_y).max(0.001),t.sx,t.ky,t.kx,t.sy,t.tx,t.ty));
+        content = format!("<g mask=\"url(#{id})\">{content}</g>");
+    }
+    content
+}
+
 fn write_shape_tree(
+    doc: &Document,
+    layer_index: usize,
     shapes: &[Shape],
     body: &mut String,
     defs: &mut String,
@@ -1008,6 +1365,7 @@ fn write_shape_tree(
     motion: &crate::motion::Motion,
     animate: bool,
     text_as_paths: bool,
+    embedded: Option<&crate::text::svg_fonts::Embedded>,
 ) {
     let frames: std::collections::HashSet<_> = shapes
         .iter()
@@ -1023,6 +1381,8 @@ fn write_shape_tree(
             .push(shape);
     }
     fn visit(
+        doc: &Document,
+        layer_index: usize,
         parent: Option<u64>,
         children: &std::collections::HashMap<Option<u64>, Vec<&Shape>>,
         body: &mut String,
@@ -1032,6 +1392,7 @@ fn write_shape_tree(
         motion: &crate::motion::Motion,
         animate: bool,
         text_as_paths: bool,
+        embedded: Option<&crate::text::svg_fonts::Embedded>,
         depth: usize,
     ) {
         if depth >= 64 {
@@ -1109,13 +1470,19 @@ fn write_shape_tree(
                     body.push_str(&format!("<g mask=\"url(#{id})\">"));
                 }
                 let defs_at = defs.len();
-                write_shape(body, defs, grad_id, &background, "", false);
+                write_shape(body, defs, grad_id, &background, "", false, embedded);
                 if animate {
-                    let (target, spin) =
-                        gradient_motion(motion, shape, &motion.sample_times(shape.id));
-                    if target.is_some() {
-                        insert_gradient_motion(defs, defs_at, &spin);
-                    }
+                    let times = motion.sample_times(shape.id);
+                    let stroke_has_gradient = shape
+                        .style
+                        .stroke
+                        .as_ref()
+                        .is_some_and(|s| s.width > 0. && s.gradient.is_some());
+                    let fill_id = *grad_id - usize::from(stroke_has_gradient);
+                    let spin = gradient_motion(motion, shape, &times, SpinTarget::Fill);
+                    insert_gradient_motion(defs, defs_at, &spin, fill_id);
+                    let spin = gradient_motion(motion, shape, &times, SpinTarget::Stroke);
+                    insert_gradient_motion(defs, defs_at, &spin, *grad_id);
                 }
                 if shape.layout.clip {
                     let clip_id = format!("oma-frame-clip-{}", shape.id);
@@ -1123,6 +1490,8 @@ fn write_shape_tree(
                     body.push_str(&format!("<g clip-path=\"url(#{clip_id})\">\n"));
                 }
                 visit(
+                    doc,
+                    layer_index,
                     Some(shape.id),
                     children,
                     body,
@@ -1132,6 +1501,7 @@ fn write_shape_tree(
                     motion,
                     animate,
                     text_as_paths,
+                    embedded,
                     depth + 1,
                 );
                 if shape.layout.clip {
@@ -1156,7 +1526,7 @@ fn write_shape_tree(
                 body.push_str("</g>\n");
             } else {
                 extra.push_str(&xf_attr(shape));
-                write_shape(body, defs, grad_id, shape, &extra, text_as_paths);
+                write_shape(body, defs, grad_id, shape, &extra, text_as_paths, embedded);
             }
             if independent {
                 let content = body.split_off(appearance_start);
@@ -1172,9 +1542,31 @@ fn write_shape_tree(
                     original.blend_interior,
                 ));
             }
+            if !original.artwork_masks.is_empty() {
+                let content = body.split_off(appearance_start);
+                body.push_str(&artwork_mask_wrap(
+                    defs,
+                    doc,
+                    &original.artwork_masks,
+                    content,
+                    &format!("s{}", original.id),
+                    crate::compositor::shape_parent_transform(doc, layer_index, original.id),
+                ));
+            }
+            if doc
+                .mask_sources()
+                .iter()
+                .any(|source| source.shape == Some(original.id))
+            {
+                let content = body.split_off(appearance_start);
+                let t = crate::compositor::shape_parent_transform(doc, layer_index, original.id);
+                defs.push_str(&format!("<g id=\"oma-source-shape-{}\" transform=\"matrix({} {} {} {} {} {})\">{content}</g>",original.id,t.sx,t.ky,t.kx,t.sy,t.tx,t.ty));
+            }
         }
     }
     visit(
+        doc,
+        layer_index,
         None,
         &children,
         body,
@@ -1184,17 +1576,64 @@ fn write_shape_tree(
         motion,
         animate,
         text_as_paths,
+        embedded,
         0,
     );
 }
 
-fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<String, String> {
+/// Export current pose overrides for source filter evaluation.
+/// Args: editable document and evaluated object poses. Returns vector SVG at this frame.
+pub(crate) fn export_posed(
+    doc: &Document,
+    poses: &std::collections::HashMap<u64, crate::motion::Pose>,
+) -> Result<String, String> {
+    let source = export_inner(doc, false, true, false)?;
+    let xml = roxmltree::Document::parse(&source).map_err(|e| e.to_string())?;
+    let mut edits = Vec::new();
+    for node in xml.descendants().filter(|n| n.is_element()) {
+        let Some(id) = node
+            .attribute("id")
+            .and_then(|id| id.strip_prefix("oma-"))
+            .and_then(|id| id.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let Some(pose) = poses.get(&id) else {
+            continue;
+        };
+        let Some(shape) = doc.layers.iter().find_map(|l| l.find(id)) else {
+            continue;
+        };
+        let transform = pose.to_skia(shape.world_bbox().center());
+        edits.push((
+            node.range().start,
+            format!("<g transform=\"{}\">", crate::svg_source::matrix(transform)),
+        ));
+        edits.push((node.range().end, "</g>".to_string()));
+    }
+    edits.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    let mut output = source;
+    for (at, text) in edits {
+        output.insert_str(at, &text);
+    }
+    Ok(output)
+}
+
+fn export_inner(doc: &Document, animate: bool, text_as_paths: bool, embed_fonts: bool) -> Result<String, String> {
+    Ok(export_inner_report(doc,animate,text_as_paths,embed_fonts)?.svg)
+}
+
+fn export_inner_report(doc: &Document, animate: bool, text_as_paths: bool, embed_fonts: bool) -> Result<SvgExport, String> {
     doc.validate_hierarchy()?;
+    doc.require_no_layer_clipping("SVG")?;
+    let mut prepared;
+    let doc=if embed_fonts {prepared=doc.clone();crate::text_geometry::reflow(&mut prepared);&prepared} else {doc};
+    let embedded = embed_fonts.then(|| crate::text::svg_fonts::Embedded::new(doc)).transpose()?;
     let mut body = String::new();
     let mut layer_outputs = std::collections::HashMap::<u64, String>::new();
     let mut defs = String::new();
     let mut grad_id = 0usize;
-    let mut css = String::new();
+    let mut css = embedded.as_ref().map_or_else(String::new, |fonts| fonts.css.clone());
     let motion = &doc.motion;
     let looping = if motion.looped { "infinite" } else { "1" };
     if animate && !motion.is_empty() {
@@ -1272,6 +1711,15 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
         let mut layer_body = String::new();
         if layer.is_group {
             for child in children.get(&layer.id).into_iter().flatten() {
+                if doc
+                    .mask_sources()
+                    .contains(&crate::artwork_mask::MaskSource {
+                        layer: child.id,
+                        shape: None,
+                    })
+                {
+                    continue;
+                }
                 if let Some(output) = layer_outputs.get(&child.id) {
                     layer_body.push_str(output);
                 }
@@ -1280,6 +1728,8 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
         match &layer.kind {
             LayerKind::Vector { shapes } => {
                 write_shape_tree(
+                    doc,
+                    doc.layers.iter().position(|l| l.id == layer.id).unwrap(),
                     shapes,
                     &mut layer_body,
                     &mut defs,
@@ -1287,7 +1737,7 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
                     &mut css,
                     motion,
                     animate,
-                    text_as_paths,
+                    text_as_paths, embedded.as_ref(),
                 );
             }
             LayerKind::Raster { pixels, .. } => {
@@ -1328,6 +1778,9 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
         if layer_body.is_empty() && !layer.is_group {
             continue;
         }
+        if let Some(graph) = &layer.svg_filter {
+            layer_body = graph.wrap(&mut defs, &format!("oma-graph-{}-", layer.id), layer_body);
+        }
         if independent {
             if let Some(mask_id) = write_layer_mask(&mut defs, layer)? {
                 layer_body = format!("<g mask=\"url(#{mask_id})\">{layer_body}</g>");
@@ -1350,13 +1803,21 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
             layer_outputs.insert(
                 layer.id,
                 wrap_motion(format!(
-                    "<g inkscape:label=\"{}\"{}>{composed}</g>",
+                    "<g inkscape:label=\"{}\"{}>{}</g>",
                     xml_escape(&layer.name),
                     if layer.visible {
                         ""
                     } else {
                         " visibility=\"hidden\""
-                    }
+                    },
+                    artwork_mask_wrap(
+                        &mut defs,
+                        doc,
+                        &layer.artwork_masks,
+                        composed,
+                        &format!("l{}", layer.id),
+                        tiny_skia::Transform::identity()
+                    )
                 )),
             );
             continue;
@@ -1377,10 +1838,38 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
             output.push_str(&layer_body);
         }
         output.push_str("</g>\n");
+        let output = artwork_mask_wrap(
+            &mut defs,
+            doc,
+            &layer.artwork_masks,
+            output,
+            &format!("l{}", layer.id),
+            tiny_skia::Transform::identity(),
+        );
         layer_outputs.insert(layer.id, wrap_motion(output));
     }
 
-    for layer in doc.layers.iter().filter(|layer| layer.parent.is_none()) {
+    let sources = doc.mask_sources();
+    for layer in &doc.layers {
+        if sources.contains(&crate::artwork_mask::MaskSource {
+            layer: layer.id,
+            shape: None,
+        }) {
+            if let Some(output) = layer_outputs.get(&layer.id) {
+                defs.push_str(&format!(
+                    "<g id=\"oma-source-layer-{}\">{output}</g>",
+                    layer.id
+                ));
+            }
+        }
+    }
+    for layer in doc.layers.iter().filter(|layer| {
+        layer.parent.is_none()
+            && !sources.contains(&crate::artwork_mask::MaskSource {
+                layer: layer.id,
+                shape: None,
+            })
+    }) {
         if let Some(output) = layer_outputs.get(&layer.id) {
             body.push_str(output);
         }
@@ -1391,10 +1880,10 @@ fn export_inner(doc: &Document, animate: bool, text_as_paths: bool) -> Result<St
     } else {
         format!("<style>\n{css}</style>\n")
     };
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n{style}<defs>\n{defs}</defs>\n{body}</svg>\n",
+    Ok(SvgExport {warnings:embedded.as_ref().map_or_else(Vec::new,|fonts|fonts.warnings.clone()),svg:format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" text-rendering=\"geometricPrecision\">\n{style}<defs>\n{defs}</defs>\n{body}</svg>\n",
         doc.width, doc.height, doc.width, doc.height
-    ))
+    )})
 }
 
 #[cfg(test)]
@@ -1402,6 +1891,73 @@ mod tests {
     use super::*;
     use crate::document::{Cmd, Shape, Style, apply};
     use crate::geom::{Geom, Pt};
+
+    #[test]
+    fn svg_type_paint_keeps_one_outer_affine_and_nested_pattern_coordinates() {
+        use crate::gradient::{Gradient, GradientKind};
+        let bounds = Bounds::from_min_size(Pt::new(10., 20.), Pt::new(80., 40.));
+        let inverse = tiny_skia::Transform::from_row(2., 0., 0., 3., -4., 7.);
+        let mut gradient = Gradient::new(GradientKind::Radial, Rgba::BLACK, Rgba::WHITE);
+        gradient.from = [0., 0.];
+        gradient.to = [0.5, 0.];
+        gradient.radial_axis = Some([0.2, 0.8]);
+        gradient.focal = [0.1, 0.2];
+        gradient.inner_radius = 0.15;
+        let definitions = type_paint_definition(
+            &Fill::Gradient(gradient), bounds, "range-gradient", inverse, &[],
+        );
+        let wrapped = format!("<svg>{definitions}</svg>");
+        let xml = roxmltree::Document::parse(&wrapped).unwrap();
+        let root = xml.descendants().find(|n| n.attribute("id") == Some("range-gradient")).unwrap();
+        assert_eq!(root.attribute("gradientTransform"), Some("matrix(2 0 0 3 -4 7) matrix(40 0 16 32 10 20)"));
+        assert_eq!(root.attribute("fx"), Some("0.1"));
+        assert_eq!(root.attribute("fy"), Some("0.2"));
+        assert_eq!(root.attribute("fr"), Some("0.15"));
+
+        let pattern = Fill::Pattern(crate::svg_source::SvgPattern {
+            definitions: r##"<pattern id="tile" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="translate(1 0)"><rect width="4" height="8" fill="#f00"/></pattern>"##.into(),
+            id: "tile".into(),
+            transform: [1., 0., 0., 1., 0., 0.],
+            opacity: 0.4,
+        });
+        let definitions = type_paint_definition(&pattern, bounds, "range-pattern", inverse, &[]);
+        let wrapped = format!("<svg>{definitions}</svg>");
+        let xml = roxmltree::Document::parse(&wrapped).unwrap();
+        let root = xml.descendants().find(|n| n.attribute("id") == Some("range-pattern")).unwrap();
+        assert_eq!(root.attribute("patternTransform"), Some("matrix(2 0 0 3 -4 7) matrix(80 0 0 40 10 20)"));
+        let resource = root.attribute("href").unwrap().strip_prefix('#').unwrap();
+        let tile = xml.descendants().find(|n| n.attribute("id") == Some(resource)).unwrap();
+        assert_eq!(tile.attribute("patternTransform"), Some("translate(1 0)"));
+        assert_eq!(paint_opacity(&pattern), 0.4);
+    }
+
+    #[test]
+    fn svg_type_source_character_patterns_keep_opacity_through_native_and_export() {
+        let source = r#"<svg xmlns="http://www.w3.org/2000/svg" width="140" height="80"><text x="12" y="54" font-family="Liberation Sans" font-size="40">MM</text></svg>"#;
+        let (mut doc, _) = crate::formats::svg::read(source, "Pattern range").unwrap();
+        doc.transparent = true;
+        let shape = doc.layers.iter_mut().filter_map(|l| l.kind.shapes_mut()).flatten().find(|s| matches!(s.geom, Geom::Text(_))).unwrap();
+        let Geom::Text(run) = &mut shape.geom else { unreachable!() };
+        run.set_character_style(0, 2, |span| span.fill = Some(Fill::Pattern(crate::svg_source::SvgPattern {
+            definitions: r##"<pattern id="tile" patternUnits="userSpaceOnUse" width="1" height="1"><rect width="1" height="1" fill="#ff0000"/></pattern>"##.into(),
+            id: "tile".into(),
+            transform: [1., 0., 0., 1., 0., 0.],
+            opacity: 0.4,
+        })));
+        crate::text::fill_contours(&mut shape.geom);
+        let native = crate::compositor::render_export(&doc, 1).unwrap();
+        let maximum_alpha = native.pixels().iter().map(|p| p.alpha()).max().unwrap();
+        assert!((101..=103).contains(&maximum_alpha), "pattern maximum alpha={maximum_alpha}");
+        assert!(native.pixels().iter().filter(|p| p.red() > 90 && p.green() == 0).count() > 100);
+        let reopened = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
+        assert_eq!(native.data(), crate::compositor::render_export(&reopened, 1).unwrap().data());
+        let exported = export(&reopened).unwrap();
+        let tree = crate::svg_source::scene(&exported).unwrap();
+        let mut portable = tiny_skia::Pixmap::new(140, 80).unwrap();
+        resvg::render(&tree, tiny_skia::Transform::identity(), &mut portable.as_mut());
+        let mean = native.data().iter().zip(portable.data()).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / native.data().len() as f64;
+        assert!(mean < 0.1, "native/export mean={mean}");
+    }
 
     #[test]
     fn project_type_exports_its_glyphs_without_requiring_the_brand_font() {
@@ -1589,8 +2145,13 @@ mod tests {
         apply(&mut doc, &Cmd::AddShape { layer: 1, shape });
         doc.layers[1].name = "Art".into();
         doc.motion.duration = 1.0;
-        doc.motion
-            .set_key(id, crate::motion::Prop::GradientAngle, 0.0, 0.0, crate::motion::Ease::Linear);
+        doc.motion.set_key(
+            id,
+            crate::motion::Prop::GradientAngle,
+            0.0,
+            0.0,
+            crate::motion::Ease::Linear,
+        );
         doc.motion.set_key(
             id,
             crate::motion::Prop::GradientAngle,
@@ -1631,7 +2192,9 @@ mod tests {
             .filter_map(|sample| sample.split_whitespace().next()?.parse().ok())
             .collect();
         assert!(
-            angles.windows(2).any(|pair| (pair[0] - pair[1]).abs() > 1.0),
+            angles
+                .windows(2)
+                .any(|pair| (pair[0] - pair[1]).abs() > 1.0),
             "values must change: {angles:?}"
         );
         assert!(angles.iter().any(|angle| angle.abs() < 0.01), "{angles:?}");
@@ -1664,8 +2227,16 @@ mod tests {
             .split(';')
             .filter_map(|sample| sample.split_whitespace().next()?.parse().ok())
             .collect();
-        assert!(angles.windows(2).any(|pair| (pair[0] - pair[1]).abs() > 1.0), "{values}");
-        assert!(values.contains("50.0000") && values.contains("30.0000"), "{values}");
+        assert!(
+            angles
+                .windows(2)
+                .any(|pair| (pair[0] - pair[1]).abs() > 1.0),
+            "{values}"
+        );
+        assert!(
+            values.contains("50.0000") && values.contains("30.0000"),
+            "{values}"
+        );
     }
 
     #[test]
@@ -1688,24 +2259,30 @@ mod tests {
         });
         apply(&mut doc, &Cmd::AddShape { layer: 1, shape });
         doc.layers[1].name = "Art".into();
-        doc.layers[1].filters.items.push(crate::filter::Fx::Displacement {
-            scale: 12.0,
-            x_ch: 0,
-            y_ch: 1,
-        });
+        doc.layers[1]
+            .filters
+            .items
+            .push(crate::filter::Fx::Displacement {
+                scale: 12.0,
+                x_ch: 0,
+                y_ch: 1,
+            });
         let report = animated_export(&doc).unwrap();
         roxmltree::Document::parse(&report.svg).expect("svg");
         assert!(
             report.warnings.iter().any(|warning| {
-                warning.contains("Turbulence") && warning.contains("Badge") && warning.contains("Art")
+                warning.contains("Turbulence")
+                    && warning.contains("Badge")
+                    && warning.contains("Art")
             }),
             "{:?}",
             report.warnings
         );
         assert!(
-            report.warnings.iter().any(|warning| {
-                warning.contains("Displacement") && warning.contains("Art")
-            }),
+            report
+                .warnings
+                .iter()
+                .any(|warning| { warning.contains("Displacement") && warning.contains("Art") }),
             "{:?}",
             report.warnings
         );
@@ -1726,9 +2303,10 @@ mod tests {
         let id = shape.id;
         apply(&mut doc, &Cmd::AddShape { layer: 1, shape });
         doc.layers[1].name = "Art".into();
-        doc.layers[1].filters.items.push(crate::filter::Fx::ColorMatrix {
-            values: [0.0; 20],
-        });
+        doc.layers[1]
+            .filters
+            .items
+            .push(crate::filter::Fx::ColorMatrix { values: [0.0; 20] });
         doc.motion.set_key(
             id,
             crate::motion::Prop::StrokeWidth,
@@ -1736,9 +2314,9 @@ mod tests {
             6.0,
             crate::motion::Ease::Linear,
         );
-        let mut photo = Layer::raster("Photo", 4, 4);
+        let mut photo = Layer::raster("Photo", 4, 4).unwrap();
         if let LayerKind::Raster { pixels, .. } = &mut photo.kind {
-            pixels.data.fill(255);
+            pixels.bytes_mut().unwrap().fill(255);
         }
         doc.layers.push(photo);
         let report = animated_export(&doc).unwrap();
@@ -1753,9 +2331,10 @@ mod tests {
             report.warnings
         );
         assert!(
-            report.warnings.iter().any(|warning| {
-                warning.contains("Photo") && warning.contains("flattened")
-            }),
+            report
+                .warnings
+                .iter()
+                .any(|warning| { warning.contains("Photo") && warning.contains("flattened") }),
             "{:?}",
             report.warnings
         );
@@ -1858,7 +2437,7 @@ mod mask_tests {
     fn svg_masks_preserve_luminance_alpha_placement_and_filter_order() {
         let mut doc = Document::new("Mask export", 160.0, 120.0, 72.0);
         doc.transparent = true;
-        let mut layer = Layer::raster("Masked image", 4, 2);
+        let mut layer = Layer::raster("Masked image", 4, 2).unwrap();
         if let LayerKind::Raster {
             pixels,
             origin,
@@ -1867,7 +2446,7 @@ mod mask_tests {
             ..
         } = &mut layer.kind
         {
-            pixels.data = [255, 0, 0, 255].repeat(8);
+            pixels.replace_bytes([255, 0, 0, 255].repeat(8)).unwrap();
             *origin = Pt::new(40.0, 30.0);
             *size = Pt::new(80.0, 40.0);
             *rotation = std::f32::consts::FRAC_PI_2;
@@ -1933,6 +2512,9 @@ mod mask_tests {
             "mask must be nested inside the outer filter group"
         );
         let decoded = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
-        assert_eq!(decoded.layers[0].mask.as_ref().unwrap().data, mask_data);
+        assert_eq!(decoded.layers[0].mask.as_ref().unwrap().data.as_slice(), mask_data);
     }
 }
+
+#[cfg(test)]
+pub(crate) mod motion_tests;

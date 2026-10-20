@@ -329,31 +329,9 @@ pub(crate) fn register_archive(root: &Path) -> Result<(), String> {
 /// Copy only the native artwork's font dependencies. Returned paths are absolute
 /// and newly created, so the caller can roll back a larger asset import safely.
 pub fn copy_document_fonts(source: &Path, destination: &Path) -> Result<Vec<PathBuf>, String> {
-    fn references(value: &serde_json::Value, out: &mut HashSet<String>) {
-        match value {
-            serde_json::Value::Object(map) => {
-                for (key, value) in map {
-                    if key == "font"
-                        && let Some(id) = value.as_str().filter(|id| id.starts_with("omatype:"))
-                    {
-                        out.insert(id.into());
-                    } else {
-                        references(value, out);
-                    }
-                }
-            }
-            serde_json::Value::Array(values) => {
-                for value in values {
-                    references(value, out);
-                }
-            }
-            _ => {}
-        }
-    }
     let bytes = read(source, 64 * 1024 * 1024)?;
-    let value = serde_json::from_slice(&bytes).map_err(|e| format!("Invalid artwork JSON: {e}"))?;
-    let mut ids = HashSet::new();
-    references(&value, &mut ids);
+    let value:serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| format!("Invalid artwork JSON: {e}"))?;
+    let ids=crate::collaboration::resources::font_references(value.get("doc").unwrap_or(&value))?;
     if ids.is_empty() {
         return Ok(vec![]);
     }
@@ -625,55 +603,68 @@ pub fn export_copy(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn validate_document_fonts(doc: &crate::document::Document) -> Result<(), String> {
-    for layer in &doc.layers {
-        for shape in layer.kind.shapes().unwrap_or_default() {
-            if let crate::geom::Geom::Text(run) = &shape.geom
-                && run.font.starts_with("omatype:")
-                && !crate::text::project_font_loaded(&run.font)
-            {
-                return Err("This artwork needs a missing project font. Copy its .omabrand/fonts folder beside the project.".into());
+/// Collect the shared save, recovery and validation font dependencies.
+/// Args: artwork and retained collaboration state. Returns unique portable face IDs.
+fn document_font_ids(doc: &crate::document::Document) -> Result<HashSet<String>, String> {
+    let mut ids = HashSet::new();
+    for doc in crate::motion::compositions::documents(doc)? {
+        for layer in &doc.layers {
+            let current=layer.kind.shapes().unwrap_or_default();
+            let shapes=current.iter().chain(current.iter().flat_map(|shape|match &shape.layout.component {
+                Some(crate::layout_components::ComponentBinding::Instance{nodes,..})=>nodes.iter().map(|n|n.baseline.as_ref()).collect::<Vec<_>>(),
+                _=>Vec::new(),
+            }));
+            for shape in shapes {
+                if let crate::geom::Geom::Text(run) = &shape.geom {
+                    ids.extend(
+                        std::iter::once(run.font.clone())
+                            .chain(run.spans.iter().filter_map(|span| span.font.clone())),
+                    );
+                    if let Some(svg)=&run.svg_text {ids.extend(crate::text::svg_type::references(svg));}
+                }
             }
         }
+        if let Some(replica) = &doc.collaboration {
+            ids.extend(crate::collaboration::resources::fonts(replica)?);
+        }
+    }
+    ids.retain(|id| id.starts_with("omatype:"));
+    Ok(ids)
+}
+
+pub(crate) fn validate_document_fonts(doc: &crate::document::Document) -> Result<(), String> {
+    if document_font_ids(doc)?
+        .iter()
+        .any(|font| !crate::text::project_font_loaded(font))
+    {
+        return Err("This artwork needs a missing project font. Copy its .omabrand/fonts folder beside the project.".into());
     }
     Ok(())
 }
 
 fn document_fonts(doc: &crate::document::Document) -> Result<Vec<LoadedFont>, String> {
-    let mut seen = HashSet::new();
     let mut fonts = Vec::new();
     let mut total = 0;
-    for layer in &doc.layers {
-        for shape in layer.kind.shapes().unwrap_or_default() {
-            let crate::geom::Geom::Text(run) = &shape.geom else {
-                continue;
-            };
-            if !run.font.starts_with("omatype:") || !seen.insert(run.font.clone()) {
-                continue;
-            }
-            let bytes = crate::text::project_font_bytes(&run.font).ok_or_else(|| {
-                format!("Cannot save without the artwork's project font: {}. Load its typography kit first.", run.font)
-            })?;
-            total += bytes.len();
-            if fonts.len() >= 256 || total > MAX_TOTAL {
-                return Err("The artwork's font archive exceeds 256 faces or 64 MB".into());
-            }
-            let extension = if bytes.starts_with(b"OTTO") {
-                "otf"
-            } else {
-                "ttf"
-            };
-            fonts.push(LoadedFont {
-                role: "Archived font".into(),
-                file: format!(
-                    "fonts/{}.{extension}",
-                    run.font.trim_start_matches("omatype:")
-                ),
-                id: run.font.clone(),
-                family: crate::text::label_for(&run.font),
-                bytes,
-            });
+    for font in document_font_ids(doc)? {
+        let bytes = crate::text::project_font_bytes(&font).ok_or_else(|| {
+            format!("Cannot save without the artwork's project font: {}. Load its typography kit first.", font)
+        })?;
+        total += bytes.len();
+        if fonts.len() >= 256 || total > MAX_TOTAL {
+            return Err("The artwork's font archive exceeds 256 faces or 64 MB".into());
         }
+        let extension = if bytes.starts_with(b"OTTO") {
+            "otf"
+        } else {
+            "ttf"
+        };
+        fonts.push(LoadedFont {
+            role: "Archived font".into(),
+            file: format!("fonts/{}.{extension}", font.trim_start_matches("omatype:")),
+            family: crate::text::label_for(&font),
+            id: font,
+            bytes,
+        });
     }
     Ok(fonts)
 }

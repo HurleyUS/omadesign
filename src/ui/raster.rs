@@ -21,12 +21,12 @@ struct Session {
     w: u32,
     h: u32,
     source: Arc<Vec<u8>>,
-    selection: Option<Arc<Vec<u8>>>,
+    selection: Option<Arc<Vec<f32>>>,
     settings: Settings,
     preview_w: u32,
     preview_h: u32,
     preview_source: Arc<Vec<u8>>,
-    preview_selection: Option<Arc<Vec<u8>>>,
+    preview_selection: Option<Arc<Vec<f32>>>,
     original_texture: TextureHandle,
     texture: TextureHandle,
     preview_job: Option<(Settings, Job)>,
@@ -51,8 +51,14 @@ pub(super) fn ready(ctx: &Context) -> bool {
     })
 }
 
-pub(super) fn inspector(ui: &mut Ui, studio: &mut Studio) {
-    let editable = studio.active_layer.is_some_and(|i| {
+fn available(studio: &Studio) -> bool {
+    if studio.capture_channels().is_err() {
+        return false;
+    }
+    if studio.channel_target.is_some() || studio.quick_mask_painting() {
+        return studio.doc.collaboration.is_none() && studio.channel_paint_target().is_some();
+    }
+    studio.active_layer.is_some_and(|i| {
         studio.doc.layer_editable(i)
             && studio.doc.layers.get(i).is_some_and(|l| {
                 if studio.paint_mask {
@@ -61,55 +67,97 @@ pub(super) fn inspector(ui: &mut Ui, studio: &mut Studio) {
                     l.kind.pixels().is_some()
                 }
             })
-    });
-    ui.label(RichText::new("Raster studio").strong().size(12.0));
+    })
+}
+
+fn choose_kind(ui: &mut Ui, accepts: impl Fn(Kind) -> bool) -> Option<Kind> {
+    let mut chosen = None;
+    for category in [
+        "Key & transparency",
+        "Color & tone",
+        "Blur",
+        "Detail",
+        "Stylize",
+        "Distort",
+    ] {
+        if !Kind::ALL
+            .iter()
+            .any(|&kind| accepts(kind) && kind.category() == category)
+        {
+            continue;
+        }
+        ui.menu_button(category, |ui| {
+            for kind in Kind::ALL
+                .into_iter()
+                .filter(|&kind| accepts(kind) && kind.category() == category)
+            {
+                let response = ui.push_id(kind as usize, |ui| ui.button(kind.name())).inner;
+                super::welcome::name_control(ui, &response, response.id.with("name"), kind.name());
+                if response.on_hover_text(kind.description()).clicked() {
+                    chosen = Some(kind);
+                    ui.close();
+                }
+            }
+        });
+    }
+    chosen
+}
+
+/// Run the implemented Pixel commands from their native top-menu categories.
+/// Args: menu UI, editor and whether to show tonal adjustments. Returns nothing; a choice opens the existing captured dialog.
+pub(super) fn command_menu(ui: &mut Ui, studio: &mut Studio, adjustments: bool) {
+    let editable = available(studio);
+    let mut curves = false;
+    let mut remove_background = false;
+    if adjustments {
+        let response = ui.add_enabled(
+            editable && studio.channel_paint_target().is_some(),
+            egui::Button::new("Curves…"),
+        );
+        super::welcome::name_control(ui, &response, response.id.with("name"), "Curves…");
+        curves = response.clicked();
+    } else {
+        remove_background = ui
+            .add_enabled(
+                super::background_removal::available(studio) && editable,
+                egui::Button::new("Remove Background…"),
+            )
+            .clicked();
+    }
+    ui.separator();
+    let chosen = ui
+        .add_enabled_ui(editable, |ui| {
+            ui.push_id(("pixel-command-menu", &studio.swap_id), |ui| {
+                choose_kind(ui, |kind| {
+                    (kind.category() == "Color & tone") == adjustments
+                })
+            })
+            .inner
+        })
+        .inner;
+    if let Some(kind) = chosen {
+        open(ui.ctx(), studio, kind);
+    } else if curves {
+        super::channel_adjustment::open(ui.ctx(), studio);
+    } else if remove_background {
+        super::background_removal::open(ui.ctx(), studio);
+    } else {
+        return;
+    }
+    ui.close_kind(egui::UiKind::Menu);
+}
+
+pub(super) fn inspector(ui: &mut Ui, studio: &mut Studio) {
+    let editable = available(studio);
     let mut chosen = None;
     let mut remove_background = false;
     ui.add_enabled_ui(editable, |ui| {
         ui.horizontal(|ui| {
             for (label, bank) in [("Filters", Bank::Filters), ("Effects", Bank::Effects)] {
                 ui.menu_button(label, |ui| {
-                    for category in [
-                        "Key & transparency",
-                        "Color & tone",
-                        "Blur",
-                        "Detail",
-                        "Stylize",
-                        "Distort",
-                    ] {
-                        if !Kind::ALL
-                            .iter()
-                            .any(|kind| kind.bank() == bank && kind.category() == category)
-                        {
-                            continue;
-                        }
-                        ui.menu_button(category, |ui| {
-                            if bank == Bank::Filters
-                                && category == "Key & transparency"
-                                && ui
-                                    .add_enabled(
-                                        super::background_removal::available(studio),
-                                        egui::Button::new("Remove Background…"),
-                                    )
-                                    .clicked()
-                            {
-                                remove_background = true;
-                                ui.close();
-                            }
-                            for kind in Kind::ALL
-                                .into_iter()
-                                .filter(|kind| kind.bank() == bank && kind.category() == category)
-                            {
-                                if ui
-                                    .button(kind.name())
-                                    .on_hover_text(kind.description())
-                                    .clicked()
-                                {
-                                    chosen = Some(kind);
-                                    ui.close();
-                                }
-                            }
-                        });
+                    chosen = choose_kind(ui, |kind| kind.bank() == bank).or(chosen);
+                    if chosen.is_some() {
+                        ui.close();
                     }
                 });
             }
@@ -147,8 +195,20 @@ pub(super) fn open(ctx: &Context, studio: &mut Studio, kind: Kind) {
     open_with_settings(ctx, studio, Settings::new(kind));
 }
 
+fn channel_filter(settings: &Settings) -> Option<crate::channels::filter::Filter> {
+    Some(crate::channels::filter::Filter::from_raster(settings))
+}
+
 pub(super) fn open_with_settings(ctx: &Context, studio: &mut Studio, settings: Settings) {
     studio.end_pixel_stroke(false);
+    if studio.channel_target.is_some() || studio.quick_mask_painting() {
+        if let Some(filter) = channel_filter(&settings) {
+            super::channel_adjustment::open_filter(ctx, studio, filter);
+        } else {
+            studio.status = "This filter is unavailable for scalar channels".into();
+        }
+        return;
+    }
     let Some(index) = studio.active_layer else {
         return;
     };
@@ -181,7 +241,7 @@ pub(super) fn open_with_settings(ctx: &Context, studio: &mut Studio, settings: S
     let scale = (600.0 / pixels.w.max(pixels.h) as f32).min(1.0);
     let pw = (pixels.w as f32 * scale).round().max(1.0) as u32;
     let ph = (pixels.h as f32 * scale).round().max(1.0) as u32;
-    let source = Arc::new(pixels.data.clone());
+    let source = Arc::new(pixels.data.to_vec());
     let preview_source = Arc::new(thumbnail(&source, pixels.w, pixels.h, pw, ph, 4));
     let preview_selection = selection
         .as_ref()
@@ -226,7 +286,7 @@ pub(super) fn open_with_settings(ctx: &Context, studio: &mut Studio, settings: S
     });
 }
 
-fn thumbnail(data: &[u8], w: u32, h: u32, dw: u32, dh: u32, channels: usize) -> Vec<u8> {
+fn thumbnail<T: Copy>(data: &[T], w: u32, h: u32, dw: u32, dh: u32, channels: usize) -> Vec<T> {
     let mut out = Vec::with_capacity(dw as usize * dh as usize * channels);
     for y in 0..dh {
         for x in 0..dw {
@@ -246,7 +306,7 @@ fn thumbnail(data: &[u8], w: u32, h: u32, dw: u32, dh: u32, channels: usize) -> 
 fn render_job(
     ctx: &Context,
     source: Arc<Vec<u8>>,
-    selection: Option<Arc<Vec<u8>>>,
+    selection: Option<Arc<Vec<f32>>>,
     w: u32,
     h: u32,
     settings: Settings,
@@ -268,6 +328,44 @@ fn render_job(
         ctx.request_repaint();
     });
     result
+}
+
+/// Name the existing filter banks and retain each native option's identity.
+/// Args: UI, layer owner and selected kind. Returns the actual native combo.
+fn kind_choice(ui: &mut Ui, owner: Id, kind: &mut Kind) -> egui::Response {
+    let before = *kind;
+    let label = ui.label("Raster filter or effect");
+    let response = super::fields::native_scope(ui, owner.with("kind"), |ui| {
+        egui::ComboBox::from_id_salt("raster-kind")
+            .selected_text(kind.name())
+            .width(255.0)
+            .show_ui(ui, |ui| {
+                for bank in [Bank::Filters, Bank::Effects] {
+                    ui.strong(if bank == Bank::Filters {
+                        "Filters"
+                    } else {
+                        "Effects"
+                    });
+                    for option in Kind::ALL.into_iter().filter(|option| option.bank() == bank) {
+                        let response = super::fields::native_scope(
+                            ui,
+                            owner.with(("choice", option as usize)),
+                            |ui| ui.selectable_value(kind, option, option.name()),
+                        )
+                        .inner;
+                        super::welcome::focus_control(ui, &response);
+                    }
+                    ui.separator();
+                }
+            })
+            .response
+    })
+    .inner;
+    if before != *kind {
+        response.request_focus();
+    }
+    super::welcome::name_control(ui, &response, label.id, "Raster filter or effect");
+    response
 }
 
 pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
@@ -315,6 +413,13 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
     }
     let mut close = false;
     let busy = session.apply_job.is_some();
+    let owner = Id::new((
+        "raster-filter-native",
+        &session.document,
+        session.layer_id,
+        session.mask,
+    ));
+    let mut kind_control = None;
     let dialog = egui::Modal::new(Id::new("raster-filter-modal")).show(&ctx, |ui| {
         let width = (ctx.viewport_rect().width() - 70.0).clamp(560.0, 950.0);
         ui.set_width(width);
@@ -346,13 +451,7 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
                     ui.set_width(275.0);
                     ui.add_enabled_ui(!busy, |ui| {
                         let before_kind = session.settings.kind;
-                        egui::ComboBox::from_id_salt("raster-kind").selected_text(session.settings.kind.name()).width(255.0).show_ui(ui, |ui| {
-                            for bank in [Bank::Filters, Bank::Effects] {
-                                ui.strong(if bank == Bank::Filters { "Filters" } else { "Effects" });
-                                for kind in Kind::ALL.into_iter().filter(|k| k.bank() == bank) { ui.selectable_value(&mut session.settings.kind, kind, kind.name()); }
-                                ui.separator();
-                            }
-                        });
+                        kind_control=Some(kind_choice(ui,owner,&mut session.settings.kind));
                         if before_kind != session.settings.kind { session.settings = Settings::new(session.settings.kind); session.sample = false; session.error = None; }
                         ui.small(session.settings.kind.description());
                         ui.add_space(8.0);
@@ -367,7 +466,11 @@ pub(super) fn show(ui: &mut Ui, studio: &mut Studio) {
             });
         });
         ui.separator();
-        if let Some(error) = &session.error { ui.colored_label(Color32::LIGHT_RED, error); }
+        if let Some(error) = &session.error {
+            let message=ui.colored_label(Color32::LIGHT_RED,error);
+            ctx.accesskit_node_builder(message.id,|node|{node.set_live(egui::accesskit::Live::Polite);node.set_live_atomic();});
+            if let Some(response)=&kind_control{ctx.accesskit_node_builder(response.id,|node|{node.set_error_message(message.id.accesskit_id());node.push_described_by(message.id.accesskit_id());});}
+        }
         ui.horizontal(|ui| {
             if ui.button("Cancel").clicked() { close = true; }
             if busy { ui.spinner(); ui.label("Applying at full resolution…"); }
@@ -492,77 +595,14 @@ fn controls(ui: &mut Ui, session: &mut Session) {
             }
         });
     }
-    let mut slider = |index: usize, label: &str, min: f32, max: f32| {
-        ui.add(Slider::new(&mut s.values[index], min..=max).text(label));
-    };
-    match s.kind {
-        Kind::ChromaKey => {
-            slider(0, "Similarity", 0.0, 0.8);
-            slider(1, "Falloff", 0.0, 0.8);
-            slider(2, "Hardness", 0.0, 1.0);
-            slider(3, "Spill cleanup", 0.0, 1.0);
-        }
-        Kind::BrightnessContrast => {
-            slider(0, "Brightness", -1.0, 1.0);
-            slider(1, "Contrast", -1.0, 1.0);
-        }
-        Kind::Exposure => {
-            slider(0, "Exposure (EV)", -5.0, 5.0);
-            slider(1, "Gamma", 0.1, 4.0);
-        }
-        Kind::Levels => {
-            slider(0, "Black point", 0.0, 0.99);
-            slider(1, "White point", 0.01, 1.0);
-            slider(2, "Gamma", 0.1, 4.0);
-            s.values[1] = s.values[1].max(s.values[0] + 0.001);
-        }
-        Kind::HueSaturation => {
-            slider(0, "Hue (°)", -180.0, 180.0);
-            slider(1, "Saturation", -1.0, 1.0);
-            slider(2, "Lightness", -1.0, 1.0);
-        }
-        Kind::Vibrance => slider(0, "Vibrance", -1.0, 2.0),
-        Kind::ColorBalance => {
-            slider(0, "Cyan / red", -1.0, 1.0);
-            slider(1, "Magenta / green", -1.0, 1.0);
-            slider(2, "Yellow / blue", -1.0, 1.0);
-        }
-        Kind::Temperature => {
-            slider(0, "Cool / warm", -1.0, 1.0);
-            slider(1, "Green / magenta", -1.0, 1.0);
-        }
-        Kind::Threshold | Kind::AlphaThreshold | Kind::Solarize => slider(0, "Threshold", 0.0, 1.0),
-        Kind::Posterize => slider(0, "Levels", 2.0, 32.0),
-        Kind::GaussianBlur | Kind::FeatherAlpha => slider(0, "Radius (px)", 0.0, 100.0),
-        Kind::GrowAlpha | Kind::ShrinkAlpha => slider(0, "Radius (px)", 1.0, 20.0),
-        Kind::MotionBlur => {
-            slider(0, "Distance (px)", 1.0, 100.0);
-            slider(1, "Angle (°)", -180.0, 180.0);
-        }
-        Kind::Sharpen => slider(0, "Amount", 0.0, 2.0),
-        Kind::UnsharpMask => {
-            slider(0, "Radius (px)", 0.1, 50.0);
-            slider(1, "Amount", 0.0, 5.0);
-            slider(2, "Threshold", 0.0, 0.3);
-        }
-        Kind::EdgeDetect | Kind::Emboss => slider(0, "Amount", 0.1, 5.0),
-        Kind::Pixelate | Kind::Halftone => slider(0, "Cell size (px)", 2.0, 100.0),
-        Kind::Noise => slider(0, "Grain amount", 0.0, 1.0),
-        Kind::Vignette => {
-            slider(0, "Darkness", 0.0, 1.0);
-            slider(1, "Inner radius", 0.0, 1.2);
-        }
-        Kind::Swirl => {
-            slider(0, "Twist (°)", -720.0, 720.0);
-            slider(1, "Radius", 0.05, 1.5);
-        }
-        Kind::Ripple => {
-            slider(0, "Amplitude (px)", 0.0, 50.0);
-            slider(1, "Wavelength (px)", 4.0, 200.0);
-        }
-        Kind::Grayscale | Kind::Sepia | Kind::Invert => {
-            ui.small("Use Strength to blend with the original image.");
-        }
+    for p in s.kind.parameters() {
+        ui.add(Slider::new(&mut s.values[p.index], p.min..=p.max).text(p.label));
+    }
+    if s.kind == Kind::Levels {
+        s.values[1] = s.values[1].max(s.values[0] + 0.001);
+    }
+    if matches!(s.kind, Kind::Grayscale | Kind::Sepia | Kind::Invert) {
+        ui.small("Use Strength to blend with the original image.");
     }
 }
 
@@ -586,21 +626,46 @@ fn commit(studio: &mut Studio, session: &Session, after: Vec<u8>) -> Result<(), 
         layer.kind.pixels()
     })
     .ok_or("The target image or mask changed")?;
-    if pixels.w != session.w || pixels.h != session.h || pixels.data != *session.source {
+    if pixels.w != session.w
+        || pixels.h != session.h
+        || pixels.data.as_slice() != session.source.as_slice()
+    {
         return Err("The pixels changed while previewing. Cancel and reopen the filter.".into());
     }
     if after.len() != session.source.len() {
         return Err("The filter returned invalid pixel data".into());
     }
-    if after == *session.source {
+    if !session.mask && layer.psd_smart.is_some() {
+        return Err("Edit the placed source or use its smart-filter controls; rasterize an explicit copy for destructive pixel filters".into());
+    }
+    let native_after = pixels
+        .native
+        .as_ref()
+        .map(|_| {
+            pixels.filtered(
+                &session.settings,
+                session.selection.as_deref().map(|s| s.as_slice()),
+            )
+        })
+        .transpose()?;
+    if native_after.is_none() && after == *session.source {
         studio.status = format!("{} · no pixel changes", session.settings.kind.name());
         return Ok(());
     }
-    let cmd = Cmd::Pixels {
-        layer: index,
-        mask: session.mask,
-        before: session.source.as_ref().clone(),
-        after,
+    let cmd = if let Some(after) = native_after {
+        Cmd::NativePixels {
+            layer: index,
+            mask: session.mask,
+            before: pixels.clone(),
+            after,
+        }
+    } else {
+        Cmd::Pixels {
+            layer: index,
+            mask: session.mask,
+            before: pixels.data.clone(),
+            after: crate::deep_color::storage::adopt(after)?,
+        }
     };
     apply_command(&mut studio.doc, &cmd);
     studio.history.push(cmd);
@@ -619,50 +684,138 @@ fn commit(studio: &mut Studio, session: &Session, after: Vec<u8>) -> Result<(), 
 mod tests {
     use super::*;
     use crate::document::{Layer, Pixels};
+
+    #[test]
+    fn keyboard_pixel_fields_raster_kind_uses_native_options_and_keeps_owner() {
+        use crate::ui::welcome::keyboard_tests as keys;
+        use egui::{Event, Key, Modifiers};
+        fn frame(
+            ctx: &Context,
+            kind: &mut Kind,
+            preceding: bool,
+            enabled: bool,
+            events: Vec<Event>,
+        ) -> egui::FullOutput {
+            keys::render(ctx, events, |ui| {
+                if preceding {
+                    let _ = ui.button("Conditional raster status");
+                }
+                ui.add_enabled_ui(enabled, |ui| {
+                    kind_choice(ui, Id::new(("raster-native-field-fixture", 7u64)), kind)
+                });
+            })
+        }
+        let ctx = Context::default();
+        ctx.enable_accesskit();
+        crate::ui::theme::apply(&ctx);
+        let mut kind = Kind::ChromaKey;
+        let output = keys::tab_to(&ctx, "Raster filter or effect", |events| {
+            frame(&ctx, &mut kind, false, true, events)
+        });
+        let target = keys::named(&output, "Raster filter or effect").0;
+        let output = frame(&ctx, &mut kind, true, true, vec![]);
+        assert_eq!(keys::named(&output, "Raster filter or effect").0, target);
+        keys::focused(&ctx, &output, "Raster filter or effect");
+        frame(
+            &ctx,
+            &mut kind,
+            true,
+            true,
+            keys::key(Key::Enter, Modifiers::NONE),
+        );
+        keys::tab_to(&ctx, "Exposure / gamma", |events| {
+            frame(&ctx, &mut kind, true, true, events)
+        });
+        frame(
+            &ctx,
+            &mut kind,
+            true,
+            true,
+            keys::key(Key::Enter, Modifiers::NONE),
+        );
+        let output = frame(&ctx, &mut kind, true, true, vec![]);
+        assert_eq!(kind, Kind::Exposure);
+        assert_eq!(keys::named(&output, "Raster filter or effect").0, target);
+        keys::focused(&ctx, &output, "Raster filter or effect");
+        let output = frame(&ctx, &mut kind, true, false, vec![]);
+        assert!(
+            keys::named(&output, "Raster filter or effect")
+                .1
+                .is_disabled()
+        );
+        frame(
+            &ctx,
+            &mut kind,
+            true,
+            false,
+            keys::action(target, egui::accesskit::Action::Click, None),
+        );
+        assert_eq!(kind, Kind::Exposure);
+    }
     #[test]
     fn filter_preview_cancel_is_non_destructive_and_apply_undo_round_trips() {
         let ctx = Context::default();
         let mut studio = Studio::new();
-        studio.doc.layers = vec![Layer::raster("Key", 2, 1)];
-        studio.doc.layers[0].kind.pixels_mut().unwrap().data = vec![0, 255, 0, 255, 255, 0, 0, 128];
+        studio.doc.layers = vec![Layer::raster("Key", 2, 1).unwrap()];
+        studio.doc.layers[0]
+            .kind
+            .pixels_mut()
+            .unwrap()
+            .replace_bytes(vec![0, 255, 0, 255, 255, 0, 0, 128])
+            .unwrap();
         studio.active_layer = Some(0);
-        let before = studio.doc.layers[0].kind.pixels().unwrap().data.clone();
+        let before = studio.doc.layers[0].kind.pixels().unwrap().data.to_vec();
         open(&ctx, &mut studio, Kind::ChromaKey);
         let session = ctx.data(|d| d.get_temp::<Session>(state_id())).unwrap();
         let after = crate::raster::apply(&session.source, 2, 1, &session.settings, None).unwrap();
-        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data, before);
+        assert_eq!(
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+            before
+        );
         assert_eq!(studio.history.len(), 0);
         commit(&mut studio, &session, after.clone()).unwrap();
-        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data, after);
+        assert_eq!(
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+            after
+        );
         let undo = studio.history.undo().unwrap();
         apply_command(&mut studio.doc, &undo);
-        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data, before);
+        assert_eq!(
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+            before
+        );
         let redo = studio.history.redo().unwrap();
         apply_command(&mut studio.doc, &redo);
-        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data, after);
+        assert_eq!(
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+            after
+        );
         let encoded = serde_json::to_string(&studio.doc).unwrap();
         let saved: crate::document::Document = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(saved.layers[0].kind.pixels().unwrap().data, after);
+        assert_eq!(
+            saved.layers[0].kind.pixels().unwrap().data.as_slice(),
+            after
+        );
     }
     #[test]
     fn filter_on_mask_preserves_image_and_rejects_stale_source() {
         let ctx = Context::default();
         let mut studio = Studio::new();
-        studio.doc.layers = vec![Layer::raster("Image", 1, 1)];
+        studio.doc.layers = vec![Layer::raster("Image", 1, 1).unwrap()];
         studio.doc.layers[0].mask = Pixels::from_rgba(1, 1, vec![30, 30, 30, 255]);
         studio.active_layer = Some(0);
         studio.paint_mask = true;
-        let source_image = studio.doc.layers[0].kind.pixels().unwrap().data.clone();
+        let source_image = studio.doc.layers[0].kind.pixels().unwrap().data.to_vec();
         open(&ctx, &mut studio, Kind::Invert);
         let session = ctx.data(|d| d.get_temp::<Session>(state_id())).unwrap();
         let after = crate::raster::apply(&session.source, 1, 1, &session.settings, None).unwrap();
         commit(&mut studio, &session, after.clone()).unwrap();
         assert_eq!(
-            studio.doc.layers[0].mask.as_ref().unwrap().data,
+            studio.doc.layers[0].mask.as_ref().unwrap().data.as_slice(),
             vec![225, 225, 225, 255]
         );
         assert_eq!(
-            studio.doc.layers[0].kind.pixels().unwrap().data,
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
             source_image
         );
         assert!(commit(&mut studio, &session, after).is_err());
@@ -739,11 +892,15 @@ mod tests {
     fn dialog_opens_from_inspector_cancels_and_applies_at_minimum_window_size() {
         let ctx = Context::default();
         let mut studio = Studio::new();
-        studio.doc.layers = vec![Layer::raster("Key", 2, 1)];
-        studio.doc.layers[0].kind.pixels_mut().unwrap().data =
-            vec![0, 255, 0, 255, 220, 10, 10, 255];
+        studio.doc.layers = vec![Layer::raster("Key", 2, 1).unwrap()];
+        studio.doc.layers[0]
+            .kind
+            .pixels_mut()
+            .unwrap()
+            .replace_bytes(vec![0, 255, 0, 255, 220, 10, 10, 255])
+            .unwrap();
         studio.active_layer = Some(0);
-        let original = studio.doc.layers[0].kind.pixels().unwrap().data.clone();
+        let original = studio.doc.layers[0].kind.pixels().unwrap().data.to_vec();
         frame(&ctx, &mut studio, vec![]);
         let labels = frame(&ctx, &mut studio, vec![]);
         click(&ctx, &mut studio, labels["Chroma key…"].center());
@@ -755,7 +912,10 @@ mod tests {
         click(&ctx, &mut studio, labels["Cancel"].center());
         assert!(!is_open(&ctx));
         assert_eq!(studio.history.len(), 0);
-        assert_eq!(studio.doc.layers[0].kind.pixels().unwrap().data, original);
+        assert_eq!(
+            studio.doc.layers[0].kind.pixels().unwrap().data.as_slice(),
+            original
+        );
         open(&ctx, &mut studio, Kind::ChromaKey);
         frame(&ctx, &mut studio, vec![]);
         let labels = frame(&ctx, &mut studio, vec![]);

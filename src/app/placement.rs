@@ -292,6 +292,12 @@ impl Studio {
                 return Err("Develop the photo before placing it in a frame".into());
             }
         };
+        if !source.motion.compositions.is_empty()
+            || !source.motion.expressions.is_empty()
+            || source.motion.scene3d.is_some()
+        {
+            return Err("FrameComposition: place motion projects on the canvas or add them through Compositions to preserve their scene".into());
+        }
         source.validate_hierarchy()?;
         if source
             .layers
@@ -388,6 +394,34 @@ impl Studio {
             }
             tokens.push(token);
         }
+        let frame = self
+            .doc
+            .find_shape(layer, parent)
+            .ok_or("Missing destination frame")?;
+        let center = frame.geom.bbox().center();
+        let placement = crate::compositor::shape_parent_transform(&self.doc, layer, parent)
+            .pre_concat(tiny_skia::Transform::from_rotate_at(
+                frame.rotation.to_degrees(),
+                center.x,
+                center.y,
+            ))
+            .pre_translate(dest.min.x, dest.min.y)
+            .pre_scale(scale, scale)
+            .pre_translate(-src.min.x, -src.min.y);
+        let mask_ids = ids.clone();
+        let remap_masks = |masks: &mut Vec<crate::artwork_mask::ArtworkMask>| {
+            for mask in masks {
+                let old = mask.source;
+                mask.remap(&layer_ids, &mask_ids, placement);
+                mask.source = crate::artwork_mask::MaskSource {
+                    layer: self.doc.layers[layer].id,
+                    shape: Some(
+                        old.shape
+                            .map_or_else(|| layer_ids[&old.layer], |id| mask_ids[&id]),
+                    ),
+                };
+            }
+        };
         for mut imported_layer in source.layers {
             let mut wrapper = asset_wrapper(&imported_layer.name, dest);
             wrapper.id = layer_ids[&imported_layer.id];
@@ -401,6 +435,8 @@ impl Studio {
             wrapper.locked = imported_layer.locked;
             wrapper.opacity = imported_layer.opacity;
             wrapper.filters = imported_layer.filters;
+            wrapper.artwork_masks = imported_layer.artwork_masks;
+            remap_masks(&mut wrapper.artwork_masks);
             super::brand_assets::scale_filters(&mut wrapper.filters, scale);
             let container = wrapper.id;
             shapes.push(wrapper);
@@ -408,6 +444,7 @@ impl Studio {
                 LayerKind::Vector { shapes: items } => {
                     for mut shape in std::mem::take(items) {
                         let old = shape.id;
+                        remap_masks(&mut shape.artwork_masks);
                         shape.id = ids[&old];
                         crate::layout_components::remap_duplicate(&mut shape, &ids);
                         shape.layout.parent = Some(
@@ -495,7 +532,8 @@ impl Studio {
                     shape.geom.map_into(src, dest);
                     // Keep absolute layer opacity and effects on the wrapper, with
                     // the original image pivot for rotation and scale tracks.
-                    shapes.iter_mut().find(|s| s.id == container).unwrap().geom = shape.geom.clone();
+                    shapes.iter_mut().find(|s| s.id == container).unwrap().geom =
+                        shape.geom.clone();
                     ids.insert(imported_layer.id, container);
                     shapes.push(shape);
                 }
@@ -520,6 +558,17 @@ impl Studio {
             .into_iter()
             .map(|shape| Cmd::AddShape { layer, shape })
             .collect();
+        let mut sources = self.doc.sources.clone();
+        for source in &source.sources {
+            source.validate()?;
+            if !sources.iter().any(|s| s.id == source.id) { sources.push(source.clone()); }
+        }
+        if sources.iter().map(|s|s.bytes().len()).sum::<usize>() > 512 * 1024 * 1024 {
+            return Err("Retained sources exceed 512 MiB".into());
+        }
+        if sources != self.doc.sources {
+            commands.push(Cmd::SetSources { before: self.doc.sources.clone(), after: sources });
+        }
         if tokens != self.doc.layout_tokens {
             commands.push(Cmd::SetLayoutTokens {
                 before: self.doc.layout_tokens.clone(),

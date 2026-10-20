@@ -1,6 +1,8 @@
 //! Decode large documents away from the UI thread; apply results on their owner.
 use super::*;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 #[derive(Clone, Copy)]
 pub(super) enum ImportMode {
@@ -21,6 +23,55 @@ pub(super) struct ImportJob {
     mode: ImportMode,
     owner: String,
     frame: Option<(usize, u64)>,
+    stage: Arc<Mutex<&'static str>>,
+    started: Instant,
+    photo_placement: Option<PhotoPlacementOwner>,
+}
+
+struct PhotoPlacement {
+    photo: Option<crate::photo::PhotoImage>,
+    target: Option<crate::deep_color::cms::DocumentColor>,
+    cancel: crate::formats::raw::Cancellation,
+}
+
+impl PhotoPlacement {
+    fn matches(&self, studio: &Studio, owner: &str) -> bool {
+        owner == studio.swap_id
+            && match &self.target {
+                Some(color) => studio.doc.color == *color,
+                None => studio.current_is_blank(),
+            }
+            && self.photo.as_ref().is_none_or(|photo| studio.photo.selected().is_some_and(|current| {
+                Arc::ptr_eq(&current.full, &photo.full)
+                    && current.source == photo.source
+                    && current.develop == photo.develop
+                    && match (&current.raw, &photo.raw) {
+                        (Some(current), Some(source)) => Arc::ptr_eq(current, source),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }))
+    }
+}
+
+struct PhotoPlacementOwner(Arc<PhotoPlacement>);
+
+impl std::ops::Deref for PhotoPlacementOwner {
+    type Target = PhotoPlacement;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for PhotoPlacementOwner {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+pub(super) struct FileFailure {
+    path: PathBuf,
+    mode: ImportMode,
+    message: String,
 }
 enum Completed {
     Imported(crate::import::Imported),
@@ -103,12 +154,34 @@ impl Studio {
         }
         let (tx, receiver) = mpsc::channel();
         let input = path.clone();
+        let stage = Arc::new(Mutex::new("Opening document"));
+        let progress = Arc::clone(&stage);
+        let photo_placement = (matches!(kind, "raw" | "photo-settings")
+            && matches!(mode, ImportMode::Place))
+            .then(|| Arc::new(PhotoPlacement {
+                photo: None,
+                target: Some(self.doc.color.clone()),
+                cancel: Default::default(),
+            }));
+        let worker = photo_placement.clone();
         std::thread::spawn(move || {
             if matches!(mode, ImportMode::Recover | ImportMode::RecoverBackground) {
                 let _ = tx.send(crate::project::load_swap(&input).map(Completed::Recovered));
                 return;
             }
-            let result = crate::import::open_any(&input).and_then(|imported| {
+            if let Some(worker) = worker {
+                let result = crate::photo::PhotoImage::load_cancellable(&input, &worker.cancel)
+                    .and_then(|photo| crate::formats::photo_placement::document(
+                        &photo, worker.target.as_ref(), &worker.cancel,
+                    ))
+                    .map(crate::import::Imported::Document)
+                    .map(Completed::Imported);
+                let _ = tx.send(result);
+                return;
+            }
+            let result = crate::import::open_with_progress(&input, |value| {
+                if let Ok(mut stage) = progress.lock() { *stage = value; }
+            }).and_then(|imported| {
                 if let crate::import::Imported::Photo(photo) = imported {
                     crate::formats::cli::photo_document(&photo)
                         .map(crate::import::Imported::Document)
@@ -128,6 +201,9 @@ impl Studio {
             mode,
             owner: self.swap_id.clone(),
             frame,
+            stage,
+            started: Instant::now(),
+            photo_placement: photo_placement.map(PhotoPlacementOwner),
         });
     }
 
@@ -143,9 +219,19 @@ impl Studio {
             .source
             .clone()
             .unwrap_or_else(|| PathBuf::from(&photo.name));
+        let placement = Arc::new(PhotoPlacement {
+            photo: Some(photo),
+            target: (!self.current_is_blank()).then(|| self.doc.color.clone()),
+            cancel: Default::default(),
+        });
+        let worker = placement.clone();
         let (tx, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = crate::formats::cli::photo_document(&photo)
+            let result = crate::formats::photo_placement::document(
+                worker.photo.as_ref().unwrap(),
+                worker.target.as_ref(),
+                &worker.cancel,
+            )
                 .map(crate::import::Imported::Document)
                 .map(Completed::Imported);
             let _ = tx.send(result);
@@ -157,6 +243,9 @@ impl Studio {
             mode: ImportMode::PhotoToDesign,
             owner: self.swap_id.clone(),
             frame: None,
+            stage: Arc::new(Mutex::new("Developing full-resolution photo")),
+            started: Instant::now(),
+            photo_placement: Some(PhotoPlacementOwner(placement)),
         });
     }
 
@@ -166,6 +255,20 @@ impl Studio {
         }
         let mut i = 0;
         while i < self.file_jobs.len() {
+            if let Some(placement) = &self.file_jobs[i].photo_placement
+                && (!placement.matches(self, &self.file_jobs[i].owner)
+                    || placement.cancel.is_cancelled())
+            {
+                let changed_tab = self.file_jobs[i].owner != self.swap_id;
+                self.file_jobs.remove(i);
+                self.photo.status = if changed_tab {
+                    "The destination tab changed. Place the photo again."
+                } else {
+                    "Photo placement cancelled; the source or destination changed."
+                }
+                .into();
+                continue;
+            }
             let result = match self.file_jobs[i].receiver.try_recv() {
                 Ok(r) => r,
                 Err(TryRecvError::Empty) => {
@@ -194,6 +297,7 @@ impl Studio {
                         "Could not {action} {}: {error}",
                         job.path.file_name().unwrap_or_default().to_string_lossy()
                     );
+                    self.file_failures.push(FileFailure { path: job.path, mode: job.mode, message: self.status.clone() });
                 }
                 Ok(Completed::Exported(notes)) => {
                     crate::telemetry::count("feature.export");
@@ -365,13 +469,15 @@ impl Studio {
         let (tx, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let result = (|| {
+                if matches!(extension.as_str(), "psd" | "psb") {
+                    let encoded = crate::formats::psd::encode_admitted(&doc, extension == "psb")?;
+                    crate::formats::write_atomic(&output, encoded.bytes.as_slice())?;
+                    return Ok(Completed::Exported(encoded.warnings));
+                }
                 let (bytes, notes) = match extension.as_str() {
-                    "psd" | "psb" => {
-                        let output = crate::formats::psd::encode(&doc, extension == "psb")?;
-                        (output.bytes, output.warnings)
-                    }
                     "pdf" => crate::formats::pdf::write(&doc)?,
                     "ora" => crate::formats::openraster::write(&doc)?,
+                    "idml" => crate::formats::idml::write(&doc)?,
                     _ => return Err("Unsupported layered export".into()),
                 };
                 crate::formats::write_atomic(&output, &bytes)?;
@@ -386,7 +492,67 @@ impl Studio {
             mode: ImportMode::Export,
             owner: self.swap_id.clone(),
             frame: None,
+            stage: Arc::new(Mutex::new("Writing export")),
+            started: Instant::now(),
+            photo_placement: None,
         });
+    }
+
+    pub(super) fn file_activity_windows(&mut self, ctx: &egui::Context) {
+        if !self.file_jobs.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            egui::Window::new("Working on files")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0., 70.))
+                .show(ctx, |ui| {
+                    for job in &self.file_jobs {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(job.path.file_name().unwrap_or_default().to_string_lossy());
+                            if let Some(placement) = &job.photo_placement {
+                                ui.push_id(("photo-placement", Arc::as_ptr(&placement.0) as usize), |ui| {
+                                    if ui.button("Cancel").clicked() {
+                                        placement.cancel.cancel();
+                                    }
+                                });
+                            }
+                        });
+                        let stage = job.stage.lock().map(|stage| *stage).unwrap_or("Working");
+                        ui.label(format!("{stage} · {:.0} s elapsed", job.started.elapsed().as_secs_f32()));
+                    }
+                    if !self.pending_open_files.is_empty() {
+                        ui.label(format!("{} more files queued", self.pending_open_files.len()));
+                    }
+                });
+            let previous = self.file_jobs.len();
+            self.file_jobs.retain(|job| {
+                !job.photo_placement.as_ref().is_some_and(|placement| placement.cancel.is_cancelled())
+            });
+            if self.file_jobs.len() != previous {
+                self.photo.status = "Photo placement cancelled.".into();
+            }
+        }
+        if self.file_failures.is_empty() { return; }
+        let mut open = true;
+        let mut retry = None;
+        egui::Window::new("Files need attention").open(&mut open).default_width(520.)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().max_height(360.).show(ui, |ui| {
+                    for (index, failure) in self.file_failures.iter().enumerate() {
+                        ui.label(&failure.message);
+                        if matches!(failure.mode, ImportMode::Open | ImportMode::OpenBackground | ImportMode::Template | ImportMode::Recover | ImportMode::RecoverBackground)
+                            && ui.button("Retry").clicked() { retry = Some(index); }
+                        ui.separator();
+                    }
+                });
+            });
+        if !open { self.file_failures.clear(); }
+        else if let Some(index) = retry {
+            let failure = self.file_failures.remove(index);
+            self.pending_open_files.push_back((failure.path, failure.mode));
+            self.start_next_open();
+        }
     }
 
     pub(super) fn import_notes_window(&mut self, ctx: &egui::Context) {
@@ -417,6 +583,37 @@ impl Studio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_activity_and_failures_remain_visible_without_replacing_work() {
+        let folder = TestFolder::new();
+        let path = folder.0.join("broken.svg");
+        std::fs::write(&path, "<svg>broken").unwrap();
+        let mut studio = Studio::new();
+        let before = serde_json::to_value(&studio.doc).unwrap();
+        studio.open_paths(vec![path]);
+        let ctx = egui::Context::default();
+        let text = |studio: &mut Studio| {
+            let mut result = String::new();
+            for _ in 0..3 {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| studio.file_activity_windows(ui.ctx()));
+                output.textures_delta.clear();
+                for shape in output.shapes {
+                    if let egui::Shape::Text(text) = shape.shape { result.push_str(&text.galley.job.text); }
+                }
+            }
+            result
+        };
+        let pending = text(&mut studio);
+        assert!(pending.contains("Working on files") && pending.contains("broken.svg") && pending.contains("elapsed"), "{pending}");
+        finish_jobs(&mut studio);
+        assert_eq!(studio.file_failures.len(), 1);
+        studio.status = "Another action".into();
+        let failed = text(&mut studio);
+        assert!(failed.contains("Files need attention") && failed.contains("Could not open broken.svg") && failed.contains("Retry"), "{failed}");
+        assert_eq!(serde_json::to_value(&studio.doc).unwrap(), before);
+        assert!(studio.file_jobs.is_empty());
+    }
 
     struct TestFolder(PathBuf);
     impl TestFolder {
@@ -560,11 +757,12 @@ mod tests {
             crate::formats::raw::RawImage {
                 width: 1800,
                 height: 12,
-                pixels: [5000, 10000, 15000].repeat(1800 * 12),
+                pixels: [5000, 10000, 15000].repeat(1800 * 12).into(),
+                memory: None,
                 metadata: Default::default(),
                 warnings: vec![],
             },
-        )
+        ).unwrap()
     }
 
     #[test]
@@ -722,7 +920,7 @@ mod tests {
         assert!(studio.photo.images.is_empty());
         let placed = studio.doc.layers.last().unwrap().kind.pixels().unwrap();
         assert_eq!((placed.w, placed.h), (13, 9));
-        assert_eq!(placed.data, image.data);
+        assert_eq!(placed.data.as_slice(), image.data.as_slice());
         assert!(studio.pending_place.is_none());
     }
 
@@ -804,11 +1002,21 @@ mod tests {
         assert_eq!(blank.doc.layers.len(), 1);
         let pixels = blank.doc.layers[0].kind.pixels().unwrap();
         assert_eq!((pixels.w, pixels.h), (1800, 12));
+        assert_eq!(pixels.native.as_ref().unwrap().depth, crate::deep_color::Depth::F32);
+        assert_eq!(blank.doc.color.depth, crate::deep_color::Depth::F32);
+        assert_eq!(blank.doc.color.intent, 1);
         assert!(blank.dirty && blank.path.is_none());
         assert_eq!(blank.photo.selected().unwrap().dimensions(), (1800, 12));
 
         let mut existing = Studio::new();
         existing.doc = Document::new("Existing artwork", 800.0, 600.0, 72.0);
+        existing.doc.color = crate::deep_color::cms::DocumentColor {
+            model: crate::deep_color::cms::Model::Rgb,
+            depth: crate::deep_color::Depth::U16,
+            icc_profile: include_bytes!("../formats/psd/fixtures/srgb-cc0.icc").to_vec(),
+            intent: 0,
+        };
+        let target_color = existing.doc.color.clone();
         existing.dirty = true;
         let before = serde_json::to_value(&existing.doc.layers).unwrap();
         existing.photo.import_photo(photo.clone());
@@ -818,13 +1026,18 @@ mod tests {
         assert_eq!((existing.doc.width, existing.doc.height), (800.0, 600.0));
         let placed = existing.doc.layers.last().unwrap().kind.pixels().unwrap();
         assert_eq!((placed.w, placed.h), (1800, 12));
+        assert_eq!(existing.doc.color, target_color);
+        let native = placed.native.as_ref().unwrap();
+        assert_eq!(native.depth, crate::deep_color::Depth::F32);
+        assert_eq!(native.intent, 0);
+        assert_eq!(native.icc_profile.as_slice(), target_color.icc_profile.as_slice());
         assert!(existing.pending_place.is_none());
         existing.undo();
         assert_eq!(serde_json::to_value(&existing.doc.layers).unwrap(), before);
 
         let mut changed_tab = Studio::new();
         changed_tab.dirty = true;
-        changed_tab.photo.import_photo(photo);
+        changed_tab.photo.import_photo(photo.clone());
         changed_tab.send_photo_to_design();
         changed_tab.new_tab();
         let destination = serde_json::to_value(&changed_tab.doc).unwrap();
@@ -832,6 +1045,66 @@ mod tests {
         assert_eq!(serde_json::to_value(&changed_tab.doc).unwrap(), destination);
         assert!(changed_tab.photo.status.contains("destination tab changed"));
         assert!(changed_tab.pending_place.is_none());
+
+        for change_color in [false, true] {
+            let mut stale = Studio::new();
+            stale.dirty = true;
+            stale.photo.import_photo(photo.clone());
+            stale.send_photo_to_design();
+            let owner = stale.file_jobs[0].photo_placement.as_ref().unwrap().0.clone();
+            if change_color {
+                stale.doc.color.intent = 3;
+            } else {
+                stale.photo.selected_mut().unwrap().develop.exposure = 0.5;
+            }
+            let destination = serde_json::to_value(&stale.doc).unwrap();
+            finish_jobs(&mut stale);
+            assert!(owner.cancel.is_cancelled());
+            assert_eq!(serde_json::to_value(&stale.doc).unwrap(), destination);
+            assert!(stale.photo.status.contains("source or destination changed"));
+            let deadline = Instant::now() + std::time::Duration::from_secs(5);
+            while Arc::strong_count(&owner) > 1 && Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(Arc::strong_count(&owner), 1, "cancelled placement retained a worker owner");
+        }
+
+        let mut cancelled = Studio::new();
+        cancelled.dirty = true;
+        cancelled.photo.import_photo(photo.clone());
+        let destination = serde_json::to_value(&cancelled.doc).unwrap();
+        cancelled.send_photo_to_design();
+        let first = cancelled.file_jobs[0].photo_placement.as_ref().unwrap().0.clone();
+        first.cancel.cancel();
+        finish_jobs(&mut cancelled);
+        assert_eq!(serde_json::to_value(&cancelled.doc).unwrap(), destination);
+        cancelled.send_photo_to_design();
+        finish_jobs(&mut cancelled);
+        assert!(cancelled.doc.layers.last().unwrap().kind.pixels().unwrap().native.is_some());
+
+        let source = root.join("placed.dng");
+        let bytes = include_bytes!("../formats/raw/synthetic.dng");
+        std::fs::write(&source, bytes).unwrap();
+        let mut file_place = Studio::new();
+        file_place.dirty = true;
+        file_place.doc.color = crate::deep_color::cms::DocumentColor {
+            model: crate::deep_color::cms::Model::Cmyk,
+            depth: crate::deep_color::Depth::U16,
+            icc_profile: include_bytes!("../formats/psd/fixtures/fogra39l-cc0.icc").to_vec(),
+            intent: 3,
+        };
+        let color = file_place.doc.color.clone();
+        file_place.queue_import(source.clone(), ImportMode::Place);
+        finish_jobs(&mut file_place);
+        assert!(file_place.pending_place.is_some());
+        file_place.commit_place_at(Pt::new(80., 60.));
+        assert_eq!(file_place.doc.color, color);
+        let native = file_place.doc.layers.last().unwrap().kind.pixels().unwrap().native.as_ref().unwrap();
+        assert_eq!(native.depth, crate::deep_color::Depth::F32);
+        assert_eq!(native.intent, 3);
+        assert!(native.cmyk.is_some());
+        assert_eq!(native.icc_profile.as_slice(), color.icc_profile.as_slice());
+        assert_eq!(std::fs::read(source).unwrap(), bytes);
     }
 
     #[test]
@@ -880,6 +1153,9 @@ mod tests {
             mode: ImportMode::Open,
             owner: studio.swap_id.clone(),
             frame: None,
+            stage: Arc::new(Mutex::new("Opening document")),
+            started: Instant::now(),
+            photo_placement: None,
         });
         studio.poll_file_jobs(&egui::Context::default());
         assert_eq!(studio.tab_count(), 2);
@@ -925,6 +1201,9 @@ mod tests {
             mode: ImportMode::Place,
             owner: studio.swap_id.clone(),
             frame: None,
+            stage: Arc::new(Mutex::new("Opening document")),
+            started: Instant::now(),
+            photo_placement: None,
         });
         studio.poll_file_jobs(&ctx);
         studio.ingest_dropped(std::path::Path::new("ignored.oma"), None);

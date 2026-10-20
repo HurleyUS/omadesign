@@ -3,7 +3,7 @@ use crate::document::Shape;
 use crate::geom::Geom;
 use eframe::egui;
 
-pub(super) const HEIGHT: f32 = 30.0;
+pub(super) const HEIGHT: f32 = 34.0;
 
 pub(super) struct ObjectRow {
     pub index: usize,
@@ -87,7 +87,7 @@ mod tests {
                 shape
             })
             .collect();
-        shapes[1994].mask = Some(Pixels::new(2048, 2048));
+        shapes[1994].mask = Some(Pixels::new(2048, 2048).unwrap());
         let storage = shapes[1994].mask.as_ref().unwrap().data.as_ptr();
         let clip = egui::Rect::from_min_max(egui::pos2(0.0, 180.0), egui::pos2(300.0, 288.0));
         let rows = snapshot(&shapes, 0.0, clip, 6.0, Some(shapes[0].id));
@@ -208,6 +208,9 @@ mod tests {
             frame(&ctx, &mut studio, None, vec![button(from, pressed)]);
         }
         assert_eq!(studio.selection, vec![(1, id)]);
+        frame(&ctx, &mut studio, None, vec![]);
+        let rows = frame(&ctx, &mut studio, None, vec![]);
+        let from = rows.iter().find(|(text, _)| text == name).unwrap().1.center();
         let order = |studio: &Studio| {
             studio.doc.layers[1]
                 .kind
@@ -226,6 +229,7 @@ mod tests {
             None,
             vec![egui::Event::PointerMoved(from + egui::vec2(0.0, 10.0))],
         );
+        assert!(egui::DragAndDrop::has_any_payload(&ctx), "the actual selected row must start its native drag at {from:?}");
         frame(&ctx, &mut studio, None, vec![egui::Event::PointerMoved(to)]);
         frame(&ctx, &mut studio, None, vec![button(to, false)]);
         assert_ne!(

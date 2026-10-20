@@ -10,6 +10,9 @@ use eframe::egui::{
     pos2, vec2,
 };
 use std::collections::BTreeSet;
+mod geometry;
+use geometry::*;
+#[cfg(test)] mod geometry_tests;
 
 pub fn show(ui: &mut Ui, studio: &mut Studio) {
     let (_, rect) = ui.allocate_space(ui.available_size());
@@ -18,6 +21,22 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
         eframe::egui::Id::new("studio-canvas"),
         Sense::click_and_drag(),
     );
+    if resp.enabled()
+        && resp.is_pointer_button_down_on()
+        && ui.input(|input| input.pointer.any_pressed())
+        && ui.ctx().memory(|memory| memory.allows_interaction(resp.layer_id))
+    {
+        resp.request_focus();
+    }
+    resp.widget_info(|| eframe::egui::WidgetInfo::labeled(
+        eframe::egui::WidgetType::Other, resp.enabled(), "Artwork canvas"
+    ));
+    super::type_commands::restore_canvas_focus(ui, studio, &resp);
+    ui.ctx().accesskit_node_builder(resp.id, |node| {
+        node.set_role(eframe::egui::accesskit::Role::Canvas);
+        node.set_description("F8 focuses the canvas. Ctrl+Shift+K creates artwork. Page Up and Page Down select artwork; Shift extends selection. Arrow keys move selected artwork.");
+        node.set_state_description(format!("{} tool; {} objects selected", studio.tool.label(), studio.selection.len()));
+    });
     studio.canvas_rect = Some(rect);
     let text_geometry_input = super::text_geometry::brackets(ui, rect, studio) | super::text_geometry::frame_ports(ui,rect,studio);
     let text_geometry_input = text_geometry_input || super::text_geometry::area_input(studio,&resp,rect);
@@ -75,7 +94,7 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
         studio.cursor = Some(studio.view.to_world(from_egui(hp) - origin));
     }
 
-    let brand_input = super::library::canvas_drop(ui, studio, &resp);
+    let brand_input = super::library::canvas_drop(ui, studio, &resp) || super::symbols::canvas_drop(ui,studio,&resp);
     let shift = ctx.input(|i| i.modifiers.shift);
     studio.snap_override = ctrl;
 
@@ -201,7 +220,7 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
     let h = rect.height().max(1.0) as u32;
     let op_tag: u8 = match &studio.op {
         Some(Op::Brush { .. }) => 1,
-        Some(Op::Smudge { .. } | Op::Clone { .. } | Op::Retouch { .. }) => 2,
+        Some(Op::Smudge { .. } | Op::Clone { .. } | Op::NativeStroke { .. } | Op::NativeRetouch { .. } | Op::Retouch { .. }) => 2,
         _ => 0,
     };
     let play_bits = if studio.is_motion() {
@@ -224,11 +243,12 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
             .screen_tex
             .as_ref()
             .is_some_and(|t| t.size() == [w as usize, h as usize]);
+    let solo_channel=studio.channel_paint_target().is_some() && !studio.quick_mask_painting();
     let changing = interaction_objects(studio);
     if changing.is_none() {
         studio.interaction_render.clear();
     }
-    if !reuse {
+    if !reuse && !solo_channel {
         let draft = match &studio.op {
             Some(Op::Brush { layer, buf, preview, .. }) => Draft {
                 preview: None,
@@ -285,7 +305,11 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
             studio.canvas_key = Some(key);
         }
     }
-    if let Some(tex) = &studio.screen_tex {
+    if solo_channel {
+        studio.screen_tex = None;
+        studio.canvas_key = None;
+        ui.painter().rect_filled(rect, 0., super::theme::bg_canvas());
+    } else if let Some(tex) = &studio.screen_tex {
         ui.painter().image(
             tex.id(),
             rect,
@@ -294,6 +318,7 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
         );
     }
 
+    super::channels::paint_target(ui, studio, rect);
     let painter = ui.painter_at(rect);
     if studio.show_grid || studio.doc.grid.visible {
         draw_grid(&painter, rect, studio);
@@ -303,8 +328,10 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
     draw_artboard_frames(&painter, rect, studio);
     draw_layout_frames(&painter, rect, studio);
     draw_comment_pins(&painter, rect, studio);
+    super::cloud::paint_presence(&painter, rect, studio);
     draw_bleed_safe(&painter, rect, studio);
     draw_overlays(&painter, rect, studio, pen_preview);
+    super::find_replace::paint(&painter, rect, studio);
     if let Some(edit)=studio.type_edit.as_ref() && edit.caret!=edit.anchor && let Some(run)=studio.selected_type() {
         let p=crate::text::caret_pt(&run,edit.caret.min(edit.anchor));
         let at=win(rect,studio.view,Pt::new(p.x,p.y-run.px))-vec2(0.,78.);
@@ -325,6 +352,9 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
             studio.ingest_dropped(f.path(), at);
         }
     }
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect.shrink(2.), 2., ui.visuals().selection.stroke, eframe::egui::StrokeKind::Inside);
+    }
 }
 
 fn interaction_objects(studio: &Studio) -> Option<Vec<(usize, u64)>> {
@@ -336,9 +366,103 @@ fn interaction_objects(studio: &Studio) -> Option<Vec<(usize, u64)>> {
         // Resizing can move constrained siblings outside the selection; those
         // operations continue to invalidate and render the complete scene.
         Some(Op::Node { layer, id, .. } | Op::Corner { layer, id, .. }) => Some(vec![(*layer, *id)]),
-        Some(Op::Brush { layer, .. } | Op::Smudge { layer, .. } | Op::Clone { layer, .. } | Op::Retouch { layer, .. }) => Some(vec![(*layer, RASTER_ID)]),
+        Some(Op::Brush { layer, .. } | Op::NativeStroke { layer, .. } | Op::NativeRetouch { layer, .. } | Op::Smudge { layer, .. } | Op::Clone { layer, .. } | Op::Retouch { layer, .. }) => Some(vec![(*layer, RASTER_ID)]),
         _ => None,
     }
+}
+
+/// Apply explicit keyboard coordinates through the canvas tools.
+/// Args: editor, finite world points, selection modifiers and clone-source mode.
+/// Returns a target error or completes the same tool command used by a canvas gesture.
+/// Locate the existing free-transform grips in document coordinates.
+/// Args: editor with an active transform. Returns scale/skew grips followed by rotation.
+pub(super) fn keyboard_transform_handles(studio: &Studio) -> Vec<Pt> {
+    if studio.free_transform.is_none() { return vec![]; }
+    let Some(bounds) = posed_bounds(studio) else { return vec![]; };
+    let angle = selection_angle(studio);
+    (0..8).map(|index| bounds.handle(index).rotate(angle))
+        .chain(std::iter::once(bounds.rotate_handle().rotate(angle))).collect()
+}
+
+pub(super) fn keyboard_gesture(studio: &mut Studio, points: &[Pt], shift: bool, alt: bool, source: bool) -> Result<(), String> {
+    let Some(&first) = points.first() else { return Err("Enter at least one point.".into()); };
+    if points.len() > 4096 || points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite() || p.x.abs() > 1_000_000. || p.y.abs() > 1_000_000.) {
+        return Err("Use at most 4096 finite points within 1000000 px.".into());
+    }
+    if studio.op.is_some() || studio.type_edit.is_some() || studio.file_dialog_pending() || studio.updates.freezing {
+        return Err("Finish the current edit first.".into());
+    }
+    if studio.persona == Persona::Photo {
+        if studio.tool != Tool::Crop || studio.photo.is_batching() || studio.photo.show_original || studio.photo.selected().is_none() {
+            return Err("Choose an editable photo and the Crop tool.".into());
+        }
+        let Some(&last) = points.get(1) else { return Err("Crop needs two opposite corners.".into()); };
+        let before = studio.photo.selected().unwrap().develop.clone();
+        studio.commit_photo_crop(first, last);
+        if studio.photo.selected().unwrap().develop == before { return Err("Choose a crop with a larger width and height.".into()); }
+        return Ok(());
+    }
+    if matches!(studio.tool, Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal | Tool::Smudge | Tool::Fill | Tool::Wand | Tool::Marquee | Tool::EllipseMarquee | Tool::Lasso | Tool::BezierLasso)
+        && studio.raster_target().is_none()
+    { return Err("Choose a visible, unlocked pixel layer.".into()); }
+    if studio.tool == Tool::Node && !studio.primary().is_some_and(|(layer, id)| {
+        studio.doc.layer_editable(layer) && studio.doc.find_shape(layer, id).is_some_and(|shape| shape.visible && !shape.locked)
+    }) { return Err("Select a visible, unlocked vector object.".into()); }
+    if source && matches!(studio.tool, Tool::Clone | Tool::Heal) {
+        studio.clone_source = Some(first);
+        studio.status = "Source set".into();
+        return Ok(());
+    }
+    if matches!(studio.tool, Tool::Brush | Tool::Eraser | Tool::Clone | Tool::Heal | Tool::Smudge) {
+        let distance: f32 = points.windows(2).map(|pair| (pair[1] - pair[0]).length()).sum();
+        if distance / studio.brush.spacing_distance().max(0.01) > 65_536. {
+            return Err("Use a shorter stroke or fewer points.".into());
+        }
+    }
+    studio.reset_snap_gesture();
+    match studio.tool {
+        Tool::Eyedropper => studio.eyedrop(first),
+        Tool::Fill => super::retouch::fill(studio, first),
+        Tool::Wand => super::retouch::apply_wand(studio, first, super::retouch::pixel_op(shift, alt)),
+        Tool::Trace => studio.trace_active_raster(),
+        Tool::Text => {
+            if let Some(hit) = hit_shape(studio, first, 6. / studio.view.scale.max(0.01)) && is_text_hit(studio, hit) {
+                studio.begin_type_edit(hit, first);
+            } else { studio.place_text(first); }
+        }
+        Tool::Pen => {
+            if points.len() < 2 { return Err("A path needs at least two points.".into()); }
+            for &point in points { studio.pen_click(point); }
+            if let Some(Op::Pen { anchors, source, .. }) = studio.op.take() {
+                studio.finish_pen(anchors, shift, source);
+            }
+        }
+        Tool::Lasso | Tool::BezierLasso => {
+            if points.len() < 3 { return Err("A selection path needs at least three points.".into()); }
+            super::retouch::commit_lasso(studio, points, super::retouch::pixel_op(shift, alt));
+        }
+        Tool::Hand => {
+            let Some(&last) = points.get(1) else { return Err("Pan needs a start and end point.".into()); };
+            let delta = (last - first) * studio.view.scale;
+            studio.view.offset = studio.view.offset + delta;
+        }
+        Tool::Node | Tool::Artboard => {
+            if studio.tool == Tool::Node { node_press(studio, first, first, shift, alt); }
+            else { artboard_press(studio, first, first, shift, alt, false); }
+            for &point in &points[1..] { continue_drag(studio, point, shift, alt); }
+            end_drag(studio, *points.last().unwrap(), alt, false, shift);
+        }
+        _ => {
+            start_drag(studio, first, first, shift, alt);
+            if studio.op.is_none() { return Err(studio.status.clone()); }
+            for &point in &points[1..] { continue_drag(studio, point, shift, alt); }
+            if points.len() == 1 && let Some(Op::Move { selection_on_click, .. }) = &studio.op {
+                studio.selection = selection_on_click.clone();
+            }
+            end_drag(studio, *points.last().unwrap(), alt, false, shift);
+        }
+    }
+    Ok(())
 }
 
 fn win(rect: Rect, view: crate::compositor::View, world: Pt) -> Pos2 {
@@ -403,6 +527,7 @@ fn pen_snap_point(studio: &mut Studio, point: Pt, modifiers: eframe::egui::Modif
 }
 
 fn handle_pointer(studio: &mut Studio, resp: &eframe::egui::Response, space: bool) {
+    if super::channel_adjustment::is_open(&resp.ctx) || super::quick_mask::is_open(&resp.ctx) { return; }
     if space {
         return;
     }
@@ -783,7 +908,9 @@ fn handle_pointer(studio: &mut Studio, resp: &eframe::egui::Response, space: boo
         .input(|i| i.pointer.button_down(PointerButton::Primary));
     if studio.op.is_some()
         && primary_down
-        && (resp.dragged_by(PointerButton::Primary) || pointer_down_starts_op(studio.tool, alt))
+        && (resp.dragged_by(PointerButton::Primary)
+            || (pointer_down_starts_op(studio.tool, alt)
+                && !matches!(studio.op, Some(Op::Move { .. }))))
     {
         continue_drag(studio, pick, shift, alt);
     }
@@ -810,7 +937,7 @@ fn handle_pointer(studio: &mut Studio, resp: &eframe::egui::Response, space: boo
 }
 
 fn pixel_stroke_active(studio: &Studio) -> bool {
-    matches!(studio.op, Some(Op::Brush { .. } | Op::Retouch { .. } | Op::Smudge { .. } | Op::Clone { .. }))
+    matches!(studio.op, Some(Op::ChannelStroke(_) | Op::Brush { .. } | Op::NativeStroke { .. } | Op::NativeRetouch { .. } | Op::Retouch { .. } | Op::Smudge { .. } | Op::Clone { .. }))
 }
 
 // Egui can receive several pointer positions between paints. Processing only
@@ -930,6 +1057,10 @@ fn is_text_hit(studio: &Studio, hit: (usize, u64)) -> bool {
 }
 
 fn start_drag(studio: &mut Studio, pick: Pt, snap: Pt, shift: bool, alt: bool) {
+    if (studio.channel_target.is_some() || studio.quick_mask_painting()) && matches!(studio.tool, Tool::Brush | Tool::Eraser) {
+        studio.start_channel_stroke(pick, studio.tool == Tool::Eraser);
+        return;
+    }
     let _ = alt;
     if studio.is_motion() {
         studio.playing = false;
@@ -1060,7 +1191,7 @@ fn start_drag(studio: &mut Studio, pick: Pt, snap: Pt, shift: bool, alt: bool) {
                     && matches!(shape.geom, Geom::Path { .. } | Geom::Paths { .. })
                 {
                     let slack = 8.0 / studio.view.scale.max(0.01);
-                    if let Some(hit) = hit_edit_node(&shape.geom, shape.local_point(pick), slack) {
+                    if let Some(hit) = hit_shape_node(studio, li, shape, pick, slack) {
                         match hit {
                             NodeHit::Point(i) => {
                                 if shift {
@@ -1483,7 +1614,7 @@ fn selection_angle(studio: &Studio) -> f32 {
                 .raster_xform()
                 .map(|(_, _, r)| r)
         } else {
-            studio.doc.find_shape(*li, *id).map(|s| s.rotation)
+            studio.doc.find_shape(*li, *id).map(|s| s.rotation + parent_angle(studio, *li, s))
         }
     });
     let angle = angles.next().unwrap_or(0.0);
@@ -1527,15 +1658,17 @@ fn posed_bounds(studio: &Studio) -> Option<Bounds> {
             })
         } else {
             studio.doc.find_shape(*li, *id).map(|s| {
-                if studio.is_motion() {
-                    studio.live_pose(*id).map_bounds(s.world_bbox())
-                } else if angle.abs() < 1e-5 {
-                    s.world_bbox()
-                } else {
-                    let bounds = s.geom.bbox();
-                    let offset = bounds.center().rotate(-angle) - bounds.center();
-                    Bounds { min: bounds.min + offset, max: bounds.max + offset }
+                if s.layout.parent.is_none() {
+                    return if studio.is_motion() { studio.live_pose(*id).map_bounds(s.world_bbox()) }
+                    else if angle.abs() < 1e-5 { s.world_bbox() }
+                    else { let bounds = s.geom.bbox(); let offset = bounds.center().rotate(-angle) - bounds.center(); Bounds { min: bounds.min + offset, max: bounds.max + offset } };
                 }
+                let transform = shape_transform(studio, *li, s);
+                let bounds = s.geom.bbox();
+                let corners = [bounds.min, Pt::new(bounds.max.x, bounds.min.y), bounds.max, Pt::new(bounds.min.x, bounds.max.y)];
+                let mut placed = Bounds::from_pt(map_point(transform, corners[0]).rotate(-angle));
+                for point in corners { placed.union_pt(map_point(transform, point).rotate(-angle)); }
+                placed
             })
         };
         let Some(bb) = bb else {
@@ -1605,25 +1738,6 @@ fn hit_node(anchors: &[Anchor], world: Pt, slack: f32, closed: bool) -> Option<N
     None
 }
 
-fn hit_edit_node(geom: &Geom, point: Pt, slack: f32) -> Option<NodeHit> {
-    let mut offset = 0;
-    let mut segment = None;
-    for (anchors, closed) in geom.path_contours() {
-        if let Some(hit) = hit_node(anchors, point, slack, closed) {
-            match hit {
-                NodeHit::Point(i) => return Some(NodeHit::Point(offset + i)),
-                NodeHit::HandleIn(i) => return Some(NodeHit::HandleIn(offset + i)),
-                NodeHit::HandleOut(i) => return Some(NodeHit::HandleOut(offset + i)),
-                NodeHit::Segment(i) => {
-                    segment = Some(NodeHit::Segment(offset + i));
-                }
-            }
-        }
-        offset += anchors.len();
-    }
-    segment
-}
-
 /// Grab a point or Bézier handle on pointer down, before egui decides it's a drag.
 fn node_press(studio: &mut Studio, pick: Pt, snap: Pt, shift: bool, alt: bool) {
     let _ = (snap, alt);
@@ -1645,7 +1759,7 @@ fn node_press(studio: &mut Studio, pick: Pt, snap: Pt, shift: bool, alt: bool) {
         return;
     }
     let slack = 8.0 / studio.view.scale.max(0.01);
-    let Some(hit) = hit_edit_node(&shape.geom, shape.local_point(pick), slack) else {
+    let Some(hit) = hit_shape_node(studio, li, shape, pick, slack) else {
         grab_corner(studio, pick, alt);
         return;
     };
@@ -1820,7 +1934,7 @@ fn hit_corner(studio: &Studio, world: Pt) -> Option<(usize, u64, Option<usize>)>
     match &s.geom {
         Geom::Rect { origin, size, .. } => {
             let widgets =
-                crate::geom::corner_widgets(*origin, *size).map(|point| s.world_point(point));
+                crate::geom::corner_widgets(*origin, *size).map(|point| map_point(shape_transform(studio, li, s), point));
             if studio.tool == Tool::Select {
                 for w in widgets {
                     if (w - world).length() <= slack {
@@ -1840,7 +1954,7 @@ fn hit_corner(studio: &Studio, world: Pt) -> Option<(usize, u64, Option<usize>)>
             for (i, a) in s.geom.anchors().enumerate() {
                 {
                     let dir = Pt::new(14.0, 14.0) / studio.view.scale.max(0.01);
-                    if (s.world_point(a.pt) + dir - world).length()
+                    if (map_point(shape_transform(studio, li, s), a.pt) + dir - world).length()
                         <= 5.0 / studio.view.scale.max(0.01)
                     {
                         return Some((li, id, Some(i)));
@@ -1896,6 +2010,18 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
         };
         studio.shear_selection(horizontal, amount);
     }
+    let motion_frames = if studio.is_motion() {
+        match &studio.op { Some(Op::Move { orig, .. } | Op::Resize { orig, .. } | Op::Rotate { orig, .. }) => motion_parents(studio,orig), _ => Default::default() }
+    } else { Default::default() };
+    let node_placement = match &studio.op {
+        Some(Op::Node { layer, id, orig, .. } | Op::Corner { layer, id, orig_geom: orig, .. }) => {
+            studio.doc.find_shape(*layer, *id).map(|shape| {
+                let mut original = shape.clone(); original.geom = orig.clone();
+                shape_transform(studio, *layer, &original)
+            })
+        }
+        _ => None,
+    };
     match &mut studio.op {
         Some(Op::Create {
             start,
@@ -1941,6 +2067,8 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
             if studio.persona == Persona::Motion {
                 studio.playing = false;
                 for snap in orig.iter() {
+                    let Some(inverse) = motion_frames.get(&(snap.layer,snap.id)).and_then(|parent| parent.invert()) else { continue; };
+                    let d = map_point(inverse,d)-map_point(inverse,Pt::ZERO);
                     let Some(target) = crate::motion::target(&studio.doc, snap.layer, snap.id)
                     else {
                         continue;
@@ -2102,15 +2230,24 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                 let sy = dst.height() / start_box.height().max(1.0);
                 let f = if shift { sx.max(sy) } else { (sx + sy) * 0.5 };
                 for snap in orig.iter() {
+                    let Some(parent) = motion_frames.get(&(snap.layer,snap.id)).copied() else { continue; };
+                    let Some(inverse) = parent.invert() else { continue; };
                     let Some(target) = crate::motion::target(&studio.doc, snap.layer, snap.id)
                     else {
                         continue;
                     };
                     let mut pose = studio.doc.motion.pose(target.id, studio.playhead);
+                    let local_center = target.bounds.center() + Pt::new(pose.dx,pose.dy);
+                    let world_center = map_point(parent,local_center);
+                    let new_center = start_box.min + (world_center-start_box.min)*f;
+                    let delta = map_point(inverse,new_center)-local_center;
+                    pose.dx += delta.x;pose.dy += delta.y;
                     pose.scale = (pose.scale * f).clamp(0.05, 32.0);
                     studio.pose_drag.insert(target.id, pose);
                 }
             } else {
+                let nested = orig.iter().any(|snap| studio.doc.find_shape(snap.layer, snap.id).is_some_and(|shape| shape.layout.parent.is_some() || shape.layout.frame));
+                if nested { nested_resize(&mut studio.doc, orig, *start_box, dst, *angle); }
                 for snap in orig.iter() {
                     if snap.id == RASTER_ID {
                         let nb = Bounds {
@@ -2130,7 +2267,7 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                                 snap.rot,
                             );
                         }
-                    } else if let (Some(geom), Some(s)) = (
+                    } else if !nested && let (Some(geom), Some(s)) = (
                         snap.geom.clone(),
                         studio.doc.find_shape_mut(snap.layer, snap.id),
                     ) {
@@ -2181,15 +2318,27 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
             if studio.persona == Persona::Motion {
                 studio.playing = false;
                 for snap in orig.iter() {
+                    let Some(parent) = motion_frames.get(&(snap.layer,snap.id)).copied() else { continue; };
+                    let Some(inverse) = parent.invert() else { continue; };
                     let Some(target) = crate::motion::target(&studio.doc, snap.layer, snap.id)
                     else {
                         continue;
                     };
                     let mut pose = studio.doc.motion.pose(target.id, studio.playhead);
-                    pose.rotation += ang;
+                    let local_center = map_point(inverse,*center);
+                    let ray = Pt::new(start_angle.cos(),start_angle.sin());
+                    let start = map_point(inverse,*center+ray)-local_center;
+                    let end = map_point(inverse,*center+ray.rotate(ang))-local_center;
+                    let local_angle = end.y.atan2(end.x)-start.y.atan2(start.x);
+                    let before = target.bounds.center()+Pt::new(pose.dx,pose.dy);
+                    let delta = before.rotate_about(local_center,local_angle)-before;
+                    pose.dx += delta.x;pose.dy += delta.y;
+                    pose.rotation += local_angle;
                     studio.pose_drag.insert(target.id, pose);
                 }
             } else {
+                let nested = orig.iter().any(|snap| studio.doc.find_shape(snap.layer, snap.id).is_some_and(|shape| shape.layout.parent.is_some() || shape.layout.frame));
+                if nested { nested_rotate(&mut studio.doc, orig, *center, ang); }
                 for snap in orig.iter() {
                     if snap.id == RASTER_ID {
                         let c0 = snap.origin + snap.size * 0.5;
@@ -2201,7 +2350,7 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                                 snap.rot + ang,
                             );
                         }
-                    } else if let (Some(geom), Some(s)) = (
+                    } else if !nested && let (Some(geom), Some(s)) = (
                         snap.geom.clone(),
                         studio.doc.find_shape_mut(snap.layer, snap.id),
                     ) {
@@ -2230,7 +2379,8 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
             if let Some(s) = studio.doc.find_shape_mut(layer, id) {
                 let center = orig.bbox().center();
                 let rotation = s.rotation;
-                let local = world.rotate_about(center, -rotation);
+                let Some(inverse) = node_placement.and_then(|placement| placement.invert()) else { return; };
+                let local = map_point(inverse, world);
                 s.geom = orig;
                 {
                     match which {
@@ -2258,11 +2408,11 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                         }
                         NodeHit::HandleIn(i) => {
                             if let Some(a) = s.geom.anchor_mut(i) {
-                                let mut h = world - a.pt.rotate_about(center, rotation);
+                                let mut h = map_point(node_placement.unwrap(), local) - map_point(node_placement.unwrap(), a.pt);
                                 if shift {
                                     h = crate::geom::constrain_45(h);
                                 }
-                                h = h.rotate(-rotation);
+                                h = map_point(inverse, map_point(node_placement.unwrap(), a.pt) + h) - a.pt;
                                 a.h_in = h;
                                 if !alt {
                                     a.h_out = -a.h_in;
@@ -2271,11 +2421,11 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                         }
                         NodeHit::HandleOut(i) => {
                             if let Some(a) = s.geom.anchor_mut(i) {
-                                let mut h = world - a.pt.rotate_about(center, rotation);
+                                let mut h = map_point(node_placement.unwrap(), local) - map_point(node_placement.unwrap(), a.pt);
                                 if shift {
                                     h = crate::geom::constrain_45(h);
                                 }
-                                h = h.rotate(-rotation);
+                                h = map_point(inverse, map_point(node_placement.unwrap(), a.pt) + h) - a.pt;
                                 a.h_out = h;
                                 if !alt {
                                     a.h_in = -a.h_out;
@@ -2288,6 +2438,9 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
             }
         }
         Some(Op::Brush { .. }) => super::retouch::brush_drag(studio, world),
+        Some(Op::NativeRetouch { .. }) => super::retouch::native_retouch_drag(studio, world),
+        Some(Op::NativeStroke { .. }) => super::retouch::native_drag(studio, world),
+        Some(Op::ChannelStroke(_)) => studio.drag_channel_stroke(world),
         Some(Op::Retouch { .. }) => super::retouch::drag(studio, world),
         Some(Op::Smudge { .. }) => super::retouch::smudge_drag(studio, world),
         Some(Op::Clone { .. }) => super::retouch::clone_drag(studio, world),
@@ -2324,7 +2477,9 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
             let orig_corners = *orig_corners;
             let orig_radius = *orig_radius;
             let orig_geom = orig_geom.clone();
-            let start = *start;
+            let Some(inverse) = node_placement.and_then(|placement| placement.invert()) else { return; };
+            let start = map_point(inverse, *start);
+            let world = map_point(inverse, world);
             if let Some(s) = studio.doc.find_shape_mut(layer, id) {
                 s.geom = orig_geom;
                 let dist = (world - start).length();
@@ -2498,6 +2653,10 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
 fn end_drag(studio: &mut Studio, world: Pt, alt: bool, ctrl: bool, shift: bool) {
     studio.reset_snap_gesture();
     match studio.op.take() {
+        Some(op @ (Op::ChannelStroke(_) | Op::Brush { .. } | Op::NativeStroke { .. } | Op::NativeRetouch { .. } | Op::Retouch { .. } | Op::Smudge { .. } | Op::Clone { .. })) => {
+            studio.op = Some(op);
+            studio.end_pixel_stroke(false);
+        }
         Some(Op::Create {
             kind,
             start,
@@ -2556,7 +2715,7 @@ fn end_drag(studio: &mut Studio, world: Pt, alt: bool, ctrl: bool, shift: bool) 
             };
             if let Some((li, id)) = studio.primary()
                 && let Some(s) = studio.doc.find_shape(li, id)
-                && let Some(anchors) = s.world_anchors()
+                && let Some(anchors) = posed_anchors(studio, li, s)
             {
                 if !shift {
                     studio.node_sel.clear();
@@ -2670,51 +2829,6 @@ fn end_drag(studio: &mut Studio, world: Pt, alt: bool, ctrl: bool, shift: bool) 
             }
             commit_canvas_commands(studio, commands);
         }
-        Some(Op::Brush {
-            layer,
-            mut buf,
-            before,
-            ..
-        }) => {
-            if let Some(mask) = studio.pixel_sel_mask(layer) {
-                paint::feather_overlay(&mut buf, &mask);
-            }
-            if let Some(px) = studio
-                .doc
-                .layers
-                .get_mut(layer)
-                .and_then(|l| l.kind.pixels_mut())
-                && let Some(mut pm) = px.to_pixmap()
-            {
-                paint::blend_onto(&mut pm, &buf, studio.brush.opacity);
-                *px = crate::document::Pixels::from_pixmap(&pm);
-                let after = px.data.clone();
-                studio.history.push(crate::document::Cmd::Pixels {
-                    layer,
-                    mask: false,
-                    before,
-                    after,
-                });
-                studio.dirty = true;
-            }
-        }
-        Some(Op::Retouch {
-            layer,
-            mask,
-            before,
-            ..
-        }) => super::retouch::finish(studio, layer, mask, before),
-        Some(Op::Smudge { layer, before, .. }) | Some(Op::Clone { layer, before, .. }) => {
-            if let Some(px) = studio.doc.layers.get(layer).and_then(|l| l.kind.pixels()) {
-                studio.history.push(crate::document::Cmd::Pixels {
-                    layer,
-                    mask: false,
-                    before,
-                    after: px.data.clone(),
-                });
-                studio.dirty = true;
-            }
-        }
         Some(Op::Marquee {
             start,
             cur,
@@ -2764,8 +2878,8 @@ fn end_drag(studio: &mut Studio, world: Pt, alt: bool, ctrl: bool, shift: bool) 
                 && let Some(s) = studio.doc.find_shape(li, id)
             {
                 let b = s.geom.bbox();
-                let start = s.local_point(start);
-                let cur = s.local_point(cur);
+                let Some(start) = local_point(studio, li, s, start) else { return; };
+                let Some(cur) = local_point(studio, li, s, cur) else { return; };
                 let from = [
                     (start.x - b.min.x) / b.width().max(1.),
                     (start.y - b.min.y) / b.height().max(1.),
@@ -2820,8 +2934,8 @@ fn node_click(studio: &mut Studio, world: Pt, alt: bool) {
         if let Some(shape) = studio.doc.find_shape(li, id) {
             let orig = shape.geom.clone();
             let rot = shape.rotation;
-            let point = shape.local_point(world);
-            if let Some(hit) = hit_edit_node(&orig, point, slack) {
+            let Some(point) = local_point(studio, li, shape, world) else { return; };
+            if let Some(hit) = hit_shape_node(studio, li, shape, world, slack) {
                 let mut after = orig.clone();
                 match hit {
                     NodeHit::Point(i) if alt => {
@@ -2942,22 +3056,12 @@ fn draw_layout_frames(p: &eframe::egui::Painter, rect: Rect, studio: &Studio) {
             if shape.layout.parent.is_some() && !on {
                 continue;
             }
-            let b = shape.world_bbox();
-            let a = win(rect, studio.view, b.min);
-            let c = win(rect, studio.view, b.max);
-            p.rect_stroke(
-                Rect::from_two_pos(a, c),
-                0.0,
-                Stroke::new(
-                    if on { 1.6 } else { 1.0 },
-                    if on {
-                        accent()
-                    } else {
-                        Color32::from_rgb(140, 150, 165)
-                    },
-                ),
-                eframe::egui::StrokeKind::Outside,
-            );
+            let b = shape.geom.bbox();
+            let transform = shape_transform(studio, li, shape);
+            let points: Vec<_> = [b.min, Pt::new(b.max.x, b.min.y), b.max, Pt::new(b.min.x, b.max.y), b.min]
+                .into_iter().map(|point| win(rect, studio.view, map_point(transform, point))).collect();
+            let a = points[0];
+            p.add(eframe::egui::Shape::line(points, Stroke::new(if on { 1.6 } else { 1.0 }, if on { accent() } else { fg_weak() })));
             p.text(
                 a + vec2(2.0, -5.0),
                 eframe::egui::Align2::LEFT_BOTTOM,
@@ -3142,6 +3246,7 @@ fn paint_brush_ring(p: &eframe::egui::Painter, rect: Rect, studio: &Studio) {
     let Some(world) = studio.cursor else {
         return;
     };
+    if super::channels::paint_brush_outline(p, rect, studio, world) { return; }
     let center = win(rect, studio.view, world);
     if !rect.contains(center) {
         return;
@@ -3182,6 +3287,10 @@ fn draw_overlays(
     pen_preview: Option<Pt>,
 ) {
     paint_brush_ring(p, rect, studio);
+    if studio.channel_paint_target().is_some() {
+        draw_pixel_sel(p, rect, studio);
+        return;
+    }
     let v = studio.view;
     if let Some(Op::Create {
         kind,
@@ -3243,15 +3352,16 @@ fn draw_overlays(
         } else {
             studio
                 .primary()
-                .and_then(|(li, id)| studio.doc.find_shape(li, id))
-                .and_then(|s| {
+                .and_then(|(li, id)| studio.doc.find_shape(li, id).map(|s| (li, s)))
+                .and_then(|(li, s)| {
                     let gradient = if studio.fill_active {
                         s.style.fill.gradient()
                     } else {
                         s.style.stroke.as_ref().and_then(|s| s.gradient.clone())
                     }?;
                     let (a, b) = gradient.endpoints(s.geom.bbox());
-                    Some((s.world_point(a), s.world_point(b)))
+                    let transform = shape_transform(studio, li, s);
+                    Some((map_point(transform, a), map_point(transform, b)))
                 })
         };
         if let Some((a, b)) = endpoints {
@@ -3313,9 +3423,11 @@ fn draw_overlays(
             continue;
         }
         if let Some(s) = studio.doc.find_shape(*li, *id) {
-            stroke_world_posed(p, rect, s, v, studio.live_pose(*id));
+            let placement = compositor::shape_parent_transform_with(&studio.doc, *li, s.id, |id| studio.live_pose(id))
+                .pre_concat(studio.live_pose(s.id).to_skia(s.world_bbox().center()));
+            stroke_world_posed(p, rect, s, v, placement);
             if studio.tool == Tool::Node
-                && let Some(anchors) = s.world_anchors()
+                && let Some(anchors) = posed_anchors(studio, *li, s)
             {
                 draw_nodes(p, rect, &anchors, v, &studio.node_sel);
             }
@@ -3324,7 +3436,7 @@ fn draw_overlays(
                 && let Geom::Rect { origin, size, .. } = &s.geom
             {
                 for w in crate::geom::corner_widgets(*origin, *size) {
-                    let sp = win(rect, v, s.world_point(w));
+                    let sp = win(rect, v, map_point(shape_transform(studio, *li, s), w));
                     p.circle_filled(sp, 4.0, accent());
                 }
             }
@@ -3391,10 +3503,11 @@ fn draw_overlays(
         ));
     }
     let owns_ime = studio.owns_type_ime(p.ctx());
-    if !owns_ime {
+    if !owns_ime && !super::find_replace::is_open(p.ctx()) && !super::find_font::is_open(p.ctx()) {
         studio.cancel_type_ime();
     }
     let edit = studio.type_edit.clone();
+    let motion = studio.is_motion();
     if let Some(edit) = edit {
         let preview = crate::app::type_ime::Preview::new(&mut studio.doc, Some(&edit));
         let start = edit.caret.min(edit.anchor);
@@ -3421,9 +3534,8 @@ fn draw_overlays(
                     if let Some(area) = draw_type_caret(
                         p,
                         rect,
-                        &preview,
+                        shape_transform_with(&preview, li, shape, |id| studio.pose_drag.get(&id).copied().unwrap_or_else(|| if motion { preview.motion.pose(id, studio.playhead) } else { crate::motion::Pose::identity() })),
                         studio.view,
-                        li,
                         shape,
                         caret,
                         anchor,
@@ -3451,14 +3563,61 @@ fn draw_overlays(
             edit.ime.interrupt = false;
         }
     }
+    if studio.hidden_characters {
+        draw_hidden_characters(p, rect, studio);
+    }
+}
+
+fn draw_hidden_characters(p: &eframe::egui::Painter, rect: Rect, studio: &Studio) {
+    let color = Color32::from_rgb(0x4f, 0x9d, 0xff);
+    let font = eframe::egui::FontId::proportional((10. * studio.view.scale).clamp(7., 18.));
+    for (li, layer) in studio.doc.layers.iter().enumerate() {
+        if !studio.doc.layer_visible(li) {
+            continue;
+        }
+        for shape in layer.kind.shapes().unwrap_or(&[]) {
+            if !shape.visible {
+                continue;
+            }
+            let Geom::Text(run) = &shape.geom else {
+                continue;
+            };
+            let transform = shape_transform(studio, li, shape);
+            let screen = |point: Pt| win(rect, studio.view, map_point(transform, point));
+            for mark in crate::text::hidden_marks(run) {
+                match mark {
+                    crate::text::HiddenMark::Dot(at) => {
+                        p.circle_filled(screen(at), 1.2, color);
+                    }
+                    crate::text::HiddenMark::Paragraph(at) => {
+                        p.text(
+                            screen(at),
+                            eframe::egui::Align2::LEFT_BOTTOM,
+                            "¶",
+                            font.clone(),
+                            color,
+                        );
+                    }
+                    crate::text::HiddenMark::Story(at) => {
+                        p.text(
+                            screen(at),
+                            eframe::egui::Align2::LEFT_BOTTOM,
+                            "#",
+                            font.clone(),
+                            color,
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn draw_type_caret(
     p: &eframe::egui::Painter,
     rect: Rect,
-    doc: &crate::document::Document,
+    transform: tiny_skia::Transform,
     v: crate::compositor::View,
-    layer: usize,
     shape: &crate::document::Shape,
     caret: usize,
     anchor: usize,
@@ -3467,22 +3626,7 @@ fn draw_type_caret(
     let Geom::Text(run) = &shape.geom else {
         return None;
     };
-    let screen = |point| {
-        let mut point = shape.world_point(point);
-        let mut parent = shape.layout.parent;
-        let mut visited = std::collections::HashSet::new();
-        while let Some(id) = parent {
-            if !visited.insert(id) || visited.len() > 64 {
-                break;
-            }
-            let Some(frame) = doc.find_shape(layer, id) else {
-                break;
-            };
-            point = frame.world_point(point);
-            parent = frame.layout.parent;
-        }
-        win(rect, v, point)
-    };
+    let screen = |point| win(rect, v, map_point(transform, point));
     if let Some(quads) = crate::text_geometry::selection_quads(run, caret, anchor) {
         for quad in quads {
             p.add(eframe::egui::Shape::convex_polygon(
@@ -3524,13 +3668,8 @@ fn draw_type_caret(
     let visible = run.layout.as_ref().is_none_or(|l| {
         run.frame.is_none() || (caret >= l.visible_start && caret <= l.visible_end)
     });
-    let c = crate::text::caret_pt(run, caret);
-    let height = crate::text::caret_height(run, caret);
-    let tangent = crate::text_geometry::caret_frame(run, caret)
-        .map(|(_, t)| t)
-        .unwrap_or(Pt::new(1., 0.));
-    let top = screen(c - tangent.perp() * height * 0.9);
-    let bot = screen(c + tangent.perp() * height * 0.2);
+    let (top,bot)=crate::text::caret_segment(run,caret);
+    let (top,bot)=(screen(top),screen(bot));
     let area = Rect::from_two_pos(top, bot).expand(1.0);
     let phase = (p.ctx().input(|i| i.time) * 2.0).fract();
     let on = phase < 0.5
@@ -3541,13 +3680,8 @@ fn draw_type_caret(
     p.ctx()
         .request_repaint_after(std::time::Duration::from_secs_f64(next * 0.5 + 0.001));
     if on {
-        let c = crate::text::caret_pt(run, caret);
-        let height = crate::text::caret_height(run, caret);
-        let tangent = crate::text_geometry::caret_frame(run, caret)
-            .map(|(_, t)| t)
-            .unwrap_or(Pt::new(1., 0.));
-        let top = screen(c - tangent.perp() * height * 0.9);
-        let bot = screen(c + tangent.perp() * height * 0.2);
+        let (top,bot)=crate::text::caret_segment(run,caret);
+        let (top,bot)=(screen(top),screen(bot));
         p.line_segment([top, bot], Stroke::new(1.5, select()));
     }
     visible.then_some(area)
@@ -3557,8 +3691,8 @@ fn draw_pixel_sel(p: &eframe::egui::Painter, rect: Rect, studio: &Studio) {
     let preview = super::pixel_selection::canvas_preview(p.ctx(), studio);
     let Some(mask) = preview
         .as_ref()
-        .map(|(v, _, _)| v.as_ref())
-        .or(studio.pixel_sel.as_ref())
+        .map(|(v, _, _)| v.as_slice())
+        .or_else(|| studio.pixel_sel.as_ref().map(|values| values.as_slice()))
     else {
         return;
     };
@@ -3789,6 +3923,13 @@ fn context_menu(resp: &eframe::egui::Response, studio: &mut Studio) {
             studio.group_selected();
             ui.close();
         }
+        if ui
+            .add_enabled(studio.can_group_selection(), eframe::egui::Button::new("Group from Layers…"))
+            .clicked()
+        {
+            super::layer_group::open(ui.ctx(), studio);
+            ui.close();
+        }
         if ui.button("Ungroup     Ctrl+Shift+G").clicked() {
             studio.ungroup_selected();
             ui.close();
@@ -3870,13 +4011,12 @@ fn stroke_world_posed(
     rect: Rect,
     s: &crate::document::Shape,
     view: crate::compositor::View,
-    pose: crate::motion::Pose,
+    transform: tiny_skia::Transform,
 ) {
-    let c = s.world_bbox().center();
     for contour in s.world_contours(64) {
         let pts: Vec<Pos2> = contour
             .iter()
-            .map(|q| win(rect, view, pose.map(c, *q)))
+            .map(|q| win(rect, view, map_point(transform, *q)))
             .collect();
         if pts.len() >= 2 {
             p.add(eframe::egui::Shape::line(
@@ -4194,6 +4334,31 @@ mod tests {
         studio.dirty = false;
         canvas_frame(&ctx, &mut studio, vec![]);
         (ctx, studio, [first, second])
+    }
+
+    #[test]
+    fn selection_click_keeps_off_grid_artwork_exact_until_an_actual_drag() {
+        use eframe::egui::{Event,Modifiers};
+        for batched in [false,true] {
+            for already_selected in [false,true] {
+                let (ctx,mut studio,[first,_])=selection_input_studio();
+                studio.doc.find_shape_mut(first.0,first.1).unwrap().geom.translate(Pt::new(0.25,0.5));
+                studio.snap=crate::snap::SnapSettings{enabled:true,grid:true,guides:false,objects:false,artboards:false,spacing:false,threshold:6.};
+                studio.selection=if already_selected{vec![first]}else{vec![]};
+                studio.dirty=false;
+                canvas_frame(&ctx,&mut studio,vec![]);
+                let before=crate::project::encode(&studio.doc).unwrap();let history=studio.history.len();
+                let at=studio.canvas_rect.unwrap().min+vec2(70.25,80.5);
+                let mut down=vec![Event::PointerMoved(at),pen_pointer_button(at,true,Modifiers::NONE)];
+                let up=vec![pen_pointer_button(at,false,Modifiers::NONE)];
+                if batched {down.extend(up);canvas_frame(&ctx,&mut studio,down);}
+                else {canvas_frame(&ctx,&mut studio,down);canvas_frame(&ctx,&mut studio,vec![]);canvas_frame(&ctx,&mut studio,up);}
+                canvas_frame(&ctx,&mut studio,vec![]);
+                assert_eq!(studio.selection,vec![first]);assert!(studio.op.is_none());
+                assert_eq!(crate::project::encode(&studio.doc).unwrap(),before,"batched={batched}, selected={already_selected}");
+                assert_eq!(studio.history.len(),history);assert!(!studio.dirty);
+            }
+        }
     }
 
     #[test]
@@ -4793,7 +4958,7 @@ mod tests {
     fn new_brush_strokes_get_independent_random_patterns() {
         let (_, mut s) = pen_input_studio();
         s.tool = Tool::Brush;
-        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300)];
+        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300).unwrap()];
         s.active_layer = Some(0);
         s.brush.size = 30.;
         s.brush.scatter = 2.;
@@ -4816,7 +4981,7 @@ mod tests {
         use eframe::egui::{Event, Modifiers, TouchDeviceId, TouchId, TouchPhase};
         let (ctx, mut s) = pen_input_studio();
         s.tool = Tool::Brush;
-        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300)];
+        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300).unwrap()];
         s.active_layer = Some(0);
         s.view.offset = Pt::ZERO;
         s.view.scale = 1.;
@@ -4942,11 +5107,73 @@ mod tests {
     }
 
     #[test]
+    fn craft_channel_paint_real_canvas_pointer_release_escape_and_grayscale_target() {
+        use eframe::egui::{Event, Modifiers};
+        let (ctx, mut s)=pen_input_studio();
+        s.doc.width=400.;s.doc.height=300.;s.view.offset=Pt::ZERO;
+        s.doc.channels.push(crate::channels::Channel{id:crate::document::next_id(),name:"Pointer alpha".into(),spot:None,plane:crate::channels::Plane{width:400,height:300,transform:[1.,0.,0.,1.,0.,0.],samples:crate::deep_color::storage::collect(std::iter::repeat_n(0.25,400*300)).unwrap()}});
+        s.brushes.selected=None;s.brush.size=12.;s.brush.color=crate::color::Rgba::WHITE;s.brush.opacity=0.8;
+        s.select_channel_target(Some(s.doc.channels[0].id)).unwrap();
+        canvas_frame(&ctx,&mut s,vec![]);
+        let before=crate::project::encode(&s.doc).unwrap();let n=s.history.len();
+        let pos=Pos2::new(80.,80.);let end=Pos2::new(140.,100.);
+        let world=s.view.pointer_to_world(from_egui(s.canvas_rect.unwrap().min),from_egui(pos));
+        let sample=world.y.floor() as usize*400+world.x.floor() as usize;
+        canvas_frame(&ctx,&mut s,vec![Event::PointerMoved(pos),pen_pointer_button(pos,true,Modifiers::NONE)]);
+        assert!(matches!(s.op,Some(Op::ChannelStroke(_))));
+        canvas_frame(&ctx,&mut s,vec![Event::PointerMoved(end),pen_pointer_button(end,false,Modifiers::NONE)]);
+        assert!(s.op.is_none());assert_eq!(s.history.len(),n+1);
+        let after=crate::project::encode(&s.doc).unwrap();assert_ne!(before,after);
+        assert!(s.doc.layers[0].kind.shapes().unwrap().is_empty());
+        assert!(s.doc.channels[0].plane.samples[sample]>0.25);
+        s.undo();assert_eq!(crate::project::encode(&s.doc).unwrap(),before);s.redo();assert_eq!(crate::project::encode(&s.doc).unwrap(),after);
+        canvas_frame(&ctx,&mut s,vec![Event::PointerMoved(pos),pen_pointer_button(pos,true,Modifiers::NONE)]);s.end_pixel_stroke(true);assert_eq!(crate::project::encode(&s.doc).unwrap(),after);
+        s.set_tool(Tool::Select);canvas_frame(&ctx,&mut s,vec![]);assert!(s.channel_paint_target().is_none());
+        assert_eq!(crate::project::encode(&crate::project::decode(&after).unwrap()).unwrap(),after);
+    }
+
+    #[test]
+    fn craft_quick_mask_actual_canvas_q_pointer_escape_undo_and_selection_return() {
+        use eframe::egui::{Event,Key,Modifiers};
+        let (ctx,mut s)=pen_input_studio();s.persona=crate::tools::Persona::Pixel;s.tool=Tool::Brush;s.view.offset=Pt::ZERO;s.brushes.selected=None;s.brush.size=12.;s.brush.opacity=0.8;
+        s.doc.layers[0].kind.shapes_mut().unwrap().push(crate::document::Shape::new(Geom::Rect {origin:Pt::new(40.,40.),size:Pt::new(160.,80.),radius:0.},crate::document::Style::default()));
+        let frame=|s:&mut Studio,events| {
+            let mut output=ctx.run_ui(eframe::egui::RawInput {screen_rect:Some(Rect::from_min_size(Pos2::ZERO,vec2(400.,300.))),events,..Default::default()},|ui|{s.handle_shortcuts(ui.ctx());show(ui,s);});
+            fn drawn(shape:&eframe::egui::Shape,id:eframe::egui::TextureId)->bool {match shape {eframe::egui::Shape::Mesh(mesh)=>mesh.texture_id==id,eframe::egui::Shape::Vec(shapes)=>shapes.iter().any(|s|drawn(s,id)),_=>false}}
+            let texture=s.screen_tex.as_ref().map(|t|t.id());
+            fn overdraw(shape:&eframe::egui::Shape,id:eframe::egui::TextureId,point:Pos2,seen:&mut bool)->bool {
+                match shape {
+                    eframe::egui::Shape::Mesh(mesh) => {if mesh.texture_id==id {*seen=true;}false},
+                    eframe::egui::Shape::Rect(rect) => *seen && rect.rect.contains(point) && rect.fill.a()==255,
+                    eframe::egui::Shape::Vec(shapes) => shapes.iter().any(|shape|overdraw(shape,id,point,seen)),
+                    _=>false,
+                }
+            }
+            let local=s.view.to_screen(Pt::new(90.,70.));let probe=s.canvas_rect.unwrap().min+vec2(local.x,local.y);
+            let visible=texture.is_some_and(|id| {let mut seen=false;let covered=output.shapes.iter().filter(|shape|shape.clip_rect.contains(probe)).any(|shape|overdraw(&shape.shape,id,probe,&mut seen));seen && !covered && output.shapes.iter().any(|shape|drawn(&shape.shape,id))});
+            let pixels=texture.and_then(|id|output.textures_delta.set.get(&id).and_then(|updates|updates.last())).map(|delta| {let eframe::egui::ImageData::Color(image)=&delta.image;image.pixels.clone()});
+            output.textures_delta.clear();
+            (pixels,visible)
+        };
+        let original_image=frame(&mut s,vec![]).0.unwrap();frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::F8,Modifiers::NONE));frame(&mut s,vec![]);
+        assert!(ctx.read_response(eframe::egui::Id::new("studio-canvas")).unwrap().has_focus());
+        let before=crate::project::encode(&s.doc).unwrap();let history=s.history.len();
+        let (image,visible)=frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::Q,Modifiers::NONE));assert!(s.doc.quick_mask.is_some());
+        assert!(visible,"Quick Mask must actually draw the original artwork texture");assert_eq!(image.unwrap(),original_image,"An empty mask must keep the rendered artwork unchanged");
+        let entered=crate::project::encode(&s.doc).unwrap();let pos=Pos2::new(80.,80.);let end=Pos2::new(140.,100.);
+        frame(&mut s,vec![Event::PointerMoved(pos),pen_pointer_button(pos,true,Modifiers::NONE)]);assert!(matches!(s.op,Some(Op::ChannelStroke(_))));
+        frame(&mut s,vec![Event::PointerMoved(end),pen_pointer_button(end,false,Modifiers::NONE)]);assert!(s.op.is_none());assert_eq!(s.history.len(),history+2);
+        let painted=crate::project::encode(&s.doc).unwrap();assert_ne!(entered,painted);assert_eq!(s.doc.layers[0].kind.shapes().unwrap().len(),1);assert!(s.doc.quick_mask.as_ref().unwrap().channel.plane.samples.iter().any(|v|*v<1.));
+        s.undo();assert_eq!(crate::project::encode(&s.doc).unwrap(),entered);s.redo();assert_eq!(crate::project::encode(&s.doc).unwrap(),painted);
+        frame(&mut s,vec![Event::PointerMoved(pos),pen_pointer_button(pos,true,Modifiers::NONE)]);frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::Escape,Modifiers::NONE));assert!(s.op.is_none());assert_eq!(crate::project::encode(&s.doc).unwrap(),painted);
+        frame(&mut s,crate::ui::welcome::keyboard_tests::key(Key::Q,Modifiers::NONE));assert!(s.doc.quick_mask.is_none());assert!(s.pixel_sel.is_some());assert_eq!(crate::project::encode(&s.doc).unwrap(),before);
+    }
+    #[test]
     fn unrelated_touch_does_not_cancel_or_change_a_mouse_brush_stroke() {
         use eframe::egui::{Event, Modifiers, TouchDeviceId, TouchId, TouchPhase};
         let (ctx, mut s) = pen_input_studio();
         s.tool = Tool::Brush;
-        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300)];
+        s.doc.layers = vec![crate::document::Layer::raster("Paint", 400, 300).unwrap()];
         s.active_layer = Some(0);
         s.view.offset = Pt::ZERO;
         canvas_frame(&ctx, &mut s, vec![]);
@@ -5458,6 +5685,7 @@ mod tests {
     fn artboard_resize_clone_gesture_commits_once_and_escape_restores_everything() {
         for cancel in [false,true] {
             let mut studio=Studio::new();
+            studio.doc.layers[0]=crate::document::Layer::raster("Background",1280,800).unwrap();
             studio.snap.enabled=false;
             studio.doc.artboards=vec![crate::document::Artboard::new(0,Pt::ZERO,Pt::new(200.,160.))];
             studio.finish_create(CreateKind::Rect,Pt::new(40.,40.),Pt::new(80.,80.));
@@ -5477,6 +5705,7 @@ mod tests {
     fn artboard_double_click_wraps_exact_bounds_or_opens_size_dialog() {
         let ctx=eframe::egui::Context::default();
         let mut studio=Studio::new();studio.doc.artboards.clear();studio.doc.artboardless=true;
+        studio.doc.layers[0]=crate::document::Layer::raster("Background",1280,800).unwrap();
         studio.finish_create(CreateKind::Rect,Pt::new(200.,300.),Pt::new(340.,390.));
         studio.tool=Tool::Artboard;
         assert!(artboard_double_click(&mut studio,&ctx,Pt::new(270.,345.)));

@@ -1,3 +1,7 @@
+#[path = "../../vendor/oma-ui/fields.rs"]
+pub(crate) mod fields;
+#[path = "../../vendor/oma-ui/workspace.rs"]
+pub(crate) mod workspace;
 mod artboard_dialog;
 mod agent;
 mod agent_attachments;
@@ -5,23 +9,42 @@ mod agent_picker;
 pub(crate) mod anim_export;
 mod browsers;
 mod background_removal;
+mod brush_bounds;
 mod canvas;
 mod chrome;
 mod credits;
 mod cloud;
 mod cloud_annotations;
 mod color_picker;
+mod color_guide;
+mod document_color;
 mod deform;
 pub(crate) mod export_dialog;
+mod screen_export;
+mod channels;
+mod channel_adjustment;
+mod quick_mask;
 mod guides;
+mod guide_keyboard;
 mod icons;
 mod jobs;
 mod key_hud;
+pub(crate) mod keyboard_authoring;
+pub(crate) mod keyboard_tools;
+mod panel_keyboard;
+mod keyboard_controls;
 #[cfg(test)]
 mod key_hud_tests;
 mod layer_drag;
+mod layer_duplicate;
+mod layer_group;
+pub(crate) mod layer_merge;
+mod layer_clipping;
 mod layout;
 mod layout_preview;
+#[cfg(test)]
+pub(crate) use layout_preview::presentation as layout_presentation;
+mod layout_properties;
 mod library;
 mod masking;
 mod motion_presets;
@@ -35,14 +58,34 @@ mod paragraph;
 mod character_spacing;
 mod opentype;
 mod raster;
+mod psd_smart;
 mod retouch;
 mod brushes;
 mod selection;
 mod studios;
+mod panel_workspace;
+mod panes;
+mod pane_previews;
+mod field_clipboard;
+mod shared_transform;
+mod svg_paint;
+mod svg_effect;
+mod symbols;
+mod graphic_styles;
+mod actions;
+#[cfg(test)]
+mod svg_field_tests;
 mod text_geometry;
+mod type_commands;
+mod find_replace;
+mod find_font;
+mod find_font_recovery;
 mod templates;
 pub mod theme;
 mod timeline;
+mod timeline_keyboard;
+mod motion_compositions;
+mod scene3d;
 mod welcome;
 
 use crate::app::Studio;
@@ -94,6 +137,7 @@ pub fn set_capture_catalog_root(ctx: &eframe::egui::Context, root: &std::path::P
 
 pub fn run(ui: &mut Ui, studio: &mut Studio) {
     let ctx = ui.ctx().clone();
+    field_clipboard::tick(&ctx,studio);
     if studio.updates.freezing {
         studio.poll_updates(&ctx, false);
         preferences::show(&ctx, studio);
@@ -109,10 +153,14 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
     }
     // Give cancellable library loads Escape before canvas shortcuts consume it.
     library::tick(&ctx, studio);
+    color_picker::set_tag(&ctx, studio.doc.color_tag);
     welcome::tick(&ctx, studio);
     plugins::tick(&ctx, studio);
     canvas::poll_screen_pick(&ctx, studio);
     theme::poll(&ctx);
+    channel_adjustment::tick(&ctx, studio);
+    studio.sync_quick_mask_palette();
+    ui.painter().rect_filled(ui.max_rect(), 0.0, theme::bg_window());
     ctx.data_mut(|data| {
         data.insert_temp(
             eframe::egui::Id::new("oma-recent-colors"),
@@ -123,7 +171,9 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
     brushes::window(&ctx, studio);
     studio.poll_pixel_edit(&ctx);
     agent::tick(&ctx, studio);
-    if !studio.file_dialog_pending()
+    let browser_closed = browsers::before_shortcuts(&ctx, studio);
+    if !browser_closed
+        && !studio.file_dialog_pending()
         && !studio.show_preferences
         && !studio.updates.freezing
         && !pixel_selection::is_open(&ctx)
@@ -133,14 +183,29 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
         && !plugins::is_open(&ctx)
         && !welcome::modal_open(&ctx)
         && !artboard_dialog::is_open(&ctx)
+        && !keyboard_authoring::is_open(&ctx)
+        && !keyboard_tools::is_open(&ctx)
+        && !guide_keyboard::is_open(&ctx)
+        && !type_commands::is_open(&ctx)
+        && !find_replace::is_open(&ctx)
+        && !find_font::is_open(&ctx)
+        && !layer_duplicate::is_open(&ctx)
+        && !layer_group::is_open(&ctx)
+        && !layer_merge::is_open(&ctx)
+        && !panel_keyboard::is_open(&ctx)
         && !studio.show_templates
+        && !channel_adjustment::is_open(&ctx)
+        && !quick_mask::is_open(&ctx)
     {
         guides::handle_shortcuts(&ctx, studio);
     }
-    if !studio.file_dialog_pending()
+    if !browser_closed
+        && !studio.file_dialog_pending()
         && !studio.show_preferences
         && !studio.updates.freezing
         && !layout_preview::is_open(&ctx)
+        && !channel_adjustment::is_open(&ctx)
+        && !quick_mask::is_open(&ctx)
         && !raster::is_open(&ctx)
         && !background_removal::is_open(&ctx)
         && !export_dialog::is_open(&ctx)
@@ -148,15 +213,28 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
         && !plugins::is_open(&ctx)
         && !welcome::modal_open(&ctx)
         && !artboard_dialog::is_open(&ctx)
+        && !keyboard_authoring::is_open(&ctx)
+        && !keyboard_tools::is_open(&ctx)
+        && !guide_keyboard::is_open(&ctx)
+        && !type_commands::is_open(&ctx)
+        && !find_replace::is_open(&ctx)
+        && !find_font::is_open(&ctx)
+        && !layer_duplicate::is_open(&ctx)
+        && !layer_group::is_open(&ctx)
+        && !layer_merge::is_open(&ctx)
+        && !panel_keyboard::is_open(&ctx)
         && !studio.show_templates
     {
-        studio.handle_shortcuts(&ctx);
+        if !layer_merge::is_open(&ctx) {
+            find_replace::shortcuts(&ctx, studio);
+            if !find_replace::is_open(&ctx) { studio.handle_shortcuts(&ctx); }
+        }
     }
     studio.tick_motion(&ctx);
     layout::poll_image(&ctx, studio);
 
     // Keep the canvas visible for previews while preventing edits behind the dialog.
-    if pixel_selection::is_open(&ctx) || background_removal::is_open(&ctx) || export_dialog::is_open(&ctx) || artboard_dialog::is_open(&ctx) {
+    if pixel_selection::is_open(&ctx) || background_removal::is_open(&ctx) || export_dialog::is_open(&ctx) || artboard_dialog::is_open(&ctx) || keyboard_authoring::is_open(&ctx) || keyboard_tools::is_open(&ctx) || guide_keyboard::is_open(&ctx) || type_commands::is_open(&ctx) || find_replace::is_open(&ctx) || find_font::is_open(&ctx) || layer_duplicate::is_open(&ctx) || layer_group::is_open(&ctx) || layer_merge::is_open(&ctx) {
         ui.disable();
     }
 
@@ -183,16 +261,13 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
         photo::show(ui, studio);
     } else {
         chrome::doc_tabs(ui, studio);
-        layout::hierarchy(ui, studio);
         chrome::left_toolbar(ui, studio);
-        if !studio.agent.visible {
-            studios::right_panel(ui, studio);
-        }
         chrome::status_bar(ui, studio);
-        timeline::show(ui, studio);
-        canvas::show(ui, studio);
+        panel_workspace::show(ui, studio);
     }
 
+    screen_export::poll(&ctx, studio);
+    channels::poll(&ctx, studio);
     if !studio.file_dialog_pending() {
         preferences::show(&ctx, studio);
         plugins::show(&ctx, studio);
@@ -202,9 +277,20 @@ pub fn run(ui: &mut Ui, studio: &mut Studio) {
         cloud::modal(ui, studio);
         layout_preview::show(ui, studio);
         raster::show(ui, studio);
+        channel_adjustment::show(&ctx, studio);
+        quick_mask::show(&ctx, studio);
         background_removal::show(&ctx, studio);
         export_dialog::show(&ctx, studio);
         artboard_dialog::show(&ctx, studio);
+        keyboard_authoring::show(&ctx, studio);
+        keyboard_tools::show(&ctx, studio);
+        guide_keyboard::show(&ctx, studio);
+        type_commands::show(&ctx, studio);
+        find_replace::show(&ctx, studio);
+        find_font::show(&ctx, studio);
+        layer_duplicate::show(&ctx, studio);
+        layer_group::show(&ctx, studio);
+        layer_merge::show(&ctx, studio);
         anim_export::show(ui, studio);
         pixel_selection::show(&ctx, studio);
 
@@ -372,3 +458,11 @@ fn egui_shortcuts(ui: &mut Ui, studio: &mut Studio) {
             }
         });
 }
+
+#[cfg(test)]
+mod shared_fields_tests;
+#[cfg(test)]
+mod shared_keyboard_tests;
+
+#[cfg(test)]
+mod workspace_qa_tests;

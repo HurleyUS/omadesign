@@ -39,10 +39,30 @@ pub(super) enum Shortcut {
     ToggleKeyHud,
     FlipHorizontal,
     FlipVertical,
+    CreateArtwork,
+    FocusCanvas,
+    NextDocument,
+    PreviousDocument,
+    CloseDocument,
+    ToolPoints,
+    NewPixelLayer,
+    ToggleQuickMask,
+    MergeActive,
+    MergeVisible,
+    StampActive,
+    StampVisible,
+    ToggleLayerClipping,
 }
 
 impl Shortcut {
     pub(super) fn available(self, persona: Persona) -> bool {
+        if matches!(self,Self::MergeActive|Self::MergeVisible|Self::StampActive|Self::StampVisible|Self::ToggleLayerClipping) {return persona==Persona::Pixel;}
+        if self == Self::ToggleQuickMask {return persona == Persona::Pixel;}
+        if self == Self::ToolPoints { return true; }
+        if self == Self::NewPixelLayer { return persona == Persona::Pixel; }
+        if self == Self::CreateArtwork {
+            return matches!(persona, Persona::Design | Persona::Layout | Persona::Motion);
+        }
         if matches!(self, Self::FlipHorizontal | Self::FlipVertical) {
             return matches!(persona, Persona::Design | Persona::Layout | Persona::Motion);
         }
@@ -76,12 +96,26 @@ impl Shortcut {
                 | Self::Export
                 | Self::Help
                 | Self::ToggleKeyHud
+                | Self::FocusCanvas
+                | Self::NextDocument
+                | Self::PreviousDocument
+                | Self::CloseDocument
         )
     }
 }
 
 fn plain_paste_key(key: Key, mods: Modifiers) -> bool {
     key == Key::Paste || (key == Key::Insert && mods.shift)
+}
+
+pub(super) fn key_shortcut_for_persona(key:Key,mods:Modifiers,persona:Persona)->Option<Shortcut> {
+    if persona==Persona::Pixel && key==Key::G && mods.alt && !mods.shift && (mods.ctrl||mods.command||mods.mac_cmd) {
+        return Some(Shortcut::ToggleLayerClipping);
+    }
+    if persona==Persona::Pixel && key==Key::E && (mods.ctrl||mods.command||mods.mac_cmd) {
+        return Some(match (mods.alt,mods.shift) {(true,true)=>Shortcut::StampVisible,(true,false)=>Shortcut::StampActive,(false,true)=>Shortcut::MergeVisible,(false,false)=>Shortcut::MergeActive});
+    }
+    key_shortcut(key,mods)
 }
 
 pub(super) fn key_shortcut(key: Key, mods: Modifiers) -> Option<Shortcut> {
@@ -94,8 +128,13 @@ pub(super) fn key_shortcut(key: Key, mods: Modifiers) -> Option<Shortcut> {
     if key == Key::F1 && mods.is_none() {
         return Some(Help);
     }
+    if key == Key::F8 && mods.is_none() {
+        return Some(FocusCanvas);
+    }
+    if key == Key::F9 && mods.is_none() { return Some(ToolPoints); }
     if !(mods.command || mods.ctrl || mods.mac_cmd) {
         return match (key, mods.shift, mods.alt) {
+            (Key::Q, false, false) => Some(ToggleQuickMask),
             (Key::H, true, false) => Some(FlipHorizontal),
             (Key::V, true, false) => Some(FlipVertical),
             _ => None,
@@ -117,7 +156,12 @@ pub(super) fn key_shortcut(key: Key, mods: Modifiers) -> Option<Shortcut> {
         (Key::O, false) => Open,
         (Key::P, true) => Place,
         (Key::N, false) => New,
+        (Key::N, true) => NewPixelLayer,
         (Key::E, false) => Export,
+        (Key::K, true) => CreateArtwork,
+        (Key::Tab, false) => NextDocument,
+        (Key::Tab, true) => PreviousDocument,
+        (Key::W, false) => CloseDocument,
         (Key::Z, false) => Undo,
         (Key::Z, true) | (Key::Y, false) => Redo,
         (Key::C, false) => Copy,
@@ -193,6 +237,17 @@ impl Studio {
     }
 
     pub fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.memory(|memory| memory.focused().is_some_and(|id| {
+            id != egui::Id::new("studio-canvas") && id != egui::Id::new("studio-photo-canvas")
+        })) {
+            ctx.input_mut(|input| {
+                for event in &mut input.events {
+                    if let Event::Key { modifiers, .. } = event {
+                        modifiers.command |= modifiers.ctrl || modifiers.mac_cmd;
+                    }
+                }
+            });
+        }
         let events = ctx.input(|i| i.events.clone());
         let final_modifiers = held_modifiers(ctx);
         // Clipboard events have no modifier field. Replay modifier changes in order,
@@ -247,7 +302,7 @@ impl Studio {
                     } else {
                         *key
                     };
-                    key_shortcut(key, *pressed_modifiers)
+                    key_shortcut_for_persona(key, *pressed_modifiers,self.persona)
                 }
                 Event::Copy => Some(if modifiers.alt {
                     Shortcut::CopyStyle
@@ -335,7 +390,7 @@ impl Studio {
                     ..
                 } = event
                 && !(modifiers.ctrl || modifiers.command || modifiers.alt || modifiers.mac_cmd)
-                && self.canvas_key(*key, modifiers.shift, *repeat)
+                && self.canvas_key(ctx, *key, modifiers.shift, *repeat)
             {
                 consumed.push(index);
             }
@@ -354,6 +409,25 @@ impl Studio {
 
     fn run_shortcut(&mut self, ctx: &egui::Context, shortcut: Shortcut, payload: Option<&str>) {
         match shortcut {
+            Shortcut::CreateArtwork => crate::ui::keyboard_authoring::open(ctx, self),
+            Shortcut::ToolPoints => crate::ui::keyboard_tools::open(ctx, self),
+            Shortcut::NewPixelLayer => self.add_layer(true),
+            Shortcut::ToggleQuickMask => {if let Err(error)=self.set_quick_mask(self.doc.quick_mask.is_none()){self.status=error;}},
+            Shortcut::NextDocument | Shortcut::PreviousDocument => {
+                self.ensure_tabs();
+                let count = self.tab_count();
+                let index = if shortcut == Shortcut::NextDocument {
+                    (self.active_tab + 1) % count
+                } else {
+                    (self.active_tab + count - 1) % count
+                };
+                self.switch_tab(index);
+                ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("studio-canvas")));
+            }
+            Shortcut::CloseDocument => self.request_close_tab(self.active_tab),
+            Shortcut::FocusCanvas => ctx.memory_mut(|memory| memory.request_focus(egui::Id::new(
+                if self.persona == Persona::Photo { "studio-photo-canvas" } else { "studio-canvas" }
+            ))),
             Shortcut::FlipHorizontal => self.flip_selection(true),
             Shortcut::FlipVertical => self.flip_selection(false),
             Shortcut::ToggleGuides => self.toggle_guides(),
@@ -371,6 +445,15 @@ impl Studio {
                 self.begin_place();
             }
             Shortcut::New => self.new_tab(),
+            Shortcut::MergeActive|Shortcut::MergeVisible|Shortcut::StampActive|Shortcut::StampVisible => {
+                if let Some(kind)=self.pixel_merge_shortcut(matches!(shortcut,Shortcut::MergeVisible|Shortcut::StampVisible)) {
+                    crate::ui::layer_merge::start(ctx,self,if matches!(shortcut,Shortcut::StampActive|Shortcut::StampVisible) {kind.stamp()} else {kind});
+                }
+            }
+            Shortcut::ToggleLayerClipping => {
+                let clipped = self.active_layer.and_then(|i| self.doc.layers.get(i)).is_some_and(|l| l.clipped);
+                self.set_layer_clipping(None, !clipped);
+            }
             Shortcut::Export => {
                 self.commit_type_edit();
                 if self.persona == Persona::Photo {
@@ -574,10 +657,21 @@ impl Studio {
         true
     }
 
-    fn canvas_key(&mut self, key: Key, shift: bool, repeat: bool) -> bool {
+    fn canvas_key(&mut self, ctx: &egui::Context, key: Key, shift: bool, repeat: bool) -> bool {
         if self.persona == Persona::Photo {
             if self.photo.is_batching() {
                 return false;
+            }
+            if matches!(key, Key::PageUp | Key::PageDown) && !self.photo.images.is_empty() {
+                let count = self.photo.images.len();
+                let index = match (self.photo.selected, key == Key::PageUp) {
+                    (Some(0), true) | (None, true) => count - 1,
+                    (Some(i), true) => (i - 1).min(count - 1),
+                    (Some(i), false) => (i + 1) % count,
+                    (None, false) => 0,
+                };
+                self.photo.select_with(index, false, shift);
+                return true;
             }
             if matches!(key, Key::Enter | Key::Escape) {
                 if let Some((start, cur)) = self.photo.crop_drag.take() {
@@ -624,6 +718,19 @@ impl Studio {
             }
         }
         if self.pixel_edit_key(key) { return true; }
+        if !repeat && key == Key::Enter && self.op.is_none() && self.pending_place.is_none()
+            && self.free_transform.is_none() && self.deformation.is_none()
+        {
+            if self.tool == Tool::Select && self.edit_keyboard_text() { return true; }
+            if super::keyboard_authoring::ArtworkKind::for_tool(self.tool).is_some() {
+                crate::ui::keyboard_authoring::open(ctx, self);
+                return true;
+            }
+        }
+        if matches!(key, Key::PageUp | Key::PageDown) {
+            self.cycle_keyboard_artwork(key == Key::PageUp, shift);
+            return true;
+        }
         if self.deformation.is_some() && matches!(key, Key::Escape | Key::Enter) {
             self.end_deform(key == Key::Escape);
             return true;
@@ -710,10 +817,10 @@ impl Studio {
                 };
                 self.nudge_pixel_sel(dx, dy);
             }
-            Key::ArrowLeft => self.nudge(-step, 0.0),
-            Key::ArrowRight => self.nudge(step, 0.0),
-            Key::ArrowUp => self.nudge(0.0, -step),
-            Key::ArrowDown => self.nudge(0.0, step),
+            Key::ArrowLeft => self.nudge_keyboard_artwork(-step, 0.0),
+            Key::ArrowRight => self.nudge_keyboard_artwork(step, 0.0),
+            Key::ArrowUp => self.nudge_keyboard_artwork(0.0, -step),
+            Key::ArrowDown => self.nudge_keyboard_artwork(0.0, step),
             Key::X => self.swap_fill_stroke(),
             Key::D => self.style = Style::default(),
             Key::OpenBracket | Key::OpenCurlyBracket => {
@@ -749,6 +856,8 @@ impl Studio {
                     (Key::O, false, _) => Tool::Ellipse,
                     (Key::Y, false, _) => Tool::Polygon,
                     (Key::S, false, Persona::Design | Persona::Layout) => Tool::Star,
+                    (Key::L, false, Persona::Pixel) => Tool::Lasso,
+                    (Key::L, true, Persona::Pixel) => Tool::BezierLasso,
                     (Key::L, false, _) => Tool::Line,
                     (Key::T, false, _) => Tool::Text,
                     (Key::G, false, _) => Tool::Gradient,
@@ -1527,6 +1636,7 @@ mod tests {
     fn select_duplicate_arrange_combine_and_nudge_use_native_chords() {
         let ctx = context();
         let mut studio = Studio::new();
+        studio.doc.layers[0] = Layer::raster("Background", 1280, 800).unwrap();
         let a = add_rectangle(&mut studio, 10.0);
         let b = add_rectangle(&mut studio, 50.0);
         let c = add_rectangle(&mut studio, 90.0);

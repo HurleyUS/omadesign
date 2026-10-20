@@ -1,6 +1,6 @@
 [package]
 name = "omadesign"
-version = "0.6.3-nightly.20261013.1"
+version = "0.6.7-nightly.20261016.1"
 edition = "2024"
 description = "Native Linux studio for design, layout, painting, photography, and motion"
 license = "MIT"
@@ -19,9 +19,15 @@ path = "src/main.rs"
 name = "gen_media"
 path = "src/bin/gen_media.rs"
 
+[features]
+oma-ui-egui032 = []
+
 [dependencies]
+omadesign-affinity = { path = "vendor/affinity" }
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-27"] }
 sha2 = "0.10"
+tiff = "0.11.3"
+png = "0.18"
 zstd = "0.13"
 mlua = { version = "0.12", features = ["lua54", "vendored", "serde"] }
 ab_glyph = "0.2.32"
@@ -40,9 +46,11 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 rayon = "1.10"
 rustybuzz = "0.20"
+subsetter = { version = "=0.2.6", default-features = false, features = ["variable-fonts"] }
 unicode-linebreak = "0.1"
 hyphenation = { version = "0.8.4", features = ["embed_en-us"] }
 unicode-segmentation = "1.13"
+unicode-bidi = "0.3"
 rfd = "0.15"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
@@ -64,8 +72,13 @@ arboard = "3.6.1"
 wl-clipboard-rs = "0.9.3"
 x11-clipboard = "0.9.3"
 x11rb = "0.13.2"
+
+[target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs"] }
 
+
+[dev-dependencies]
+omadesign-affinity = { path = "vendor/affinity", features = ["synth"] }
 
 [build-dependencies]
 cc = { version = "1", features = ["parallel"] }
@@ -75,6 +88,8 @@ tar = "0.4"
 # winit 0.30 only emits PinchGesture on macOS/iOS. This tree adds Wayland
 # zwp_pointer_gestures_v1 so a trackpad pinch zooms the canvas.
 [patch.crates-io]
+resvg = { path = "vendor/resvg" }
+usvg = { path = "vendor/usvg" }
 # Wait for Wayland frame callbacks instead of polling occluded windows.
 eframe = { path = "vendor/eframe" }
 # Retain native clipboard key presses for modifier-aware application shortcuts.

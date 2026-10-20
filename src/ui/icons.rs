@@ -13,6 +13,8 @@ pub mod ph {
     pub const INFO: &str = "\u{E2CE}";
     pub const TEXT_AA: &str = "\u{E6EE}";
     pub const PALETTE: &str = "\u{E6C8}";
+    pub const FLOPPY_DISK: &str = "\u{E248}";
+    pub const ARROW_CLOCKWISE: &str = "\u{E036}";
     pub const TOOLBOX: &str = "\u{ECA0}";
     pub const CURSOR: &str = "\u{E1DC}";
     pub const PATH: &str = "\u{E39C}";
@@ -36,6 +38,9 @@ pub mod ph {
     pub const PAINT_BUCKET: &str = "\u{E392}";
     pub const BANDAIDS: &str = "\u{E0B2}";
     pub const COPY: &str = "\u{E1CA}";
+    pub const TRASH: &str = "\u{E4A6}";
+    pub const ARROW_UP: &str = "\u{E08E}";
+    pub const ARROW_DOWN: &str = "\u{E04C}";
     pub const DROP: &str = "\u{E210}";
     pub const CROP: &str = "\u{E1D4}";
     pub const SELECTION: &str = "\u{E69A}";
@@ -152,11 +157,13 @@ pub fn mode_color(persona: Persona) -> eframe::egui::Color32 {
 }
 
 pub fn colored_button(ui: &mut Ui, icon: &str, tip: &str, selected: bool, color: eframe::egui::Color32) -> Response {
-    let (rect, allocated) = ui.allocate_exact_size(vec2(36., 30.), Sense::hover());
+    let size = vec2(36., 30.);
+    let (allocated, space) = ui.allocate_space(size);
+    let rect = ui.layout().align_size_within_rect(size, space);
     let id = match tip {
         "Agent" => eframe::egui::Id::new("studio-agent-toggle"),
         "Welcome" => eframe::egui::Id::new("studio-welcome-toggle"),
-        _ => allocated.id,
+        _ => allocated,
     };
     let response = ui.interact(rect, id, Sense::click());
     response.widget_info(|| WidgetInfo::selected(WidgetType::Button, ui.is_enabled(), selected, tip));

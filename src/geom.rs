@@ -646,10 +646,49 @@ fn default_true() -> bool {
     true
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// One symbol flowing as a single character in a story.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InlineSymbol {
+    /// Character index of the object-replacement character.
+    pub at: usize,
+    /// Component definition this character follows.
+    pub symbol: u64,
+    /// Art height divided by the font size. Stays inside (0, 100].
+    pub scale: f32,
+    /// Raise in pixels. Positive moves the art up.
+    #[serde(default)]
+    pub shift: f32,
+}
+
+/// Resolved symbol ink for one inline character. Rebuilt from the symbol. Not saved.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlinePaint {
+    /// Character index this ink belongs to.
+    pub at: usize,
+    /// Horizontal advance in pixels.
+    pub advance: f32,
+    /// Art height in pixels.
+    pub height: f32,
+    /// Raise in pixels. Positive moves the art up.
+    pub shift: f32,
+    /// Font size used to center the art on the cap height.
+    pub px: f32,
+    /// Filled contours in the symbol's unit box, from (0, 0) to (1, 1).
+    pub pieces: Vec<(crate::document::Fill, Vec<Vec<Pt>>)>,
+}
+
 /// Live type: the string stays editable. Contours are a shaped cache.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TypeRun {
     pub origin: Pt,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<[f32; 6]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub svg_text: Option<crate::text::svg_type::SvgText>,
     pub content: String,
     pub px: f32,
     pub tracking: f32,
@@ -661,6 +700,15 @@ pub struct TypeRun {
     pub wrap_width: Option<f32>,
     #[serde(default)]
     pub align: TextAlign,
+    /// Columns run down. The next column starts to the left. Absent on old documents, which stay horizontal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub vertical: bool,
+    /// A symbol standing in for one object-replacement character. Old documents have none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inlines: Vec<InlineSymbol>,
+    /// Symbol ink rebuilt when the document is marked. Not saved.
+    #[serde(skip)]
+    pub inline_paint: Vec<InlinePaint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraphs: Vec<ParagraphStyle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -672,6 +720,8 @@ pub struct TypeRun {
     /// Installed font path or portable `omatype:` content ID. Empty picks system sans.
     #[serde(default)]
     pub font: String,
+    #[serde(default, skip_serializing_if = "crate::text::variations::FontVariations::is_empty")]
+    pub font_variations: crate::text::variations::FontVariations,
     #[serde(default = "default_true")]
     pub kern: bool,
     #[serde(default = "default_true")]
@@ -696,17 +746,23 @@ impl Default for TypeRun {
     fn default() -> Self {
         Self {
             origin: Pt::ZERO,
+            transform: None,
+            svg_text: None,
             content: String::new(),
             px: 72.0,
             tracking: 0.0,
             leading: 0.0,
             wrap_width: None,
             align: TextAlign::Start,
+            vertical: false,
+            inlines: vec![],
+            inline_paint: vec![],
             paragraphs: vec![],
             spans: vec![],
             features: vec![],
             manual_kern: Default::default(),
             font: String::new(),
+            font_variations: Default::default(),
             kern: true,
             liga: true,
             tnum: false,
@@ -721,6 +777,35 @@ impl Default for TypeRun {
 }
 
 impl TypeRun {
+    /// Map a type-space point into the document.
+    /// Args: local point. Returns the point after the optional affine matrix.
+    pub fn map_point(&self, point: Pt) -> Pt {
+        let [a,b,c,d,e,f] = self.transform.unwrap_or([1.,0.,0.,1.,0.,0.]);
+        Pt::new(a*point.x+c*point.y+e,b*point.x+d*point.y+f)
+    }
+
+    /// Recover a type-space point from the document.
+    /// Args: document point. Returns local coordinates, or the input for a singular matrix.
+    pub fn unmap_point(&self, point: Pt) -> Pt {
+        let [a,b,c,d,e,f] = self.transform.unwrap_or([1.,0.,0.,1.,0.,0.]);
+        let det=a*d-b*c;
+        if det.abs()<1e-10 { return point; }
+        let p=point-Pt::new(e,f);
+        Pt::new((d*p.x-c*p.y)/det,(-b*p.x+a*p.y)/det)
+    }
+
+    /// Compose a document-space edit onto the type matrix.
+    /// Args: affine edit in SVG row order. Returns nothing; cached contours follow the edit.
+    pub fn apply_affine(&mut self, matrix: [f32; 6]) {
+        let [a,b,c,d,e,f]=matrix;
+        let [g,h,i,j,k,l]=self.transform.unwrap_or([1.,0.,0.,1.,0.,0.]);
+        self.transform=Some([a*g+c*h,b*g+d*h,a*i+c*j,b*i+d*j,a*k+c*l+e,b*k+d*l+f]);
+        for point in self.contours.iter_mut().flatten() {
+            *point=Pt::new(a*point.x+c*point.y+e,b*point.x+d*point.y+f);
+        }
+        self.layout=None;
+    }
+
     pub fn line_height(&self) -> f32 {
         if self.leading > 0.5 {
             self.leading
@@ -766,16 +851,21 @@ pub enum KeepTogether { #[default] None, All, Edges { first: u8, last: u8 } }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ParagraphStyle {
+    pub publishing_style: Option<String>,
     pub start: usize, pub align: TextAlign, pub word_spacing: [f32; 3], pub letter_spacing: [f32; 3],
     pub break_mode: BreakMode, pub overflow_wrap: bool, pub hyphenate: bool, pub hyphen: Option<HyphenSettings>,
     pub min_start_lines: u8, pub min_end_lines: u8, pub allow_orphans: bool, pub runt: Option<RuntRule>,
     pub keep_with_next: u8, pub keep_together: KeepTogether,
 }
-impl Default for ParagraphStyle { fn default() -> Self { Self { start: 0, align: TextAlign::Start, word_spacing: [80.,100.,133.], letter_spacing: [0.,0.,0.], break_mode: BreakMode::Normal, overflow_wrap: false, hyphenate: false, hyphen: None, min_start_lines: 2, min_end_lines: 2, allow_orphans: true, runt: None, keep_with_next: 0, keep_together: KeepTogether::None } } }
+impl Default for ParagraphStyle { fn default() -> Self { Self { publishing_style: None, start: 0, align: TextAlign::Start, word_spacing: [80.,100.,133.], letter_spacing: [0.,0.,0.], break_mode: BreakMode::Normal, overflow_wrap: false, hyphenate: false, hyphen: None, min_start_lines: 2, min_end_lines: 2, allow_orphans: true, runt: None, keep_with_next: 0, keep_together: KeepTogether::None } } }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CharSpan {
+    pub publishing_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_variations: Option<crate::text::variations::FontVariations>,
+    pub font: Option<String>, pub px: Option<f32>, pub fill: Option<crate::document::Fill>,
     pub start: usize, pub end: usize, pub no_break: bool, pub features: Vec<([u8;4],u32)>,
     pub tracking: Option<f32>, pub kerning: Option<KernMode>, pub leading: Option<Leading>,
     pub baseline_shift: Option<f32>, pub hscale: Option<f32>, pub vscale: Option<f32>,
@@ -881,15 +971,34 @@ impl Geom {
         }
     }
 
+    /// Bound stored geometry in its local coordinate space.
+    /// Args: none. Returns its frame, including authored curve handles.
     pub fn bbox(&self) -> Bounds {
+        if matches!(self, Geom::Path { .. } | Geom::Paths { .. })
+            && self.anchors().all(|anchor| anchor.radius == 0.0)
+        {
+            let mut bounds = None::<Bounds>;
+            for anchor in self.anchors() {
+                for point in [anchor.pt, anchor.pt + anchor.h_in, anchor.pt + anchor.h_out] {
+                    match &mut bounds {
+                        Some(bounds) => bounds.union_pt(point),
+                        None => bounds = Some(Bounds::from_pt(point)),
+                    }
+                }
+            }
+            return bounds.unwrap_or(Bounds::from_pt(Pt::ZERO));
+        }
         match self {
+            Geom::Text(run) if run.svg_text.is_some()=>if let Some(layout)=crate::text::svg_type::layout(run){return layout.bounds;},
             Geom::Text(run) if run.frame.is_some() => return crate::text_geometry::frame_bounds(run).unwrap(),
-            Geom::Text(run) if run.on_path.is_none() && run.wrap_width.is_some() => {
+            Geom::Text(run) if run.transform.is_none() && run.on_path.is_none() && run.wrap_width.is_some() => {
                 let (width, height) = crate::text::measure(run);
-                return Bounds::from_min_size(
+                let mut bounds=Bounds::from_min_size(
                     Pt::new(run.origin.x, run.origin.y - run.px * 0.85),
                     Pt::new(width.max(1.0), height.max(1.0)),
                 );
+                for point in crate::text::shape(run).iter().flatten(){bounds.union_pt(*point);}
+                return bounds;
             }
             Geom::Rect { origin, size, .. } => {
                 return Bounds {
@@ -965,6 +1074,10 @@ impl Geom {
     }
 
     pub fn translate(&mut self, d: Pt) {
+        if let Geom::Text(run)=self && run.transform.is_some() {
+            run.apply_affine([1.,0.,0.,1.,d.x,d.y]);
+            return;
+        }
         match self {
             Geom::Rect { origin, .. } => *origin += d,
             Geom::Ellipse { center, .. }
@@ -1006,6 +1119,7 @@ impl Geom {
     /// Canvas handles and Text frame dimensions continue to reflow at the same type size.
     pub fn map_into_with_text_scale(&mut self, src: Bounds, dst: Bounds) {
         self.map_into(src, dst);
+        if matches!(self,Geom::Text(run) if run.transform.is_some()){return;}
         if let Geom::Text(run) = self && run.frame.is_some() {
             let sx = dst.width() / src.width().max(0.001);
             let sy = dst.height() / src.height().max(0.001);
@@ -1029,6 +1143,10 @@ impl Geom {
         } else {
             dst.height() / src.height()
         };
+        if let Geom::Text(run)=self && run.transform.is_some() {
+            run.apply_affine([sx,0.,0.,sy,dst.min.x-src.min.x*sx,dst.min.y-src.min.y*sy]);
+            return;
+        }
         match self {
             Geom::Rect { origin, size, .. } => {
                 *origin = src.map_pt(*origin, dst);
@@ -1084,6 +1202,10 @@ impl Geom {
                 t.leading *= sy;
                 t.scale_character_metrics(sy);
                 if (sx-sy).abs()>0.001 && sy.abs()>0.001 {t.scale_character_widths(sx/sy);}
+                if t.on_path.is_none() && t.svg_text.is_none() {
+                    t.contours = crate::text::shape(t);
+                    return;
+                }
                 for c in &mut t.contours {
                     for p in c {
                         *p = src.map_pt(*p, dst);
@@ -1108,6 +1230,10 @@ impl Geom {
     }
 
     pub fn flip_about(&mut self, c: Pt, horizontal: bool) {
+        if let Geom::Text(run)=self && run.transform.is_some() {
+            run.apply_affine(if horizontal {[-1.,0.,0.,1.,2.*c.x,0.]} else {[1.,0.,0.,-1.,0.,2.*c.y]});
+            return;
+        }
         let fp = |p: Pt| {
             if horizontal {
                 Pt::new(2.0 * c.x - p.x, p.y)
@@ -1174,6 +1300,11 @@ impl Geom {
     }
 
     pub fn rotate_about(&mut self, origin: Pt, angle: f32) {
+        if let Geom::Text(run)=self && run.transform.is_some() {
+            let (s,c)=angle.sin_cos();
+            run.apply_affine([c,s,-s,c,origin.x-c*origin.x+s*origin.y,origin.y-s*origin.x-c*origin.y]);
+            return;
+        }
         let rot = |p: &mut Pt| *p = p.rotate_about(origin, angle);
         match self {
             Geom::Rect {
@@ -1560,6 +1691,93 @@ pub fn simplify_geom(geom: &mut Geom, epsilon: f32) {
     crate::simplify::apply(geom, epsilon.max(0.0));
 }
 
+
+
+/// Build editable curves using the same control points and object rotation.
+/// Args: path geometry, local rotation center and radians. Returns its native curve path.
+pub(crate) fn curve_path(geometry: &Geom, center: Pt, rotation: f32) -> Option<tiny_skia::Path> {
+    let mut path = tiny_skia::PathBuilder::new();
+    let world_point = |point: Pt| point.rotate_about(center, rotation);
+    for (anchors, closed) in geometry.path_contours() {
+        let segments = path_cubics(anchors, closed);
+        if let Some(first) = segments.first() {
+            let p = world_point(first[0]);
+            path.move_to(p.x, p.y);
+            for [a, c1, c2, b] in segments {
+                let [a, c1, c2, b] = [a, c1, c2, b].map(world_point);
+                if (c1 - a).length_sq() < 1e-10 && (c2 - b).length_sq() < 1e-10 {
+                    path.line_to(b.x, b.y);
+                } else {
+                    path.cubic_to(c1.x, c1.y, c2.x, c2.y, b.x, b.y);
+                }
+            }
+            if closed { path.close(); }
+        }
+    }
+    path.finish()
+}
+
+/// Preserve native curves as editable anchors.
+/// Args: native path and winding rule. Returns geometry for a nonempty path.
+pub(crate) fn path_geom(path: &tiny_skia::Path, winding: bool) -> Option<Geom> {
+    use tiny_skia::PathSegment;
+    let mut paths = Vec::<(Vec<Anchor>, bool)>::new();
+    let mut anchors = Vec::<Anchor>::new();
+    let mut closed = false;
+    for segment in path.segments() {
+        match segment {
+            PathSegment::MoveTo(p) => {
+                if !anchors.is_empty() {
+                    paths.push((std::mem::take(&mut anchors), closed));
+                }
+                closed = false;
+                anchors.push(Anchor::corner(Pt::new(p.x, p.y)));
+            }
+            PathSegment::LineTo(p) => anchors.push(Anchor::corner(Pt::new(p.x, p.y))),
+            PathSegment::QuadTo(c, p) => {
+                let previous = anchors.last_mut()?;
+                let end = Pt::new(p.x, p.y);
+                let control = Pt::new(c.x, c.y);
+                previous.h_out = (control - previous.pt) * (2. / 3.);
+                let mut a = Anchor::corner(end);
+                a.h_in = (control - end) * (2. / 3.);
+                anchors.push(a);
+            }
+            PathSegment::CubicTo(c1, c2, p) => {
+                let previous = anchors.last_mut()?;
+                previous.h_out = Pt::new(c1.x, c1.y) - previous.pt;
+                let mut a = Anchor::corner(Pt::new(p.x, p.y));
+                a.h_in = Pt::new(c2.x, c2.y) - a.pt;
+                anchors.push(a);
+            }
+            PathSegment::Close => {
+                closed = true;
+                if anchors.len() > 1 && (anchors[0].pt - anchors.last()?.pt).length() < 0.0001 {
+                    let last = anchors.pop()?;
+                    anchors[0].h_in = last.h_in;
+                }
+            }
+        }
+    }
+    if !anchors.is_empty() {
+        paths.push((anchors, closed));
+    }
+    if paths.is_empty() {
+        None
+    } else if paths.len() == 1 && !winding {
+        let (anchors, closed) = paths.pop()?;
+        Some(Geom::Path { anchors, closed })
+    } else {
+        Some(Geom::Paths {
+            paths: paths
+                .into_iter()
+                .map(|(anchors, closed)| PathContour { anchors, closed })
+                .collect(),
+            winding,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1591,6 +1809,30 @@ mod tests {
         };
         assert!(g.contains(Pt::new(5.0, 5.0)));
         assert!(!g.contains(Pt::new(20.0, 5.0)));
+    }
+
+    #[test]
+    fn path_bounds_keep_constant_axes_exact_and_preserve_rounded_extensions() {
+        let mut start = Anchor::corner(Pt::new(46.45, 0.0));
+        start.h_out = Pt::new(0.0, 30.0);
+        let mut end = Anchor::corner(Pt::new(46.45, 100.0));
+        end.h_in = Pt::new(0.0, -30.0);
+        let anchors = vec![start, end];
+        let expected = Bounds { min: start.pt, max: end.pt };
+        assert_eq!(Geom::Path { anchors: anchors.clone(), closed: false }.bbox(), expected);
+        assert_eq!(Geom::Paths {
+            paths: vec![PathContour { anchors, closed: false }], winding: false,
+        }.bbox(), expected);
+
+        let mut rounded = Anchor::corner(Pt::new(10.0, 0.0));
+        rounded.h_in = Pt::new(1.0, 0.0);
+        rounded.h_out = Pt::new(0.0, 1.0);
+        rounded.radius = 10.0;
+        let geometry = Geom::Path {
+            anchors: vec![Anchor::corner(Pt::ZERO), rounded, Anchor::corner(Pt::splat(10.0))],
+            closed: false,
+        };
+        assert!(geometry.bbox().max.x > 11.0);
     }
 
     #[test]
