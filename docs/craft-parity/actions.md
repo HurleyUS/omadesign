@@ -10,4 +10,6 @@ Playback moves the original history aside, runs ordinary editor commands in a st
 
 Actions also record Move (arrow-key nudges, with its offset) and Align (each of the six edges/centres). The Actions panel can export the selected action, or every action, to a standalone JSON file, and import such files with collision-safe renaming; damaged files change nothing.
 
+At `8c289283c422fb6f8d315d399249b179cb28ebba` that route passed 12 tests. Receipt `3d33e50fc5c372e38ae318e0b0178a0a648a86894388120049a2b6112f280cbc`.
+
 Actions exchange receipt follows.
