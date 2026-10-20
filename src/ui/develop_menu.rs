@@ -33,6 +33,15 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
         studio.status = "auto light".into();
         ui.close();
     }
+    if ui
+        .add_enabled(ready, Button::new("Auto white balance"))
+        .on_hover_text("Neutralize the average color with temperature and tint")
+        .clicked()
+    {
+        develop_step(studio, |image| crate::photo::auto_white_balance(&mut image.develop, &image.preview));
+        studio.status = "auto white balance".into();
+        ui.close();
+    }
     let cropped = develop.as_ref().is_some_and(|p| p.crop.is_some());
     if ui.add_enabled(ready && cropped, Button::new("Clear crop")).clicked() {
         develop_step(studio, |image| image.develop.crop = None);

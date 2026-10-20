@@ -5,6 +5,8 @@ pub mod optics;
 pub mod presets;
 mod raw_photo;
 pub mod transfer;
+mod white_balance;
+pub use white_balance::auto_white_balance;
 pub use raw_photo::LinearImage;
 pub use raw_photo::{AdmittedImage, AdmittedSamples, EncodedPhoto};
 

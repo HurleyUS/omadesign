@@ -171,3 +171,17 @@ fn craft_develop_auto_light_panel_button_is_one_photo_undo() {
     studio.undo();
     assert_eq!(develop(&studio), changed);
 }
+
+#[test]
+fn craft_develop_menu_auto_white_balance_is_one_photo_undo() {
+    let mut studio = editor();
+    let before = develop(&studio);
+    let mut expected = before.clone();
+    crate::photo::auto_white_balance(&mut expected, &studio.photo.selected().unwrap().preview);
+    assert_ne!(expected, before);
+    let mut seat = open_develop(&mut studio);
+    seat.invoke(&mut studio, "Auto white balance");
+    assert_eq!(develop(&studio), expected);
+    reopen(&studio);
+    undo_redo(&mut studio, &before);
+}
