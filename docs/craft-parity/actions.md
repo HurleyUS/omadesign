@@ -7,3 +7,7 @@ The current recorder supports visible, unlocked vector artwork in Design and Lay
 Actions live in a bounded, versioned `actions.json` beside the personal palette. Native controls provide creation, paste/rename, recording, stop/save, playback, step removal/manual insertion, deletion and reload. Recordings append to the captured action, not a later pane selection. A concurrent action edit preserves pending steps and the current file; Save as New recovers the complete original sequence plus the new recording. Paused recordings allow explicit library cleanup. Discard is explicit. Recording checks the actual destination library's byte budget before adding another step.
 
 Playback moves the original history aside, runs ordinary editor commands in a staging history, and combines their accepted commands into one completed Undo entry. Staging retains commands beyond the ordinary 200-entry limit. A refused middle step reverses those exact commands and restores the original document, vector selection, dirty flag and original Undo/Redo history. No history clone, fabricated input event, alternate forward mutation route or separate document loader is used.
+
+Actions also record Move (arrow-key nudges, with its offset) and Align (each of the six edges/centres). The Actions panel can export the selected action, or every action, to a standalone JSON file, and import such files with collision-safe renaming; damaged files change nothing.
+
+Actions exchange receipt follows.
