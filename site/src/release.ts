@@ -1,6 +1,6 @@
 import { REPO } from "./site";
 
-export const RELEASE_VERSION = "0.6.3-nightly.20261013.0001";
+export const RELEASE_VERSION = "0.6.8";
 export const RELEASE_TAG = `v${RELEASE_VERSION}`;
 export const RELEASE_URL = `${REPO}/releases/tag/${RELEASE_TAG}`;
 export const NIGHTLY_VERSION = "0.6.7-nightly.20261016.0001";

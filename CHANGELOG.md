@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-20 · 0.6.8 — Craft parity
+
+- Ship the 0.6.4–0.6.7 milestones and the Craft parity stack (#220–#451) as one stable release.
+- The native float compositor adds conic and shape gradients. Gray and Lab tagged documents use project format version 40.
+- Motion Animation, Layout, Develop and Effect menus run real commands. Adds layer effects, reverse/clear animation, auto white balance and Remove Auto Layout.
+- Adds spot and alpha channel exchange with Photoshop, channel Calculations, saved selections, exact channel transforms and filtered layer masks.
+- Asset Export adds bleed, JPEG quality, PNG-8/WebP/GIF variants and row reordering, and accepts layer drags.
+- Adds symbol replacement and library import, linked graphic styles, broader actions and recolor reduction presets.
+- [Release notes](docs/releases/0.6.8.md)
+
 ## 2026-10-13 · 0.6.3-nightly.20261013.0001 — Brushes that follow your hand
 
 - Fix scaling after rotating a multi-object selection, preserve editable primitives during uniform scaling, and prevent canvas movement from resizing the sidebar.

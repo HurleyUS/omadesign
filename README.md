@@ -33,9 +33,9 @@ Asahi Omarchy, current Arch ARM, and anything newer.
 
 ## Latest release
 
-**0.6.3-nightly.20261013.0001** adds brush scatter, rotation, jitter, Square tips, and Wayland/X11 pen pressure. Rotated selections scale correctly, canvas movement leaves the sidebar alone, and file/rendering fixes from Fred Nix are included.
+**0.6.8** ships Craft parity: conic and shape gradients in the native float compositor, Gray/Lab tagged documents (format v40), real Motion/Layout/Develop/Effect menu commands, spot channels, Asset Export variants, symbol libraries and linked styles. It also includes all of 0.6.4–0.6.7.
 
-[What changed](docs/releases/0.6.3-nightly.20261013.0001.md) · [Brush packs](https://omadesign.app/brushes)
+[What changed](docs/releases/0.6.8.md) · [Brush packs](https://omadesign.app/brushes)
 
 ## Install
 

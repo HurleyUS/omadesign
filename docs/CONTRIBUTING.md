@@ -142,7 +142,7 @@ Refuse to ship if `objdump -T` shows GLIBC newer than 2.35.
 
 Nightlies use `BASE-nightly.YYYYMMDD.NNNN`, with a four-digit daily counter starting
 at `0001`, and a `v` prefix on the Git tag. Dates use America/New_York. Fetch tags
-before choosing the next counter. Publish routine nightlies as prereleases. A nightly selected as the latest release must use `--prerelease=false --latest`, and the website release constant, featured update, README and manual must point to that exact version. The current latest is `0.6.3-nightly.20261013.0001`.
+before choosing the next counter. Publish routine nightlies as prereleases. A nightly selected as the latest release must use `--prerelease=false --latest`, and the website release constant, featured update, README and manual must point to that exact version. The current latest is `0.6.8`.
 
 ```sh
 git fetch origin --tags

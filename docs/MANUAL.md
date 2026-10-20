@@ -20,7 +20,7 @@ shows or hides the strip; **F1** opens the complete shortcut list.
 
 ## Install
 
-The current release is **0.6.3-nightly.20261013.0001**. The installer below installs this nightly as the latest release. [Release notes](releases/0.6.3-nightly.20261013.0001.md).
+The current release is **0.6.8**. The installer below installs it. [Release notes](releases/0.6.8.md).
 
 ```sh
 curl -fsSL https://omadesign.app/install | sh
