@@ -39,6 +39,14 @@ pub(super) fn can_detach(studio: &Studio) -> bool {
         })
 }
 
+/// The selected frame is editable and stacks its children.
+pub(super) fn can_remove_auto(studio: &Studio) -> bool {
+    available(studio)
+        && studio.selected_frame().is_some_and(|hit| {
+            editable(studio, hit) && studio.doc.find_shape(hit.0, hit.1).is_some_and(|s| s.layout.stack.is_some())
+        })
+}
+
 pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
     let wrap = can_wrap(studio);
     if ui.add_enabled(wrap, eframe::egui::Button::new("Wrap in frame")).clicked() {
@@ -51,6 +59,15 @@ pub(super) fn menu(ui: &mut Ui, studio: &mut Studio) {
         .clicked()
     {
         studio.auto_layout_selection();
+        ui.close();
+    }
+    if ui
+        .add_enabled(can_remove_auto(studio), eframe::egui::Button::new("Remove auto layout"))
+        .on_hover_text("Keep the frame and children where they are")
+        .clicked()
+    {
+        studio.edit_layout(|l| l.stack = None);
+        studio.status = "auto layout removed".into();
         ui.close();
     }
     ui.separator();

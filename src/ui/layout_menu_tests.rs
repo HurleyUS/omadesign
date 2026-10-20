@@ -150,3 +150,24 @@ fn craft_layout_menu_keeps_panel_shortcuts() {
         keys::named(&seat.output, label);
     }
 }
+
+#[test]
+fn craft_layout_menu_remove_auto_layout_keeps_frame_and_positions() {
+    let (mut studio, hit) = editor();
+    let mut seat = open_layout(&mut studio);
+    seat.invoke(&mut studio, "Add auto layout");
+    let frame = shape(&studio, hit.1).layout.parent.expect("wrapped");
+    studio.selection = vec![(hit.0, frame)];
+    let geometry = shape(&studio, hit.1).geom.clone();
+    let before = saved(&studio);
+    let history = studio.history.len();
+    let mut seat = open_layout(&mut studio);
+    seat.invoke(&mut studio, "Remove auto layout");
+    assert!(shape(&studio, frame).layout.stack.is_none());
+    assert!(shape(&studio, frame).layout.frame);
+    assert_eq!(shape(&studio, hit.1).layout.parent, Some(frame));
+    assert_eq!(shape(&studio, hit.1).geom, geometry);
+    assert_eq!(studio.history.len(), history + 1);
+    reopen(&studio);
+    undo_redo(&mut studio, &before);
+}
