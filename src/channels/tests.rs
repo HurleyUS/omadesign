@@ -61,11 +61,10 @@ fn craft_channels_scalar_native32_preserves_exact_samples_aliases_and_legacy_def
         !crate::deep_color::has_native(&doc),
         "auxiliary scalar channels do not change painted RGB precision"
     );
-    let error = match crate::formats::psd::encode_admitted(&doc, false) {
-        Ok(_) => panic!("Saved channels were silently dropped"),
-        Err(error) => error,
-    };
-    assert!(error.contains("SavedChannelsUnsupported"));
+    let psd = crate::formats::psd::encode(&doc, false).unwrap();
+    let imported = crate::formats::psd::decode(&psd.bytes, "channels").unwrap().document;
+    assert_eq!(imported.channels.len(), 1, "root saved channels travel as Photoshop alpha channels");
+    assert_eq!(imported.channels[0].name, "Alpha Δ");
     let without = crate::compositor::export_png(&fixture(), 1).unwrap();
     let with = crate::compositor::export_png(&doc, 1).unwrap();
     assert_eq!(
@@ -97,11 +96,13 @@ fn craft_channels_current_embedded_retained_deleted_and_underdeclared_readers_re
         .push(crate::motion::compositions::Composition::new(doc.clone()));
     for d in [&doc, &parent] {
         assert!(crate::collaboration::snapshot(d).is_err());
-        let error = match crate::formats::psd::encode_admitted(d, false) {
-            Ok(_) => panic!("Dropped embedded channels"),
-            Err(error) => error,
-        };
-        assert!(error.contains("SavedChannelsUnsupported"));
+        if std::ptr::eq(d, &parent) {
+            let error = match crate::formats::psd::encode_admitted(d, false) {
+                Ok(_) => panic!("Dropped embedded channels"),
+                Err(error) => error,
+            };
+            assert!(error.contains("SavedChannelsUnsupported"));
+        }
         let encoded = crate::project::encode(d).unwrap();
         let mut v: serde_json::Value = serde_json::from_str(&encoded).unwrap();
         assert_eq!(v["version"], 32);

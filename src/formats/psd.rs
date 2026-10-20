@@ -4,6 +4,7 @@
 //! Parsing is bounded and never invokes a shell or an external converter.
 
 mod codec;
+mod channels;
 pub mod descriptor;
 mod effects;
 mod engine_data;
@@ -125,6 +126,7 @@ fn encode_blend(blend: Blend) -> &'static [u8; 4] {
 pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
     let parsed = codec::parse(bytes)?;
     let mut warnings = parsed.warnings;
+    let saved_channels = parsed.saved_channels;
     // Avoid allocating a disposable full-canvas background before loading layers.
     let mut doc = Document::new(name, 1.0, 1.0, parsed.dpi);
     doc.width = parsed.width as f32;
@@ -332,6 +334,7 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<PsdImport, String> {
             "This Photoshop file contains only a merged image; no separate layers were saved.",
         );
     }
+    doc.channels = saved_channels;
     Ok(PsdImport {
         document: doc,
         warnings,

@@ -114,6 +114,7 @@ pub(super) struct Parsed {
     pub layers: Vec<Record>,
     pub merged: Option<Arc<Allocation<u8>>>,
     pub merged_alpha: bool,
+    pub saved_channels: Vec<crate::channels::Channel>,
     pub warnings: Vec<String>,
 }
 
@@ -163,6 +164,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
     let mut resources = r.section(false)?;
     let mut dpi = 72.0;
     let mut icc_profile = Vec::new();
+    let mut channel_info = super::channels::Info::default();
     while resources.remaining() >= 12 {
         if resources.take(4)? != b"8BIM" {
             return Err("Invalid Photoshop image resource signature".into());
@@ -178,6 +180,9 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
         }
         if id == 1039 {
             icc_profile = data.bytes.to_vec();
+        }
+        if id == 1045 || id == 1077 {
+            channel_info.read(id, data.bytes, &mut warnings);
         }
         if data.bytes.len() % 2 != 0 {
             resources.take(1)?;
@@ -210,7 +215,9 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
             }
         }
     }
-    let merged = if layers.is_empty() {
+    let extras = channels.saturating_sub(color_channels(mode) + usize::from(merged_alpha));
+    let wants_extras = extras > 0 && !channel_info.names.is_empty();
+    let merged = if layers.is_empty() || wants_extras {
         let pixels = dimensions(width, height)?;
         budget(
             &mut allocation,
@@ -227,13 +234,18 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
             depth,
             large,
         )?;
-        if !merged_alpha && channels > color_channels(mode) {
+        if !merged_alpha && channels > color_channels(mode) && !wants_extras {
             warn(&mut warnings,"Extra merged alpha or spot channels were not treated as document transparency.");
         }
         Some(samples)
     } else {
         None
     };
+    let saved_channels = match merged.as_ref().filter(|_| wants_extras) {
+        Some(samples) => channel_info.channels(samples, width, height, depth, channels - extras, extras, &mut warnings)?,
+        None => Vec::new(),
+    };
+    let merged = merged.filter(|_| layers.is_empty());
     Ok(Parsed {
         width,
         height,
@@ -245,6 +257,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Parsed, String> {
         layers,
         merged,
         merged_alpha,
+        saved_channels,
         warnings,
     })
 }

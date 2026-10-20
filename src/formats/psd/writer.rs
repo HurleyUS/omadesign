@@ -67,8 +67,8 @@ pub fn encode_admitted(doc: &Document, large: bool) -> Result<super::AdmittedPsd
     if crate::motion::compositions::documents(doc)?.iter().any(|document| document.quick_mask.is_some()) {
         return Err("QuickMaskUnsupported: Photoshop Quick Mask export is not implemented yet; save .oma to retain it".into());
     }
-    if crate::motion::compositions::documents(doc)?.iter().any(|document| !document.channels.is_empty()) {
-        return Err("SavedChannelsUnsupported: Photoshop alpha channel export is not implemented yet. Save .oma to retain saved channels.".into());
+    if crate::motion::compositions::documents(doc)?.iter().any(|document| !std::ptr::eq(*document, doc) && !document.channels.is_empty()) {
+        return Err("SavedChannelsUnsupported: Photoshop export keeps saved channels only on the root document, not inside compositions. Save .oma to retain them.".into());
     }
     if doc.layers.iter().any(|l| {
         l.kind.shapes().is_some_and(|ss| {
@@ -244,7 +244,9 @@ pub fn encode_admitted(doc: &Document, large: bool) -> Result<super::AdmittedPsd
     out.write_all(b"8BPS").map_err(|e| e.to_string())?;
     u16(&mut out, if large { 2 } else { 1 })?;
     out.write_all(&[0; 6]).map_err(|e| e.to_string())?;
-    u16(&mut out, if doc.color.model == crate::deep_color::cms::Model::Cmyk {5} else {4})?;
+    let extra = super::channels::extra_planes(doc, w, h, depth)?;
+    let base_channels: u16 = if doc.color.model == crate::deep_color::cms::Model::Cmyk {5} else {4};
+    u16(&mut out, base_channels + u16::try_from(extra.len()).map_err(|_| "Too many saved channels for Photoshop")?)?;
     u32(&mut out, h)?;
     u32(&mut out, w)?;
     u16(&mut out, depth)?;
@@ -275,6 +277,7 @@ pub fn encode_admitted(doc: &Document, large: bool) -> Result<super::AdmittedPsd
             resources.push(0);
         }
     }
+    super::channels::write_resources(&mut resources, &doc.channels)?;
     section(&mut out, &resources, false)?;
     let (embedded, external) = super::smart::write_links(doc)?;
     let links = [(b"lnk2",embedded,large),(b"lnkE",external,false)];
@@ -307,6 +310,9 @@ pub fn encode_admitted(doc: &Document, large: bool) -> Result<super::AdmittedPsd
     let merged = merged.in_document_color(&doc.color)?;
     for ch in 0..if doc.color.model == crate::deep_color::cms::Model::Cmyk {5} else {4} {
         out.write_all(&plane(&merged, ch, depth, doc.color.model == crate::deep_color::cms::Model::Rgb)?).map_err(|e| e.to_string())?;
+    }
+    for data in &extra {
+        out.write_all(data).map_err(|e| e.to_string())?;
     }
     Ok(super::AdmittedPsdExport {
         bytes: out.finish()?,
