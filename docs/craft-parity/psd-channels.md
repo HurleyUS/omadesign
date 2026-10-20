@@ -2,6 +2,8 @@
 
 PSD and PSB export now write the root document's saved alpha and spot channels as merged-image extra channels. Names go in resource 1045 (Unicode) and display settings in resource 1077. Import reads them back as saved channels, with names, spot inks and solidity, at 8, 16 or 32 bits. Each channel is resampled onto the canvas grid with nearest samples, so translated or rotated channel placements land where they appear. Channels inside compositions are still refused rather than dropped.
 
+At `04c83c5af5202c51fd4b7db17413fcd2597bf852` that route passed 45 tests. Receipt `382294ce42803798087e33cd8a6289e1c8bb397d18a651377923cfd27198b21a`.
+
 ## Decisions to review
 
 - Spot channel data is written inverted (0 = full ink), as Photoshop stores it, and alpha data is written as coverage (255 = selected). Both are converted back on import.
