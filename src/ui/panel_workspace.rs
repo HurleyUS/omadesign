@@ -5,6 +5,7 @@ use eframe::egui::{self, Ui};
 
 pub(super) const PANELS: &[(&str, &str)] = &[
     ("transform", "Transform"),
+    ("properties", "Properties"),
     ("align", "Align"),
     ("pathfinder", "Pathfinder"),
     ("appearance", "Appearance"),
@@ -82,12 +83,12 @@ fn preset(name: &str) -> Workspace {
     let groups = match name {
         "Pixel" => vec![
             right(&["color", "swatches", "gradients", "patterns"], 0.25),
-            right(&["brushes", "transform", "adjustments"], 0.25),
+            right(&["properties", "brushes", "transform", "adjustments"], 0.25),
             right(&["layers", "channels", "paths"], 0.5),
         ],
         "Layout" => vec![
             right(&["layout", "transform", "align"], 0.4),
-            right(&["appearance", "stroke", "variables"], 0.2),
+            right(&["properties", "appearance", "stroke", "variables"], 0.2),
             right(&["layers", "hierarchy", "components"], 0.4),
         ],
         "Motion" => vec![
@@ -102,7 +103,7 @@ fn preset(name: &str) -> Workspace {
         ],
         _ => vec![
             right(&["transform", "align", "pathfinder"], 0.3),
-            right(&["appearance", "stroke", "color", "swatches"], 0.35),
+            right(&["properties", "appearance", "stroke", "color", "swatches"], 0.35),
             right(&["layers", "paths", "channels"], 0.5),
         ],
     };
@@ -119,14 +120,6 @@ fn prepare(book: &mut super::workspace::Book, persona: Persona) {
             .tasks
             .entry(name.into())
             .or_insert_with(|| preset(name));
-        if layout
-            .groups
-            .iter()
-            .flat_map(|g| &g.panels)
-            .any(|p| p == "properties")
-        {
-            *layout = preset(name);
-        }
         layout.normalize(&PANELS.iter().map(|p| p.0).collect::<Vec<_>>());
     }
 }
@@ -251,8 +244,13 @@ fn photo_preset() -> Workspace {
 
 pub(super) fn return_focus(ctx: &egui::Context, studio: &mut Studio) {
     prepare(&mut studio.panel_workspaces, studio.persona);
-    if let Some(layout) = studio.panel_workspaces.tasks.get_mut(task(studio.persona)) {
-        if let Some(panel) = layout.focus.clone() {
+    if let Some(layout) = studio.panel_workspaces.tasks.get_mut(&studio.panel_workspaces.active) {
+        layout.normalize(&PANELS.iter().map(|panel| panel.0).collect::<Vec<_>>());
+        let panel = layout
+            .focus
+            .clone()
+            .or_else(|| layout.groups.first().map(|group| group.panels[group.active].clone()));
+        if let Some(panel) = panel {
             layout.request_focus(ctx, "oma-workspace", &panel);
         }
     }

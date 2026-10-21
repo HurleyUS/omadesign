@@ -30,6 +30,7 @@ fn contents(ui: &mut Ui, studio: &mut Studio, panel: &str) {
         return;
     }
     match panel {
+        "properties" => super::studios::inspector_content(ui, studio),
         "align" => super::selection::arrange_panel(ui, studio),
         "pathfinder" => pathfinder(ui, studio),
         "swatches" => super::library::pane(ui, studio, crate::app::libraries::Sidebar::Palettes),
