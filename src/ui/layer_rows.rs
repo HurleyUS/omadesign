@@ -93,8 +93,6 @@ mod tests {
         let rows = snapshot(&shapes, 0.0, clip, 6.0, Some(shapes[0].id));
         assert_eq!(
             rows.iter().map(|row| row.visual_index).collect::<Vec<_>>(),
-            // Pitch 40: row 4 spans 160..194 and row 7 spans 280..314, so
-            // both partially overlap the 180..288 clip and must be drawn.
             [4, 5, 6, 7, 1999]
         );
         assert_eq!(rows[0].name, "Object 1995");
