@@ -1181,7 +1181,7 @@ mod qualification_tests {
         let output = std::env::var_os("CRAFT_MOTION_QA_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| {
-                std::env::temp_dir().join(format!("craft-motion-{}", crate::document::next_id()))
+                crate::test_support::scratch(format!("craft-motion-{}", crate::document::next_id()).as_str())
             });
         assert!(output.starts_with("/home/"));
         std::fs::create_dir_all(&output).unwrap();

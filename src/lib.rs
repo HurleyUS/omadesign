@@ -76,3 +76,20 @@ pub mod outline;
 
 pub mod telemetry;
 pub mod resources;
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::PathBuf;
+
+    /// Test scratch root
+    /// Brief: Writable scratch directory for test receipts and fixtures that never lands on the root disk.
+    /// Args: `segment` - unique path segment for the test family, e.g. `color-themes` or `craft-motion`.
+    /// Returns: an absolute path under `TMPDIR` when that directory lives under `/home`, otherwise `.qa-runs` beside the manifest (the repo's serialized test helper guarantees TMPDIR under /home; a bare cargo run falls back to the manifest-side .qa-runs directory).
+    pub(crate) fn scratch(segment: &str) -> PathBuf {
+        let fallback = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".qa-runs");
+        match std::env::var_os("TMPDIR").map(PathBuf::from) {
+            Some(root) if root.starts_with("/home") => root.join(segment),
+            _ => fallback.join(segment),
+        }
+    }
+}
