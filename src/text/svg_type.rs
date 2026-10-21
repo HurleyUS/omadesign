@@ -966,7 +966,7 @@ fn substituted_font(font: &usvg::Font) -> Option<std::path::PathBuf> {
 
 /// Reuse the shared fontconfig substitution for unavailable families.
 /// Args: ordered families, weight and style. Returns the cached actual font path.
-fn substituted_path(families:&[usvg::FontFamily],weight:u16,style:usvg::FontStyle)->Option<std::path::PathBuf> {
+pub(crate) fn substituted_path(families:&[usvg::FontFamily],weight:u16,style:usvg::FontStyle)->Option<std::path::PathBuf> {
     static MATCHES: OnceLock<Mutex<HashMap<String, Option<std::path::PathBuf>>>> = OnceLock::new();
     let family = families.iter()
         .map(|family| match family {

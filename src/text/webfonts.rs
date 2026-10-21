@@ -213,6 +213,27 @@ fn faces(source: &str) -> Result<Vec<&str>, String> {
     Ok(blocks)
 }
 
+/// Reuse the original parse's fc substitution for an unavailable family request.
+/// Args: requested families, resolved font weight and slant, and the reader database.
+/// Returns the substituted face's portable reference.
+fn substituted_face_reference(tokens:&[usvg::FontFamily], style:&std::collections::BTreeMap<String,String>, db:&usvg::fontdb::Database)->Option<String> {
+    if tokens.is_empty() {return None;}
+    let weight = style
+        .get("font-weight")
+        .map_or(400, |s| if s.as_str()=="bold" {700} else {s.parse().unwrap_or(400)});
+    let font_style = match style.get("font-style").map(String::as_str) {
+        Some("italic") => usvg::FontStyle::Italic,
+        Some("oblique") => usvg::FontStyle::Oblique,
+        _ => usvg::FontStyle::Normal,
+    };
+    let path=super::svg_type::substituted_path(tokens,weight,font_style)?;
+    let face=db.faces().find_map(|f| match &f.source {
+        usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p,_) if *p==path => Some(f),
+        _ => None,
+    });
+    face.and_then(|f| reference(db,f.id))
+}
+
 /// Bind embedded CSS family aliases to the actual portable faces selected for this source.
 /// Args: captured text metadata and its original font database. Returns no value; ordinary missing family requests stay unchanged.
 pub(crate) fn bind(svg:&mut super::svg_type::SvgText, db:&usvg::fontdb::Database, used:&[(usize,crate::geom::CharSpan)])->Result<(),String> {
@@ -223,14 +244,24 @@ pub(crate) fn bind(svg:&mut super::svg_type::SvgText, db:&usvg::fontdb::Database
     }
     super::svg_type::map_families(&mut svg.root,|style,range| {
         let mut families=Vec::new();
-        for (family,id) in super::svg_type::family_faces(style,db) {
+        let resolved=super::svg_type::family_faces(style,db);
+        for (family,id) in resolved.iter() {
             let value=if let Some(id)=id {
-                if let Some(value)=references.get(&id) {format!("'{value}'")} else {
-                    let value=reference(db,id).ok_or("Cannot retain this SVG text face within the existing font archive limits")?;
-                    references.insert(id,value.clone());format!("'{value}'")
+                if let Some(value)=references.get(id) {format!("'{value}'")} else {
+                    let value=reference(db,*id).ok_or("Cannot retain this SVG text face within the existing font archive limits")?;
+                    references.insert(id.clone(),value.clone());format!("'{value}'")
                 }
-            } else {super::svg_type::family_css(&family)};
+            } else {super::svg_type::family_css(family)};
             if !families.contains(&value) {families.push(value);}
+        }
+        if resolved.iter().all(|(_,id)| id.is_none()) {
+            // Keep the original parse's substituted base face behind the authored request so
+            // the runtime picks the same primary face as the reader's own resolution.
+            let tokens: Vec<_> = resolved.iter().map(|(family,_)| family.clone()).collect();
+            if let Some(value)=substituted_face_reference(&tokens,style,db) {
+                let value=format!("'{value}'");
+                if !families.contains(&value) {families.push(value);}
+            }
         }
         let mut actual:Vec<_>=used.iter().filter(|(at,_)|range.contains(at)).filter_map(|(at,style)|style.font.as_ref().map(|f|(*at,f))).collect();
         actual.sort_by_key(|(at,_)|*at);
