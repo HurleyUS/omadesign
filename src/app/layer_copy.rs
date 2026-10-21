@@ -51,7 +51,7 @@ pub(super) fn prepare(doc: &Document, root: usize, delta: Pt) -> Result<Copied, 
     if root >= doc.layers.len() || !delta.x.is_finite() || !delta.y.is_finite() {
         return Err("Choose an existing layer to duplicate".into());
     }
-    let indices: Vec<_> = (0..=root)
+    let indices: Vec<_> = (0..doc.layers.len())
         .filter(|&i| i == root || doc.layer_ancestors(i).contains(&root))
         .collect();
     if indices.windows(2).any(|p| p[1] != p[0] + 1) {
@@ -189,12 +189,15 @@ impl Studio {
                 .unwrap()
                 .name = name.to_owned();
         }
+        // Insert the whole copy after the complete source subtree, so a
+        // nested copy keeps the sibling slots between the source layers.
+        let insert_at = copied.indices.last().copied().unwrap_or(index) + 1;
         let mut commands: Vec<_> = copied
             .layers
             .iter()
             .enumerate()
             .map(|(offset, layer)| Cmd::AddLayer {
-                index: index + 1 + offset,
+                index: insert_at + offset,
                 layer: layer.clone(),
             })
             .collect();
@@ -220,7 +223,9 @@ impl Studio {
         self.end_deform(false);
         self.reset_snap_gesture();
         self.commit(command);
-        self.activate_layer_tree(index + copied.layers.len());
+        let root_copy_index =
+            insert_at + copied.indices.iter().position(|&i| i == index).unwrap_or(0);
+        self.activate_layer_tree(root_copy_index);
         self.selected_layer = Some(root);
         self.status = format!("Duplicated {}", self.doc.layers[index].name);
         true
