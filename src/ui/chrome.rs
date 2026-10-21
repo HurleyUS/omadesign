@@ -214,7 +214,8 @@ fn pane_items(ui: &mut Ui, studio: &mut Studio, panels: &[&str]) {
 }
 
 fn mode_tabs_rect(row: eframe::egui::Rect) -> eframe::egui::Rect {
-    eframe::egui::Rect::from_min_size(eframe::egui::pos2((row.right() - 144.0 - 288.0).max(row.left() + 180.0), row.center().y - 15.0), vec2(288.0, 30.0))
+    let left = row.center().x - 144.0;
+    eframe::egui::Rect::from_min_size(eframe::egui::pos2(left.max(row.left() + 180.0), row.center().y - 15.0), vec2(288.0, 30.0))
 }
 
 fn file_menu(ui: &mut Ui, studio: &mut Studio) {
