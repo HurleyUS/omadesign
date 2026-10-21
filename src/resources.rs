@@ -24,6 +24,20 @@ struct State {
     sources: Vec<(Weak<dyn Send + Sync>, Arc<Lease>)>,
 }
 
+#[cfg(test)]
+static TEST_EXCLUSIVE: Mutex<()> = Mutex::new(());
+
+/// Test-only pool claim
+/// Brief: Excludes other claim-holding tests from interleaving with this test's pool accounting.
+/// Args: none.
+/// Returns: a mutable guard the caller must hold across its whole before/after pool assertion window.
+pub(crate) fn test_exclusive() -> std::sync::MutexGuard<'static, ()> {
+    match TEST_EXCLUSIVE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 #[derive(Debug)]
 pub struct Budget {
     limit: u64,

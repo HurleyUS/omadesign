@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 mod features;
 
 pub(crate) const VERSION: u32 = features::COLOR_TAGS;
+pub(crate) use features::{ACTIVE_SELECTION, RICH_TEXT};
 
 /// Check whether this build implements a project version.
 /// Args: envelope version. Returns false for unimplemented reserved formats.

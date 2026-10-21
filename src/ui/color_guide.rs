@@ -874,11 +874,10 @@ mod tests {
     pub(super) fn context() -> egui::Context {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let ctx = egui::Context::default();
-        let root = std::path::PathBuf::from(
-            std::env::var("TMPDIR").expect("Run through the serialized helper"),
-        );
+        let root = crate::test_support::scratch("color-themes");
+        std::fs::create_dir_all(&root).unwrap();
         let file = root.join(format!(
-            "color-themes-{}-{}.json",
+            "{}-{}.json",
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));

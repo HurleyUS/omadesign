@@ -6,7 +6,7 @@ mod native_tests;
 mod retained;
 pub(crate) use retained::{serialized_version, value_version};
 
-pub(super) const RICH_TEXT: u32 = 14;
+pub(crate) const RICH_TEXT: u32 = 14;
 pub(super) const ADVANCED_GRADIENT: u32 = 15;
 pub(super) const VECTOR_PATTERN: u32 = 16;
 pub(super) const SVG_FILTER: u32 = 17;
@@ -28,7 +28,7 @@ pub(super) const CHANNELS: u32 = 32;
 pub(super) const QUICK_MASK: u32 = 33;
 pub(super) const VARIABLE_FONTS: u32 = 34;
 pub(super) const LAYER_CLIPPING: u32 = 35;
-pub(super) const ACTIVE_SELECTION: u32 = 36;
+pub(crate) const ACTIVE_SELECTION: u32 = 36;
 pub(super) const SPOT_CHANNELS: u32 = 37;
 pub(super) const EXPORT_OPTIONS: u32 = 38;
 pub(super) const LINKED_STYLES: u32 = 39;
