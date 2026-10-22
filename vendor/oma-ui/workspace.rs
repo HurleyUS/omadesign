@@ -551,7 +551,8 @@ impl Workspace {
                         shown.response.rect.width(),
                         shown.response.rect.height(),
                     ];
-                    if ui.ctx().memory(|memory| memory.focused())
+                    if (explicitly_requested.is_none() || focus_delivered)
+                        && ui.ctx().memory(|memory| memory.focused())
                         .and_then(|focus| ui.ctx().read_response(focus))
                         .is_some_and(|focused| owns_focus(shown.response.rect, &focused))
                     {
@@ -580,7 +581,8 @@ impl Workspace {
                                 content(ui);
                             });
                     });
-                    if ui.ctx().memory(|memory| memory.focused())
+                    if (explicitly_requested.is_none() || focus_delivered)
+                        && ui.ctx().memory(|memory| memory.focused())
                         .and_then(|focus| ui.ctx().read_response(focus))
                         .is_some_and(|focused| owns_focus(rect, &focused))
                     {
