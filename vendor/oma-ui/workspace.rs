@@ -553,7 +553,7 @@ impl Workspace {
                     ];
                     if ui.ctx().memory(|memory| memory.focused())
                         .and_then(|focus| ui.ctx().read_response(focus))
-                        .is_some_and(|focused| shown.response.rect.contains(focused.rect.center()))
+                        .is_some_and(|focused| owns_focus(shown.response.rect, &focused))
                     {
                         self.focus = Some(saved.panels[saved.active].clone());
                     }
@@ -582,7 +582,7 @@ impl Workspace {
                     });
                     if ui.ctx().memory(|memory| memory.focused())
                         .and_then(|focus| ui.ctx().read_response(focus))
-                        .is_some_and(|focused| rect.contains(focused.rect.center()))
+                        .is_some_and(|focused| owns_focus(rect, &focused))
                     {
                         self.focus = Some(saved.panels[saved.active].clone());
                     }
@@ -1134,4 +1134,12 @@ mod tests {
                 .any(|g| g.panels.iter().any(|p| p == "canvas"))
         );
     }
+}
+
+/// Attribute keyboard focus to the group that actually shows it.
+/// Clipped overflow from a neighbouring group has an empty interaction rect,
+/// so it must not move workspace focus to the group drawn beneath it.
+fn owns_focus(rect: egui::Rect, focused: &egui::Response) -> bool {
+    let visible = focused.interact_rect;
+    visible.is_positive() && rect.contains(visible.center())
 }
