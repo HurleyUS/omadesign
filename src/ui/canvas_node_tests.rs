@@ -103,7 +103,7 @@ fn rotated_nodes_draw_pick_and_drag_in_one_world_frame() {
                     .iter()
                     .any(|item| matches!(&item.shape, eframe::egui::Shape::Rect(rect)
                 if rect.fill == select() && rect.rect.center().distance(at) < 0.002
-                    && (rect.rect.width() == 6.0 || rect.rect.width() == 8.0))),
+                    && [6.0_f32, 8.0].iter().any(|w| (rect.rect.width() - w).abs() < 1e-3))),
                 "node overlay must follow rotation"
             );
         }
