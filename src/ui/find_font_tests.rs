@@ -248,6 +248,7 @@ fn craft_find_font_native_menu_filter_style_selected_change_undo_and_reopen() {
 }
 #[test]
 fn craft_find_font_native_find_all_cancel_stale_and_narrow_modal_keep_document_unchanged() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     let mut s = editor();
     let mut seat = Seat::new();
     let before = wire(&s);

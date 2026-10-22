@@ -472,6 +472,7 @@ pub(crate) mod sample_bytes {
 
         #[test]
         fn streaming_samples_propagate_output_failure_without_partial_success() {
+            let _pool_exclusive = crate::resources::test_exclusive();
             struct Refuse {
                 remaining: usize,
             }
