@@ -554,7 +554,7 @@ impl Workspace {
                     if (explicitly_requested.is_none() || focus_delivered)
                         && ui.ctx().memory(|memory| memory.focused())
                         .and_then(|focus| ui.ctx().read_response(focus))
-                        .is_some_and(|focused| owns_focus(shown.response.rect, &focused))
+                        .is_some_and(|focused| owns_focus(shown.response.rect, shown.response.layer_id, &focused))
                     {
                         self.focus = Some(saved.panels[saved.active].clone());
                     }
@@ -584,7 +584,7 @@ impl Workspace {
                     if (explicitly_requested.is_none() || focus_delivered)
                         && ui.ctx().memory(|memory| memory.focused())
                         .and_then(|focus| ui.ctx().read_response(focus))
-                        .is_some_and(|focused| owns_focus(rect, &focused))
+                        .is_some_and(|focused| owns_focus(rect, ui.layer_id(), &focused))
                     {
                         self.focus = Some(saved.panels[saved.active].clone());
                     }
@@ -1141,7 +1141,9 @@ mod tests {
 /// Attribute keyboard focus to the group that actually shows it.
 /// Clipped overflow from a neighbouring group has an empty interaction rect,
 /// so it must not move workspace focus to the group drawn beneath it.
-fn owns_focus(rect: egui::Rect, focused: &egui::Response) -> bool {
+/// Popups and menus live on their own layer above the dock; focus there belongs
+/// to no group, so it must not pull workspace focus back to a panel tab.
+fn owns_focus(rect: egui::Rect, layer: egui::LayerId, focused: &egui::Response) -> bool {
     let visible = focused.interact_rect;
-    visible.is_positive() && rect.contains(visible.center())
+    focused.layer_id == layer && visible.is_positive() && rect.contains(visible.center())
 }
