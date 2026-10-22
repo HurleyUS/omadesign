@@ -508,20 +508,16 @@ fn palette_sidebar_creates_edits_applies_and_saves_transparent_colours() {
         studio.doc.find_shape(0, selected).unwrap().style.fill,
         Fill::Solid(color)
     );
-    // The docked chrome also paints a "Stroke" tab; use the palette toggle
-    // beside Fill.
-    let stroke_toggle = labels
+    // The dock tab bar also paints a "Stroke" tab; target the palette's own
+    // Fill/Stroke toggle, which shares a row with the palette "Fill" toggle.
+    let fill = label_rect(&labels, "Fill");
+    let stroke = labels
         .iter()
-        .filter(|text| text.label == "Stroke" && text.rect.intersects(text.clip))
-        .min_by(|a, b| {
-            (a.rect.center().y - fill_toggle.center().y)
-                .abs()
-                .total_cmp(&(b.rect.center().y - fill_toggle.center().y).abs())
-        })
-        .unwrap()
-        .rect
-        .center();
-    let labels = click_at(&ctx, &mut studio, stroke_toggle, PointerButton::Primary, 900.0);
+        .filter(|text| text.label == "Stroke" && (text.rect.center().y - fill.center().y).abs() < 4.)
+        .map(|text| text.rect.center())
+        .next()
+        .expect("palette Stroke toggle beside Fill");
+    let labels = click_at(&ctx, &mut studio, stroke, PointerButton::Primary, 900.0);
     let swatch = swatch_rect(&labels, color).center();
     click_at(&ctx, &mut studio, swatch, PointerButton::Primary, 900.0);
     assert_eq!(
