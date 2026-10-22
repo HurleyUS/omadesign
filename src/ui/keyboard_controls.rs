@@ -121,7 +121,7 @@ pub(super) fn motion_number(
             *value = before;
         }
         if !valid && response.enabled() {
-            ui.scope(|ui| {
+            let shown = ui.scope(|ui| {
                 ui.set_max_width(220.0);
                 super::welcome::control_error(
                     ui,
@@ -129,6 +129,14 @@ pub(super) fn motion_number(
                     "Enter a finite number within the shown range",
                 );
             });
+            // Keep the rejected field's message inside a clipped scroll area while it is edited.
+            if response.has_focus() && !ui.clip_rect().contains_rect(shown.response.rect) {
+                ui.scroll_to_rect_animation(
+                    response.rect.union(shown.response.rect),
+                    None,
+                    egui::style::ScrollAnimation::none(),
+                );
+            }
         }
         number_focus(ui, &response);
         super::welcome::focus_control(ui, &response);
