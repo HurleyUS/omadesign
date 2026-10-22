@@ -108,7 +108,10 @@ pub(super) fn inspector_content(ui: &mut Ui, studio: &mut Studio) {
                 .max_height(properties_height)
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    super::selection::arrange_panel(ui, studio);
+                    // The Align pane owns alignment when it is the visible tab (#476).
+                    if !super::panel_workspace::shown(ui.ctx(), "align") {
+                        super::selection::arrange_panel(ui, studio);
+                    }
                     super::text_geometry::wrap_inspector(ui, studio);
                     section_gap(ui);
                     if motion {
