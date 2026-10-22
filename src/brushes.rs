@@ -426,7 +426,12 @@ fn crop(tip: Tip) -> Result<Tip, String> {
 /// Arguments are the target, center, brush settings, tip, and erase flag; pixels are blended in place.
 pub fn stamp(pm: &mut tiny_skia::Pixmap, pos: Pt, brush: &Brush, tip: &Tip, erase: bool) {
     let (pos, brush) = brush.dab(pos);
-    let brush = &brush;
+    stamp_dab(pm, pos, &brush, tip, erase);
+}
+
+/// Stamp an already varied sampled dab without changing its random pattern at tile edges.
+/// Takes the target, local center, varied settings, tip and erase flag; updates the target.
+pub(crate) fn stamp_dab(pm: &mut tiny_skia::Pixmap, pos: Pt, brush: &Brush, tip: &Tip, erase: bool) {
     let scale = brush.size.max(1.0) / tip.width.max(tip.height) as f32;
     let (w, h) = (tip.width as f32 * scale, tip.height as f32 * scale);
     let radius = (w * w + h * h).sqrt() * 0.5;

@@ -17,6 +17,9 @@ struct Qa {
     screenshot: bool,
     canvas: bool,
     before: String,
+    large: bool,
+    ui_ms: Vec<f64>,
+    peak_working_pixels: usize,
 }
 
 fn canvas_point(step: usize) -> Pt {
@@ -31,6 +34,19 @@ fn canvas_point(step: usize) -> Pt {
     let t = (step - segment * 5) as f32 / 5.;
     corners[segment] + (corners[segment + 1] - corners[segment]) * t
 }
+impl Qa {
+    fn point(&self, step: usize) -> Pt {
+        let p = canvas_point(step);
+        if self.large {
+            Pt::new(
+                54000. + (p.x + 70.) * 20.,
+                -30000. + (p.y + 60.) * (7000. / 300.),
+            )
+        } else {
+            p
+        }
+    }
+}
 impl eframe::App for Qa {
     fn raw_input_hook(&mut self, _: &egui::Context, input: &mut egui::RawInput) {
         input
@@ -41,7 +57,22 @@ impl eframe::App for Qa {
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let start = Instant::now();
         eframe::App::ui(&mut self.studio, ui, frame);
+        self.ui_ms.push(start.elapsed().as_secs_f64() * 1000.);
+        if let Some(omadesign::app::Op::Brush { buf, .. }) = &self.studio.op {
+            self.peak_working_pixels = self
+                .peak_working_pixels
+                .max(buf.tiles.values().map(|pm| pm.pixels().len()).sum());
+            if self.large {
+                let pixels = self.studio.doc.layers[0].kind.pixels().unwrap();
+                assert_eq!(
+                    (pixels.w, pixels.h),
+                    (1920, 1080),
+                    "moving the pen must not resize the saved image"
+                );
+            }
+        }
         assert!(
             self.started.elapsed().as_secs() < 60,
             "Native brush QA timed out"
@@ -61,11 +92,14 @@ impl eframe::App for Qa {
                 if self.canvas { 0 } else { 1 },
                 if self.canvas { 6 } else { 0 },
             );
-            self.studio.brush.size = 38.;
+            self.studio.brush.size = if self.large { 555. } else { 38. };
+            if self.large {
+                self.studio.brush.spacing = 0.15;
+            }
             let pos = position(
                 &self.studio,
                 if self.canvas {
-                    canvas_point(0)
+                    self.point(0)
                 } else {
                     Pt::new(70., 90.)
                 },
@@ -82,7 +116,7 @@ impl eframe::App for Qa {
             let pos = position(
                 &self.studio,
                 if self.canvas {
-                    canvas_point(self.frame - 10)
+                    self.point(self.frame - 10)
                 } else {
                     Pt::new(70. + (self.frame - 10) as f32 * 8., 90.)
                 },
@@ -93,7 +127,7 @@ impl eframe::App for Qa {
             let pos = position(
                 &self.studio,
                 if self.canvas {
-                    canvas_point(20)
+                    self.point(20)
                 } else {
                     Pt::new(230., 90.)
                 },
@@ -119,12 +153,7 @@ impl eframe::App for Qa {
             let after = omadesign::project::encode(&self.studio.doc).unwrap();
             if self.canvas {
                 assert_eq!(self.studio.history.len(), 1);
-                for point in [
-                    Pt::new(-70., 90.),
-                    Pt::new(180., 240.),
-                    Pt::new(430., 90.),
-                    Pt::new(180., -60.),
-                ] {
+                for point in [self.point(2), self.point(7), self.point(12), self.point(17)] {
                     let p = self.studio.mask_point(0, point);
                     let grid = self.studio.doc.layers[0].kind.pixels().unwrap();
                     assert!(p.x >= 0. && p.y >= 0. && p.x < grid.w as f32 && p.y < grid.h as f32);
@@ -211,7 +240,9 @@ impl eframe::App for Qa {
                     "Brush packs persist"
                 );
                 let grid = self.studio.doc.layers[0].kind.pixels().unwrap();
-                let report = serde_json::json!({"renderer":"native WGPU","input":"egui pointer down, 20 drag samples, pointer up","import":if self.canvas { "built-in Square" } else { "external JaxGrass ABR through editor importer" },"canvas_bounds":self.canvas,"original_grid":[320,180],"painted_grid":[grid.w,grid.h],"packs_after_reload":library.packs.len(),"undo_redo_exact":true,"save_reopen_exact":true,"frames":self.frame,"seconds":self.started.elapsed().as_secs_f32(),"painted_pixels":self.painted.as_ref().unwrap().chunks_exact(4).filter(|p|p[3]>0).count()});
+                let mut times = self.ui_ms.clone();
+                times.sort_by(f64::total_cmp);
+                let report = serde_json::json!({"large_canvas":self.large,"view_scale":self.studio.view.scale,"brush_size":self.studio.brush.size,"peak_working_pixels":self.peak_working_pixels,"studio_ui_ms":self.ui_ms,"studio_ui_median_ms":times[times.len()/2],"studio_ui_p95_ms":times[(times.len()*95/100).min(times.len()-1)],"studio_ui_max_ms":times[times.len()-1],"renderer":"native WGPU","input":"egui pointer down, 20 drag samples, pointer up","import":if self.canvas { "built-in Square" } else { "external JaxGrass ABR through editor importer" },"canvas_bounds":self.canvas,"original_grid":if self.large {[1920,1080]} else {[320,180]},"painted_grid":[grid.w,grid.h],"packs_after_reload":library.packs.len(),"undo_redo_exact":true,"save_reopen_exact":true,"frames":self.frame,"seconds":self.started.elapsed().as_secs_f32(),"painted_pixels":self.painted.as_ref().unwrap().chunks_exact(4).filter(|p|p[3]>0).count()});
                 std::fs::write(
                     self.output.join("native-result.json"),
                     serde_json::to_vec_pretty(&report).unwrap(),
@@ -228,7 +259,8 @@ impl eframe::App for Qa {
 fn main() -> eframe::Result {
     let args: Vec<_> = std::env::args().collect();
     assert_eq!(args.len(), 3, "brush_qa INPUT.abr|--canvas OUTPUT");
-    let canvas = args[1] == "--canvas";
+    let large = args[1] == "--large-canvas";
+    let canvas = large || args[1] == "--canvas";
     let output = PathBuf::from(&args[2]);
     std::fs::create_dir_all(&output).unwrap();
     for (key, name) in [
@@ -244,9 +276,18 @@ fn main() -> eframe::Result {
         }
     }
     let mut studio = Studio::new();
-    studio.doc = Document::new("Brush packs", 320., 180., 72.);
+    studio.doc = Document::new(
+        "Brush packs",
+        if large { 1920. } else { 320. },
+        if large { 1080. } else { 180. },
+        72.,
+    );
     studio.doc.transparent = true;
-    studio.doc.layers = vec![Layer::raster("Paint", 320, 180)];
+    studio.doc.layers = vec![Layer::raster(
+        "Paint",
+        if large { 1920 } else { 320 },
+        if large { 1080 } else { 180 },
+    )];
     studio.active_layer = Some(0);
     studio.show_welcome = false;
     studio.persona = Persona::Pixel;
@@ -257,8 +298,12 @@ fn main() -> eframe::Result {
         studio.need_fit = false;
         studio.show_rulers = false;
         studio.view = omadesign::compositor::View {
-            scale: 1.5,
-            offset: Pt::new(180., 180.),
+            scale: if large { 0.04 } else { 1.5 },
+            offset: if large {
+                Pt::new(-2100., 1400.)
+            } else {
+                Pt::new(180., 180.)
+            },
         };
     } else {
         studio.import_brush_pack(std::path::Path::new(&args[1]));
@@ -268,7 +313,7 @@ fn main() -> eframe::Result {
         "Omadesign brush QA",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1440., 900.])
+                .with_inner_size(if large { [3412., 2131.] } else { [1440., 900.] })
                 .with_title("Omadesign · brush pack QA"),
             renderer: eframe::Renderer::Wgpu,
             ..Default::default()
@@ -285,6 +330,9 @@ fn main() -> eframe::Result {
                 screenshot: false,
                 canvas,
                 before,
+                large,
+                ui_ms: vec![],
+                peak_working_pixels: 0,
             }))
         }),
     )

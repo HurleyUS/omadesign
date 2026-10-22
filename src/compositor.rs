@@ -151,9 +151,36 @@ fn canvas_bg() -> Rgba {
     )
 }
 
+#[derive(Clone, Copy)]
+pub enum BrushPreview<'a> {
+    Dense(&'a Pixmap),
+    Tiles(&'a crate::raster_paint::BrushBuffer),
+}
+
+impl BrushPreview<'_> {
+    fn bounds(self) -> Option<crate::geom::Bounds> {
+        use crate::geom::Bounds;
+        match self {
+            Self::Dense(pm) => Some(Bounds::from_min_size(Pt::ZERO, Pt::new(pm.width() as f32, pm.height() as f32))),
+            Self::Tiles(buffer) => buffer.tiles.keys().map(|&(x,y)| Bounds::from_min_size(
+                Pt::new((x*crate::raster_paint::TILE) as f32,(y*crate::raster_paint::TILE) as f32),
+                Pt::new(crate::raster_paint::TILE as f32,crate::raster_paint::TILE as f32))).reduce(|a,b|a.union(b)),
+        }
+    }
+
+    fn draw(self, target: &mut Pixmap, paint: &PixmapPaint, transform: Transform, mask: Option<&tiny_skia::Mask>) {
+        match self {
+            Self::Dense(pm) => target.draw_pixmap(0,0,pm.as_ref(),paint,transform,mask),
+            Self::Tiles(buffer) => for (&(x,y),pm) in &buffer.tiles {
+                target.draw_pixmap(0,0,pm.as_ref(),paint,transform.pre_translate((x*crate::raster_paint::TILE) as f32,(y*crate::raster_paint::TILE) as f32),mask);
+            },
+        }
+    }
+}
+
 pub struct Draft<'a> {
     pub preview: Option<&'a Shape>,
-    pub brush: Option<(usize, &'a Pixmap, f32)>,
+    pub brush: Option<(usize, BrushPreview<'a>, f32)>,
 }
 
 impl Draft<'static> {
@@ -352,7 +379,7 @@ fn draw_layer(
     pm: &mut Pixmap,
     layer: &Layer,
     t: Transform,
-    brush: Option<(&Pixmap, f32)>,
+    brush: Option<(BrushPreview<'_>, f32)>,
     preview: Option<&Shape>,
     motion_t: Option<f32>,
     doc: &Document,
@@ -490,7 +517,7 @@ fn draw_layer(
 fn layer_region(
     layer: &Layer,
     transform: Transform,
-    brush: Option<(&Pixmap, f32)>,
+    brush: Option<(BrushPreview<'_>, f32)>,
     preview: Option<&Shape>,
     motion: Option<f32>,
     doc: &Document,
@@ -536,12 +563,9 @@ fn layer_region(
             bounds?
         }
         LayerKind::Raster { pixels, .. } => {
-            let w = brush.map_or(pixels.w, |(pm, _)| pixels.w.max(pm.width()));
-            let h = brush.map_or(pixels.h, |(pm, _)| pixels.h.max(pm.height()));
-            let bounds = crate::geom::Bounds::from_min_size(
-                Pt::new(-1.0, -1.0),
-                Pt::new(w as f32 + 2.0, h as f32 + 2.0),
-            );
+            let mut bounds = crate::geom::Bounds::from_min_size(Pt::ZERO,Pt::new(pixels.w as f32,pixels.h as f32));
+            if let Some(next)=brush.and_then(|(brush,_)|brush.bounds()) {bounds=bounds.union(next);}
+            let bounds=bounds.inflate(1.);
             let Some(bounds) =
                 transformed_bounds(bounds, transform.pre_concat(layer_pixel_transform(layer)))
             else {
@@ -602,35 +626,15 @@ pub fn layer_pixel_transform(layer: &Layer) -> Transform {
             Transform::identity()
         };
     };
-    let dimensions = if size.x.abs() > 0.5 && size.y.abs() > 0.5 {
-        *size
-    } else {
-        Pt::new(pixels.w as f32, pixels.h as f32)
-    };
-    let mut transform = Transform::from_translate(origin.x, origin.y).pre_scale(
-        dimensions.x / pixels.w.max(1) as f32,
-        dimensions.y / pixels.h.max(1) as f32,
-    );
-    if rotation.abs() > 1e-5 {
-        let centre = *origin + dimensions * 0.5;
-        transform = Transform::from_translate(centre.x, centre.y)
-            .pre_concat(Transform::from_rotate(rotation.to_degrees()))
-            .pre_concat(Transform::from_translate(-centre.x, -centre.y))
-            .pre_concat(transform);
-    }
-    if shear.abs() > 1e-4 {
-        let slope = *shear / dimensions.y.max(1.0);
-        let shear_xf = Transform::from_row(1.0, 0.0, slope, 1.0, -slope * origin.y, 0.0);
-        transform = shear_xf.pre_concat(transform);
-    }
-    transform
+    let _ = (pixels,origin,size,rotation,shear);
+    crate::raster_paint::RasterGrid::capture(layer).unwrap().transform()
 }
 
 fn draw_content(
     pm: &mut Pixmap,
     layer: &Layer,
     t: Transform,
-    brush: Option<(&Pixmap, f32)>,
+    brush: Option<(BrushPreview<'_>, f32)>,
     preview: Option<&Shape>,
     opacity: f32,
     blend: tiny_skia::BlendMode,
@@ -694,10 +698,7 @@ fn draw_content(
                 );
             });
             if let Some((buf, flow)) = brush {
-                pm.draw_pixmap(
-                    0,
-                    0,
-                    buf.as_ref(),
+                buf.draw(pm,
                     &PixmapPaint {
                         opacity: (opacity * flow).clamp(0.0, 1.0),
                         blend_mode: blend,

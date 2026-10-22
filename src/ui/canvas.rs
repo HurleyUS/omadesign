@@ -234,7 +234,7 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
                 preview: None,
                 brush: Some((
                     *layer,
-                    preview.as_ref().unwrap_or(buf),
+                    crate::compositor::BrushPreview::Tiles(preview.as_ref().unwrap_or(buf)),
                     studio.brush.opacity,
                 )),
             },

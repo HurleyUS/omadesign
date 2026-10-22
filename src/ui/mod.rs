@@ -5,7 +5,6 @@ mod agent_picker;
 pub(crate) mod anim_export;
 mod browsers;
 mod background_removal;
-mod brush_bounds;
 mod canvas;
 mod chrome;
 mod credits;

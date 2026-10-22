@@ -9,8 +9,12 @@ pub(crate) fn rgba_to_pixmap(w: u32, h: u32, data: &[u8]) -> Option<tiny_skia::P
         return None;
     }
     let mut pm = tiny_skia::Pixmap::new(w, h)?;
-    for (dst, src) in pm.pixels_mut().iter_mut().zip(data.chunks_exact(4)) {
-        *dst = tiny_skia::ColorU8::from_rgba(src[0], src[1], src[2], src[3]).premultiply();
+    for (index, block) in data.chunks(4096).enumerate() {
+        if block.iter().all(|b| *b == 0) { continue }
+        let offset = index * 1024;
+        for (dst,src) in pm.pixels_mut()[offset..offset+block.len()/4].iter_mut().zip(block.chunks_exact(4)) {
+            *dst = tiny_skia::ColorU8::from_rgba(src[0], src[1], src[2], src[3]).premultiply();
+        }
     }
     Some(pm)
 }

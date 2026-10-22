@@ -504,7 +504,7 @@ impl Clone for Pixels {
         Self {
             w: self.w,
             h: self.h,
-            data: self.data.clone(),
+            data: crate::raster_paint::reframe(&self.data, (self.w,self.h), (self.w,self.h), (0,0)).unwrap_or_else(|| self.data.clone()),
             version: self.version,
             cached_pm: RefCell::new(None),
             cached_uniform: RefCell::new(*self.cached_uniform.borrow()),
@@ -567,7 +567,10 @@ impl Pixels {
     }
 
     pub fn to_pixmap(&self) -> Option<tiny_skia::Pixmap> {
-        self.with_pm(|pm| pm.clone())
+        self.with_pm(|pm| {
+            let data = crate::raster_paint::reframe(pm.data(),(self.w,self.h),(self.w,self.h),(0,0))?;
+            tiny_skia::Pixmap::from_vec(data,tiny_skia::IntSize::from_wh(self.w,self.h)?)
+        }).flatten()
     }
 
     /// Every pixel has alpha 0.
@@ -1650,35 +1653,6 @@ impl CanvasSettings {
     }
 }
 
-/// A paint layer's pixels, placement, and aligned mask.
-#[derive(Clone, Debug)]
-pub struct RasterState {
-    pub kind: LayerKind,
-    pub mask: Option<Pixels>,
-}
-
-impl RasterState {
-    /// Capture paint content before a stroke.
-    /// Takes a layer; returns its raster content, or None for a vector layer.
-    pub fn capture(layer: &Layer) -> Option<Self> {
-        layer.kind.pixels()?;
-        Some(Self {
-            kind: layer.kind.clone(),
-            mask: layer.mask.clone(),
-        })
-    }
-
-    /// Restore paint content without changing layer settings.
-    /// Takes the destination layer; returns nothing.
-    pub fn restore(self, layer: &mut Layer) {
-        layer.kind = self.kind;
-        if let Some(pixels) = layer.kind.pixels_mut() {
-            pixels.touch();
-        }
-        layer.mask = self.mask;
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum Cmd {
     SetCanvas { before: CanvasSettings, after: CanvasSettings },
@@ -1817,8 +1791,7 @@ pub enum Cmd {
     },
     PaintRaster {
         layer: usize,
-        before: RasterState,
-        after: RasterState,
+        change: crate::raster_paint::RasterChange,
     },
     AddGuide {
         guide: Guide,
@@ -1910,6 +1883,22 @@ pub enum Cmd {
 }
 
 const MAX_HISTORY: usize = 200;
+const MAX_HISTORY_PIXEL_BYTES: usize = 256 * 1024 * 1024;
+
+impl Cmd {
+    fn pixel_bytes(&self) -> usize {
+        let layer_bytes = |layer: &Layer| layer.kind.pixels().map_or(0, |p| p.data.len()) + layer.mask.as_ref().map_or(0, |p| p.data.len());
+        match self {
+            Self::Pixels { before, after, .. } => before.len() + after.len(),
+            Self::PaintRaster { change, .. } => change.patches.iter().map(|p| p.before.len() + p.after.len()).sum(),
+            Self::AddLayer { layer, .. } | Self::RemoveLayer { layer, .. } => layer_bytes(layer),
+            Self::SetLayerMask { before, after, .. } | Self::SetShapeMask { before, after, .. } => before.as_ref().map_or(0,|p|p.data.len()) + after.as_ref().map_or(0,|p|p.data.len()),
+            Self::UpscaleLayer { before, after, .. } => before.0.data.len()+after.0.data.len()+before.1.as_ref().map_or(0,|p|p.data.len())+after.1.as_ref().map_or(0,|p|p.data.len()),
+            Self::Batch(commands) => commands.iter().map(Self::pixel_bytes).sum(),
+            _ => 0,
+        }
+    }
+}
 
 #[derive(Default, Clone)]
 pub struct History {
@@ -1927,7 +1916,7 @@ impl History {
         }
         self.undo.push(cmd);
         self.redo.clear();
-        if self.undo.len() > MAX_HISTORY {
+        while self.undo.len() > 1 && (self.undo.len() > MAX_HISTORY || self.undo.iter().map(Cmd::pixel_bytes).sum::<usize>() > MAX_HISTORY_PIXEL_BYTES) {
             self.undo.remove(0);
         }
     }
@@ -2330,11 +2319,7 @@ pub(crate) fn invert_cmd(cmd: Cmd) -> Cmd {
             before: after,
             after: before,
         },
-        Cmd::PaintRaster { layer, before, after } => Cmd::PaintRaster {
-            layer,
-            before: after,
-            after: before,
-        },
+        Cmd::PaintRaster { layer, change } => Cmd::PaintRaster { layer, change: change.inverted() },
         Cmd::AddGuide { guide } => Cmd::RemoveGuide {
             index: usize::MAX,
             guide,
@@ -2685,9 +2670,9 @@ pub fn apply(doc: &mut Document, cmd: &Cmd) {
                 l.blend = *blend;
             }
         }
-        Cmd::PaintRaster { layer, after, .. } => {
+        Cmd::PaintRaster { layer, change } => {
             if let Some(layer) = doc.layers.get_mut(*layer) {
-                after.clone().restore(layer);
+                let _ = change.apply(layer);
             }
         }
         Cmd::Pixels {

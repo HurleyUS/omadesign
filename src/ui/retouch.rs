@@ -249,17 +249,6 @@ fn clip_working(
     }
 }
 
-fn clip_overlay(
-    studio: &Studio,
-    layer: usize,
-    buf: &mut tiny_skia::Pixmap,
-    region: paint::PixelRegion,
-) {
-    if let Some(sel) = studio.cached_pixel_sel_mask(layer) {
-        paint::clip_overlay_region(buf, &sel, region);
-    }
-}
-
 fn layer_pixels(studio: &Studio, layer: usize) -> Option<(u32, u32, Vec<u8>)> {
     let pixels = studio.doc.layers.get(layer)?.kind.pixels()?;
     Some((pixels.w, pixels.h, pixels.data.clone()))
@@ -270,49 +259,42 @@ pub(super) fn start_brush(studio: &mut Studio, world: Pt) {
         studio.status = "add a pixel layer to paint".into();
         return;
     };
-    let Some(before) = crate::document::RasterState::capture(&studio.doc.layers[layer]) else {
-        return;
-    };
-    let pixels = before.kind.pixels().unwrap();
-    let (w, h) = (pixels.w, pixels.h);
-    let Some(mut buf) = tiny_skia::Pixmap::new(w, h) else {
-        return;
-    };
-    let mut preview = None;
-    if let Err(message) = super::brush_bounds::ensure(studio, layer, world, world, &mut buf, &mut preview, true) {
-        studio.status = message.into();
-        return;
-    }
-    let (w, h) = (buf.width(), buf.height());
     let point = studio.mask_point(layer, world);
     studio.brush_distance = studio.brush.spacing_distance();
     studio.brush_heading = 0.0;
     studio.brush.seed = crate::document::next_id();
-    if let Some(tip) = studio.brushes.tip() {
-        let brush = paint::Brush { opacity: 1.0, ..studio.brush };
-        crate::brushes::stamp(&mut buf, point, &brush, tip, false);
-    } else {
-        paint::stamp(&mut buf, point, &studio.brush, false);
+    let mut buf = crate::raster_paint::BrushBuffer::default();
+    let target=&studio.doc.layers[layer];
+    let pixels=target.kind.pixels().unwrap();
+    if target.mask.is_some() || !pixels.is_invisible() {buf.base=Some(crate::geom::Bounds::from_min_size(Pt::ZERO,Pt::new(pixels.w as f32,pixels.h as f32)));}
+    if !buf.accepts(point,point,&studio.brush) {studio.status="The painted span exceeds the image memory budget".into();return;}
+    let brush = paint::Brush { opacity: 1.0, ..studio.brush };
+    if let Err(message) = buf.stamp(point, &brush, studio.brushes.tip()) {
+        studio.status = message.into();
+        return;
     }
-    let region = paint::PixelRegion::stroke(w, h, point, point, &studio.brush);
-    clip_overlay(studio, layer, &mut buf, region);
-    let preview = studio.cached_pixel_sel_mask(layer).and_then(|mask| {
-        if !mask.iter().any(|&coverage| coverage > 0 && coverage < 255) {
-            return None;
+    let mut preview = None;
+    brush_selection(studio, layer, &mut buf, &mut preview, true);
+    studio.op = Some(Op::Brush { layer, erase:false, buf, preview, last:Some(world), selection_generation:studio.pixel_sel_gen });
+    studio.mark_interaction();
+}
+
+fn brush_selection(studio: &Studio, layer: usize, buf: &mut crate::raster_paint::BrushBuffer, preview: &mut Option<crate::raster_paint::BrushBuffer>, all: bool) {
+    if studio.pixel_sel.is_none() { *preview=None; buf.dirty.clear(); return }
+    let keys: Vec<_> = if all { buf.tiles.keys().copied().collect() } else { buf.dirty.iter().copied().collect() };
+    for key @ (x,y) in keys {
+        let Some(mask)=studio.brush_selection_tile(layer, Pt::new((x*crate::raster_paint::TILE) as f32,(y*crate::raster_paint::TILE) as f32)) else {continue};
+        let soft=mask.iter().any(|&v|v>0 && v<255);
+        let pm=buf.tiles.get_mut(&key).unwrap();
+        paint::clip_overlay_region(pm,&mask,paint::PixelRegion::full(pm.width(),pm.height()));
+        if soft && preview.is_none() { *preview=Some(buf.clone()); }
+        if let Some(preview)=preview {
+            let mut pm=buf.tiles[&key].clone();
+            paint::feather_overlay(&mut pm,&mask);
+            preview.tiles.insert(key,pm);
         }
-        let mut preview = tiny_skia::Pixmap::new(w, h)?;
-        paint::feather_overlay_region(&mut preview, &buf, &mask, region);
-        Some(preview)
-    });
-    studio.op = Some(Op::Brush {
-        layer,
-        erase: false,
-        buf,
-        preview,
-        last: Some(world),
-        before,
-        selection_generation: studio.pixel_sel_gen,
-    });
+    }
+    buf.dirty.clear();
 }
 
 pub(super) fn start_smudge(studio: &mut Studio, world: Pt) {
@@ -593,110 +575,33 @@ pub(super) fn fill(studio: &mut Studio, world: Pt) {
 }
 
 pub(super) fn brush_drag(studio: &mut Studio, world: Pt) {
-    let Some(Op::Brush {
-        layer,
-        erase,
-        mut buf,
-        mut preview,
-        last,
-        before,
-        selection_generation,
-    }) = (match &studio.op {
-        Some(Op::Brush { .. }) => studio.op.take(),
-        _ => None,
-    })
-    else {
-        return;
-    };
-    if last.is_some_and(|prev| (prev - world).length_sq() < 0.0001) {
-        studio.op = Some(Op::Brush {
-            layer,
-            erase,
-            buf,
-            preview,
-            last,
-            before,
-            selection_generation,
-        });
-        return;
-    }
-    if let Err(message) = super::brush_bounds::ensure(
-        studio, layer, last.unwrap_or(world), world, &mut buf, &mut preview, false,
-    ) {
-        studio.status = message.into();
-        studio.op = Some(Op::Brush {
-            layer, erase, buf, preview, last: None, before, selection_generation,
-        });
-        return;
-    }
-    let from = last.map_or_else(
-        || studio.mask_point(layer, world),
-        |p| studio.mask_point(layer, p),
-    );
-    let to = studio.mask_point(layer, world);
-    if (to - from).length() > 0.001 {
-        studio.brush_heading = (to - from).y.atan2((to - from).x);
-    }
-    if let Some(tip) = studio.brushes.tip() {
-        let brush = paint::Brush { opacity: 1.0, ..studio.brush };
+    let Some(Op::Brush { layer,erase,mut buf,mut preview,last,selection_generation }) = (match &studio.op {
+        Some(Op::Brush { .. })=>studio.op.take(),_=>None,
+    }) else {return};
+    let from=last.map_or_else(||studio.mask_point(layer,world),|p|studio.mask_point(layer,p));
+    let to=studio.mask_point(layer,world);
+    let mut next=Some(world);
+    if ![from.x,from.y,to.x,to.y].iter().all(|v|v.is_finite() && v.abs()<1_000_000_000.) {
+        studio.status="Brush position is outside the supported pixel range".into();
+        next=None;
+    } else if !buf.accepts(from,to,&studio.brush) {
+        studio.status="The painted span exceeds the image memory budget. Start another pixel layer here".into();
+        next=None;
+    } else if last.is_none_or(|p|(p-world).length_sq()>=0.0001) {
+        if (to-from).length()>0.001 {studio.brush_heading=(to-from).y.atan2((to-from).x);}
+        let brush=paint::Brush{opacity:1.0,..studio.brush};
+        let mut error=None;
         if last.is_some() {
-            crate::brushes::stroke_spaced(
-                &mut buf,
-                from,
-                to,
-                &brush,
-                tip,
-                erase,
-                &mut studio.brush_distance,
-            );
-        } else {
-            crate::brushes::stamp(&mut buf, to, &brush, tip, erase);
-        }
-    } else if last.is_some() {
-        paint::stroke_spaced(
-            &mut buf,
-            from,
-            to,
-            &studio.brush,
-            erase,
-            &mut studio.brush_distance,
-        );
-    } else {
-        paint::stamp(&mut buf, to, &studio.brush, erase);
+            paint::spaced_dabs(from,to,&brush,&mut studio.brush_distance,|at,brush|{
+                if error.is_none() {error=buf.stamp(at,brush,studio.brushes.tip()).err();}
+            });
+        } else {error=buf.stamp(to,&brush,studio.brushes.tip()).err();}
+        if let Some(message)=error {studio.status=message.into();next=None;}
+        brush_selection(studio,layer,&mut buf,&mut preview,selection_generation!=studio.pixel_sel_gen);
+        studio.mark_interaction();
     }
-    let selection_changed = selection_generation != studio.pixel_sel_gen;
-    let region = if selection_changed {
-        paint::PixelRegion::full(buf.width(), buf.height())
-    } else {
-        paint::PixelRegion::stroke(buf.width(), buf.height(), from, to, &studio.brush)
-    };
-    clip_overlay(studio, layer, &mut buf, region);
-    if selection_changed {
-        let soft = studio
-            .cached_pixel_sel_mask(layer)
-            .is_some_and(|mask| mask.iter().any(|&v| v > 0 && v < 255));
-        if soft {
-            if preview.is_none() {
-                preview = tiny_skia::Pixmap::new(buf.width(), buf.height());
-            }
-        } else {
-            preview = None;
-        }
-    }
-    if let Some(preview) = &mut preview
-        && let Some(mask) = studio.cached_pixel_sel_mask(layer)
-    {
-        paint::feather_overlay_region(preview, &buf, &mask, region);
-    }
-    studio.op = Some(Op::Brush {
-        layer,
-        erase,
-        buf,
-        preview,
-        last: Some(world),
-        before,
-        selection_generation: studio.pixel_sel_gen,
-    });
+    if next.is_none() {studio.brush_distance=studio.brush.spacing_distance();}
+    studio.op=Some(Op::Brush {layer,erase,buf,preview,last:next,selection_generation:studio.pixel_sel_gen});
 }
 
 pub(super) fn smudge_drag(studio: &mut Studio, world: Pt) {
@@ -843,8 +748,9 @@ mod tests {
     fn world_rgba(studio: &Studio, point: Pt) -> [u8; 4] {
         let point = studio.mask_point(0, point);
         let pixels = pixels(studio, 0, false).unwrap();
-        assert!(point.x >= 0.0 && point.y >= 0.0);
-        assert!(point.x < pixels.w as f32 && point.y < pixels.h as f32);
+        if point.x < 0.0 || point.y < 0.0 || point.x >= pixels.w as f32 || point.y >= pixels.h as f32 {
+            return [0;4];
+        }
         rgba(studio, point.x.floor() as u32, point.y.floor() as u32, false)
     }
 
@@ -1165,8 +1071,11 @@ mod tests {
                 panic!("soft preview");
             };
             let mut reference = buf.clone();
-            paint::feather_overlay(&mut reference, &studio.cached_pixel_sel_mask(0).unwrap());
-            assert_eq!(preview, &reference);
+            for (&(x,y),pm) in &mut reference.tiles {
+                let mask=studio.brush_selection_tile(0,Pt::new((x*crate::raster_paint::TILE) as f32,(y*crate::raster_paint::TILE) as f32)).unwrap();
+                paint::feather_overlay(pm,&mask);
+            }
+            assert_eq!(preview.tiles, reference.tiles);
         }
         studio.nudge_pixel_sel(-2, 3);
         brush_drag(&mut studio, Pt::new(40.0, 15.0));
@@ -1179,8 +1088,11 @@ mod tests {
             panic!("updated soft preview");
         };
         let mut reference = buf.clone();
-        paint::feather_overlay(&mut reference, &studio.cached_pixel_sel_mask(0).unwrap());
-        assert_eq!(preview, &reference);
+        for (&(x,y),pm) in &mut reference.tiles {
+            let mask=studio.brush_selection_tile(0,Pt::new((x*crate::raster_paint::TILE) as f32,(y*crate::raster_paint::TILE) as f32)).unwrap();
+            paint::feather_overlay(pm,&mask);
+        }
+        assert_eq!(preview.tiles, reference.tiles);
         studio.set_pixel_sel(None);
         brush_drag(&mut studio, Pt::new(50.0, 15.0));
         assert!(matches!(studio.op, Some(Op::Brush { preview: None, .. })));
