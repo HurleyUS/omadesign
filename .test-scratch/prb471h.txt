@@ -1,0 +1,93 @@
+PRB471 label="Menu" fill=None y=13.0..30.0 clip_y=0.0..44.0 live=true
+PRB471 label="Move" fill=None y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="Shift+drag" fill=None y=851.5..864.5 clip_y=847.0..869.0 live=true
+PRB471 label="45° movement" fill=None y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="Alt+drag" fill=None y=851.5..864.5 clip_y=847.0..869.0 live=true
+PRB471 label="Clone and move" fill=None y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="Shift+click" fill=None y=851.5..864.5 clip_y=847.0..869.0 live=true
+PRB471 label="Add to selection" fill=None y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="Delete" fill=None y=851.5..864.5 clip_y=847.0..869.0 live=true
+PRB471 label="Delete selection" fill=None y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="+3 more" fill=None y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="Keys" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="V" fill=None y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Move" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="A" fill=None y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Node" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="P" fill=None y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Pen" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="N" fill=None y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Pencil" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="R" fill=None y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Rectangle" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="O" fill=None y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Ellipse" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="Y" fill=None y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Polygon" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="S" fill=None y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Star" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="L" fill=None y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Line" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="T" fill=None y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Text" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="+10 more" fill=None y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="100%" fill=None y=820.5..837.5 clip_y=814.0..842.0 live=true
+PRB471 label="100%" fill=None y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="320 × 240 px" fill=None y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="1 selected" fill=None y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="Move" fill=None y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="V" fill=None y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="Default font: NHaasGroteskDSPro-55Rg (from AbsoluteFill)" fill=None y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="Transform" fill=None y=56.0..73.0 clip_y=51.0..238.1 live=true
+PRB471 label="Align" fill=None y=56.0..73.0 clip_y=51.0..238.1 live=true
+PRB471 label="Pathfinder" fill=None y=56.0..73.0 clip_y=51.0..238.1 live=true
+PRB471 label="X" fill=None y=101.0..118.0 clip_y=96.0..238.1 live=true
+PRB471 label="10.0" fill=None y=129.0..146.0 clip_y=96.0..238.1 live=true
+PRB471 label="Y" fill=None y=101.0..118.0 clip_y=96.0..238.1 live=true
+PRB471 label="10.0" fill=None y=129.0..146.0 clip_y=96.0..238.1 live=true
+PRB471 label="W" fill=None y=156.0..173.0 clip_y=96.0..238.1 live=true
+PRB471 label="20.0" fill=None y=184.0..201.0 clip_y=96.0..238.1 live=true
+PRB471 label="H" fill=None y=156.0..173.0 clip_y=96.0..238.1 live=true
+PRB471 label="20.0" fill=None y=184.0..201.0 clip_y=96.0..238.1 live=true
+PRB471 label="Rotate" fill=None y=209.0..226.0 clip_y=96.0..238.1 live=true
+PRB471 label="0.0" fill=None y=237.0..254.0 clip_y=96.0..238.1 live=false
+PRB471 label="Properties" fill=None y=257.0..274.0 clip_y=252.1..466.8 live=true
+PRB471 label="Appearance" fill=None y=257.0..274.0 clip_y=252.1..466.8 live=true
+PRB471 label="Stroke" fill=None y=257.0..274.0 clip_y=252.1..466.8 live=true
+PRB471 label="Color" fill=None y=257.0..274.0 clip_y=252.1..466.8 live=true
+PRB471 label="Personal" fill=None y=308.0..325.0 clip_y=303.1..472.8 live=true
+PRB471 label="Project" fill=None y=308.0..325.0 clip_y=303.1..472.8 live=true
+PRB471 label="omadesign-library-jobs-786314-1987272288470075" fill=None y=309.0..324.0 clip_y=303.1..472.8 live=true
+PRB471 label="Filter names or hex colors…" fill=None y=336.0..353.0 clip_y=303.1..472.8 live=true
+PRB471 label="+ Palette" fill=None y=364.2..381.2 clip_y=303.1..472.8 live=true
+PRB471 label="Save •" fill=None y=364.2..381.2 clip_y=303.1..472.8 live=true
+PRB471 label="Rename" fill=None y=395.2..412.2 clip_y=303.1..472.8 live=true
+PRB471 label="Palette 1" fill=None y=395.1..412.1 clip_y=394.1..413.2 live=true
+PRB471 label="Fill" fill=None y=426.2..443.2 clip_y=303.1..472.8 live=true
+PRB471 label="Stroke" fill=None y=426.2..443.2 clip_y=303.1..472.8 live=true
+PRB471 label="+" fill=None y=457.2..474.2 clip_y=303.1..472.8 live=true
+PRB471 label="+ Current color" fill=None y=457.2..474.2 clip_y=303.1..472.8 live=true
+PRB471 label="#D97C5B or #D97C5B80" fill=None y=457.1..474.1 clip_y=303.1..472.8 live=true
+PRB471 label="Layers" fill=None y=492.0..509.0 clip_y=486.8..808.0 live=true
+PRB471 label="Paths" fill=None y=492.0..509.0 clip_y=486.8..808.0 live=true
+PRB471 label="Channels" fill=None y=492.0..509.0 clip_y=486.8..808.0 live=true
+PRB471 label="Layer blend" fill=None y=536.3..553.3 clip_y=486.8..808.0 live=true
+PRB471 label="Normal" fill=None y=536.8..553.8 clip_y=486.8..808.0 live=true
+PRB471 label="Layer opacity" fill=None y=566.3..583.3 clip_y=486.8..808.0 live=true
+PRB471 label="100" fill=None y=566.8..583.8 clip_y=486.8..808.0 live=true
+PRB471 label="%" fill=None y=566.8..583.8 clip_y=486.8..808.0 live=true
+PRB471 label="Artwork" fill=None y=612.0..628.0 clip_y=602.8..772.0 live=true
+PRB471 label="Rectangle" fill=None y=649.0..665.0 clip_y=602.8..772.0 live=true
+PRB471 label="100" fill=None y=47.0..59.0 clip_y=44.0..66.0 live=true
+PRB471 label="200" fill=None y=47.0..59.0 clip_y=44.0..66.0 live=true
+PRB471 label="300" fill=None y=47.0..59.0 clip_y=44.0..66.0 live=true
+PRB471 label="400" fill=None y=47.0..59.0 clip_y=44.0..66.0 live=true
+PRB471 label="100" fill=None y=141.0..153.0 clip_y=44.0..815.0 live=true
+PRB471 label="200" fill=None y=241.0..253.0 clip_y=44.0..815.0 live=true
+PRB471 label="300" fill=None y=341.0..353.0 clip_y=44.0..815.0 live=true
+PRB471 label="400" fill=None y=441.0..453.0 clip_y=44.0..815.0 live=true
+PRB471 label="500" fill=None y=541.0..553.0 clip_y=44.0..815.0 live=true
+PRB471 label="600" fill=None y=641.0..653.0 clip_y=44.0..815.0 live=true
+PRB471 label="700" fill=None y=741.0..753.0 clip_y=44.0..815.0 live=true
+PRB471 label="px" fill=None y=49.5..60.5 clip_y=44.0..815.0 live=true
+PRB471 label="Artboard 1" fill=None y=46.0..59.0 clip_y=44.0..815.0 live=true

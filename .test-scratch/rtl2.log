@@ -1,0 +1,58 @@
+
+running 1 test
+test text::svg_type::tests::svg_type_rotated_reflected_mixed_positioned_rtl_vertical_and_path_roundtrip ... FAILED
+
+failures:
+
+---- text::svg_type::tests::svg_type_rotated_reflected_mixed_positioned_rtl_vertical_and_path_roundtrip stdout ----
+DB-PICK-SUB requested=false families=[Named("Times New Roman")] path="/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"
+DB-PICK-SUB requested=false families=[Named("Times New Roman")] path="/usr/share/fonts/liberation/LiberationSerif-Bold.ttf"
+RTL-READ span families=[Named("Times New Roman")] weight=400 style=Normal
+DB-FONT load=omatype:0db7285c0c75ed90c9b36e80d13b23b1 bytes=393692
+DB-FONT loaded ids=1 as omatype:0db7285c0c75ed90c9b36e80d13b23b1
+DB-PICK-SUB requested=false families=[Named("Times New Roman")] path="/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"
+DB-PICK-SUB requested=false families=[Named("Times New Roman")] path="/usr/share/fonts/liberation/LiberationSerif-Bold.ttf"
+DB-SUBST tokens=[Named("Times New Roman")] path="/usr/share/fonts/liberation/LiberationSerif-Bold.ttf" face=Some((ID(InnerId(19v1)), ["Liberation Serif"], Weight(700)))
+DB-SUBST tokens=[Named("Times New Roman")] path="/usr/share/fonts/liberation/LiberationSerif-Regular.ttf" face=Some((ID(InnerId(26v1)), ["Liberation Serif"], Weight(400)))
+DB-FONT load=omatype:0db7285c0c75ed90c9b36e80d13b23b1 bytes=393692
+DB-FONT loaded ids=1 as omatype:0db7285c0c75ed90c9b36e80d13b23b1
+DB-PICK-SUB requested=false families=[Named("Times New Roman")] path="/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"
+DB-PICK-SUB requested=false families=[Named("Times New Roman")] path="/usr/share/fonts/liberation/LiberationSerif-Bold.ttf"
+DB-PICK-SUB requested=false families=[Named("Times New Roman")] path="/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"
+DB-PICK-SUB requested=false families=[Named("Times New Roman")] path="/usr/share/fonts/liberation/LiberationSerif-Bold.ttf"
+DB-PICK-SEL requested=true weight=400 families=[Named("Liberation Serif")] picked=Some(Some("Liberation Serif"))
+DB-PICK-SEL requested=true weight=700 families=[Named("Liberation Serif")] picked=Some(Some("Liberation Serif"))
+DB-PICK-SEL requested=true weight=400 families=[Named("Liberation Serif")] picked=Some(Some("Liberation Serif"))
+DB-PICK-SEL requested=true weight=700 families=[Named("Liberation Serif")] picked=Some(Some("Liberation Serif"))
+DB-FONT load=omatype:0db7285c0c75ed90c9b36e80d13b23b1 bytes=393692
+DB-FONT loaded ids=1 as omatype:0db7285c0c75ed90c9b36e80d13b23b1
+DB-PICK-SEL requested=true weight=400 families=[Named("Liberation Serif")] picked=Some(Some("Liberation Serif"))
+DB-PICK-SEL requested=true weight=700 families=[Named("Liberation Serif")] picked=Some(Some("Liberation Serif"))
+DB-FONT load=omatype:0db7285c0c75ed90c9b36e80d13b23b1 bytes=393692
+DB-FONT loaded ids=1 as omatype:0db7285c0c75ed90c9b36e80d13b23b1
+DB-FONT load=omatype:b4a8bbf500bc9ab81202f2750b78fed4 bytes=370196
+DB-FONT loaded ids=1 as omatype:b4a8bbf500bc9ab81202f2750b78fed4
+DB-PICK-SEL requested=true weight=400 families=[Named("omatype:0db7285c0c75ed90c9b36e80d13b23b1")] picked=Some(Some("omatype:0db7285c0c75ed90c9b36e80d13b23b1"))
+DB-PICK-SEL requested=true weight=700 families=[Named("omatype:b4a8bbf500bc9ab81202f2750b78fed4")] picked=Some(Some("omatype:b4a8bbf500bc9ab81202f2750b78fed4"))
+DB-PICK-SUB requested=false families=[Named("DejaVu Sans")] path="/usr/share/fonts/liberation/LiberationSans-Regular.ttf"
+DB-FONT load=omatype:8ee2d990ce7183f96e48892f85645246 bytes=410820
+DB-FONT loaded ids=1 as omatype:8ee2d990ce7183f96e48892f85645246
+DB-PICK-SUB requested=false families=[Named("DejaVu Sans")] path="/usr/share/fonts/liberation/LiberationSans-Regular.ttf"
+DB-SUBST tokens=[Named("DejaVu Sans")] path="/usr/share/fonts/liberation/LiberationSans-Regular.ttf" face=Some((ID(InnerId(29v1)), ["Liberation Sans"], Weight(400)))
+DB-SUBST tokens=[Named("DejaVu Sans")] path="/usr/share/fonts/liberation/LiberationSans-Regular.ttf" face=Some((ID(InnerId(29v1)), ["Liberation Sans"], Weight(400)))
+DB-SUBST tokens=[Named("DejaVu Sans")] path="/usr/share/fonts/liberation/LiberationSans-Regular.ttf" face=Some((ID(InnerId(29v1)), ["Liberation Sans"], Weight(400)))
+DB-FONT load=omatype:8ee2d990ce7183f96e48892f85645246 bytes=410820
+DB-FONT loaded ids=1 as omatype:8ee2d990ce7183f96e48892f85645246
+DB-PICK-SUB requested=false families=[Named("Times New Roman")] path="/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"
+DB-PICK-SUB requested=false families=[Named("DejaVu Sans")] path="/usr/share/fonts/liberation/LiberationSans-Regular.ttf"
+
+thread 'text::svg_type::tests::svg_type_rotated_reflected_mixed_positioned_rtl_vertical_and_path_roundtrip' (4106399) panicked at src/text/svg_type/tests.rs:97:9:
+Full styles: 2.8400059
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    text::svg_type::tests::svg_type_rotated_reflected_mixed_positioned_rtl_vertical_and_path_roundtrip
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2199 filtered out; finished in 0.43s
+

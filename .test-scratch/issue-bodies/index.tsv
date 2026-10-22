@@ -1,0 +1,33 @@
+01-agent-duplicate-nested-tree.md	Test failure: agent duplicate nested layer tree drops a nested child	bug
+02-select-save-version-36-vs-40.md	Test failure: active-selection save writes content-required version 36 instead of current format 40	bug
+03-select-older-reader-format-36.md	Test failure: active-selection older-reader gate saves at version 36 so a downgraded reader reads as 35-era file	bug
+04-opentype-version-12.md	Test failure: OpenType feature editing roundtrip expects encoded version 12, encoder now writes content-required version	bug
+05-svg-type-rtl-catastrophic.md	Test failure: mixed SVG type run (RTL Arabic, rotated, reflected) renders 0.76 off reference	bug
+06-browser-closed-native-panel.md	Test failure: closing the shape browser does not restore a native focused panel	bug,accessibility
+07-canvas-flip-transform-submenu.md	Test failure: canvas context flip no longer presents the Transform submenu on right-click	bug
+08-rotated-node-overlay.md	Test failure: rotated node overlay does not follow rotation (handles off world frame)	bug
+09-chrome-mode-icons-3-of-5.md	Test failure: mode icon rail exposes 3 of 5 modes directly	bug,accessibility
+10-color-guide-tmpdir-1-library.md	Test failure: color-guide theme library preserves corrupt future files needs serialized helper TMPDIR	bug,tests,test-isolation
+11-color-guide-tmpdir-2-dock.md	Test failure: color-guide compact dock keeps swatches visible needs serialized helper TMPDIR	bug,tests,test-isolation
+12-color-guide-tmpdir-3-swatch.md	Test failure: color-guide real swatch and theme wheel needs serialized helper TMPDIR	bug,tests,test-isolation
+13-color-guide-tmpdir-4-pane.md	Test failure: color-guide pane body can open another pane needs serialized helper TMPDIR	bug,tests,test-isolation
+14-color-guide-tmpdir-5-recolor.md	Test failure: color-guide recolor native hex apply needs serialized helper TMPDIR	bug,tests,test-isolation
+15-clipping-tab-rename.md	Test failure: native Tab never reaches the clipping rename field	bug,accessibility
+16-clipping-tab-create-mask.md	Test failure: native Tab never reaches Create Clipping Mask from clipping rows	bug,accessibility
+17-merge-tab-merge-down.md	Test failure: native Tab never reaches Merge Down from layer merge rows	bug,accessibility
+18-stamp-tab-rename.md	Test failure: native Tab never reaches Rename for layer merge stamp	bug,accessibility
+19-layout-missing-properties.md	Test failure: layout inspector empty-document grid loses native Properties widget	bug,accessibility
+20-library-plus-palette.md	Test failure: library sidebar loses the + Palette affordance	bug
+21-motion-composition-error-paint.md	Test failure: composition start field error does not paint once	bug
+22-photo-float-missing-develop.md	Test failure: photo workspace float cycle loses native Photo develop widget	bug
+23-photo-preset-missing-develop.md	Test failure: photo workflow preset authoring loses native Photo develop widget	bug
+24-photo-transfer-missing-develop.md	Test failure: photo workflow adjustments transfer loses native Photo develop widget	bug
+25-selection-align-routes.md	Test failure: inspector loses the single Align home for alignment routing	bug
+26-selection-single-live-click.md	Test failure: single-layer alignment home click target vanished from painted labels	bug,accessibility
+27-font-picker-missing-blend.md	Test failure: font picker effect pane loses native Layer blend widget	bug,accessibility
+28-layer-rows-visible-snapshot.md	Test failure: layer rows snapshot includes an offscreen row (4 shows up in visible-only snapshot)	bug
+29-svg-filter-missing-properties.md	Test failure: SVG filter pane loses native Properties widget	bug,accessibility
+30-svg-pattern-missing-properties.md	Test failure: SVG pattern pane loses native Properties widget	bug,accessibility
+31-timeline-missing-preset-duration.md	Test failure: timeline preset panel loses native Motion preset duration field	bug,accessibility
+32-scene3d-receipt-home-path.md	Test failure: scene3d output receipt must live under /home but TMPDIR can be unset	bug,tests,test-isolation
+33-umbrella-parallel-isolation.md	Parallel library test runs flake on exact shared global resource-pool assertions (10 tests)	tests,test-isolation
