@@ -52,7 +52,7 @@ pub(super) const PANELS: &[(&str, &str)] = &[
     ("compositions", "Compositions"),
     ("scene3d", "3D Scene"),
     ("photo-library", "Photo Library"),
-    ("photo-develop", "Develop"),
+    ("photo-develop", "Photo develop"),
     ("histogram", "Histogram"),
     ("presets", "Presets"),
     ("adjustments", "Adjustments"),
