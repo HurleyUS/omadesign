@@ -91,10 +91,13 @@ fn native_reopen_and_idml_roundtrip_preserve_editable_story_and_publishing() {
     assert_eq!(round.artboards.len(), 2);
     assert_eq!(round.publishing.bleed, [9., 12., 15., 18.]);
     assert_eq!(round.publishing.masters, doc.publishing.masters);
-    assert_eq!(
-        round.publishing.links.values().collect::<Vec<_>>(),
-        doc.publishing.links.values().collect::<Vec<_>>()
-    );
+    // Links are keyed by process-global layer ids, so compare the link set, not id order (#484).
+    let sorted = |links: &std::collections::BTreeMap<u64, String>| {
+        let mut v = links.values().cloned().collect::<Vec<_>>();
+        v.sort();
+        v
+    };
+    assert_eq!(sorted(&round.publishing.links), sorted(&doc.publishing.links));
     let head = texts(&round)
         .into_iter()
         .find(|t| t.thread.as_ref().unwrap().prev.is_none())
