@@ -13,8 +13,8 @@ fn structure(doc: &Document) -> Value {
             "opacity":l.opacity,"blend":l.blend,"pass_through":l.pass_through,"mask":l.mask.is_some(),"objects":l.kind.shapes().map_or(0,|s|s.len()),
             "offset":l.kind.raster_xform().map(|(p,_,_)|[p.x,p.y]),
             "artwork_masks":l.artwork_masks,
-            "pixels":l.kind.pixels().map(|p|json!({"width":p.w,"height":p.h,"rgba":p.data})),
-            "mask_pixels":l.mask.as_ref().map(|p|json!({"width":p.w,"height":p.h,"rgba":p.data}))
+            "pixels":l.kind.pixels().map(|p|json!({"width":p.w,"height":p.h,"rgba":&p.data[..]})),
+            "mask_pixels":l.mask.as_ref().map(|p|json!({"width":p.w,"height":p.h,"rgba":&p.data[..]}))
         })).collect::<Vec<_>>()})
 }
 
