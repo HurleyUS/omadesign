@@ -189,6 +189,9 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Pixels>, String> {
     if stored_channels as usize != channels {return Err("TIFF auxiliary samples are unsupported; original source is unchanged".into());}
     let (w,h) = decoder.dimensions().map_err(|e| e.to_string())?;
     let count = storage::count(w,h,channels)?;
+    // The pinned decoder's buffer layout describes only the first plane of a
+    // planar (PlanarConfiguration=2) image; leave those to the generic decoder.
+    if decoder.get_tag_u32(Tag::PlanarConfiguration).unwrap_or(1) == 2 {return Ok(None);}
     let layout = decoder.image_buffer_layout().map_err(|e| e.to_string())?;
     let (depth,bps) = match (layout.sample_format,color.bit_depth()) {
         (tiff::tags::SampleFormat::Uint,8) => (Depth::U8,1),
