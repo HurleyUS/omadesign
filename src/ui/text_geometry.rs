@@ -294,13 +294,30 @@ pub fn frame_inspector(ui: &mut Ui, studio: &mut Studio) {
                 });
             }
             ui.horizontal(|ui| {
-                for (value, label) in [
-                    (VAlign::Top, "Top"),
-                    (VAlign::Center, "Center"),
-                    (VAlign::Bottom, "Bottom"),
-                    (VAlign::Justify, "Justify"),
+                for (value, label, glyph) in [
+                    (VAlign::Top, "Top", Some(super::icons::ph::ALIGN_TOP)),
+                    (VAlign::Center, "Center", Some(super::icons::ph::ALIGN_CENTER_V)),
+                    (VAlign::Bottom, "Bottom", Some(super::icons::ph::ALIGN_BOTTOM)),
+                    (VAlign::Justify, "Justify", None),
                 ] {
-                    ui.selectable_value(&mut frame.valign, value, label);
+                    let selected = frame.valign == value;
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(30., 28.), Sense::hover());
+                    let response = ui.interact(rect, egui::Id::new(("frame-valign", label)), Sense::click());
+                    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label));
+                    if selected || response.hovered() || response.has_focus() {
+                        ui.painter().rect_filled(rect.shrink(1.), 6., if selected { super::theme::accent_soft() } else { super::theme::bg_widget_hover() });
+                    }
+                    let color = if selected { super::theme::accent() } else { super::theme::fg_weak() };
+                    if let Some(glyph) = glyph {
+                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, glyph, super::icons::font(18.), color);
+                    } else {
+                        // Evenly spread baselines between the top and bottom of the frame.
+                        for y in [rect.top()+5.,rect.center().y,rect.bottom()-5.] {
+                            ui.painter().line_segment([egui::pos2(rect.left()+7.,y),egui::pos2(rect.right()-7.,y)], Stroke::new(1.4,color));
+                        }
+                        for x in [rect.left()+4.,rect.right()-4.] {ui.painter().line_segment([egui::pos2(x,rect.top()+4.),egui::pos2(x,rect.bottom()-4.)],Stroke::new(0.8,color));}
+                    }
+                    if response.on_hover_text(format!("Vertical alignment: {label}")).clicked() { frame.valign=value; }
                 }
             });
             ui.add_enabled(

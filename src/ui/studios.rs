@@ -58,7 +58,9 @@ pub fn right_panel(ui: &mut Ui, studio: &mut Studio) {
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     super::selection::arrange_panel(ui, studio);
+            eprintln!("WIDTH after super::selection::arrange_panel(ui, studio); {} maxx {}",ui.min_rect().width(),ui.min_rect().max.x);
                     super::text_geometry::wrap_inspector(ui, studio);
+            eprintln!("WIDTH after super::text_geometry::wrap_inspector(ui, studio); {} maxx {}",ui.min_rect().width(),ui.min_rect().max.x);
                     section_gap(ui);
                     if motion {
                         motion_studio(ui, studio);
@@ -72,6 +74,7 @@ pub fn right_panel(ui: &mut Ui, studio: &mut Studio) {
                     }
                     if design && typing && !reshaping {
                         character_studio(ui, studio);
+            eprintln!("WIDTH after character_studio(ui, studio); {} maxx {}",ui.min_rect().width(),ui.min_rect().max.x);
                         section_gap(ui);
                     }
                     if layout {
@@ -113,8 +116,10 @@ pub fn right_panel(ui: &mut Ui, studio: &mut Studio) {
                     if !studio.paint_mask {
                         if matches!(studio.tool, Tool::Brush | Tool::Fill | Tool::Eyedropper) {
                             paint_color_studio(ui, studio);
+            eprintln!("WIDTH after color_studio(ui, studio); {} maxx {}",ui.min_rect().width(),ui.min_rect().max.x);
                         } else if !paint {
                             color_studio(ui, studio);
+            eprintln!("WIDTH after color_studio(ui, studio); {} maxx {}",ui.min_rect().width(),ui.min_rect().max.x);
                         }
                     }
                     if studio.tool == Tool::Trace {
@@ -931,6 +936,7 @@ fn apply_stroke(studio: &mut Studio, stroke: Option<DocStroke>) {
 fn character_studio(ui: &mut Ui, studio: &mut Studio) {
     heading(ui, "Typography");
     super::text_geometry::frame_inspector(ui, studio);
+            eprintln!("WIDTH after super::text_geometry::frame_inspector(ui, studio); {} maxx {}",ui.min_rect().width(),ui.min_rect().max.x);
     super::text_geometry::path_inspector(ui, studio);
     let live = studio.selected_type();
     let font = live
@@ -939,6 +945,7 @@ fn character_studio(ui: &mut Ui, studio: &mut Studio) {
         .unwrap_or_else(|| studio.text_font.clone());
     let label = crate::text::label_for(&font);
     let mut chosen = font.clone();
+    eprintln!("FONT before: available={} cursor={:?} max={:?} clip={:?}", ui.available_width(),ui.cursor(),ui.max_rect(),ui.clip_rect());
     let font_button = ui.add_sized(
         vec2(ui.available_width(), 28.0),
         eframe::egui::Button::new(RichText::new(&label).size(12.0)).truncate(),
@@ -1011,6 +1018,7 @@ fn character_studio(ui: &mut Ui, studio: &mut Studio) {
         studio.text_font = path;
         studio.font_scroll_once = true;
     }
+    eprintln!("WIDTH after font picker {} maxx {}",ui.min_rect().width(),ui.min_rect().max.x);
     eframe::egui::CollapsingHeader::new("Google Fonts")
         .default_open(false)
         .show(ui, |ui| google_fonts_ui(ui, studio));
@@ -1020,8 +1028,12 @@ fn character_studio(ui: &mut Ui, studio: &mut Studio) {
         studio.patch_type(|t| t.px = px);
     }
     super::character_spacing::show(ui,studio);
+            eprintln!("WIDTH after super::character_spacing::show(ui,studio); {} maxx {}",ui.min_rect().width(),ui.min_rect().max.x);
     super::opentype::show(ui, studio, &font);
+            eprintln!("WIDTH after super::opentype::show(ui, studio, &font); {} maxx {}",ui.min_rect().width(),ui.min_rect().max.x);
     super::paragraph::show(ui, studio);
+            eprintln!("WIDTH after super::paragraph::show(ui, studio); {} maxx {}",ui.min_rect().width(),ui.min_rect().max.x);
+    eprintln!("WIDTH before typing label {} maxx {}",ui.min_rect().width(),ui.min_rect().max.x);
     if studio.type_edit.is_some() {
         ui.label(
             RichText::new("Typing on the canvas. Esc finishes.")
@@ -2534,6 +2546,7 @@ pub(super) fn layers_studio(ui: &mut Ui, studio: &mut Studio) {
                                             }
                                         } else {
                                             if matches!(&shape.geom, Geom::Text(t) if t.layout.as_ref().is_some_and(|l|l.overflow)) { ui.colored_label(eframe::egui::Color32::from_rgb(240,55,75), "+").on_hover_text("Text overflows its frame"); }
+                                            let name_width = (ui.available_width() - 50.0).max(42.0);
                                             let guide_name;
                                             let name = if shape.guide {
                                                 guide_name = format!("Guide · {}", shape.name);
@@ -3079,6 +3092,21 @@ fn expanded_keyframes_and_effects_respect_the_resized_panel() {
                 (width - target_width).abs() <= 1.0,
                 "Trace grew {target_width}px panel to {width}px"
             );
+        }
+    }
+}
+
+#[test]
+fn area_text_inspector_keeps_compact_width_while_typing() {
+    let ctx=eframe::egui::Context::default();crate::ui::theme::apply(&ctx);
+    let mut studio=Studio::new();studio.active_layer=Some(1);studio.persona=Persona::Design;studio.text_px=25.;
+    studio.place_area_text(crate::geom::Bounds::from_min_size(crate::geom::Pt::new(70.,100.),crate::geom::Pt::new(350.,250.)));
+    studio.type_insert(&"Editable area text wraps and retains hidden source. ".repeat(12));
+    for editing in [true,false] {
+        if !editing {studio.commit_type_edit();}
+        for _ in 0..8 {
+            let mut width=0.;let mut output=ctx.run_ui(eframe::egui::RawInput{screen_rect:Some(eframe::egui::Rect::from_min_size(eframe::egui::Pos2::ZERO,vec2(960.,640.))),..Default::default()},|ui|{right_panel(ui,&mut studio);width=960.-ui.available_width();});
+            output.textures_delta.clear();assert!(width<=304.,"area inspector grew to {width}px while editing={editing}");
         }
     }
 }
