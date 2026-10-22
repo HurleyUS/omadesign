@@ -215,6 +215,7 @@ pub fn qualify(request: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     #[test]
+    #[ignore = "environment-specific suite qualification: needs node and the pinned fixture cohort; run with --ignored"]
     fn required_public_fixture_cohort() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let out = root.join(".artifacts/suite/omadesign");
