@@ -92,7 +92,7 @@ fn preset(name: &str) -> Workspace {
             right(&["layers", "hierarchy", "components"], 0.4),
         ],
         "Motion" => vec![
-            right(&["transform", "keyframes", "appearance"], 0.4),
+            right(&["properties", "transform", "keyframes", "appearance"], 0.4),
             right(&["layers", "compositions", "scene3d"], 0.6),
             group(&["timeline"], Place::Bottom, 220.0, 1.0),
         ],
