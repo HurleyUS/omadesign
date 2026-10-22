@@ -9,6 +9,7 @@ pub(crate) mod photo_placement;
 pub mod psd;
 pub mod raw;
 pub mod svg;
+pub mod suite_qualification;
 pub mod xcf;
 
 pub fn decode_image(bytes: &[u8]) -> Result<crate::document::Pixels, String> {
