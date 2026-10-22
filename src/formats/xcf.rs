@@ -416,6 +416,9 @@ impl<'a> Parser<'a> {
         let _lh = self.u32()?;
         let _lbpp = self.u32()?;
         let tiles = self.pointers()?;
+        if tiles.len() != tile_count(width, height) {
+            return Err("GIMP layer mask tile count does not match its size".into());
+        }
         let raw = self.read_tiles(width, height, hbpp.max(bpc), compression, &tiles)?;
         let mut mask = vec![0u8; (width as usize) * (height as usize)];
         let stride = hbpp.max(1) as usize;
@@ -1242,5 +1245,72 @@ mod tests {
         let encoded = rle_encode(&pixels, 4);
         let decoded = decode_rle(&encoded, pixels.len(), 4).unwrap();
         assert_eq!(decoded, pixels);
+    }
+
+    fn layer_with_extra_mask_tiles() -> Vec<u8> {
+        let mut w = Writer::new(0);
+        w.u32(1);
+        w.u32(1);
+        w.u32(0);
+        w.prop(PROP_COMPRESSION, &[0]);
+        w.end_props();
+        let layer_slot = w.pointer_slot();
+        w.pointer_at(0);
+        w.pointer_at(0);
+        w.patch_pointer(layer_slot, w.data.len() as u64);
+        w.u32(1);
+        w.u32(1);
+        w.u32(1);
+        w.string("");
+        w.end_props();
+        let hierarchy_slot = w.pointer_slot();
+        let mask_slot = w.pointer_slot();
+        w.patch_pointer(hierarchy_slot, w.data.len() as u64);
+        w.u32(1);
+        w.u32(1);
+        w.u32(4);
+        let level_slot = w.pointer_slot();
+        w.pointer_at(0);
+        w.patch_pointer(level_slot, w.data.len() as u64);
+        w.u32(1);
+        w.u32(1);
+        w.u32(4);
+        let tile_slot = w.pointer_slot();
+        w.pointer_at(0);
+        w.patch_pointer(tile_slot, w.data.len() as u64);
+        w.data.extend([1, 2, 3, 255]);
+        w.patch_pointer(mask_slot, w.data.len() as u64);
+        w.u32(1);
+        w.u32(1);
+        w.string("");
+        w.end_props();
+        let mask_hierarchy = w.pointer_slot();
+        w.patch_pointer(mask_hierarchy, w.data.len() as u64);
+        w.u32(1);
+        w.u32(1);
+        w.u32(1);
+        let mask_level = w.pointer_slot();
+        w.pointer_at(0);
+        w.patch_pointer(mask_level, w.data.len() as u64);
+        w.u32(1);
+        w.u32(1);
+        w.u32(1);
+        let tile_one = w.pointer_slot();
+        let tile_two = w.pointer_slot();
+        w.pointer_at(0);
+        w.patch_pointer(tile_one, w.data.len() as u64);
+        w.data.push(0xff);
+        w.patch_pointer(tile_two, w.data.len() as u64);
+        w.data.push(0x00);
+        w.data
+    }
+
+    #[test]
+    fn extra_mask_tiles_are_rejected_without_panicking() {
+        let err = read(&layer_with_extra_mask_tiles(), "Mask").unwrap_err();
+        assert!(
+            err.contains("mask tile count"),
+            "extra mask tiles must be an error, got {err}"
+        );
     }
 }

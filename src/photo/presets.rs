@@ -121,7 +121,7 @@ pub fn merge(current: &[Preset], incoming: &[Preset]) -> Result<Vec<Preset>, Str
         let mut suffix = 2;
         while result
             .iter()
-            .any(|p| p.name.eq_ignore_ascii_case(&preset.name))
+            .any(|p| p.name.trim().to_lowercase() == preset.name.trim().to_lowercase())
         {
             preset.name = format!("{base} ({suffix})");
             suffix += 1;
@@ -136,6 +136,31 @@ pub fn merge(current: &[Preset], incoming: &[Preset]) -> Result<Vec<Preset>, Str
 mod tests {
     use super::*;
     use crate::photo::{DevelopParams, transfer::Categories};
+
+    #[test]
+    fn merge_uses_the_same_name_normalization_as_validation() {
+        for (existing, incoming, renamed) in [
+            (" Evening ", "Evening", "Evening (2)"),
+            ("ÉTÉ", "été", "été (2)"),
+        ] {
+            let preset = Preset {
+                name: existing.into(),
+                params: DevelopParams::default(),
+                categories: Categories::default(),
+            };
+            let other = Preset {
+                name: incoming.into(),
+                ..preset.clone()
+            };
+            assert!(encode(std::slice::from_ref(&preset)).is_ok());
+            assert!(encode(std::slice::from_ref(&other)).is_ok());
+            let merged = merge(std::slice::from_ref(&preset), &[other]).unwrap();
+            assert_eq!(merged.len(), 2);
+            assert_eq!(merged[0], preset);
+            assert_eq!(merged[1].name, renamed);
+            assert_eq!(decode(&encode(&merged).unwrap()).unwrap(), merged);
+        }
+    }
 
     #[test]
     fn portable_presets_roundtrip_categories_and_merge_without_overwriting_names() {

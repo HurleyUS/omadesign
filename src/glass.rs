@@ -99,9 +99,9 @@ pub(super) fn apply(pm: &mut Pixmap, glass: &AppleGlass) {
                 }
                 let cover = src_a as f32 / 255.0 / color[3];
                 let i = x * 4;
-                row[i] = to_byte(color[0] * cover);
-                row[i + 1] = to_byte(color[1] * cover);
-                row[i + 2] = to_byte(color[2] * cover);
+                row[i] = to_byte(color[0] * cover).min(src_a);
+                row[i + 1] = to_byte(color[1] * cover).min(src_a);
+                row[i + 2] = to_byte(color[2] * cover).min(src_a);
                 row[i + 3] = src_a;
             }
         });
@@ -479,6 +479,25 @@ impl Lens<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn highlights_preserve_premultiplied_alpha() {
+        let glass = AppleGlass {
+            blur: 0.0,
+            spec_power: 1.0,
+            spec_intensity: 2.0,
+            ..Default::default()
+        };
+        for alpha in [0, 128, 255] {
+            let mut image = Pixmap::new(16, 16).unwrap();
+            image.fill(tiny_skia::Color::from_rgba8(255, 255, 255, alpha));
+            apply(&mut image, &glass);
+            for pixel in image.data().chunks_exact(4) {
+                assert_eq!(pixel[3], alpha);
+                assert!(pixel[..3].iter().all(|&c| c <= pixel[3]), "{pixel:?}");
+            }
+        }
+    }
 
     #[test]
     fn distance_is_positive_inside_and_points_inward() {

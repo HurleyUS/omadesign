@@ -256,7 +256,7 @@ pub fn texture(gradient: &Gradient, shape: &Shape, padding: f32, scale: f32) -> 
                 -tile.min.x * w as f32 / tile.width(),
                 -tile.min.y * h as f32 / tile.height(),
             );
-            let rule = if matches!(geom, Geom::Poly { winding: true, .. }) {
+            let rule = if geom.nonzero_winding() {
                 tiny_skia::FillRule::Winding
             } else {
                 tiny_skia::FillRule::EvenOdd
@@ -466,6 +466,43 @@ mod integration_tests {
             );
         }
     }
+    #[test]
+    fn shape_texture_preserves_compound_path_winding() {
+        let contours = vec![
+            vec![
+                Pt::new(0., 0.),
+                Pt::new(100., 0.),
+                Pt::new(100., 100.),
+                Pt::new(0., 100.),
+            ],
+            vec![
+                Pt::new(30., 30.),
+                Pt::new(70., 30.),
+                Pt::new(70., 70.),
+                Pt::new(30., 70.),
+            ],
+        ];
+        let g = gradient(GradientKind::Shape);
+        for winding in [false, true] {
+            let polygon = Shape::new(
+                Geom::Poly {
+                    contours: contours.clone(),
+                    winding,
+                },
+                Style::default(),
+            );
+            let paths = Shape::new(polygon.geom.to_path(), Style::default());
+            let expected = texture(&g, &polygon, 0., 1.).unwrap();
+            let actual = texture(&g, &paths, 0., 1.).unwrap();
+            let center = (actual.0.height() / 2 * actual.0.width() + actual.0.width() / 2) as usize;
+            assert_eq!(
+                actual.0.pixels()[center],
+                expected.0.pixels()[center],
+                "winding={winding}"
+            );
+        }
+    }
+
     #[test]
     fn shape_texture_cache_keeps_corners_and_uses_render_scale() {
         let mut shape = Shape::new(

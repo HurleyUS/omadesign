@@ -303,10 +303,12 @@ impl Writer {
             return Ok(*id);
         }
         let pixels = layer.kind.pixels().ok_or("Expected a raster layer")?;
-        if pixels.w == 0
-            || pixels.h == 0
-            || pixels.data.len() != pixels.w as usize * pixels.h as usize * 4
-        {
+        // w and h are file or document fields. w*h*4 can overflow usize, and
+        // that panic used to fire inside the check that should reject them.
+        let bytes = u64::from(pixels.w)
+            .checked_mul(u64::from(pixels.h))
+            .and_then(|n| n.checked_mul(4));
+        if pixels.w == 0 || pixels.h == 0 || bytes != Some(pixels.data.len() as u64) {
             return Err("Invalid raster buffer during PDF export".into());
         }
         let mut rgb = Vec::with_capacity(pixels.data.len() / 4 * 3);
@@ -398,37 +400,41 @@ fn order(
 fn path(operations: &mut Vec<Operation>, shape: &Shape) {
     let center = shape.geom.bbox().center();
     let rotate = |point: Pt| point.rotate_about(center, shape.rotation);
-    if let Geom::Path { anchors, closed } = &shape.geom {
-        let Some(first) = anchors.first() else {
-            return;
-        };
-        let first_pt = rotate(first.pt);
-        op(operations, "m", &[first_pt.x, first_pt.y]);
-        for pair in anchors.windows(2) {
-            let a = &pair[0];
-            let b = &pair[1];
-            let to = rotate(b.pt);
-            if a.h_out == Pt::ZERO && b.h_in == Pt::ZERO {
-                op(operations, "l", &[to.x, to.y]);
-            } else {
-                let c1 = rotate(a.pt + a.h_out);
-                let c2 = rotate(b.pt + b.h_in);
-                op(operations, "c", &[c1.x, c1.y, c2.x, c2.y, to.x, to.y]);
+    // Compounds keep a closed flag and cubics on every contour. `is_closed`
+    // is true when any contour is closed, so it must not decide the others.
+    if matches!(shape.geom, Geom::Path { .. } | Geom::Paths { .. }) {
+        for (anchors, closed) in shape.geom.path_contours() {
+            let Some(first) = anchors.first() else {
+                continue;
+            };
+            let first_pt = rotate(first.pt);
+            op(operations, "m", &[first_pt.x, first_pt.y]);
+            for pair in anchors.windows(2) {
+                let a = &pair[0];
+                let b = &pair[1];
+                let to = rotate(b.pt);
+                if a.h_out == Pt::ZERO && b.h_in == Pt::ZERO {
+                    op(operations, "l", &[to.x, to.y]);
+                } else {
+                    let c1 = rotate(a.pt + a.h_out);
+                    let c2 = rotate(b.pt + b.h_in);
+                    op(operations, "c", &[c1.x, c1.y, c2.x, c2.y, to.x, to.y]);
+                }
             }
-        }
-        if *closed {
-            if let Some(last) = anchors.last()
-                && (last.h_out != Pt::ZERO || first.h_in != Pt::ZERO)
-            {
-                let c1 = rotate(last.pt + last.h_out);
-                let c2 = rotate(first.pt + first.h_in);
-                op(
-                    operations,
-                    "c",
-                    &[c1.x, c1.y, c2.x, c2.y, first_pt.x, first_pt.y],
-                );
+            if closed {
+                if let Some(last) = anchors.last()
+                    && (last.h_out != Pt::ZERO || first.h_in != Pt::ZERO)
+                {
+                    let c1 = rotate(last.pt + last.h_out);
+                    let c2 = rotate(first.pt + first.h_in);
+                    op(
+                        operations,
+                        "c",
+                        &[c1.x, c1.y, c2.x, c2.y, first_pt.x, first_pt.y],
+                    );
+                }
+                op(operations, "h", &[]);
             }
-            op(operations, "h", &[]);
         }
     } else {
         for contour in shape.world_contours(96) {
