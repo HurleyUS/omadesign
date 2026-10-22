@@ -551,6 +551,12 @@ impl Workspace {
                         shown.response.rect.width(),
                         shown.response.rect.height(),
                     ];
+                    if ui.ctx().memory(|memory| memory.focused())
+                        .and_then(|focus| ui.ctx().read_response(focus))
+                        .is_some_and(|focused| shown.response.rect.contains(focused.rect.center()))
+                    {
+                        self.focus = Some(saved.panels[saved.active].clone());
+                    }
                 }
                 if !open {
                     self.close_group(saved);
@@ -574,6 +580,12 @@ impl Workspace {
                                 content(ui);
                             });
                     });
+                    if ui.ctx().memory(|memory| memory.focused())
+                        .and_then(|focus| ui.ctx().read_response(focus))
+                        .is_some_and(|focused| rect.contains(focused.rect.center()))
+                    {
+                        self.focus = Some(saved.panels[saved.active].clone());
+                    }
                     let horizontal = matches!(saved.place, Place::Left | Place::Right);
                     let (edge, sign) = match saved.place {
                         Place::Left => (

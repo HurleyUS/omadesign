@@ -34,6 +34,17 @@ pub fn next_id() -> u64 {
     }
 }
 
+/// Draw a random seed for transient work (e.g. one brush stroke) without
+/// registering it as a live document ID, so per-stroke callers cannot grow the
+/// global ID set without bound.
+/// Args: none. Returns a nonzero, JSON-safe value that is never retained.
+pub fn transient_seed() -> u64 {
+    if IDS.get().is_none() { next_id(); }
+    let mut ids = IDS.get().unwrap().lock().unwrap_or_else(|e| e.into_inner());
+    ids.0 = ids.0.wrapping_add(0x0013_79b9_7f4a_7c15) & ((1 << 53) - 1);
+    ids.0.max(1)
+}
+
 /// Reserve an ID read from a native file without sharing a process counter.
 /// Args: existing ID. Returns nothing; subsequent allocations exclude this ID.
 pub fn bump_id(seen: u64) {

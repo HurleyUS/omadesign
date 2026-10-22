@@ -49,7 +49,7 @@ pub fn top_bar(ui: &mut Ui, studio: &mut Studio) {
         .show(ui, |ui| {
             let row = ui.max_rect();
             let modes = mode_tabs_rect(row);
-            let compact = modes.left() - row.left() < 660.0;
+            let compact = modes.left() - row.left() < 420.0;
             let left = eframe::egui::Rect::from_min_max(
                 row.min,
                 eframe::egui::pos2(modes.left() - 12.0, row.bottom()),
@@ -214,7 +214,8 @@ fn pane_items(ui: &mut Ui, studio: &mut Studio, panels: &[&str]) {
 }
 
 fn mode_tabs_rect(row: eframe::egui::Rect) -> eframe::egui::Rect {
-    eframe::egui::Rect::from_min_size(eframe::egui::pos2((row.right() - 144.0 - 288.0).max(row.left() + 180.0), row.center().y - 15.0), vec2(288.0, 30.0))
+    let left = row.center().x - 144.0;
+    eframe::egui::Rect::from_min_size(eframe::egui::pos2(left.max(row.left() + 180.0), row.center().y - 15.0), vec2(288.0, 30.0))
 }
 
 fn file_menu(ui: &mut Ui, studio: &mut Studio) {

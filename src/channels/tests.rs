@@ -134,6 +134,7 @@ fn craft_channels_current_embedded_retained_deleted_and_underdeclared_readers_re
 }
 #[test]
 fn craft_channels_invalid_scalar_payloads_names_and_transforms_preserve_source_and_pool() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     let original = plane(&[0., 0.25, 1.]);
     let pool = resources::global();
     let before = (pool.usage().0, pool.pending_bytes());

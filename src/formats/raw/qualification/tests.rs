@@ -339,6 +339,7 @@ fn own_dng() -> Vec<u8> {
 
 #[test]
 fn raw_camera_contract_real_photo_workflow_cannot_replace_external_references() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     let scratch = Scratch::new();
     let original = scratch.0.join("own.dng");
     fs::write(&original, own_dng()).unwrap();

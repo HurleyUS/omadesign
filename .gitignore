@@ -48,3 +48,10 @@ id_ed25519*
 credentials.json
 .cache/
 node_modules/
+
+# OS, profiler and local app-state files.
+.DS_Store
+*.profraw
+*.profdata
+/profiles/
+*.sqlite-journal

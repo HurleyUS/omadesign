@@ -37,6 +37,7 @@ fn close(actual: &[f32], expected: &[f32], tolerance: f32) {
 
 #[test]
 fn craft_channel_filter_families_all_thirty_keep_float_coverage_and_selection_owners() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     let values: Vec<_> = (0..35)
         .map(|i| {
             if i == 0 {
@@ -313,6 +314,7 @@ fn craft_channel_filter_families_unsharp_and_convolution_match_independent_kerne
 
 #[test]
 fn craft_channel_filter_families_mid_kernel_cancellation_releases_owned_working_buffers() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     use std::sync::atomic::{AtomicBool, Ordering};
     let source = resources::global()
         .copy_now(&vec![[0.25, 0.5, 0.75, 1.]; 1024 * 128], &storage::check)

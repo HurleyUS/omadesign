@@ -39,7 +39,7 @@ fn craft_active_selection_save_and_reopen_keeps_exact_soft_coverage() {
     assert_eq!(crate::project::encode(&s.doc).unwrap(), artwork);
     assert_eq!(s.history.len(), history);
     assert!(!s.dirty);
-    assert_eq!(version(&path), crate::project::VERSION as u64);
+    assert_eq!(version(&path), crate::project::ACTIVE_SELECTION as u64);
     let loaded = crate::project::load_from(&path).unwrap();
     assert!(loaded.active_selection.is_some());
     let mut reopened = Studio::new();
@@ -113,7 +113,11 @@ fn craft_active_selection_older_reader_refuses_the_new_version() {
     let text = crate::project::encode(&s.doc).unwrap();
     s.doc.active_selection = None;
     let mut value: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(value["version"], crate::project::VERSION);
-    value["version"] = (crate::project::VERSION - 1).into();
-    assert!(crate::project::decode(&value.to_string()).is_err(), "a version-35 reader must not silently drop it");
+    assert_eq!(value["version"], crate::project::ACTIVE_SELECTION);
+    value["version"] = (crate::project::ACTIVE_SELECTION - 1).into();
+    assert!(
+        crate::project::decode(&value.to_string()).is_err(),
+        "a version-{} reader must not silently drop it",
+        crate::project::ACTIVE_SELECTION - 1
+    );
 }

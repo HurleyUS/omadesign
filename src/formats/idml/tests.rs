@@ -61,6 +61,7 @@ fn independently_authored_styled_threaded_publishing_package() {
 }
 #[test]
 fn native_reopen_and_idml_roundtrip_preserve_editable_story_and_publishing() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     let (mut doc, notes) = read(FIXTURE, "Publishing").unwrap();
     doc.import_notes = notes;
     let head = doc

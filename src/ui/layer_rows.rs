@@ -93,11 +93,13 @@ mod tests {
         let rows = snapshot(&shapes, 0.0, clip, 6.0, Some(shapes[0].id));
         assert_eq!(
             rows.iter().map(|row| row.visual_index).collect::<Vec<_>>(),
-            [5, 6, 7, 1999]
+            [4, 5, 6, 7, 1999]
         );
-        assert_eq!(rows[0].name, "Object 1994");
-        assert!(rows[0].masked);
-        assert_eq!(rows[3].name, "Object 0");
+        assert_eq!(rows[0].name, "Object 1995");
+        assert!(!rows[0].masked);
+        assert_eq!(rows[1].name, "Object 1994");
+        assert!(rows[1].masked);
+        assert_eq!(rows[4].name, "Object 0");
         assert_eq!(shapes[1994].mask.as_ref().unwrap().data.as_ptr(), storage);
         assert!(snapshot(&shapes, 400.0, clip, 6.0, None).is_empty());
     }

@@ -253,7 +253,7 @@ pub(super) fn start(studio: &mut Studio, world: Pt) {
     };
     studio.brush_distance = studio.brush.spacing_distance();
     studio.brush_heading = 0.0;
-    studio.brush.seed = crate::document::next_id();
+    studio.brush.seed = crate::document::transient_seed();
     let source = if heal {
         match buf.try_clone() {
             Ok(source) => Some(source),
@@ -384,7 +384,7 @@ pub(super) fn start_brush(studio: &mut Studio, world: Pt) {
     let point = studio.mask_point(layer, world);
     studio.brush_distance = studio.brush.spacing_distance();
     studio.brush_heading = 0.0;
-    studio.brush.seed = crate::document::next_id();
+    studio.brush.seed = crate::document::transient_seed();
     if let Some(tip) = studio.brushes.tip() {
         let brush = paint::Brush {
             opacity: 1.0,

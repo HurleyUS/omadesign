@@ -167,6 +167,7 @@ fn craft_export_sizing_real_png_jpeg_tiff_density_and_native16_tags_samples() {
 
 #[test]
 fn craft_export_sizing_invalid_overflow_cancel_and_atomic_owner_release() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     let source = source_fixture(Depth::F32);
     let baseline = crate::resources::global().usage().0;
     let pending = crate::resources::global().pending_bytes();
