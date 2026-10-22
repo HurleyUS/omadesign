@@ -1217,6 +1217,7 @@ mod tests {
 
     #[test]
     fn admitted_project_output_survives_roundtrip_write_failure_and_last_alias() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         use crate::{deep_color::Depth, document::Layer};
         use std::sync::{
             Arc,

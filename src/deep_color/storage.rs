@@ -74,6 +74,7 @@ mod builder_tests {
 
     #[test]
     fn initialized_builder_retains_spare_and_last_alias_without_default_samples() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         #[derive(Clone, Copy, Debug, PartialEq)]
         struct Sample(u32);
         let pool = resources::global();

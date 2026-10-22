@@ -334,6 +334,7 @@ fn native_malformed_payload_and_mid_decode_cancellation_preserve_source_bytes() 
 
 #[test]
 fn native_admission_refusal_runs_in_an_independent_process() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     let status = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",

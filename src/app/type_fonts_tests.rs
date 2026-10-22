@@ -93,6 +93,7 @@ fn reopen(s: &Studio) {
 }
 #[test]
 fn craft_find_font_core_reports_real_faces_runs_and_unique_missing_glyphs_without_editing() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     let (mut s, hit, _) = editor();
     let id = s.doc.layers[0].kind.shapes().unwrap()[1].id;
     let bytes = std::sync::Arc::new(std::fs::read(BASE).unwrap());
@@ -233,6 +234,7 @@ fn craft_find_font_core_find_includes_locked_hidden_and_empty_results_without_gr
 }
 #[test]
 fn craft_find_font_core_live_story_replacement_retains_existing_draft_caret_and_history_boundary() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     let (mut s, hit, other) = editor();
     let before = wire(&s);
     s.begin_type_edit(hit, Pt::new(30., 60.));

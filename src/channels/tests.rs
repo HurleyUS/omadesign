@@ -245,6 +245,7 @@ fn craft_channels_native_float_color_and_transparency_are_read_before_byte_quant
 }
 #[test]
 fn craft_channels_cancellation_keeps_shared_sources_and_releases_generated_allocations() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     let p = plane(&[0., 0.25, 0.5, 1.]);
     let before = p.samples.clone();
     let pool = resources::global();

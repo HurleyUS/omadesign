@@ -125,6 +125,7 @@ impl Progress for CancelDuringEncoding {
 
 #[test]
 fn admitted_native_encoding_cancel_releases_working_storage_and_preserves_source() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     let source = Source::Document(document(Depth::U16));
     let before = crate::resources::global().usage().0;
     let Source::Document(doc) = &source else {

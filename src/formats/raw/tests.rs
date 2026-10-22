@@ -4,6 +4,7 @@ const DNG: &[u8] = include_bytes!("synthetic.dng");
 
 #[test]
 fn native_result_retains_its_memory_and_cancellable_decoder_ownership() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     use std::time::Duration;
     let baseline = resources::global().usage().0;
     let native = native_decode(DNG, &Cancellation::default(), false).unwrap();
@@ -79,6 +80,7 @@ fn calibration_dng(w: u32, h: u32) -> Vec<u8> {
 
 #[test]
 fn active_native_interpolation_cancels_promptly_then_next_decode_succeeds() {
+    let _pool_exclusive = crate::resources::test_exclusive();
     use std::time::{Duration, Instant};
     let bytes = calibration_dng(2048, 1536);
     let token = Cancellation::default();

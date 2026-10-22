@@ -456,6 +456,7 @@ mod layout_tests {
     }
     #[test]
     fn craft_variable_font_find_replace_preserves_unmatched_axis_ranges_and_one_document_undo() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         let mut s = crate::app::Studio::new();
         s.show_welcome = false;
         s.doc = crate::document::Document::new("Axis replacements", 300., 180., 96.);

@@ -28,14 +28,39 @@ struct State {
 static TEST_EXCLUSIVE: Mutex<()> = Mutex::new(());
 
 /// Test-only pool claim
-/// Brief: Excludes other claim-holding tests from interleaving with this test's pool accounting.
+/// Brief: Gives this test thread a private pool so parallel tests cannot move its accounting (#484).
 /// Args: none.
-/// Returns: a mutable guard the caller must hold across its whole before/after pool assertion window.
+/// Returns: a guard the caller must hold across its whole before/after pool assertion window;
+/// `global()` on this thread resolves to the private pool until the guard drops.
 #[cfg(test)]
-pub(crate) fn test_exclusive() -> std::sync::MutexGuard<'static, ()> {
-    match TEST_EXCLUSIVE.lock() {
+pub(crate) fn test_exclusive() -> TestPool {
+    let guard = match TEST_EXCLUSIVE.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    };
+    let shared = shared_pool();
+    let private: &'static Arc<Budget> =
+        Box::leak(Box::new(Budget::new(shared.limit, shared.host_pressure)));
+    let previous = TEST_POOL.with(|pool| pool.replace(Some(private)));
+    TestPool { _guard: guard, previous }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_POOL: std::cell::Cell<Option<&'static Arc<Budget>>> = const { std::cell::Cell::new(None) };
+}
+
+/// Restores the shared pool for this thread when a pool-accounting test ends.
+#[cfg(test)]
+pub(crate) struct TestPool {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Option<&'static Arc<Budget>>,
+}
+
+#[cfg(test)]
+impl Drop for TestPool {
+    fn drop(&mut self) {
+        TEST_POOL.with(|pool| pool.set(self.previous));
     }
 }
 
@@ -635,6 +660,14 @@ pub fn available_memory() -> Option<u64> {
 /// Use one process-wide pool for native, source and development allocations.
 /// Args: none. Returns a pool capped at half physical memory and eight GiB, with live pressure checks.
 pub fn global() -> &'static Arc<Budget> {
+    #[cfg(test)]
+    if let Some(pool) = TEST_POOL.with(|pool| pool.get()) {
+        return pool;
+    }
+    shared_pool()
+}
+
+fn shared_pool() -> &'static Arc<Budget> {
     static POOL: OnceLock<Arc<Budget>> = OnceLock::new();
     POOL.get_or_init(|| {
         Budget::new(
@@ -683,6 +716,7 @@ mod tests {
     use super::*;
     #[test]
     fn typed_growth_retains_initialized_credit_and_admits_transient_old_plus_new() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         #[derive(Clone, Copy, Debug, PartialEq)]
         struct Sample(u16);
         let check = || Ok(());
@@ -733,6 +767,7 @@ mod tests {
 
     #[test]
     fn cancellation_after_growth_admission_restores_the_existing_owner() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         let pool = Budget::new(1024, false);
         let mut output = pool.copy_now(&[1u32; 8], &|| Ok(())).unwrap();
         let checks = std::sync::atomic::AtomicUsize::new(0);
@@ -760,6 +795,7 @@ mod tests {
 
     #[test]
     fn output_writes_credit_only_initialized_length_and_preserve_owners_on_failure() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         let check = || Ok(());
         let pool = Budget::new(256, false);
         let mut output = pool.allocate_now::<u8, _>(0, &check).unwrap();
@@ -787,6 +823,7 @@ mod tests {
     }
     #[test]
     fn initialized_credit_keeps_spare_capacity_pending_and_tracks_final_alias() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         static FREE: AtomicU64 = AtomicU64::new(100);
         fn available() -> Option<u64> {
             Some(HEADROOM + FREE.load(Ordering::Acquire))
@@ -827,6 +864,7 @@ mod tests {
 
     #[test]
     fn copy_adopt_and_opaque_transfer_preserve_capacity_and_one_owner_credit() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         let pool = Budget::new(128, false);
         let check = || Ok(());
         let owner = pool.copy_now(&[1u8; 32], &check).unwrap();
@@ -852,6 +890,7 @@ mod tests {
 
     #[test]
     fn host_snapshot_cannot_combine_old_availability_with_new_initialized_credit() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         use std::sync::{Barrier, mpsc};
         static FREE: AtomicU64 = AtomicU64::new(100);
         static PAUSE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -915,6 +954,7 @@ mod tests {
 
     #[test]
     fn synchronous_admission_never_waits_for_retained_buffers() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         let pool = Budget::new(64, false);
         let check = || Ok(());
         let storage = pool.allocate_now::<u8, _>(48, &check).unwrap();
@@ -939,6 +979,7 @@ mod tests {
     }
     #[test]
     fn adopted_native_allocations_share_one_budget_with_raw_and_cow_copies() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         let pool = Budget::new(160, false);
         let check = || Ok(());
         let raw = pool.reserve(80, &check).unwrap();
@@ -963,6 +1004,7 @@ mod tests {
 
     #[test]
     fn adoption_rejects_wrong_pool_short_and_shared_leases() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         let pool = Budget::new(100, false);
         let other = Budget::new(100, false);
         let check = || Ok(());
@@ -984,6 +1026,7 @@ mod tests {
     }
     #[test]
     fn raw_resources_follow_last_sample_clone_and_enforce_aggregate_budget() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         let pool = Budget::new(100, false);
         let cancel = || Ok(());
         let lease = pool.reserve(60, &cancel).unwrap();
@@ -1002,6 +1045,7 @@ mod tests {
     }
     #[test]
     fn raw_resources_admit_high_resolution_by_bytes_and_reject_overflow() {
+        let _pool_exclusive = crate::resources::test_exclusive();
         let demand = native_demand(105_000_000, 102_000_000).unwrap();
         assert!(demand > 4_000_000_000);
         let pool = Budget::new(8 * 1024 * MIB, false);
