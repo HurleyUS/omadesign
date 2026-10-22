@@ -1660,7 +1660,32 @@ mod keyboard_field_tests {
         );
         frame(ctx, studio, vec![]);
         keys::tab_to(ctx, "Panel", |events| frame(ctx, studio, events));
-        frame(ctx, studio, keys::key(Key::End, Modifiers::NONE));
+        if action == 8 {
+            frame(ctx, studio, keys::key(Key::Enter, Modifiers::NONE));
+            let mut picked = false;
+            for _ in 0..128 {
+                let output = frame(ctx, studio, keys::key(Key::Tab, Modifiers::NONE));
+                let native = ctx.memory(|memory| memory.focused()).map(|id| id.accesskit_id());
+                picked = native.and_then(|native| {
+                    output
+                        .platform_output
+                        .accesskit_update
+                        .as_ref()
+                        .and_then(|update| {
+                            update
+                                .nodes
+                                .iter()
+                                .find(|(id, _)| *id == native)
+                                .map(|(_, node)| node.label() == Some("Photo develop"))
+                        })
+                }) == Some(true);
+                if picked {
+                    break;
+                }
+            }
+            assert!(picked, "Panel combo never reached Photo develop");
+            frame(ctx, studio, keys::key(Key::Enter, Modifiers::NONE));
+        }
         keys::tab_to(ctx, "Panel action", |events| frame(ctx, studio, events));
         frame(ctx, studio, keys::key(Key::Home, Modifiers::NONE));
         for _ in 0..action {

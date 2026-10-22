@@ -31,6 +31,7 @@ static TEST_EXCLUSIVE: Mutex<()> = Mutex::new(());
 /// Brief: Excludes other claim-holding tests from interleaving with this test's pool accounting.
 /// Args: none.
 /// Returns: a mutable guard the caller must hold across its whole before/after pool assertion window.
+#[cfg(test)]
 pub(crate) fn test_exclusive() -> std::sync::MutexGuard<'static, ()> {
     match TEST_EXCLUSIVE.lock() {
         Ok(guard) => guard,
