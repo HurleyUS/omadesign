@@ -69,19 +69,25 @@ pub(super) fn native_number_valid(ui: &Ui, response: &Response, property: Id, at
 /// Args: UI, affected responses and plain error. Returns no value; native reader announcements are unproven.
 pub(super) fn control_error(ui: &mut Ui, fields: &[&Response], message: &str) {
     let error = error_response(ui, fields, message);
-    // Keep the message beside the focused field visible; in short docked
-    // panes it otherwise lands below the fold, unseen.
+    // Keep the message of the field being edited on screen; a clipped label is never painted.
     if fields.iter().any(|field| field.has_focus()) && !ui.clip_rect().contains_rect(error.rect) {
-        ui.scroll_to_rect_animation(error.rect, None, egui::style::ScrollAnimation::none());
+        reveal_bounds(ui, fields, error.rect, None);
     }
+}
+
+/// Scroll a rejected control and its message into view.
+/// When both do not fit (a tall multiline source), the message wins: an unpainted error is lost (#480, #481).
+fn reveal_bounds(ui: &mut Ui, fields: &[&Response], error: egui::Rect, align: Option<egui::Align>) {
+    let bounds = fields.iter().fold(error, |rect, field| rect.union(field.rect));
+    let target = if bounds.height() <= ui.clip_rect().height() { bounds } else { error };
+    ui.scroll_to_rect_animation(target, align, egui::style::ScrollAnimation::none());
 }
 
 /// Reveal an existing rejected field and its associated message inside its scroll area.
 /// Args: UI, actual controls and their validation error. Returns whether native focus was restored.
 pub(super) fn reveal_control_error(ui: &mut Ui, fields: &[&Response], message: &str) -> bool {
     let error = error_response(ui, fields, message);
-    let bounds = fields.iter().fold(error.rect, |rect, field| rect.union(field.rect));
-    ui.scroll_to_rect_animation(bounds, Some(egui::Align::Center), egui::style::ScrollAnimation::none());
+    reveal_bounds(ui, fields, error.rect, Some(egui::Align::Center));
     let activating = ui.input(|input| input.pointer.any_click()
         || input.key_pressed(egui::Key::Enter) || input.key_pressed(egui::Key::Space));
     let restored = if !activating && ui.is_enabled() {
