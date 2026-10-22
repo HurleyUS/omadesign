@@ -204,6 +204,12 @@ pub(super) fn panels(ui: &mut Ui, studio: &mut Studio) -> egui::Rect {
             layout.request_focus(ui.ctx(), "oma-workspace", &panel);
         }
     }
+    let shown: std::collections::HashSet<String> = book
+        .tasks
+        .get(task(studio.persona))
+        .map(|layout| layout.groups.iter().filter_map(|group| group.panels.get(group.active).cloned()).collect())
+        .unwrap_or_default();
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("oma-shown-panels"), std::sync::Arc::new(shown)));
     let center = book.tasks.get_mut(task(studio.persona)).unwrap().show(
         ui,
         "oma-workspace",
@@ -497,4 +503,11 @@ mod tab_visibility_tests {
         assert_eq!(ctx.memory(|m|m.focused()).map(|id|id.accesskit_id()),Some(id));
         let bounds=node.bounds().unwrap();assert!(bounds.x0>=880.0&&bounds.x1<=1200.0,"the actual active tab must be visible: {bounds:?}");
     }
+}
+
+/// Whether a docked pane is the visible tab of its group this frame.
+/// Args: context and pane ID. Returns true only for the active tab of an open group.
+pub(super) fn shown(ctx: &egui::Context, panel: &str) -> bool {
+    ctx.data(|d| d.get_temp::<std::sync::Arc<std::collections::HashSet<String>>>(egui::Id::new("oma-shown-panels")))
+        .is_some_and(|shown| shown.contains(panel))
 }
