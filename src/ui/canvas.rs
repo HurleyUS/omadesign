@@ -3863,7 +3863,10 @@ fn context_menu(resp: &eframe::egui::Response, studio: &mut Studio) {
         }
     }
     resp.context_menu(|ui| {
-        super::text_geometry::menu(ui, studio);
+        // Type commands only for text, so object menus keep Transform on screen.
+        if studio.selected_type().is_some() || studio.has_outline_text_targets() {
+            super::text_geometry::menu(ui, studio);
+        }
         if ui.button("Cut                    Ctrl+X").clicked() {
             studio.cut_selection(ui.ctx());
             ui.close();
