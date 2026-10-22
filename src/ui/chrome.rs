@@ -49,7 +49,7 @@ pub fn top_bar(ui: &mut Ui, studio: &mut Studio) {
         .show(ui, |ui| {
             let row = ui.max_rect();
             let modes = mode_tabs_rect(row);
-            let compact = modes.left() - row.left() < 660.0;
+            let compact = modes.left() - row.left() < 420.0;
             let left = eframe::egui::Rect::from_min_max(
                 row.min,
                 eframe::egui::pos2(modes.left() - 12.0, row.bottom()),

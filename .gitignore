@@ -56,5 +56,10 @@ node_modules/
 # own nested .gitignore files).
 .fallow/
 .convex/local/
-*.profraw
+
+# OS, profiler and local app-state files.
 .DS_Store
+*.profraw
+*.profdata
+/profiles/
+*.sqlite-journal
