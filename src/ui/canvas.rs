@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 mod geometry;
 use geometry::*;
 #[cfg(test)] mod geometry_tests;
+#[cfg(test)] mod nudge_focus_tests;
 
 pub fn show(ui: &mut Ui, studio: &mut Studio) {
     let (_, rect) = ui.allocate_space(ui.available_size());
@@ -46,10 +47,14 @@ pub fn show(ui: &mut Ui, studio: &mut Studio) {
         resp.request_focus();
     }
 
-    if studio.type_edit.is_some() {
+    // A focused canvas owns the arrow keys: they nudge artwork (or move the caret),
+    // so native arrow focus navigation must never leave the canvas after a nudge.
+    // Tab and Escape stay native outside text editing so the workspace Tab cycle still works.
+    if studio.type_edit.is_some() || resp.has_focus() {
+        let editing = studio.type_edit.is_some();
         ui.ctx().memory_mut(|memory| memory.set_focus_lock_filter(
             eframe::egui::Id::new("studio-canvas"),
-            eframe::egui::EventFilter {horizontal_arrows:true,vertical_arrows:true,tab:true,escape:true},
+            eframe::egui::EventFilter {horizontal_arrows:true,vertical_arrows:true,tab:editing,escape:editing},
         ));
     }
 
