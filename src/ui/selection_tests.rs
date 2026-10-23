@@ -149,9 +149,10 @@ fn inspector_routes_all_alignment_distribution_and_order_controls() {
         s.undo();
         assert_eq!(crate::project::encode(&s.doc).unwrap(), before);
     }
-    for glyph in [ph::ALIGN_CENTER_H, ph::ALIGN_CENTER_V] {
+    // Distribute has its own icons now, so each appears once, below the Align header.
+    for glyph in [ph::ARROWS_OUT_LINE_HORIZONTAL, ph::ARROWS_OUT_LINE_VERTICAL] {
         let labels = frame(&ctx, &mut s, 1600., vec![]);
-        let distribute = align_pane_glyph(&labels, glyph).1[1];
+        let distribute = *align_pane_glyph(&labels, glyph).1.first().expect("distribute control");
         let h = s.history.len();
         click_at(&ctx, &mut s, distribute, Modifiers::SHIFT);
         assert_eq!(s.history.len(), h + 1);

@@ -11,10 +11,10 @@ pub(super) fn arrange_panel(ui: &mut Ui, studio: &mut Studio) {
     let selected = !studio.selection.is_empty() || studio.selected_layer.is_some();
     ui.add_enabled_ui(selected, |ui| {
         ui.horizontal_wrapped(|ui| {
-            if ui.small_button("To front").on_hover_text("Bring to front · Ctrl+Shift+]").clicked() {studio.bring_to_front();}
-            if ui.small_button("Forward").on_hover_text("Bring forward · Ctrl+]").clicked() {studio.bring_forward();}
-            if ui.small_button("To back").on_hover_text("Send to back · Ctrl+Shift+[").clicked() {studio.send_to_back();}
-            if ui.small_button("Backward").on_hover_text("Send backward · Ctrl+[").clicked() {studio.send_backward();}
+            if icons::icon_button(ui,ph::SKIP_FORWARD,"Bring to front · Ctrl+Shift+]",false) {studio.bring_to_front();}
+            if icons::icon_button(ui,ph::ARROW_UP,"Bring forward · Ctrl+]",false) {studio.bring_forward();}
+            if icons::icon_button(ui,ph::SKIP_BACK,"Send to back · Ctrl+Shift+[",false) {studio.send_to_back();}
+            if icons::icon_button(ui,ph::ARROW_DOWN,"Send backward · Ctrl+[",false) {studio.send_backward();}
         });
     });
     ui.separator();
@@ -48,10 +48,10 @@ pub(super) fn arrange_panel(ui: &mut Ui, studio: &mut Studio) {
             ui.add_enabled_ui(count >= 3, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for (label, hint, distribution) in [
-                        ("Distribute H", "Distribute horizontally", Distribute::Horizontal),
-                        ("Distribute V", "Distribute vertically", Distribute::Vertical),
+                        (ph::ARROWS_OUT_LINE_HORIZONTAL, "Distribute horizontally", Distribute::Horizontal),
+                        (ph::ARROWS_OUT_LINE_VERTICAL, "Distribute vertically", Distribute::Vertical),
                     ] {
-                        if ui.small_button(label).on_hover_text(hint).clicked() {
+                        if icons::icon_button(ui, label, hint, false) {
                             studio.distribute_sel(distribution);
                         }
                     }
