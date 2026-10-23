@@ -118,7 +118,7 @@ fn inspector_routes_all_alignment_distribution_and_order_controls() {
         s.undo();
         assert_eq!(crate::project::encode(&s.doc).unwrap(), before);
     }
-    for label in ["Distribute H", "Distribute V"] {
+    for label in [ph::ARROWS_OUT_LINE_HORIZONTAL, ph::ARROWS_OUT_LINE_VERTICAL] {
         let h = s.history.len();
         click(&ctx, &mut s, label, Modifiers::SHIFT);
         assert_eq!(s.history.len(), h + 1);
@@ -126,7 +126,7 @@ fn inspector_routes_all_alignment_distribution_and_order_controls() {
     }
     let ids = s.selection.clone();
     s.selection = vec![ids[1]];
-    for label in ["To front", "To back", "Forward", "Backward"] {
+    for label in [ph::SKIP_FORWARD, ph::SKIP_BACK, ph::ARROW_UP, ph::ARROW_DOWN] {
         let h = s.history.len();
         click(&ctx, &mut s, label, Modifiers::NONE);
         assert_eq!(s.history.len(), h + 1);

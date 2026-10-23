@@ -76,6 +76,8 @@ pub mod ph {
     pub const REPEAT: &str = "\u{E3F6}";
     pub const SKIP_BACK: &str = "\u{E5A4}";
     pub const SKIP_FORWARD: &str = "\u{E5A6}";
+    pub const ARROWS_OUT_LINE_HORIZONTAL: &str = "\u{E534}";
+    pub const ARROWS_OUT_LINE_VERTICAL: &str = "\u{E536}";
 }
 
 pub fn font(size: f32) -> FontId {
