@@ -111,7 +111,7 @@ impl eframe::App for Qa {
                 .pixels()
                 .unwrap()
                 .data
-                .clone();
+                .to_vec();
             assert!(
                 pixels.chunks_exact(4).any(|p| p[3] > 0),
                 "Native pointer painted pixels"
