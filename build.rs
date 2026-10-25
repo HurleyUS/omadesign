@@ -65,7 +65,11 @@ fn add_sources(build: &mut cc::Build, directory: &Path) {
     for entry in entries {
         if entry.is_dir() {
             add_sources(build, &entry);
-        } else if entry.extension().is_some_and(|ext| ext == "cpp") {
+        } else if entry.extension().is_some_and(|ext| ext == "cpp")
+            // `*_ph.cpp` are LibRaw's placeholder stubs for builds without the
+            // real pre/post-processing and writer units; they duplicate symbols.
+            && !entry.file_stem().is_some_and(|stem| stem.to_string_lossy().ends_with("_ph"))
+        {
             build.file(entry);
         }
     }
