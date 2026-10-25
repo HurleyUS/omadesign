@@ -1044,6 +1044,7 @@ fn main() -> eframe::Result {
     fs::create_dir_all(&output).unwrap();
     let profile =
         std::env::temp_dir().join(format!("omadesign-inspector-qa-{}", std::process::id()));
+    let mut profile_env = Vec::new();
     for (var, dir) in [
         ("XDG_CONFIG_HOME", "config"),
         ("XDG_DATA_HOME", "data"),
@@ -1052,10 +1053,10 @@ fn main() -> eframe::Result {
     ] {
         let p = profile.join(dir);
         fs::create_dir_all(&p).unwrap();
-        unsafe {
-            std::env::set_var(var, p);
-        }
+        profile_env.push((var, p));
     }
+    // Re-run with the isolated profile instead of mutating this process's env.
+    omadesign::qa_env::ensure_env(&profile_env);
     eframe::run_native(
         "omadesign-inspector-qa",
         eframe::NativeOptions {

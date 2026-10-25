@@ -2478,6 +2478,7 @@ fn main() -> eframe::Result {
     assert!(matches!(fps, 10 | 15 | 30 | 60), "FPS must be 10, 15, 30 or 60");
     // Keep the real desktop HOME/theme, isolate every app write and credential.
     let profile = std::env::temp_dir().join(format!("omadesign-recording-{}", std::process::id()));
+    let mut profile_env = Vec::new();
     for (variable, name) in [
         ("XDG_CONFIG_HOME", "config"),
         ("XDG_DATA_HOME", "data"),
@@ -2486,11 +2487,10 @@ fn main() -> eframe::Result {
     ] {
         let path = profile.join(name);
         fs::create_dir_all(&path).unwrap();
-        // No threads exist yet: this capture process owns its environment.
-        unsafe {
-            std::env::set_var(variable, path);
-        }
+        profile_env.push((variable, path));
     }
+    // Re-run with the isolated profile instead of mutating this process's env.
+    omadesign::qa_env::ensure_env(&profile_env);
     let catalog = scene
         .starts_with("welcome-")
         .then(|| prepare_welcome_catalog(&profile));

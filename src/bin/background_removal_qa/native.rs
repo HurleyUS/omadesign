@@ -425,6 +425,7 @@ impl eframe::App for Capture {
 pub fn run(input: PathBuf, output: PathBuf) -> eframe::Result {
     // Isolate capture state without replacing the user's desktop HOME/theme.
     let profile = output.join("profile");
+    let mut profile_env = Vec::new();
     for (key, name) in [
         ("XDG_CONFIG_HOME", "config"),
         ("XDG_DATA_HOME", "data"),
@@ -433,10 +434,10 @@ pub fn run(input: PathBuf, output: PathBuf) -> eframe::Result {
     ] {
         let path = std::env::current_dir().unwrap().join(profile.join(name));
         std::fs::create_dir_all(&path).unwrap();
-        unsafe {
-            std::env::set_var(key, path);
-        }
+        profile_env.push((key, path));
     }
+    // Re-run with the isolated profile instead of mutating this process's env.
+    omadesign::qa_env::ensure_env(&profile_env);
     let img = image::open(input).unwrap().to_rgba8();
     let (w, h) = img.dimensions();
     let original = img.into_raw();
