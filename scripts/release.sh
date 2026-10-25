@@ -180,3 +180,8 @@ sh scripts/package-installer.sh "$VERSION" "$ARCHITECTURES"
 echo
 ls -lh "$DIST"/*.tar.gz
 cat "$DIST"/*.sha256
+
+# Preview what scripts/oma-cleanup.sh would reclaim; nothing is deleted here.
+echo
+echo "Cleanup preview (run scripts/oma-cleanup.sh --apply to delete):"
+bash scripts/oma-cleanup.sh || echo "cleanup preview failed (release output is unaffected)"

@@ -48,3 +48,6 @@ id_ed25519*
 credentials.json
 .cache/
 node_modules/
+
+# Local, per-machine cleanup protections (paths/branches, one glob per line).
+/.oma-cleanup.keep
