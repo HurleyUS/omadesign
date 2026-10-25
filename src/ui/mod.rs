@@ -74,6 +74,8 @@ mod symbols;
 mod graphic_styles;
 mod actions;
 #[cfg(test)]
+mod transform_rotation_tests;
+#[cfg(test)]
 mod svg_field_tests;
 mod text_geometry;
 mod type_commands;

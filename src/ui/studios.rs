@@ -1780,9 +1780,12 @@ fn raster_transform(ui: &mut Ui, studio: &mut Studio, li: usize) {
 
 /// Transform-panel X/Y/W/H for one static vector shape.
 /// Args: the shape. Returns `[x, y, width, height]` as shown in the panel.
+/// X/Y are the world bounds origin; W/H are the object's own (pre-rotation) size,
+/// so a ±90° rotation never swaps them and sub-pixel sizes are shown as-is.
 pub(crate) fn shape_transform_fields(shape: &crate::document::Shape) -> [f32; 4] {
     let shown = shape.world_bbox();
-    [shown.min.x, shown.min.y, shown.width().max(1.0), shown.height().max(1.0)]
+    let own = if crate::geom::is_rotated(shape.rotation) { shape.geom.bbox() } else { shown };
+    [shown.min.x, shown.min.y, own.width(), own.height()]
 }
 
 /// Commit Transform-panel X/Y/W/H for one static vector shape as one undo step.
@@ -1793,9 +1796,18 @@ pub(crate) fn apply_shape_transform_fields(studio: &mut Studio, layer: usize, id
     };
     let layout_frame = shape.layout.frame;
     let [x, y, width, height] = fields;
-    let destination = crate::geom::Bounds {
-        min: crate::geom::Pt::new(x, y),
-        max: crate::geom::Pt::new(x + width, y + height),
+    let destination = if crate::geom::is_rotated(shape.rotation) {
+        // Resize about the object's own pivot and move by the world-origin delta,
+        // keeping its rotation instead of fitting it to the rotated bounds.
+        let shown = shape.world_bbox();
+        let size = crate::geom::Pt::new(width.max(0.0), height.max(0.0));
+        let offset = crate::geom::Pt::new(x - shown.min.x, y - shown.min.y);
+        crate::geom::Bounds::from_min_size(shape.geom.bbox().center() - size * 0.5 + offset, size)
+    } else {
+        crate::geom::Bounds {
+            min: crate::geom::Pt::new(x, y),
+            max: crate::geom::Pt::new(x + width, y + height),
+        }
     };
     if layout_frame {
         studio.set_layout_frame_bounds(layer, id, destination);
@@ -1895,17 +1907,17 @@ fn transform_studio_contents(ui: &mut Ui, studio: &mut Studio, title: bool) {
     };
     let compound = matches!(&shape.geom, Geom::Poly { contours, .. } if contours.len() > 1);
     let [mut x, mut y, mut width, mut height] = if motion {
-        [shown.min.x, shown.min.y, shown.width().max(1.0), shown.height().max(1.0)]
+        [shown.min.x, shown.min.y, shown.width(), shown.height()]
     } else {
         shape_transform_fields(shape)
     };
-    let changed = bounds_fields(ui, &mut x, &mut y, &mut width, &mut height, 1.0);
+    let changed = bounds_fields(ui, &mut x, &mut y, &mut width, &mut height, crate::geom::MIN_EXTENT);
     if changed {
         if motion {
             let dx = x - shown.min.x;
             let dy = y - shown.min.y;
-            let sx = width / shown.width().max(1.0);
-            let sy = height / shown.height().max(1.0);
+            let sx = width / shown.width().max(crate::geom::MIN_EXTENT);
+            let sy = height / shown.height().max(crate::geom::MIN_EXTENT);
             let mut after = studio.doc.motion.clone();
             let t = studio.playhead;
             if dx.abs() > 0.01 {
