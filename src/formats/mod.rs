@@ -7,6 +7,8 @@ pub mod openraster;
 pub mod pdf;
 pub(crate) mod photo_placement;
 pub mod psd;
+// Little CMS / LibRaw FFI bridge; see [lints] in Cargo.toml.
+#[allow(unsafe_code)]
 pub mod raw;
 pub mod svg;
 pub mod xcf;
