@@ -1,2 +1,4 @@
 [target.aarch64-unknown-linux-gnu]
-linker = "aarch64-linux-gnu-gcc"
+# gcc driver + the rust-lld bundled with rustup: ~2x faster incremental links
+# than GNU ld (docs/build-speed.md). OMA_LINKER_GNU_LD=1 forces GNU ld.
+linker = "scripts/aarch64-lld-cc"

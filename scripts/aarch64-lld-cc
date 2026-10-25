@@ -1,0 +1,11 @@
+#!/bin/sh
+# aarch64 Linux linker driver: aarch64-linux-gnu-gcc + the rust-lld that ships
+# with every rustup toolchain (no system mold/lld needed). Falls back to the
+# default GNU ld when the bundled lld is missing. See docs/build-speed.md.
+cc="${OMA_AARCH64_CC:-aarch64-linux-gnu-gcc}"
+sysroot="$(rustc --print sysroot 2>/dev/null)"
+gcc_ld="$sysroot/lib/rustlib/aarch64-unknown-linux-gnu/bin/gcc-ld"
+if [ -z "$OMA_LINKER_GNU_LD" ] && [ -x "$gcc_ld/ld.lld" ]; then
+    exec "$cc" -fuse-ld=lld -B"$gcc_ld" "$@"
+fi
+exec "$cc" "$@"
