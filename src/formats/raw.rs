@@ -226,10 +226,10 @@ fn native_decode(
     // SAFETY: Every field is a plain number, fixed byte array, or nullable raw
     // pointer. All-zero initialization is valid, including the Drop owner.
     let mut native: NativeImage = unsafe { std::mem::zeroed() };
+    let active = cancel.native_activity();
     // SAFETY: The borrowed byte buffer remains alive through synchronous decode.
     // The C++ adapter validates input/layout, catches exceptions and writes only
     // within the exactly matching repr(C) output. It never retains input bytes.
-    let active = cancel.native_activity();
     let result = unsafe {
         oma_raw_decode(
             bytes.as_ptr(),
@@ -302,24 +302,10 @@ pub(crate) fn decode_reserved(
         .try_reserve_exact(count as usize * 3)
         .map_err(|_| "Not enough memory to retain the 16-bit RAW image".to_owned())?;
     if native.colors == 3 {
-        // SAFETY: Reservation above owns enough storage for every validated
-        // byte. The source is a distinct live native allocation, and every u16
-        // bit pattern is valid. LibRaw memory images use host byte order. Copy
-        // once rather than walking millions of samples in a development build.
-        unsafe {
-            for (index, chunk) in samples.chunks(4 * 1024 * 1024).enumerate() {
-                cancel.check()?;
-                std::ptr::copy_nonoverlapping(
-                    chunk.as_ptr(),
-                    pixels
-                        .as_mut_ptr()
-                        .cast::<u8>()
-                        .add(index * 4 * 1024 * 1024),
-                    chunk.len(),
-                );
-            }
-            pixels.set_len(count as usize * 3);
-        }
+        // Every u16 bit pattern is valid and LibRaw memory images use host
+        // byte order, so copy the validated bytes straight into the samples.
+        pixels.resize(count as usize * 3, 0);
+        copy_bytes_cancellable(samples, bytemuck::cast_slice_mut(&mut pixels), cancel)?;
     } else {
         for (index, sample) in samples.as_chunks::<2>().0.iter().enumerate() {
             if index % 65536 == 0 {
@@ -402,6 +388,17 @@ unsafe extern "C" fn reserve_native(context: *const c_void, bytes: u64) -> i32 {
     }
 }
 
+/// Copy native bytes in 4 MiB chunks, checking cancellation between chunks.
+/// Args: source bytes and an equally long destination. Returns a cancellation error.
+fn copy_bytes_cancellable(source: &[u8], target: &mut [u8], cancel: &Cancellation) -> Result<(), String> {
+    const CHUNK: usize = 4 * 1024 * 1024;
+    for (from, to) in source.chunks(CHUNK).zip(target.chunks_mut(CHUNK)) {
+        cancel.check()?;
+        to.copy_from_slice(from);
+    }
+    Ok(())
+}
+
 fn positive(value: f32) -> f32 {
     if value.is_finite() && value > 0.0 {
         value
@@ -459,22 +456,11 @@ fn decode_sensor(bytes: &[u8], cancel: &Cancellation) -> Result<SensorImage, Str
     values
         .try_reserve_exact(count as usize)
         .map_err(|_| "Not enough memory for the sensor reference")?;
-    // SAFETY: validated native storage remains owned through this bounded copy; u16 has no invalid bit patterns.
-    unsafe {
-        let bytes = std::slice::from_raw_parts(native.data, native.data_size as usize);
-        for (index, chunk) in bytes.chunks(4 * 1024 * 1024).enumerate() {
-            cancel.check()?;
-            std::ptr::copy_nonoverlapping(
-                chunk.as_ptr(),
-                values
-                    .as_mut_ptr()
-                    .cast::<u8>()
-                    .add(index * 4 * 1024 * 1024),
-                chunk.len(),
-            );
-        }
-        values.set_len(count as usize);
-    }
+    // SAFETY: the validated native allocation owns exactly `data_size`
+    // readable bytes and stays alive until `decoded` is dropped below.
+    let bytes = unsafe { std::slice::from_raw_parts(native.data, native.data_size as usize) };
+    values.resize(count as usize, 0);
+    copy_bytes_cancellable(bytes, bytemuck::cast_slice_mut(&mut values), cancel)?;
     let (width, height) = (native.width, native.height);
     drop(decoded);
     lease.resize(values.capacity() as u64 * 2, cancel)?;

@@ -23,6 +23,7 @@ path = "src/bin/gen_media.rs"
 oma-ui-egui032 = []
 
 [dependencies]
+bytemuck = "1.25"
 omadesign-affinity = { path = "vendor/affinity" }
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-27"] }
 sha2 = "0.10"
@@ -108,3 +109,12 @@ debug = "line-tables-only"
 
 [profile.test]
 debug = "line-tables-only"
+
+# Unsafe code is confined to the reviewed FFI bridges (Little CMS and LibRaw),
+# which opt back in with `#[allow(unsafe_code)]`; every block there carries a
+# `// SAFETY:` comment (#486).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
