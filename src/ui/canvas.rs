@@ -2146,18 +2146,18 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                 let hw = if hx == 0.5 {
                     start_box.width() * 0.5
                 } else {
-                    (world.x - c.x).abs().max(0.5)
+                    (world.x - c.x).abs().max(crate::geom::MIN_EXTENT * 0.5)
                 };
                 let hh = if hy == 0.5 {
                     start_box.height() * 0.5
                 } else {
-                    (world.y - c.y).abs().max(0.5)
+                    (world.y - c.y).abs().max(crate::geom::MIN_EXTENT * 0.5)
                 };
                 let mut dst_w = hw * 2.0;
                 let mut dst_h = hh * 2.0;
                 if shift && hx != 0.5 && hy != 0.5 {
                     // Uniform about centre: keep aspect.
-                    let asp = start_box.width().max(1.0) / start_box.height().max(1.0);
+                    let asp = start_box.width().max(crate::geom::MIN_EXTENT) / start_box.height().max(crate::geom::MIN_EXTENT);
                     if dst_w / asp > dst_h {
                         dst_w = dst_h * asp;
                     } else {
@@ -2179,11 +2179,11 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                 }
                 if shift && hx != 0.5 && hy != 0.5 {
                     // Uniform corner drag – preserve aspect ratio.
-                    let asp = start_box.width().max(1.0) / start_box.height().max(1.0);
-                    let w = (max.x - min.x).abs().max(1.0);
-                    let h = (max.y - min.y).abs().max(1.0);
+                    let asp = start_box.width().max(crate::geom::MIN_EXTENT) / start_box.height().max(crate::geom::MIN_EXTENT);
+                    let w = (max.x - min.x).abs().max(crate::geom::MIN_EXTENT);
+                    let h = (max.y - min.y).abs().max(crate::geom::MIN_EXTENT);
                     // Decide which axis drives scaling – the larger relative change.
-                    let use_w = w / start_box.width() > h / start_box.height();
+                    let use_w = w / start_box.width().max(crate::geom::MIN_EXTENT) > h / start_box.height().max(crate::geom::MIN_EXTENT);
                     if use_w {
                         let nh = w / asp;
                         if hy == 0.0 {
@@ -2200,19 +2200,21 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                         }
                     }
                 }
-                // Ensure valid size and handle inversion gracefully.
-                if max.x - min.x < 1.0 {
+                // Keep a dragged axis valid without growing sub-pixel artwork; an
+                // axis whose handle is not dragged keeps its true size (#487).
+                let min_extent = crate::geom::MIN_EXTENT;
+                if hx != 0.5 && max.x - min.x < min_extent {
                     if hx == 0.0 {
-                        min.x = max.x - 1.0;
+                        min.x = max.x - min_extent;
                     } else {
-                        max.x = min.x + 1.0;
+                        max.x = min.x + min_extent;
                     }
                 }
-                if max.y - min.y < 1.0 {
+                if hy != 0.5 && max.y - min.y < min_extent {
                     if hy == 0.0 {
-                        min.y = max.y - 1.0;
+                        min.y = max.y - min_extent;
                     } else {
-                        max.y = min.y + 1.0;
+                        max.y = min.y + min_extent;
                     }
                 }
                 // If the drag inverted (min > max), swap.
@@ -2226,8 +2228,8 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
             let dst = Bounds { min, max };
             if studio.persona == Persona::Motion {
                 studio.playing = false;
-                let sx = dst.width() / start_box.width().max(1.0);
-                let sy = dst.height() / start_box.height().max(1.0);
+                let sx = dst.width() / start_box.width().max(crate::geom::MIN_EXTENT);
+                let sy = dst.height() / start_box.height().max(crate::geom::MIN_EXTENT);
                 let f = if shift { sx.max(sy) } else { (sx + sy) * 0.5 };
                 for snap in orig.iter() {
                     let Some(parent) = motion_frames.get(&(snap.layer,snap.id)).copied() else { continue; };
@@ -2273,8 +2275,8 @@ fn continue_drag(studio: &mut Studio, world: Pt, shift: bool, alt: bool) {
                     ) {
                         s.geom = geom;
                         let center = s.geom.bbox().center();
-                        let sx = dst.width() / start_box.width().max(1.0);
-                        let sy = dst.height() / start_box.height().max(1.0);
+                        let sx = dst.width() / start_box.width().max(crate::geom::MIN_EXTENT);
+                        let sy = dst.height() / start_box.height().max(crate::geom::MIN_EXTENT);
                         if (sx - sy).abs() <= 1e-4 * sx.abs().max(sy.abs()).max(1.0) {
                             s.geom.map_into(*start_box, dst);
                             let mapped = start_box.map_pt(center.rotate(-*angle), dst).rotate(*angle);
@@ -5079,6 +5081,36 @@ mod tests {
                 .iter()
                 .all(|b| *b == 0)
         );
+    }
+
+    /// #487: bounding-box handles keep a 0.25 px outlined stroke's thickness
+    /// and may shrink an axis below 1 px.
+    #[test]
+    fn handle_resize_keeps_quarter_pixel_outline_thickness() {
+        for (handle, target, expected) in [
+            (5usize, Pt::new(260., 60.125), Pt::new(220., 0.25)),
+            (7, Pt::new(-60., 60.125), Pt::new(220., 0.25)),
+            (5, Pt::new(40.25, 60.125), Pt::new(0.25, 0.25)),
+            (6, Pt::new(90., 60.1), Pt::new(120., 0.1)),
+        ] {
+            let mut s = Studio::new();
+            s.snap.enabled = false;
+            let outline = Geom::Rect { origin: Pt::new(40., 60.), size: Pt::new(120., 0.25), radius: 0. }.to_path();
+            let shape = crate::document::Shape::new(outline, Default::default());
+            let id = shape.id;
+            s.doc.layers[1].kind.shapes_mut().unwrap().push(shape);
+            s.active_layer = Some(1);
+            s.selection = vec![(1, id)];
+            let bounds = posed_bounds(&s).unwrap();
+            s.op = Some(Op::Resize { orig: snapshot_with_children(&s), handle, start_box: bounds, angle: 0. });
+            continue_drag(&mut s, target, false, false);
+            end_drag(&mut s, target, false, false, false);
+            let size = s.doc.find_shape(1, id).unwrap().geom.bbox().size();
+            assert!(
+                (size.x - expected.x).abs() < 1e-3 && (size.y - expected.y).abs() < 1e-3,
+                "handle {handle}: expected {expected:?}, got {size:?}"
+            );
+        }
     }
 
     #[test]
