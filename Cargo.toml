@@ -100,3 +100,11 @@ winit = { path = "vendor/winit" }
 lto = "thin"
 codegen-units = 1
 opt-level = 3
+
+# Line tables keep panics/backtraces readable while cutting clean builds ~15%,
+# core rebuilds ~19% and the target dir ~44% (#486 audit, 8.8 GB -> 4.9 GB).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
