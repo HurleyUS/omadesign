@@ -1778,6 +1778,32 @@ fn raster_transform(ui: &mut Ui, studio: &mut Studio, li: usize) {
     }
 }
 
+/// Transform-panel X/Y/W/H for one static vector shape.
+/// Args: the shape. Returns `[x, y, width, height]` as shown in the panel.
+pub(crate) fn shape_transform_fields(shape: &crate::document::Shape) -> [f32; 4] {
+    let shown = shape.world_bbox();
+    [shown.min.x, shown.min.y, shown.width().max(1.0), shown.height().max(1.0)]
+}
+
+/// Commit Transform-panel X/Y/W/H for one static vector shape as one undo step.
+/// Args: studio, shape address and the panel's `[x, y, width, height]`.
+pub(crate) fn apply_shape_transform_fields(studio: &mut Studio, layer: usize, id: u64, fields: [f32; 4]) {
+    let Some(shape) = studio.doc.find_shape(layer, id) else {
+        return;
+    };
+    let layout_frame = shape.layout.frame;
+    let [x, y, width, height] = fields;
+    let destination = crate::geom::Bounds {
+        min: crate::geom::Pt::new(x, y),
+        max: crate::geom::Pt::new(x + width, y + height),
+    };
+    if layout_frame {
+        studio.set_layout_frame_bounds(layer, id, destination);
+    } else {
+        studio.transform_shape_with_text_scale(layer, id, destination);
+    }
+}
+
 fn edit_shape_geometry(studio: &mut Studio, layer: usize, id: u64, edit: impl FnOnce(&mut Geom)) {
     let Some(shape) = studio.doc.find_shape(layer, id) else {
         return;
@@ -1851,7 +1877,6 @@ fn transform_studio_contents(ui: &mut Ui, studio: &mut Studio, title: bool) {
     } else {
         bounds
     };
-    let layout_frame = shape.layout.frame;
     let rotation = shape.rotation;
     let polygon = if let Geom::Polygon { sides, .. } = shape.geom {
         Some(sides)
@@ -1869,10 +1894,11 @@ fn transform_studio_contents(ui: &mut Ui, studio: &mut Studio, title: bool) {
         None
     };
     let compound = matches!(&shape.geom, Geom::Poly { contours, .. } if contours.len() > 1);
-    let mut x = shown.min.x;
-    let mut y = shown.min.y;
-    let mut width = shown.width().max(1.0);
-    let mut height = shown.height().max(1.0);
+    let [mut x, mut y, mut width, mut height] = if motion {
+        [shown.min.x, shown.min.y, shown.width().max(1.0), shown.height().max(1.0)]
+    } else {
+        shape_transform_fields(shape)
+    };
     let changed = bounds_fields(ui, &mut x, &mut y, &mut width, &mut height, 1.0);
     if changed {
         if motion {
@@ -1920,15 +1946,7 @@ fn transform_studio_contents(ui: &mut Ui, studio: &mut Studio, title: bool) {
             }
             studio.commit_motion(after);
         } else {
-            let destination = crate::geom::Bounds {
-                min: crate::geom::Pt::new(x, y),
-                max: crate::geom::Pt::new(x + width, y + height),
-            };
-            if layout_frame {
-                studio.set_layout_frame_bounds(layer, id, destination);
-            } else {
-                studio.transform_shape_with_text_scale(layer, id, destination);
-            }
+            apply_shape_transform_fields(studio, layer, id, [x, y, width, height]);
         }
     }
     let mut degrees = if motion {
