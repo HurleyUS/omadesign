@@ -140,10 +140,13 @@ impl Catalog {
             },
             ..Default::default()
         });
-        choices
-            .into_iter()
-            .filter(|f| Some(f.id) == id)
-            .min_by_key(|f| (u8::from(f.slant!=slant), f.weight.abs_diff(weight)))
+        // Prefer fontdb's own match, but when it resolves to a face the
+        // family listing folded away (e.g. a static copy of a variable
+        // family), still answer with the closest listed style.
+        let closest = |f: &Choice| (u8::from(f.slant != slant), f.weight.abs_diff(weight));
+        let matched = choices.iter().filter(|f| Some(f.id) == id).min_by_key(|f| closest(f)).cloned();
+        matched
+            .or_else(|| choices.into_iter().min_by_key(|f| closest(f)))
             .ok_or_else(|| "Choose an available font family".into())
     }
     /// Bind a selected face to the existing portable font loader.
