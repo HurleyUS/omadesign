@@ -411,21 +411,24 @@ fn keyboard_layout_inspector_empty_document_grid_named_property_and_variable_aut
     );
     native_frame(&ctx, &mut studio, vec![]);
     let (layer, root) = studio.selected_frame().unwrap();
-    let mut properties_focused = false;
+    // Layout fields live in the Auto Layout dock pane since the dock rebuild.
+    assert!(crate::ui::panel_workspace::open(&ctx, &mut studio, "layout"));
+    let mut pane_focused = false;
+    let mut output = native_frame(&ctx, &mut studio, vec![]);
     for _ in 0..6 {
-        let output = native_frame(&ctx, &mut studio, keys::key(Key::F6, Modifiers::NONE));
         if ctx
             .memory(|memory| memory.focused())
             .map(|id| id.accesskit_id())
-            == Some(keys::named(&output, "Properties").0)
+            == Some(keys::named(&output, "Auto Layout").0)
         {
-            properties_focused = true;
+            pane_focused = true;
             break;
         }
+        output = native_frame(&ctx, &mut studio, keys::key(Key::F6, Modifiers::NONE));
     }
     assert!(
-        properties_focused,
-        "Native F6 must reach the Properties panel before authoring its fields"
+        pane_focused,
+        "Native focus must reach the Auto Layout pane before authoring its fields"
     );
     native_press(&ctx, &mut studio, "Arrange children automatically");
     native_press(&ctx, &mut studio, "Grid");
@@ -473,7 +476,7 @@ fn keyboard_layout_inspector_empty_document_grid_named_property_and_variable_aut
     let extent = studio.panel_workspaces.tasks["Layout"]
         .groups
         .iter()
-        .find(|group| group.panels.iter().any(|panel| panel == "properties"))
+        .find(|group| group.panels.iter().any(|panel| panel == "layout"))
         .unwrap()
         .extent;
     assert!(
