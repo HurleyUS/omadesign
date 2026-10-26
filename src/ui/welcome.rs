@@ -511,7 +511,10 @@ pub(super) mod keyboard_tests {
             output = frame(vec![]);
         }
         let mut trace = Vec::new();
-        for _ in 0..128 {
+        // One full cycle can visit every accessible node once; the docked
+        // workspace exposes far more than the old fixed 128-step budget.
+        let budget = output.platform_output.accesskit_update.as_ref().unwrap().nodes.len().max(128) + 16;
+        for _ in 0..budget {
             let focused = ctx.memory(|memory| memory.focused()).map(|id| id.accesskit_id());
             if focused == Some(named(&output, name).0) {
                 return frame(vec![]);
