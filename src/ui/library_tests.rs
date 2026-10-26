@@ -466,6 +466,17 @@ fn palette_sidebar_creates_edits_applies_and_saves_transparent_colours() {
     studio.libraries.draft().receive(vec![], None);
     let selected = studio.doc.layers[0].kind.shapes().unwrap()[0].id;
     studio.selection = vec![(0, selected)];
+    // Palettes now live in the docked Swatches pane, hidden behind its tab.
+    crate::ui::panel_workspace::open(&ctx, &mut studio, "swatches");
+    for _ in 0..3 {
+        full_frame(&ctx, &mut studio, vec![], 900.0);
+    }
+    // Give the Swatches column the height the old full-height sidebar had.
+    for layout in studio.panel_workspaces.tasks.values_mut() {
+        for group in &mut layout.groups {
+            group.weight = if group.panels.iter().any(|p| p == "swatches") { 10.0 } else { 0.1 };
+        }
+    }
     for _ in 0..3 {
         full_frame(&ctx, &mut studio, vec![], 900.0);
     }
@@ -490,13 +501,27 @@ fn palette_sidebar_creates_edits_applies_and_saves_transparent_colours() {
     click_at(&ctx, &mut studio, plus, PointerButton::Primary, 900.0);
     let color = Rgba::new(0xD9, 0x7C, 0x5B, 0x80);
     let labels = click_label(&ctx, &mut studio, "Fill");
+    let fill_toggle = label_rect(&labels, "Fill");
     let swatch = swatch_rect(&labels, color).center();
     click_at(&ctx, &mut studio, swatch, PointerButton::Primary, 900.0);
     assert_eq!(
         studio.doc.find_shape(0, selected).unwrap().style.fill,
         Fill::Solid(color)
     );
-    let labels = click_label(&ctx, &mut studio, "Stroke");
+    // The docked chrome also paints a "Stroke" tab; use the palette toggle
+    // beside Fill.
+    let stroke_toggle = labels
+        .iter()
+        .filter(|text| text.label == "Stroke" && text.rect.intersects(text.clip))
+        .min_by(|a, b| {
+            (a.rect.center().y - fill_toggle.center().y)
+                .abs()
+                .total_cmp(&(b.rect.center().y - fill_toggle.center().y).abs())
+        })
+        .unwrap()
+        .rect
+        .center();
+    let labels = click_at(&ctx, &mut studio, stroke_toggle, PointerButton::Primary, 900.0);
     let swatch = swatch_rect(&labels, color).center();
     click_at(&ctx, &mut studio, swatch, PointerButton::Primary, 900.0);
     assert_eq!(
