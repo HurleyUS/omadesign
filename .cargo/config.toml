@@ -2,3 +2,10 @@
 # gcc driver + the rust-lld bundled with rustup: ~2x faster incremental links
 # than GNU ld (docs/build-speed.md). OMA_LINKER_GNU_LD=1 forces GNU ld.
 linker = "scripts/aarch64-lld-cc"
+
+# Tests need a disk-backed scratch root under the checkout: several assert
+# real on-disk reopen/fsync behaviour and paths under /home, and /tmp is a
+# RAM-backed tmpfs on m1pro16. scripts/serialized-cargo.mjs overrides this
+# with its own per-run scratch dir.
+[env]
+TMPDIR = { value = ".test-scratch", relative = true }
