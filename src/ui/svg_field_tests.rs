@@ -5,7 +5,9 @@ use eframe::egui::{self, Event, Key, Modifiers};
 fn frame(ctx: &egui::Context, studio: &mut Studio, events: Vec<Event>) -> egui::FullOutput {
     keys::render(ctx, events, |ui| super::run(ui, studio))
 }
-fn imported(source: &str) -> (egui::Context, Studio) {
+/// Open retained SVG artwork, select it by keyboard and bring the dock pane
+/// that owns its controls (`panel`, titled `title`) into native focus.
+fn imported(source: &str, panel: &str, title: &str) -> (egui::Context, Studio) {
     let ctx = egui::Context::default();
     ctx.enable_accesskit();
     super::theme::apply(&ctx);
@@ -19,21 +21,25 @@ fn imported(source: &str) -> (egui::Context, Studio) {
     frame(&ctx, &mut studio, keys::key(Key::PageDown, Modifiers::NONE));
     frame(&ctx, &mut studio, vec![]);
     assert!(!studio.selection.is_empty());
-    let mut properties_focused = false;
+    // Panes are hidden by default since the dock rebuild; the Window menu
+    // command opens and focuses one.
+    assert!(super::panel_workspace::open(&ctx, &mut studio, panel));
+    let mut pane_focused = false;
+    let mut output = frame(&ctx, &mut studio, vec![]);
     for _ in 0..6 {
-        let output = frame(&ctx, &mut studio, keys::key(Key::F6, Modifiers::NONE));
         if ctx
             .memory(|memory| memory.focused())
             .map(|id| id.accesskit_id())
-            == Some(keys::named(&output, "Properties").0)
+            == Some(keys::named(&output, title).0)
         {
-            properties_focused = true;
+            pane_focused = true;
             break;
         }
+        output = frame(&ctx, &mut studio, keys::key(Key::F6, Modifiers::NONE));
     }
     assert!(
-        properties_focused,
-        "Native F6 must expose the selected artwork's Properties panel"
+        pane_focused,
+        "Native focus must reach the selected artwork's {title} pane"
     );
     (ctx, studio)
 }
@@ -87,6 +93,8 @@ fn reopen(doc: &crate::document::Document) {
 fn keyboard_svg_pattern_native_selection_scalars_draft_apply_errors_undo_and_reopen() {
     let (ctx, mut studio) = imported(
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="4" height="4" fill="red"/></pattern></defs><rect x="5" y="5" width="80" height="60" fill="url(#p)"/></svg>"##,
+        "patterns",
+        "Patterns",
     );
     let target = studio.primary();
     press(&ctx, &mut studio, "Vector pattern");
@@ -135,6 +143,8 @@ fn keyboard_svg_pattern_native_selection_scalars_draft_apply_errors_undo_and_reo
 fn keyboard_svg_filter_native_source_respects_graph_owner_lock_and_retires_undo_drafts() {
     let (ctx, mut studio) = imported(
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><defs><filter id="f"><feOffset dx="2" dy="3"/></filter></defs><g filter="url(#f)"><rect x="10" y="10" width="40" height="30" fill="red"/></g></svg>"##,
+        "effects",
+        "Effects",
     );
     let index = studio
         .doc
