@@ -397,7 +397,11 @@ pub(super) fn dialogs(ctx: &Context, studio: &mut Studio) {
     if close || response.should_close() {
         state.dialog = None;
         state.owner = None;
-        super::super::panel_workspace::return_focus(ctx, studio);
+        // Transfer and preset dialogs are launched from Develop; hand native
+        // focus back to that pane even when no pane tab was focused before.
+        if !super::super::panel_workspace::open(ctx, studio, "photo-develop") {
+            super::super::panel_workspace::return_focus(ctx, studio);
+        }
     }
     write(ctx, state);
 }
