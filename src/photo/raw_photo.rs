@@ -788,6 +788,7 @@ mod tests {
 
     #[test]
     fn encoded_growth_admits_old_and_new_capacity_before_reallocation() {
+    let _pool = crate::resources::isolated();
         use std::io::Write;
         let cancel = Cancellation::default();
         let pool = resources::Budget::new(100, false);
@@ -841,6 +842,7 @@ mod tests {
 
     #[test]
     fn detached_raw_preview_levels_remain_admitted_after_photo_and_source_drop() {
+    let _pool = crate::resources::isolated();
         let raw =
             crate::formats::raw::decode(include_bytes!("../formats/raw/synthetic.dng")).unwrap();
         let source = Arc::downgrade(&raw.pixels);

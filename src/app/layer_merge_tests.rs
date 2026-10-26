@@ -485,6 +485,7 @@ fn craft_merge_external_channel_and_auto_layout_mask_dependencies_refuse_before_
 
 #[test]
 fn craft_merge_cancel_refusal_and_stale_result_preserve_original_and_redo_without_resource_leaks() {
+    let _pool = crate::resources::isolated();
     use std::sync::atomic::{AtomicUsize, Ordering};
     struct Stop {
         calls: AtomicUsize,

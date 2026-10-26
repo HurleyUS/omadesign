@@ -14,6 +14,7 @@ struct Plan {
 #[test]
 #[ignore = "explicit serial fixture preparation with a source/tool-pinned private plan"]
 fn scheduled_x2d_references_hold_shared_admission() {
+    let _pool = crate::resources::isolated();
     let plan: Plan = serde_json::from_slice(
         &fs::read(std::env::var_os("OMA_RAW_REFERENCE_PLAN").expect("OMA_RAW_REFERENCE_PLAN"))
             .unwrap(),

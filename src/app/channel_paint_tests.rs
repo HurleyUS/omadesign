@@ -274,6 +274,7 @@ fn craft_channel_paint_clips_extreme_off_grid_segments_without_unbounded_dab_wor
 }
 #[test]
 fn craft_channel_paint_invalid_owners_and_brushes_preserve_document_and_admission() {
+    let _pool = crate::resources::isolated();
     let mut s = studio();
     let source = bytes(&s);
     let used = crate::resources::global().usage().0;

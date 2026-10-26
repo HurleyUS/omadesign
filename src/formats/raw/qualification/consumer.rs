@@ -221,6 +221,7 @@ fn scheduled_x2d_native_project_roundtrip() {
 #[test]
 #[ignore = "one scheduled pinned X2D case; global heavy helper, private bindings and storage plan required"]
 fn scheduled_x2d_available_workflow_keeps_required_identity_failure() {
+    let _pool = crate::resources::isolated();
     let manifest = parse_manifest(MANIFEST).unwrap();
     let case = manifest
         .cases

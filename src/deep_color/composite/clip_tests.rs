@@ -439,6 +439,7 @@ fn float_clips_centered_stroke_is_intersected_before_coverage() {
 
 #[test]
 fn float_clips_cancel_pressure_early_cleanup_and_source_immutability_use_actual_pool() {
+    let _pool = crate::resources::isolated();
     let mut doc = weighted_document();
     doc.width = 32.;
     doc.height = 32.;

@@ -120,6 +120,7 @@ fn content_crop_retains_full_storage_and_canonicalizes_empty_images_without_losi
 
 #[test]
 fn content_crop_cancel_during_scan_and_allocation_releases_scratch_and_keeps_sources() {
+    let _pool = crate::resources::isolated();
     let baseline = resources::global().usage().0;
     let pending = resources::global().pending_bytes();
     let pixels = Pixels::from_samples(32, 32, Depth::F32, vec![0.; 32 * 32 * 4]).unwrap();
