@@ -96,7 +96,7 @@ fn keyboard_photo_workflow_transfers_adjustments_and_undo_without_pointer_or_pre
     assert!(matches!(read(&ctx).dialog, Some(Dialog::Apply(_))));
     press(&ctx, &mut studio, "Apply to 1 photos");
     let output = settle(&ctx, &mut studio);
-    keys::focused(&ctx, &output, "Photo develop");
+    keys::focused(&ctx, &output, "Develop");
     assert!(read(&ctx).dialog.is_none());
     assert_eq!(studio.photo.images[0].develop.exposure, 1.25);
     assert_eq!(studio.photo.images[1].develop.exposure, 1.25);
@@ -194,6 +194,6 @@ fn keyboard_photo_workflow_preset_native_fields_save_reopen_and_stale_owner_refu
     assert_eq!(std::fs::read(&path).unwrap(), unchanged);
     press(&ctx, &mut studio, "Done");
     let output = settle(&ctx, &mut studio);
-    keys::focused(&ctx, &output, "Photo develop");
+    keys::focused(&ctx, &output, "Develop");
     std::fs::remove_dir_all(root).unwrap();
 }
