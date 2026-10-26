@@ -308,7 +308,9 @@ pub(super) fn pane(ui: &mut Ui, studio: &mut Studio, panel: &str) -> bool {
         "gradients" => paint_studio(ui,studio,true),
         "stroke" => stroke_studio(ui,studio),
         "character" => character_studio(ui,studio),
-        "keyframes" => super::timeline_keyboard::editor(ui,studio),
+        // The dock rebuild retired the Properties inspector that hosted the
+        // motion-preset options; keep them beside the keys they author.
+        "keyframes" => {super::timeline_keyboard::editor(ui,studio);ui.separator();super::motion_presets::inspector(ui,studio);},
         "effects" => fx_studio(ui,studio),
         "trace" => trace_studio(ui,studio),
         "brushes" => {super::brushes::pane(ui,studio);brush_studio(ui,studio);},
