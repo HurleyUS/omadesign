@@ -1,3 +1,12 @@
+[workspace]
+# The application crate stays at the root. Native bridges live in their own
+# crates so their C/C++ builds cache independently of app edits (#486).
+# vendor/affinity joins as a path dependency of the app; the patched upstream
+# crates in vendor/ (eframe, egui-winit, winit, resvg, usvg) are not members.
+members = [".", "crates/omadesign-lcms", "crates/omadesign-libraw"]
+exclude = ["vendor"]
+resolver = "3"
+
 [package]
 name = "omadesign"
 version = "0.6.8"
@@ -25,6 +34,8 @@ oma-ui-egui032 = []
 [dependencies]
 bytemuck = "1.25"
 omadesign-affinity = { path = "vendor/affinity" }
+omadesign-lcms = { path = "crates/omadesign-lcms" }
+omadesign-libraw = { path = "crates/omadesign-libraw" }
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-27"] }
 sha2 = "0.10"
 tiff = "0.11.3"
@@ -64,8 +75,6 @@ usvg = "0.47"
 resvg = "0.47"
 lopdf = { version = "0.44", default-features = false }
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
-libz-sys = { version = "1.1", features = ["static"] }
-mozjpeg-sys = { version = "2.2.3", default-features = false, features = ["unwinding"] }
 
 arboard = "3.6.1"
 
@@ -81,10 +90,6 @@ rustix = { version = "1.1", features = ["fs"] }
 [dev-dependencies]
 omadesign-affinity = { path = "vendor/affinity", features = ["synth"] }
 
-[build-dependencies]
-cc = { version = "1", features = ["parallel"] }
-flate2 = "1"
-tar = "0.4"
 
 # winit 0.30 only emits PinchGesture on macOS/iOS. This tree adds Wayland
 # zwp_pointer_gestures_v1 so a trackpad pinch zooms the canvas.
@@ -110,9 +115,9 @@ debug = "line-tables-only"
 [profile.test]
 debug = "line-tables-only"
 
-# Unsafe code is confined to the reviewed FFI bridges (Little CMS and LibRaw),
-# which opt back in with `#[allow(unsafe_code)]`; every block there carries a
-# `// SAFETY:` comment (#486).
+# The application crate has no unsafe code. It lives only in the FFI bridge
+# crates (crates/omadesign-lcms, crates/omadesign-libraw), where every block
+# carries a `// SAFETY:` comment (#486).
 [lints.rust]
 unsafe_code = "deny"
 

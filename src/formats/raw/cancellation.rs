@@ -123,17 +123,11 @@ impl crate::resources::CancellationCheck for Cancellation {
     }
 }
 
-pub(super) unsafe extern "C" fn progress(context: *const std::ffi::c_void, stage: u32) {
-    // SAFETY: The same synchronous token lifetime applies as for cancelled().
-    let token = unsafe { &*context.cast::<Cancellation>() };
-    token.progress.store(stage, Ordering::Release);
-}
-
-pub(super) unsafe extern "C" fn cancelled(context: *const std::ffi::c_void) -> i32 {
-    // SAFETY: decode_cancellable keeps the referenced token alive until the
-    // synchronous native call and its joined monitor have both returned.
-    let token = unsafe { &*context.cast::<Cancellation>() };
-    i32::from(token.is_cancelled())
+impl Cancellation {
+    /// Record the native decoder's current stage for progress monitors.
+    pub(super) fn record_stage(&self, stage: u32) {
+        self.progress.store(stage, Ordering::Release);
+    }
 }
 
 #[cfg(test)]
