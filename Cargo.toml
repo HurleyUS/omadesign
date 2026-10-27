@@ -1,7 +1,8 @@
 [workspace]
 # The application crate stays at the root. Native bridges live in their own
 # crates so their C/C++ builds cache independently of app edits (#486).
-# vendor/ holds patched or vendored upstream crates that are not members.
+# vendor/affinity joins as a path dependency of the app; the patched upstream
+# crates in vendor/ (eframe, egui-winit, winit, resvg, usvg) are not members.
 members = [".", "crates/omadesign-lcms", "crates/omadesign-libraw"]
 exclude = ["vendor"]
 resolver = "3"

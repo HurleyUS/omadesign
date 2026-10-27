@@ -28,6 +28,6 @@ x86_64 is unchanged because it already uses a fast linker.
 - `.` is the `omadesign` application crate (lib, `omadesign` and QA binaries).
 - `crates/omadesign-lcms` compiles `vendor/lcms2` and owns the `Profile` and `Transform` handles.
 - `crates/omadesign-libraw` compiles `vendor/libraw` and `src/bridge.cpp`, and exposes `decode` with a `Host` trait for cancellation, progress and memory admission.
-- `vendor/` crates (patched eframe/winit/resvg/usvg, affinity) are excluded from the workspace and are built only as dependencies.
+- `vendor/affinity` is a member because the app depends on it by path, so `--workspace` also runs its tests. The patched upstream crates in `vendor/` (eframe, egui-winit, winit, resvg, usvg) are not members and build only as dependencies.
 
 Run the suite across the workspace with `cargo test --workspace --lib`.
