@@ -491,6 +491,7 @@ fn craft_clipping_locked_busy_and_dependency_cycles_reject_without_mutation() {
 
 #[test]
 fn craft_clipping_native_cancel_keeps_all_sources_and_releases_scratch() {
+    let _pool = crate::resources::isolated();
     use std::sync::atomic::{AtomicUsize, Ordering};
     let mut s = fixture();
     s.doc.width = 256.;

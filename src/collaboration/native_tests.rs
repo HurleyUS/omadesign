@@ -348,6 +348,7 @@ fn native_admission_refusal_runs_in_an_independent_process() {
 #[test]
 #[ignore = "launched in isolation by native_admission_refusal_runs_in_an_independent_process"]
 fn allocation_pressure_child() {
+    let _pool = crate::resources::isolated();
     let doc = fixture();
     let cells = snapshot(&doc).unwrap();
     let mut placeholder: Document = serde_json::from_value(inflate("", &cells).unwrap()).unwrap();

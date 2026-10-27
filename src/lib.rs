@@ -49,6 +49,8 @@ mod phosphor_map;
 pub mod photo;
 pub mod plugins;
 pub mod presets;
+#[doc(hidden)]
+pub mod qa_env;
 pub mod project;
 pub mod raster;
 pub mod release_version;

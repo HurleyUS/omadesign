@@ -1,0 +1,11 @@
+# Weekly omadesign cleanup. Install with scripts/install-cleanup-timer.sh.
+[Unit]
+Description=omadesign merged worktree, branch and build-output cleanup
+
+[Service]
+Type=oneshot
+# %h is the user's home directory; the installer rewrites the checkout path.
+WorkingDirectory=%h/Projects/omadesign
+ExecStart=/usr/bin/env bash scripts/oma-cleanup.sh --apply
+Nice=10
+IOSchedulingClass=idle

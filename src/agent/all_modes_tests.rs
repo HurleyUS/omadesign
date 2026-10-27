@@ -521,7 +521,7 @@ fn incompatible_canvas_import_dimensions_fail_without_changing_the_document() {
 }
 
 #[test]
-fn duplicate_nested_layer_tree_keeps_external_parent_and_remaps_children() {
+fn duplicate_nested_group_copies_the_group_under_its_external_parent() {
     let mut s = studio();
     let outer = Layer::group("outer");
     let mut inner = Layer::group("inner"); inner.parent = Some(outer.id);
@@ -530,9 +530,15 @@ fn duplicate_nested_layer_tree_keeps_external_parent_and_remaps_children() {
     s.doc.layers = vec![outer, inner, child];
     let before = crate::project::encode(&s.doc).unwrap();
     call(&mut s, "editor_action", json!({"action":"duplicate_layer", "layer":1}));
-    assert_eq!(s.doc.layers.len(), 5);
-    assert_eq!(s.doc.layers[3].parent, Some(s.doc.layers[0].id));
-    assert_eq!(s.doc.layers[4].parent, Some(s.doc.layers[3].id));
-    assert_ne!(s.doc.layers[4].kind.shapes().unwrap()[0].id, s.doc.layers[2].kind.shapes().unwrap()[0].id);
+    // Master's duplicate_layer copies the group row itself, directly above
+    // the source, keeping its external parent; children stay with the original.
+    assert_eq!(s.doc.layers.len(), 4);
+    let copy = &s.doc.layers[2];
+    assert_eq!(copy.name, "inner copy");
+    assert_ne!(copy.id, s.doc.layers[1].id);
+    assert_eq!(copy.parent, Some(s.doc.layers[0].id));
+    assert!(s.doc.layers.iter().all(|l| l.parent != Some(copy.id)));
+    assert_eq!(s.doc.layers[3].parent, Some(s.doc.layers[1].id));
+    assert_eq!(s.doc.layers[3].kind.shapes().unwrap().len(), 1);
     s.undo(); assert_eq!(crate::project::encode(&s.doc).unwrap(), before);
 }

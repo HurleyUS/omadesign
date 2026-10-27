@@ -252,7 +252,16 @@ fn photo_preset() -> Workspace {
 pub(super) fn return_focus(ctx: &egui::Context, studio: &mut Studio) {
     prepare(&mut studio.panel_workspaces, studio.persona);
     if let Some(layout) = studio.panel_workspaces.tasks.get_mut(task(studio.persona)) {
-        if let Some(panel) = layout.focus.clone() {
+        // A pane is only remembered once its tab took focus; when a dialog or
+        // browser closes before that, land on the first docked pane instead
+        // of leaving native focus on nothing.
+        let panel = layout.focus.clone().or_else(|| {
+            layout
+                .groups
+                .iter()
+                .find_map(|group| group.panels.get(group.active).or(group.panels.first()).cloned())
+        });
+        if let Some(panel) = panel {
             layout.request_focus(ctx, "oma-workspace", &panel);
         }
     }

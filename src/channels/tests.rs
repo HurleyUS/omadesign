@@ -134,6 +134,7 @@ fn craft_channels_current_embedded_retained_deleted_and_underdeclared_readers_re
 }
 #[test]
 fn craft_channels_invalid_scalar_payloads_names_and_transforms_preserve_source_and_pool() {
+    let _pool = crate::resources::isolated();
     let original = plane(&[0., 0.25, 1.]);
     let pool = resources::global();
     let before = (pool.usage().0, pool.pending_bytes());
@@ -244,6 +245,7 @@ fn craft_channels_native_float_color_and_transparency_are_read_before_byte_quant
 }
 #[test]
 fn craft_channels_cancellation_keeps_shared_sources_and_releases_generated_allocations() {
+    let _pool = crate::resources::isolated();
     let p = plane(&[0., 0.25, 0.5, 1.]);
     let before = p.samples.clone();
     let pool = resources::global();

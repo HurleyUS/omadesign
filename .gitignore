@@ -48,3 +48,13 @@ id_ed25519*
 credentials.json
 .cache/
 node_modules/
+
+# Local, per-machine cleanup protections (paths/branches, one glob per line).
+/.oma-cleanup.keep
+
+# Tool caches and local backend state (explicit; these tools also drop their
+# own nested .gitignore files).
+.fallow/
+.convex/local/
+*.profraw
+.DS_Store

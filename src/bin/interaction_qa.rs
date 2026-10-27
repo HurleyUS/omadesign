@@ -459,6 +459,7 @@ fn main() -> eframe::Result {
         .contains(&scenario.as_str())
     );
     std::fs::create_dir_all(&output).unwrap();
+    let mut profile_env = Vec::new();
     for (key, directory) in [
         ("XDG_CONFIG_HOME", "config"),
         ("XDG_DATA_HOME", "data"),
@@ -467,10 +468,10 @@ fn main() -> eframe::Result {
     ] {
         let path = output.join("profile").join(directory);
         std::fs::create_dir_all(&path).unwrap();
-        unsafe {
-            std::env::set_var(key, path);
-        }
+        profile_env.push((key, path));
     }
+    // Re-run with the isolated profile instead of mutating this process's env.
+    omadesign::qa_env::ensure_env(&profile_env);
     let mut studio = Studio::new();
     studio.doc = fixture(
         &scenario,

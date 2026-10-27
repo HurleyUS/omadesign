@@ -2951,6 +2951,7 @@ dependencies = [
  "ab_glyph",
  "arboard",
  "base64",
+ "bytemuck",
  "cc",
  "eframe",
  "flate2",

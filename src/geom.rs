@@ -3,6 +3,17 @@
 use serde::{Deserialize, Serialize};
 pub use crate::text_geometry::{TextOnPath, PathAlign, TextFrame, TextThread, TextWrap, WrapMode, VAlign, Overflow};
 
+/// Smallest width or height an object may be resized to, in document px.
+/// Sub-pixel geometry such as a 0.25 px outlined stroke must survive resizing.
+pub const MIN_EXTENT: f32 = 0.001;
+
+/// Whether a rotation (radians) differs from a whole turn, so own size and
+/// axis-aligned world bounds can disagree.
+pub fn is_rotated(rotation: f32) -> bool {
+    let turn = rotation.rem_euclid(std::f32::consts::TAU);
+    turn > 1e-5 && std::f32::consts::TAU - turn > 1e-5
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Pt {
     pub x: f32,

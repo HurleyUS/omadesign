@@ -23,6 +23,7 @@ path = "src/bin/gen_media.rs"
 oma-ui-egui032 = []
 
 [dependencies]
+bytemuck = "1.25"
 omadesign-affinity = { path = "vendor/affinity" }
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-27"] }
 sha2 = "0.10"
@@ -100,3 +101,20 @@ winit = { path = "vendor/winit" }
 lto = "thin"
 codegen-units = 1
 opt-level = 3
+
+# Line tables keep panics/backtraces readable while cutting clean builds ~15%,
+# core rebuilds ~19% and the target dir ~44% (#486 audit, 8.8 GB -> 4.9 GB).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
+# Unsafe code is confined to the reviewed FFI bridges (Little CMS and LibRaw),
+# which opt back in with `#[allow(unsafe_code)]`; every block there carries a
+# `// SAFETY:` comment (#486).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"

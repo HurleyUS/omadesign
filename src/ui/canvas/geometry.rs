@@ -149,8 +149,8 @@ pub(super) fn nested_resize(
         })
         .collect();
     work.sort_by_key(|(depth, ..)| *depth);
-    let sx = destination.width() / source.width().max(1.);
-    let sy = destination.height() / source.height().max(1.);
+    let sx = destination.width() / source.width().max(crate::geom::MIN_EXTENT);
+    let sy = destination.height() / source.height().max(crate::geom::MIN_EXTENT);
     let edit = Transform::from_rotate(angle.to_degrees())
         .pre_concat(
             Transform::from_translate(destination.min.x, destination.min.y)

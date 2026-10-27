@@ -620,6 +620,10 @@ pub fn available_memory() -> Option<u64> {
 /// Use one process-wide pool for native, source and development allocations.
 /// Args: none. Returns a pool capped at half physical memory and eight GiB, with live pressure checks.
 pub fn global() -> &'static Arc<Budget> {
+    #[cfg(test)]
+    if let Some(pool) = ISOLATED.with(|pool| pool.get()) {
+        return pool;
+    }
     static POOL: OnceLock<Arc<Budget>> = OnceLock::new();
     POOL.get_or_init(|| {
         Budget::new(
@@ -628,6 +632,34 @@ pub fn global() -> &'static Arc<Budget> {
             true,
         )
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    static ISOLATED: std::cell::Cell<Option<&'static Arc<Budget>>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test-only: route this thread's `global()` to a private pool so exact
+/// usage assertions are not disturbed by tests running in parallel.
+/// Args: none. Returns a guard that restores the shared pool on drop.
+#[cfg(test)]
+pub fn isolated() -> IsolatedPool {
+    let limit = {
+        let shared = global();
+        shared.usage().1
+    };
+    let pool: &'static Arc<Budget> = Box::leak(Box::new(Budget::new(limit, true)));
+    IsolatedPool(ISOLATED.with(|slot| slot.replace(Some(pool))))
+}
+
+#[cfg(test)]
+pub struct IsolatedPool(Option<&'static Arc<Budget>>);
+
+#[cfg(test)]
+impl Drop for IsolatedPool {
+    fn drop(&mut self) {
+        ISOLATED.with(|slot| slot.set(self.0));
+    }
 }
 
 /// Compute conservative native peak demand from stored sensor and expanded output sizes.

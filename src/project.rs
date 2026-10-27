@@ -1117,6 +1117,7 @@ mod tests {
 
     #[test]
     fn native_parser_deducts_only_borrowed_root_raster_samples() {
+    let _pool = crate::resources::isolated();
         let raster =
             serde_json::json!({"kind":{"Raster":{"pixels":{"native":{"samples":"AAAA"}}}}});
         let text =
@@ -1150,6 +1151,7 @@ mod tests {
 
     #[test]
     fn native_parser_keeps_ambiguous_escaped_and_opaque_paths_fully_charged() {
+    let _pool = crate::resources::isolated();
         let original = r#"{"version":23,"doc":{"layers":[{"kind":{"Raster":{"pixels":{"native":{"samples":"AAAA"}}}}}]}}"#;
         let doc = serde_json::from_str::<serde_json::Value>(original).unwrap()["doc"].to_string();
         let cases = [
@@ -1187,6 +1189,7 @@ mod tests {
 
     #[test]
     fn admitted_project_output_refuses_size_drift_and_releases_its_owner() {
+    let _pool = crate::resources::isolated();
         struct Changing {
             grow: bool,
             calls: std::cell::Cell<u8>,
@@ -1213,6 +1216,7 @@ mod tests {
 
     #[test]
     fn admitted_project_output_survives_roundtrip_write_failure_and_last_alias() {
+    let _pool = crate::resources::isolated();
         use crate::{deep_color::Depth, document::Layer};
         use std::sync::{
             Arc,

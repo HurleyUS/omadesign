@@ -330,6 +330,7 @@ fn native_mask_on_vector_layer_keeps_float_coverage() {
 
 #[test]
 fn native_storage_shares_history_and_adopts_one_allocation_lease() {
+    let _pool = crate::resources::isolated();
     use std::sync::Arc;
     let mut authored = resources::global()
         .allocate::<f32, _>(8, &storage::check)
@@ -367,6 +368,7 @@ fn native_storage_shares_history_and_adopts_one_allocation_lease() {
 
 #[test]
 fn byte_history_swaps_prepared_storage_when_admission_is_full() {
+    let _pool = crate::resources::isolated();
     use std::sync::Arc;
     use crate::document::{Cmd, History, apply as apply_command};
     let pool = resources::Budget::new(12, false);
@@ -388,6 +390,7 @@ fn byte_history_swaps_prepared_storage_when_admission_is_full() {
 
 #[test]
 fn paint_surface_retains_transferred_allocation_until_drop() {
+    let _pool = crate::resources::isolated();
     let pool = resources::Budget::new(4, false);
     let mut bytes = pool.allocate_now::<u8,_>(4,&storage::check).unwrap();
     bytes.as_mut_slice().copy_from_slice(&[31,16,8,90]);

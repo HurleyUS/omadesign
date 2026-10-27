@@ -70,8 +70,8 @@ fn mixed_contents(ui: &mut Ui, studio: &mut Studio) -> bool {
     for (index, (label, unit, range, reset)) in [
         ("X", " px", -100000.0..=100000.0, Some(0.0)),
         ("Y", " px", -100000.0..=100000.0, Some(0.0)),
-        ("Width", " px", 1.0..=20000.0, None),
-        ("Height", " px", 1.0..=20000.0, None),
+        ("Width", " px", crate::geom::MIN_EXTENT..=20000.0, None),
+        ("Height", " px", crate::geom::MIN_EXTENT..=20000.0, None),
         ("Rotation", "°", -180.0..=180.0, Some(0.0)),
     ]
     .into_iter()
@@ -137,8 +137,8 @@ fn apply_constrained(studio: &mut Studio, after: [f32; 5], changed: [bool; 5], l
             let shown = pose.map_bounds(bounds);
             let mut desired = after;
             if linked && changed[2] != changed[3] {
-                if changed[2] { desired[3] = after[2] * shown.height() / shown.width().max(1.0); }
-                else { desired[2] = after[3] * shown.width() / shown.height().max(1.0); }
+                if changed[2] { desired[3] = after[2] * shown.height() / shown.width().max(crate::geom::MIN_EXTENT); }
+                else { desired[2] = after[3] * shown.width() / shown.height().max(crate::geom::MIN_EXTENT); }
             }
             for (index, prop, value) in [
                 (0, crate::motion::Prop::X, pose.dx + after[0] - shown.min.x),
@@ -146,12 +146,12 @@ fn apply_constrained(studio: &mut Studio, after: [f32; 5], changed: [bool; 5], l
                 (
                     2,
                     crate::motion::Prop::Width,
-                    pose.width_scale * desired[2] / shown.width().max(1.0),
+                    pose.width_scale * desired[2] / shown.width().max(crate::geom::MIN_EXTENT),
                 ),
                 (
                     3,
                     crate::motion::Prop::Height,
-                    pose.height_scale * desired[3] / shown.height().max(1.0),
+                    pose.height_scale * desired[3] / shown.height().max(crate::geom::MIN_EXTENT),
                 ),
                 (
                     4,
@@ -191,8 +191,8 @@ fn apply_constrained(studio: &mut Studio, after: [f32; 5], changed: [bool; 5], l
                     }
                 }
                 if linked && changed[2] != changed[3] {
-                    if changed[2] { value[3] = after[2] * bounds.height() / bounds.width().max(1.0); }
-                    else { value[2] = after[3] * bounds.width() / bounds.height().max(1.0); }
+                    if changed[2] { value[3] = after[2] * bounds.height() / bounds.width().max(crate::geom::MIN_EXTENT); }
+                    else { value[2] = after[3] * bounds.width() / bounds.height().max(crate::geom::MIN_EXTENT); }
                 }
                 let before = shape.geom.clone();
                 let mut geometry = before.clone();

@@ -1,4 +1,6 @@
 //! Native document samples. RGBA8 is a display cache; authored samples remain authoritative.
+// Little CMS / LibRaw FFI bridge; see [lints] in Cargo.toml.
+#[allow(unsafe_code)]
 pub mod cms;
 mod color_pixels;
 mod composite;
@@ -324,6 +326,7 @@ pub(crate) mod sample_bytes {
 
         #[test]
         fn counted_samples_keep_exact_capacity_float_bits_and_final_alias_admission() {
+    let _pool = crate::resources::isolated();
             let values: Vec<_> = (0..8193).map(|i| f32::from_bits(0x3e800001 + i)).collect();
             let bytes: Vec<_> = values
                 .iter()
@@ -355,6 +358,7 @@ pub(crate) mod sample_bytes {
 
         #[test]
         fn counted_samples_refuse_partial_nonfinite_invalid_and_oversized_windows() {
+    let _pool = crate::resources::isolated();
             let pool = resources::global();
             let before = (pool.usage().0, pool.pending_bytes());
             for bytes in [vec![1], vec![1, 2], vec![1, 2, 3], vec![0; 5], vec![0; 7]] {
@@ -394,6 +398,7 @@ pub(crate) mod sample_bytes {
 
         #[test]
         fn counted_samples_stop_at_the_byte_limit_and_refuse_both_size_drifts() {
+    let _pool = crate::resources::isolated();
             let pool = resources::global();
             let before = (pool.usage().0, pool.pending_bytes());
             let text = base64::engine::general_purpose::STANDARD.encode(packed(&[0; 8]));

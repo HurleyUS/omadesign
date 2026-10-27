@@ -28,6 +28,8 @@ fn fixture() -> (egui::Context, Studio) {
         s.selection.push((0, sh.id));
         s.doc.layers[0].kind.shapes_mut().unwrap().push(sh);
     }
+    // Align is its own dock tab beside Transform and Pathfinder; bring it forward.
+    assert!(crate::ui::panel_workspace::open(&ctx, &mut s, "align"));
     (ctx, s)
 }
 fn frame(
@@ -91,44 +93,78 @@ fn click(ctx: &egui::Context, s: &mut Studio, label: &str, modifiers: Modifiers)
         );
     }
 }
+/// Press a point through real pointer events.
+fn click_at(ctx: &egui::Context, s: &mut Studio, p: Pos2, modifiers: Modifiers) {
+    for pressed in [true, false] {
+        frame(ctx, s, 1600., vec![
+            Event::ModifiersChanged(modifiers),
+            Event::PointerMoved(p),
+            Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers },
+        ]);
+    }
+}
+/// The Align pane's icon rows, anchored on its "Align" section header:
+/// (order row above the header, align row, distribute row) for one glyph.
+fn align_pane_glyph(labels: &[(String, Pos2)], glyph: &str) -> (Vec<Pos2>, Vec<Pos2>) {
+    let header = labels
+        .iter()
+        .filter(|(text, _)| text == "Align")
+        .map(|(_, p)| *p)
+        .max_by(|a, b| a.y.total_cmp(&b.y))
+        .expect("Align pane section header");
+    let near: Vec<Pos2> = labels
+        .iter()
+        .filter(|(text, p)| text == glyph && (p.x - header.x).abs() < 300. && (p.y - header.y).abs() < 120.)
+        .map(|(_, p)| *p)
+        .collect();
+    let (mut above, mut below): (Vec<_>, Vec<_>) = near.into_iter().partition(|p| p.y < header.y);
+    above.sort_by(|a, b| a.y.total_cmp(&b.y));
+    below.sort_by(|a, b| a.y.total_cmp(&b.y));
+    (above, below)
+}
 #[test]
 fn inspector_routes_all_alignment_distribution_and_order_controls() {
     let (ctx, mut s) = fixture();
     for _ in 0..3 {
         frame(&ctx, &mut s, 1600., vec![]);
     }
-    for glyph in [
-        ph::ALIGN_LEFT,
-        ph::ALIGN_CENTER_H,
-        ph::ALIGN_RIGHT,
-        ph::ALIGN_TOP,
-        ph::ALIGN_CENTER_V,
-        ph::ALIGN_BOTTOM,
+    // The Align tab draws each alignment once; the centre glyphs are reused
+    // by the distribute row beneath it.
+    for (glyph, rows) in [
+        (ph::ALIGN_LEFT, 1),
+        (ph::ALIGN_CENTER_H, 2),
+        (ph::ALIGN_RIGHT, 1),
+        (ph::ALIGN_TOP, 1),
+        (ph::ALIGN_CENTER_V, 2),
+        (ph::ALIGN_BOTTOM, 1),
     ] {
         let labels = frame(&ctx, &mut s, 1600., vec![]);
-        assert_eq!(
-            labels.iter().filter(|(text, _)| text == glyph).count(),
-            1,
-            "single Align home"
-        );
+        assert_eq!(labels.iter().filter(|(text, _)| text == glyph).count(), rows, "single Align home");
+        let (_, below) = align_pane_glyph(&labels, glyph);
+        assert_eq!(below.len(), rows, "Align tab rows for {glyph:?}");
         let before = crate::project::encode(&s.doc).unwrap();
         let h = s.history.len();
-        click(&ctx, &mut s, glyph, Modifiers::NONE);
+        click_at(&ctx, &mut s, below[0], Modifiers::NONE);
         assert_eq!(s.history.len(), h + 1);
         s.undo();
         assert_eq!(crate::project::encode(&s.doc).unwrap(), before);
     }
-    for label in ["Distribute H", "Distribute V"] {
+    for glyph in [ph::ALIGN_CENTER_H, ph::ALIGN_CENTER_V] {
+        let labels = frame(&ctx, &mut s, 1600., vec![]);
+        let distribute = align_pane_glyph(&labels, glyph).1[1];
         let h = s.history.len();
-        click(&ctx, &mut s, label, Modifiers::SHIFT);
+        click_at(&ctx, &mut s, distribute, Modifiers::SHIFT);
         assert_eq!(s.history.len(), h + 1);
         s.undo();
     }
     let ids = s.selection.clone();
     s.selection = vec![ids[1]];
-    for label in ["To front", "To back", "Forward", "Backward"] {
+    for glyph in [ph::SKIP_FORWARD, ph::SKIP_BACK, ph::ARROW_UP, ph::ARROW_DOWN] {
+        let labels = frame(&ctx, &mut s, 1600., vec![]);
+        let order = align_pane_glyph(&labels, glyph).0;
+        assert_eq!(order.len(), 1, "one order control {glyph:?}");
         let h = s.history.len();
-        click(&ctx, &mut s, label, Modifiers::NONE);
+        click_at(&ctx, &mut s, order[0], Modifiers::NONE);
         assert_eq!(s.history.len(), h + 1);
     }
 }

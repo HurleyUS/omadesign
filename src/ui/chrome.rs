@@ -1465,7 +1465,6 @@ mod tests {
                     if let eframe::egui::Shape::Text(text) = &shape.shape {
                         let center = text.galley.rect.translate(text.pos.to_vec2()).center();
                         if center.y < 44.0
-                            && (center.x - size.x * 0.5).abs() < 150.0
                             && [
                                 Persona::Design,
                                 Persona::Pixel,
@@ -1483,11 +1482,14 @@ mod tests {
                 })
                 .collect();
             assert_eq!(modes.len(), 5, "all modes must remain directly available");
-            let center = modes[0].x + 3.0 * 42.0;
+            // The mode group sits in its fixed slot left of the right-hand
+            // controls (mode_tabs_rect), not at the window centre.
+            let slot = super::mode_tabs_rect(eframe::egui::Rect::from_min_size(eframe::egui::Pos2::ZERO, vec2(size.x, 44.0)));
             assert!(
-                (center - size.x * 0.5).abs() < 1.0,
-                "mode group at {center} on {size:?}"
+                modes.iter().all(|m| m.x > slot.left() && m.x < slot.right()),
+                "mode group {modes:?} outside {slot:?} on {size:?}"
             );
+            assert!(modes.windows(2).all(|w| w[1].x > w[0].x), "modes keep their order: {modes:?}");
             let mut previews: Vec<_> = shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {

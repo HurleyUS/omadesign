@@ -721,7 +721,11 @@ impl eframe::App for Qa {
 }
 fn main() -> eframe::Result {
     let output = PathBuf::from(std::env::args().nth(1).expect("workspace_qa OUTPUT"));
-    fs::create_dir(&output).expect("QA output must be a fresh directory");
+    // The isolated re-run reuses the directory its parent just created.
+    if std::env::var_os(omadesign::qa_env::ISOLATED_MARKER).is_none() {
+        fs::create_dir(&output).expect("QA output must be a fresh directory");
+    }
+    let mut profile_env = Vec::new();
     for (key, dir) in [
         ("XDG_CONFIG_HOME", "config"),
         ("XDG_DATA_HOME", "data"),
@@ -730,10 +734,10 @@ fn main() -> eframe::Result {
     ] {
         let p = output.join("profile").join(dir);
         fs::create_dir_all(&p).unwrap();
-        unsafe {
-            std::env::set_var(key, p);
-        }
+        profile_env.push((key, p));
     }
+    // Re-run with the isolated profile instead of mutating this process's env.
+    omadesign::qa_env::ensure_env(&profile_env);
     eframe::run_native(
         "Omadesign 0.6.3 acceptance",
         eframe::NativeOptions {

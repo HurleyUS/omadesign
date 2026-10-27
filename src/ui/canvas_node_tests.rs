@@ -103,7 +103,7 @@ fn rotated_nodes_draw_pick_and_drag_in_one_world_frame() {
                     .iter()
                     .any(|item| matches!(&item.shape, eframe::egui::Shape::Rect(rect)
                 if rect.fill == select() && rect.rect.center().distance(at) < 0.002
-                    && (rect.rect.width() == 6.0 || rect.rect.width() == 8.0))),
+                    && ((rect.rect.width() - 6.0).abs() < 0.001 || (rect.rect.width() - 8.0).abs() < 0.001))),
                 "node overlay must follow rotation"
             );
         }
@@ -310,7 +310,10 @@ fn canvas_context_flip_targets_the_clicked_object_and_preserves_multi_selection(
     ) -> Vec<eframe::egui::epaint::ClippedShape> {
         let mut output = ctx.run_ui(
             eframe::egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 900.0))),
+                // The canvas context menu now lists every Type command before
+                // Transform; at 900 px tall Transform falls off-screen (flagged
+                // in #486 PR). Use a window tall enough to reach it.
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 1800.0))),
                 events,
                 ..Default::default()
             },

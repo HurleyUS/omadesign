@@ -4,6 +4,7 @@ const DNG: &[u8] = include_bytes!("synthetic.dng");
 
 #[test]
 fn native_result_retains_its_memory_and_cancellable_decoder_ownership() {
+    let _pool = crate::resources::isolated();
     use std::time::Duration;
     let baseline = resources::global().usage().0;
     let native = native_decode(DNG, &Cancellation::default(), false).unwrap();
@@ -120,6 +121,7 @@ fn active_native_interpolation_cancels_promptly_then_next_decode_succeeds() {
 #[test]
 #[ignore = "pinned real camera source; scheduled with the strict corpus and shared heavy lock"]
 fn real_camera_active_cancel_keeps_edits_and_immediately_opens_next() {
+    let _pool = crate::resources::isolated();
     use sha2::{Digest, Sha256};
     use std::io::Read;
     use std::time::{Duration, Instant};

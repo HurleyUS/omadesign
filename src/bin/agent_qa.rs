@@ -175,6 +175,7 @@ fn main() -> eframe::Result {
         .windows(2)
         .find(|w| w[0] == "--prompt-file")
         .map(|w| std::fs::read_to_string(&w[1]).expect("Readable prompt file"));
+    let mut profile_env = Vec::new();
     for (key, name) in [
         ("XDG_CONFIG_HOME", "config"),
         ("XDG_DATA_HOME", "data"),
@@ -183,10 +184,10 @@ fn main() -> eframe::Result {
     ] {
         let path = directory.join(name);
         std::fs::create_dir_all(&path).unwrap();
-        unsafe {
-            std::env::set_var(key, path);
-        }
+        profile_env.push((key, path));
     }
+    // Re-run with the isolated profile instead of mutating this process's env.
+    omadesign::qa_env::ensure_env(&profile_env);
     eframe::run_native(
         "Omadesign — live ACP verification",
         eframe::NativeOptions {

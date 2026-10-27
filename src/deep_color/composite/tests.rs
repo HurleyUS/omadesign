@@ -435,6 +435,7 @@ fn float_vector_whole_and_solid_span_text_share_original_curves_affine_placement
 
 #[test]
 fn float_vector_real_admission_cancel_pressure_and_final_owner_preserve_source() {
+    let _pool = crate::resources::isolated();
     let shape = rect(
         Pt::new(0.125, 0.25),
         Pt::new(63.5, 31.5),

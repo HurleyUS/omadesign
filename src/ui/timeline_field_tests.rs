@@ -76,6 +76,8 @@ fn keyboard_motion_native_timing_and_preset_authoring_undo_and_save_reopen() {
     frame(&ctx, &mut studio, keys::key(Key::Enter, Modifiers::NONE));
     let history = studio.history.len();
     let before = studio.doc.motion.clone();
+    crate::ui::panel_workspace::open(&ctx, &mut studio, "keyframes");
+    frame(&ctx, &mut studio, vec![]);
     keys::tab_to(&ctx, "Motion preset duration (s)", |events| {
         frame(&ctx, &mut studio, events)
     });

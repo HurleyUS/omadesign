@@ -111,7 +111,7 @@ impl eframe::App for Qa {
                 .pixels()
                 .unwrap()
                 .data
-                .clone();
+                .to_vec();
             assert!(
                 pixels.chunks_exact(4).any(|p| p[3] > 0),
                 "Native pointer painted pixels"
@@ -231,6 +231,7 @@ fn main() -> eframe::Result {
     let canvas = args[1] == "--canvas";
     let output = PathBuf::from(&args[2]);
     std::fs::create_dir_all(&output).unwrap();
+    let mut profile_env = Vec::new();
     for (key, name) in [
         ("XDG_CONFIG_HOME", "config"),
         ("XDG_DATA_HOME", "data"),
@@ -239,10 +240,10 @@ fn main() -> eframe::Result {
     ] {
         let p = output.join("profile").join(name);
         std::fs::create_dir_all(&p).unwrap();
-        unsafe {
-            std::env::set_var(key, p);
-        }
+        profile_env.push((key, p));
     }
+    // Re-run with the isolated profile instead of mutating this process's env.
+    omadesign::qa_env::ensure_env(&profile_env);
     let mut studio = Studio::new();
     studio.doc = Document::new("Brush packs", 320., 180., 72.);
     studio.doc.transparent = true;

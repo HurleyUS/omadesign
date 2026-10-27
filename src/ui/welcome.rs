@@ -68,7 +68,12 @@ pub(super) fn native_number_valid(ui: &Ui, response: &Response, property: Id, at
 /// Associate one visible validation message with its native controls.
 /// Args: UI, affected responses and plain error. Returns no value; native reader announcements are unproven.
 pub(super) fn control_error(ui: &mut Ui, fields: &[&Response], message: &str) {
-    error_response(ui, fields, message);
+    let error = error_response(ui, fields, message);
+    // Keep the message beside the focused field visible; in short docked
+    // panes it otherwise lands below the fold, unseen.
+    if fields.iter().any(|field| field.has_focus()) && !ui.clip_rect().contains_rect(error.rect) {
+        ui.scroll_to_rect_animation(error.rect, None, egui::style::ScrollAnimation::none());
+    }
 }
 
 /// Reveal an existing rejected field and its associated message inside its scroll area.
@@ -511,7 +516,10 @@ pub(super) mod keyboard_tests {
             output = frame(vec![]);
         }
         let mut trace = Vec::new();
-        for _ in 0..128 {
+        // One full cycle can visit every accessible node once; the docked
+        // workspace exposes far more than the old fixed 128-step budget.
+        let budget = output.platform_output.accesskit_update.as_ref().unwrap().nodes.len().max(128) + 16;
+        for _ in 0..budget {
             let focused = ctx.memory(|memory| memory.focused()).map(|id| id.accesskit_id());
             if focused == Some(named(&output, name).0) {
                 return frame(vec![]);

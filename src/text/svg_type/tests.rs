@@ -48,7 +48,7 @@ fn svg_type_rotated_reflected_mixed_positioned_rtl_vertical_and_path_roundtrip()
         r##"<text x="15" y="55" font-size="25" fill="#248" transform="matrix(.9 .25 -.2 1.1 30 4)">Affine <tspan font-size="36" fill="#d24" font-weight="bold">type</tspan></text>"##,
         r##"<style>.ink{font-family:DejaVu Sans;fill:#248;font-size:28px}</style><g class="ink"><text x="20" y="55" fill="inherit" font-size="inherit" text-anchor="end" transform="translate(180 0)"><tspan>Full</tspan> <tspan fill="#d24">styles</tspan> </text></g>"##,
         r##"<text x="15 52 95" y="55 68 55" dx="0 3 -2" dy="0 -2 1" rotate="0 22 -15" font-size="32" fill="#248" transform="translate(245 0) scale(-1 1)">ABC</text>"##,
-        r##"<text x="220" y="55" font-size="32" fill="#248" direction="rtl" unicode-bidi="bidi-override">مرحبا بالعالم</text>"##,
+        r##"<text x="220" y="55" font-family="Noto Naskh Arabic" font-size="32" fill="#248" direction="rtl" unicode-bidi="bidi-override">مرحبا بالعالم</text>"##,
         r##"<text x="100" y="25" font-size="25" fill="#248" writing-mode="tb">Vertical</text>"##,
         r##"<defs><path id="curve" d="M10 80 Q130 -15 250 80"/></defs><text font-size="25" fill="#248"><textPath href="#curve" startOffset="12">Editable path text</textPath></text>"##,
     ] {

@@ -1661,6 +1661,10 @@ mod keyboard_field_tests {
         frame(ctx, studio, vec![]);
         keys::tab_to(ctx, "Panel", |events| frame(ctx, studio, events));
         frame(ctx, studio, keys::key(Key::End, Modifiers::NONE));
+        // Develop precedes Histogram, Presets and Adjustments in the registry.
+        for _ in 0..3 {
+            frame(ctx, studio, keys::key(Key::ArrowUp, Modifiers::NONE));
+        }
         keys::tab_to(ctx, "Panel action", |events| frame(ctx, studio, events));
         frame(ctx, studio, keys::key(Key::Home, Modifiers::NONE));
         for _ in 0..action {
@@ -1706,7 +1710,7 @@ mod keyboard_field_tests {
             keys::replace(text, |events| frame(&ctx, &mut studio, events));
         }
         let output = apply_panel(&ctx, &mut studio);
-        keys::focused(&ctx, &output, "Photo develop");
+        keys::focused(&ctx, &output, "Develop");
         assert_eq!(keys::named(&output, "Exposure").0, exposure);
         let group = studio.panel_workspaces.tasks["Photo"]
             .groups
@@ -1746,7 +1750,7 @@ mod keyboard_field_tests {
                         .contains_key("photo-develop")
                 );
             } else {
-                keys::focused(&ctx, &output, "Photo develop");
+                keys::focused(&ctx, &output, "Develop");
             }
         }
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1775,7 +1779,7 @@ mod keyboard_field_tests {
                 .iter()
                 .find(|(_, node)| {
                     node.role() == egui::accesskit::Role::Window
-                        && node.label() == Some("Photo develop")
+                        && node.label() == Some("Develop")
                 })
                 .unwrap()
                 .1

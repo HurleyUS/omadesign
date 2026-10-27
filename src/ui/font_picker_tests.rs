@@ -388,10 +388,11 @@ fn keyboard_font_native_effect_blend_retirement_and_layer_owner_guards() {
     studio.show_welcome = false;
     let layer = studio.active_layer.unwrap();
     let expected = studio.doc.layers[layer].blend;
+    // Layer blend moved from the layer list into the Layers pane settings.
     let mut frame = |events| {
         keys::render(&ctx, events, |ui| {
             ui.set_max_width(300.);
-            super::layers_studio(ui, &mut studio);
+            super::layers_content(ui, &mut studio);
         })
     };
     let output = keys::tab_to(&ctx, "Layer blend", &mut frame);
@@ -400,7 +401,7 @@ fn keyboard_font_native_effect_blend_retirement_and_layer_owner_guards() {
     drop(frame);
     assert_eq!(studio.doc.layers[layer].blend, *Blend::ALL.last().unwrap());
     studio.add_layer_group();
-    let output = keys::render(&ctx, vec![], |ui| super::layers_studio(ui, &mut studio));
+    let output = keys::render(&ctx, vec![], |ui| super::layers_content(ui, &mut studio));
     assert_ne!(keys::named(&output, "Layer blend").0, first);
     assert!(keys::named(&output, "Layer blend").1.is_disabled());
     assert_ne!(studio.doc.layers[layer].blend, expected);
