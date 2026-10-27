@@ -128,14 +128,13 @@ fn inspector_routes_all_alignment_distribution_and_order_controls() {
     for _ in 0..3 {
         frame(&ctx, &mut s, 1600., vec![]);
     }
-    // The Align tab draws each alignment once; the centre glyphs are reused
-    // by the distribute row beneath it.
+    // The Align tab draws each alignment once; distribute has its own icons.
     for (glyph, rows) in [
         (ph::ALIGN_LEFT, 1),
-        (ph::ALIGN_CENTER_H, 2),
+        (ph::ALIGN_CENTER_H, 1),
         (ph::ALIGN_RIGHT, 1),
         (ph::ALIGN_TOP, 1),
-        (ph::ALIGN_CENTER_V, 2),
+        (ph::ALIGN_CENTER_V, 1),
         (ph::ALIGN_BOTTOM, 1),
     ] {
         let labels = frame(&ctx, &mut s, 1600., vec![]);
