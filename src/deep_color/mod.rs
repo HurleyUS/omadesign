@@ -1,6 +1,5 @@
 //! Native document samples. RGBA8 is a display cache; authored samples remain authoritative.
 // Little CMS / LibRaw FFI bridge; see [lints] in Cargo.toml.
-#[allow(unsafe_code)]
 pub mod cms;
 mod color_pixels;
 mod composite;

@@ -6,15 +6,12 @@
 //! pipeline applies it before display conversion. Neither thumbnails nor camera
 //! JPEG previews are used. The source buffer is borrowed and never modified.
 
-use std::{ffi::c_void, os::raw::c_char};
+use omadesign_libraw::Image as NativeImage;
+use std::os::raw::c_char;
 mod cancellation;
 pub use cancellation::Cancellation;
 pub mod resources;
 
-// These crates provide the statically built decompression libraries consumed by
-// the C++ bridge. Referencing them retains their native link metadata.
-use libz_sys as _;
-use mozjpeg_sys as _;
 use serde::{Deserialize, Serialize};
 
 pub const VERSION: &str = "LibRaw 0.22.2";
@@ -138,56 +135,6 @@ fn restore_samples<'de, D: serde::Deserializer<'de>>(
     deserializer.deserialize_seq(Samples)
 }
 
-#[repr(C)]
-struct NativeImage {
-    owner: *mut c_void,
-    data: *const u8,
-    data_size: u64,
-    width: u32,
-    height: u32,
-    colors: u32,
-    bits: u32,
-    warnings: u32,
-    raw_count: u32,
-    dng_opcodes: u32,
-    orientation: i32,
-    iso: f32,
-    shutter: f32,
-    aperture: f32,
-    focal_length: f32,
-    camera_wb: [f32; 4],
-    baseline_exposure: f32,
-    timestamp: i64,
-    make: [c_char; 64],
-    model: [c_char; 64],
-    lens: [c_char; 128],
-    error: [c_char; 256],
-}
-
-unsafe extern "C" {
-    fn oma_raw_decode(
-        bytes: *const u8,
-        length: usize,
-        image: *mut NativeImage,
-        cancelled: unsafe extern "C" fn(*const c_void) -> i32,
-        context: *const c_void,
-        progress: unsafe extern "C" fn(*const c_void, u32),
-        reserve: unsafe extern "C" fn(*const c_void, u64) -> i32,
-        memory_context: *const c_void,
-        memory_limit: u64,
-        sensor_only: i32,
-    ) -> i32;
-    fn oma_raw_free(owner: *mut c_void);
-}
-
-impl Drop for NativeImage {
-    fn drop(&mut self) {
-        // SAFETY: The bridge returns sole ownership of this allocation, or null.
-        // `NativeImage` is never cloned or moved across the FFI boundary again.
-        unsafe { oma_raw_free(self.owner) };
-    }
-}
-
 /// Release native pixels before their reservation and decoder lock.
 /// Args: completed native image, admitted memory and exclusive decoder guard.
 /// Returns an owner that preserves this cleanup order on every error path.
@@ -223,27 +170,13 @@ fn native_decode(
         lease: resources::global().reserve(64 * 1024 * 1024, cancel)?,
         error: std::sync::Mutex::new(None),
     };
-    // SAFETY: Every field is a plain number, fixed byte array, or nullable raw
-    // pointer. All-zero initialization is valid, including the Drop owner.
-    let mut native: NativeImage = unsafe { std::mem::zeroed() };
     let active = cancel.native_activity();
-    // SAFETY: The borrowed byte buffer remains alive through synchronous decode.
-    // The C++ adapter validates input/layout, catches exceptions and writes only
-    // within the exactly matching repr(C) output. It never retains input bytes.
-    let result = unsafe {
-        oma_raw_decode(
-            bytes.as_ptr(),
-            bytes.len(),
-            &mut native,
-            cancellation::cancelled,
-            (cancel as *const Cancellation).cast(),
-            cancellation::progress,
-            reserve_native,
-            (&admission as *const Admission).cast(),
-            resources::global().usage().1,
-            i32::from(sensor_only),
-        )
-    };
+    let (result, native) = omadesign_libraw::decode(
+        bytes,
+        &admission,
+        resources::global().usage().1,
+        sensor_only,
+    );
     drop(active);
     let decoded = NativeDecoded {
         image: native,
@@ -289,14 +222,13 @@ pub(crate) fn decode_reserved(
         || native.bits != 16
         || !matches!(native.colors, 1 | 3)
         || native.data_size != count * u64::from(native.colors) * 2
-        || native.data.is_null()
     {
         return Err("The RAW decoder returned an invalid pixel buffer".into());
     }
-    // SAFETY: The bridge allocation owns exactly `data_size` readable bytes and
-    // stays alive until `native` is dropped after this copy. Validation above
-    // also bounds this slice well below isize::MAX on supported platforms.
-    let samples = unsafe { std::slice::from_raw_parts(native.data, native.data_size as usize) };
+    // The bridge allocation stays alive until `decoded` is dropped after this copy.
+    let samples = native
+        .data()
+        .ok_or("The RAW decoder returned an invalid pixel buffer")?;
     let mut pixels: Vec<u16> = Vec::new();
     pixels
         .try_reserve_exact(count as usize * 3)
@@ -375,15 +307,23 @@ struct Admission<'a> {
     error: std::sync::Mutex<Option<String>>,
 }
 
-unsafe extern "C" fn reserve_native(context: *const c_void, bytes: u64) -> i32 {
-    // SAFETY: the synchronous native call borrows Admission until all callbacks return.
-    let admission = unsafe { &*context.cast::<Admission>() };
-    admission.cancel.record_native_memory_request(bytes);
-    match admission.lease.resize(bytes, admission.cancel) {
-        Ok(()) => 0,
-        Err(error) => {
-            *admission.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
-            1
+impl omadesign_libraw::Host for Admission<'_> {
+    fn cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+
+    fn progress(&self, stage: u32) {
+        self.cancel.record_stage(stage);
+    }
+
+    fn reserve(&self, bytes: u64) -> bool {
+        self.cancel.record_native_memory_request(bytes);
+        match self.lease.resize(bytes, self.cancel) {
+            Ok(()) => true,
+            Err(error) => {
+                *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
+                false
+            }
         }
     }
 }
@@ -447,8 +387,6 @@ fn decode_sensor(bytes: &[u8], cancel: &Cancellation) -> Result<SensorImage, Str
         || count.checked_mul(2) != Some(native.data_size)
         || native.colors != 1
         || native.bits != 16
-        || native.data.is_null()
-        || native.data_size > isize::MAX as u64
     {
         return Err("Invalid sensor reference plane".into());
     }
@@ -456,9 +394,8 @@ fn decode_sensor(bytes: &[u8], cancel: &Cancellation) -> Result<SensorImage, Str
     values
         .try_reserve_exact(count as usize)
         .map_err(|_| "Not enough memory for the sensor reference")?;
-    // SAFETY: the validated native allocation owns exactly `data_size`
-    // readable bytes and stays alive until `decoded` is dropped below.
-    let bytes = unsafe { std::slice::from_raw_parts(native.data, native.data_size as usize) };
+    // The native allocation stays alive until `decoded` is dropped below.
+    let bytes = native.data().ok_or("Invalid sensor reference plane")?;
     values.resize(count as usize, 0);
     copy_bytes_cancellable(bytes, bytemuck::cast_slice_mut(&mut values), cancel)?;
     let (width, height) = (native.width, native.height);
