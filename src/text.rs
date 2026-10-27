@@ -270,7 +270,92 @@ fn walk_ttfs(
 }
 
 pub fn fonts() -> &'static [FontFace] {
-    FONTS.get_or_init(scan_fonts)
+    FONTS.get_or_init(load_font_index)
+}
+
+/// Whether the installed font index is built; the UI fills font defaults only after this.
+pub fn fonts_ready() -> bool {
+    FONTS.get().is_some()
+}
+
+/// Build the installed font index on a background thread so the window never waits on it.
+/// Args: none. Returns immediately; later `fonts()` callers block only until it finishes.
+pub fn start_font_index() {
+    if fonts_ready() {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("font-index".into())
+        .spawn(|| {
+            fonts();
+        });
+}
+
+const FONT_INDEX_FILE: &str = "font-index-v1.tsv";
+
+/// A key that changes when fontconfig's file list or any scanned font directory changes.
+fn font_index_key(files: &[PathBuf]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    files.hash(&mut hasher);
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = ["/usr/share/fonts", "/usr/local/share/fonts"]
+        .into_iter()
+        .map(PathBuf::from)
+        .chain([PathBuf::from(format!("{home}/.local/share/fonts")), PathBuf::from(format!("{home}/.fonts"))])
+        .collect();
+    dirs.push(crate::project::data_dir().join("fonts"));
+    for dir in dirs {
+        let stamp = std::fs::metadata(&dir).and_then(|m| m.modified()).ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos());
+        (dir, stamp).hash(&mut hasher);
+    }
+    PREFERRED.iter().map(|p| Path::new(p).exists()).collect::<Vec<_>>().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Read the cached font index, or scan fonts and write it.
+/// Args: none. Returns the installed faces; a stale or unreadable cache is rebuilt.
+fn load_font_index() -> Vec<FontFace> {
+    let path = crate::project::data_dir().join(FONT_INDEX_FILE);
+    let key = font_index_key(&fc_font_files());
+    if let Some(found) = read_font_index(&path, &key) {
+        return found;
+    }
+    let found = scan_fonts();
+    write_font_index(&path, &key, &found);
+    found
+}
+
+fn read_font_index(path: &Path, key: &str) -> Option<Vec<FontFace>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut lines = text.lines();
+    if lines.next()? != key {
+        return None;
+    }
+    let faces: Vec<FontFace> = lines
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(name, path)| FontFace { name: name.to_owned(), path: PathBuf::from(path) })
+        .collect();
+    (!faces.is_empty()).then_some(faces)
+}
+
+fn write_font_index(path: &Path, key: &str, faces: &[FontFace]) {
+    let mut text = format!("{key}\n");
+    for face in faces {
+        if face.name.contains(['\t', '\n']) || face.path.to_string_lossy().contains(['\t', '\n']) {
+            continue;
+        }
+        text.push_str(&format!("{}\t{}\n", face.name, face.path.to_string_lossy()));
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
 }
 
 static DYNAMIC_FONTS: OnceLock<Mutex<Vec<FontFace>>> = OnceLock::new();
@@ -869,137 +954,12 @@ pub fn glyph_count(run:&TypeRun)->usize {compose(run).iter().map(|l|l.glyphs.len
 /// Scan ~/Projects for `next/font/google` imports and return the most frequent
 /// family (e.g. “Inter”). Underscores in the identifier are turned into spaces
 /// so `Noto_Sans_Mono` → “Noto Sans Mono”.
-pub fn detect_max_font_family() -> Option<String> {
-    detect_max_font_family_in(&projects_root())
-}
-
-fn projects_root() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(format!("{home}/Projects"))
-}
-
-fn detect_max_font_family_in(root: &Path) -> Option<String> {
-    if !root.exists() {
-        return None;
-    }
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    walk_for_font_imports(root, &mut counts, 0);
-    if counts.is_empty() {
-        return None;
-    }
-    // Prefer the family with highest count; tie-break by preferring sans over mono,
-    // then alphabetically – this makes Inter (sans) win over Noto_Sans_Mono (mono)
-    // when counts are equal, matching hustlelaunch.com's primary sans.
-    let mut best: Option<(String, usize)> = None;
-    for (fam, cnt) in counts {
-        let entry = best.get_or_insert((fam.clone(), cnt));
-        if cnt > entry.1 || (cnt == entry.1 && is_preferred_over(&fam, &entry.0)) {
-            *entry = (fam, cnt);
-        }
-    }
-    best.map(|(f, _)| f)
-}
-
-fn is_preferred_over(a: &str, b: &str) -> bool {
-    // Sans is preferred over mono for a design default.
-    let a_mono = a.to_ascii_lowercase().contains("mono");
-    let b_mono = b.to_ascii_lowercase().contains("mono");
-    if a_mono != b_mono {
-        return !a_mono && b_mono;
-    }
-    a.to_ascii_lowercase() < b.to_ascii_lowercase()
-}
-
-fn walk_for_font_imports(dir: &Path, counts: &mut HashMap<String, usize>, depth: u8) {
-    if depth > 6 {
-        return;
-    }
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            // Skip heavy dirs
-            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if matches!(
-                name,
-                "node_modules" | ".git" | "target" | ".next" | "dist" | "build"
-            ) {
-                continue;
-            }
-            walk_for_font_imports(&p, counts, depth + 1);
-            continue;
-        }
-        let ext = p
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if !matches!(ext.as_str(), "ts" | "tsx" | "js" | "jsx") {
-            continue;
-        }
-        // Only inspect files that could contain next/font
-        if let Ok(text) = std::fs::read_to_string(&p) {
-            if !text.contains("next/font/google") {
-                continue;
-            }
-            // Extract `import { Inter, Foo } from "next/font/google"` identifiers.
-            // We do a light parse: find the substring between "import {" and "} from".
-            for import in extract_google_imports(&text) {
-                for ident in import.split(',') {
-                    let raw = ident
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or("")
-                        .trim_matches(|c| c == '{' || c == '}');
-                    // Handle `Inter as MyInter` – take before “as”.
-                    let base = raw.split(" as ").next().unwrap_or(raw).trim();
-                    if base.is_empty() || base.starts_with("/*") {
-                        continue;
-                    }
-                    // Convert `Noto_Sans_Mono` → “Noto Sans Mono”
-                    let family = base.replace('_', " ").trim().to_string();
-                    if !family.is_empty() {
-                        *counts.entry(family).or_insert(0) += 1;
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn extract_google_imports(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut pos = 0;
-    while let Some(start) = text[pos..].find("next/font/google") {
-        let abs = pos + start;
-        // Walk backwards to find the opening “{” of the import.
-        let before = &text[..abs];
-        if let Some(brace_start) = before.rfind("import") {
-            let segment = &before[brace_start..abs];
-            if let Some(l) = segment.find('{')
-                && let Some(r) = segment[l..].find('}')
-            {
-                out.push(segment[l + 1..l + r].to_string());
-            }
-        }
-        pos = abs + "next/font/google".len();
-    }
-    out
-}
-
-/// Resolve the preferred default font file by looking at the max font from web
-/// apps, then omarchy font, then Inter, then the first system font.
+/// Resolve the preferred default font file: the max95 family, then the omarchy
+/// desktop font, then Inter, then the first system font. It never reads the
+/// user's project folders (that crawl cost ~9 s on a cold start).
 pub fn preferred_default_path() -> Option<PathBuf> {
     // 1. Custom max font from uncap.us (max95 for headings/type tool)
     if let Some(p) = find_installed_for_family("max") {
-        return Some(p);
-    }
-    // 2. Max font from Projects
-    if let Some(fam) = detect_max_font_family()
-        && let Some(p) = find_installed_for_family(&fam)
-    {
         return Some(p);
     }
     // If the family is a Google Font but not installed, still return None so
@@ -1055,22 +1015,18 @@ fn find_installed_for_family(family: &str) -> Option<PathBuf> {
     None
 }
 
+/// The family the app defaults to; shown in the status hint without enumerating fonts.
 pub fn preferred_default_family_name() -> Option<String> {
-    detect_max_font_family().or_else(|| {
-        // fallback to omarchy font name for display
-        std::process::Command::new("omarchy")
-            .args(["font", "current"])
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                    if !s.is_empty() {
-                        return Some(s);
-                    }
-                }
-                None
-            })
+    Some("max95".into())
+}
+
+static DEFAULT_FONT: OnceLock<String> = OnceLock::new();
+
+/// The resolved default font path, computed once. Blocks only if the background
+/// font index is still being built. Returns "" when no font is installed.
+pub fn default_font() -> &'static str {
+    DEFAULT_FONT.get_or_init(|| {
+        preferred_default_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
     })
 }
 
@@ -1195,23 +1151,4 @@ mod tests {
         assert!(t.font.is_empty());
     }
 
-    #[test]
-    fn max_font_detection_prefers_inter() {
-        let tmp = std::env::temp_dir().join(format!("omadesign-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(tmp.join("proj/app")).unwrap();
-        std::fs::write(
-            tmp.join("proj/app/layout.tsx"),
-            r#"import { Inter, Noto_Sans_Mono } from "next/font/google";"#,
-        )
-        .unwrap();
-        std::fs::write(
-            tmp.join("proj/app/page.tsx"),
-            r#"import { Inter } from "next/font/google";"#,
-        )
-        .unwrap();
-        let fam = detect_max_font_family_in(&tmp).unwrap();
-        assert_eq!(fam, "Inter", "Inter appears twice, Noto once");
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
 }

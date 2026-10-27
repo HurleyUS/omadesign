@@ -1027,7 +1027,7 @@ fn add_text(s: &mut Studio, origin: Pt, content: &str, px: f32, color: Rgba, tra
         content: content.into(),
         px,
         tracking,
-        font: s.text_font.clone(),
+        font: s.text_font_resolved(),
         kern: true,
         liga: true,
         ..TypeRun::default()

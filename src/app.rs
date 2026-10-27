@@ -422,6 +422,8 @@ pub struct Studio {
     pub text_tracking: f32,
     pub text_leading: f32,
     pub text_font: String,
+    /// The default font and its status hint are filled once the background font index is ready.
+    pub font_default_pending: bool,
     pub text_kern: bool,
     pub text_liga: bool,
     pub text_tnum: bool,
@@ -606,6 +608,8 @@ fn recolor_fill(fill: Fill, color: Rgba) -> Fill {
     }
 }
 
+const WELCOME_STATUS: &str = "Welcome home. V to move, R for a rectangle, B to paint, or open Photo.";
+
 impl Default for Studio {
     fn default() -> Self {
         Self::new()
@@ -644,7 +648,7 @@ impl Studio {
             brush_distance: 0.0,
             brush_heading: 0.0,
             paint_contact: None,
-            brushes: crate::brushes::Library::load(crate::project::data_dir().join("brushes")),
+            brushes: crate::brushes::Library::load_deferred(crate::project::data_dir().join("brushes")),
             brush_import_job: None,
             fill_tolerance: 32.0,
             clone_source: None,
@@ -668,7 +672,7 @@ impl Studio {
             snap_override: false,
             stroke_constraint: None,
             photo: PhotoSession::new(),
-            status: "Welcome home. V to move, R for a rectangle, B to paint, or open Photo.".into(),
+            status: WELCOME_STATUS.into(),
             cursor: None,
             timeline_scroll: 0,
             canvas_rect: None,
@@ -684,9 +688,9 @@ impl Studio {
             text_px: 72.0,
             text_tracking: 0.0,
             text_leading: 0.0,
-            text_font: crate::text::preferred_default_path()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default(),
+            // Filled from the background font index; startup never enumerates fonts.
+            text_font: String::new(),
+            font_default_pending: true,
             text_kern: true,
             text_liga: true,
             text_tnum: false,
@@ -793,18 +797,6 @@ impl Studio {
         };
         s.ensure_tabs();
         s.doc.grid.visible = false;
-        // Hint the max-font default in the status line so it is discoverable
-        // before any type is placed. The Character studio also shows it.
-        if let Some(fam) = crate::text::preferred_default_family_name() {
-            if !s.text_font.is_empty() {
-                let label = crate::text::label_for(&s.text_font);
-                s.status = format!("Default font: {label} (from {fam})");
-            } else {
-                s.status = format!(
-                    "Default font: {fam} not installed — open Character → Google Fonts to install"
-                );
-            }
-        }
         s
     }
 
@@ -2206,6 +2198,36 @@ impl Studio {
         self.apply_deltas(&deltas);
     }
 
+    /// Fill the default font and its status hint once the font index exists.
+    /// Args: whether to wait for the index. Returns nothing; a chosen font is never replaced.
+    pub fn settle_default_font(&mut self, wait: bool) {
+        if !self.font_default_pending || (!wait && !crate::text::fonts_ready()) {
+            return;
+        }
+        self.font_default_pending = false;
+        if self.text_font.is_empty() {
+            self.text_font = crate::text::default_font().to_owned();
+        }
+        if self.status == WELCOME_STATUS
+            && let Some(fam) = crate::text::preferred_default_family_name()
+        {
+            self.status = if self.text_font.is_empty() {
+                format!("Default font: {fam} not installed — open Character → Google Fonts to install")
+            } else {
+                format!("Default font: {} (from {fam})", crate::text::label_for(&self.text_font))
+            };
+        }
+    }
+
+    /// The type tool's font: the chosen one, or the resolved default.
+    pub fn text_font_resolved(&self) -> String {
+        if self.text_font.is_empty() && self.font_default_pending {
+            crate::text::default_font().to_owned()
+        } else {
+            self.text_font.clone()
+        }
+    }
+
     pub fn type_defaults(&self) -> TypeRun {
         TypeRun {
             origin: Pt::ZERO,
@@ -2215,7 +2237,7 @@ impl Studio {
             leading: self.text_leading,
             wrap_width: None,
             align: crate::geom::TextAlign::Start,
-            font: self.text_font.clone(),
+            font: self.text_font_resolved(),
             kern: self.text_kern,
             liga: self.text_liga,
             tnum: self.text_tnum,
@@ -4679,6 +4701,11 @@ impl eframe::App for Studio {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.settle_default_font(false);
+        self.brushes.poll_user_packs();
+        if self.font_default_pending || self.brushes.user_packs_pending() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        }
         let ctx = ui.ctx().clone();
         if self.allow_close || ctx.input(|i| i.viewport().close_requested()) {
             crate::screen_pick::stop();
