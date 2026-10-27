@@ -197,10 +197,12 @@ pub struct Library {
     pub(crate) directory: PathBuf,
     fingerprints: Vec<String>,
     outline_cache: std::cell::RefCell<Option<CursorOutline>>,
+    /// User packs still being read from disk off the UI thread.
+    pending: Option<std::sync::mpsc::Receiver<Vec<Result<Pack, String>>>>,
 }
 
 impl Library {
-    pub fn load(directory: PathBuf) -> Self {
+    fn bundled(directory: PathBuf) -> Self {
         let mut library = Self {
             packs: vec![],
             selected: None,
@@ -208,6 +210,7 @@ impl Library {
             directory,
             fingerprints: vec![],
             outline_cache: Default::default(),
+            pending: None,
         };
         for bytes in [
             include_bytes!("../assets/brushes/essentials.omabrush").as_slice(),
@@ -221,21 +224,56 @@ impl Library {
                 Err(e) => library.errors.push(e),
             }
         }
-        if let Ok(entries) = std::fs::read_dir(&library.directory) {
-            let mut paths: Vec<_> = entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| is_pack(p))
-                .collect();
-            paths.sort();
-            for path in paths {
-                match import(&path) {
-                    Ok(pack) => library.packs.push(pack),
-                    Err(e) => library.errors.push(format!("{}: {e}", path.display())),
-                }
-            }
+        library
+    }
+
+    /// Load bundled packs now and user packs synchronously.
+    /// Args: user pack directory. Returns the full library.
+    pub fn load(directory: PathBuf) -> Self {
+        let mut library = Self::bundled(directory);
+        let found = user_packs(&library.directory);
+        library.absorb(found);
+        library
+    }
+
+    /// Load bundled packs now and read user packs on a background thread.
+    /// Args: user pack directory. Returns at once; `poll_user_packs` merges the rest.
+    pub fn load_deferred(directory: PathBuf) -> Self {
+        let mut library = Self::bundled(directory);
+        let (send, receive) = std::sync::mpsc::channel();
+        let dir = library.directory.clone();
+        if std::thread::Builder::new().name("brush-packs".into()).spawn(move || { let _ = send.send(user_packs(&dir)); }).is_ok() {
+            library.pending = Some(receive);
+        } else {
+            let found = user_packs(&library.directory);
+            library.absorb(found);
         }
         library
+    }
+
+    /// Merge user packs once the background read finishes.
+    /// Args: none. Returns whether packs were merged this call.
+    pub fn poll_user_packs(&mut self) -> bool {
+        let Some(receive) = &self.pending else { return false };
+        match receive.try_recv() {
+            Ok(found) => { self.pending = None; self.absorb(found); true }
+            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => { self.pending = None; false }
+        }
+    }
+
+    /// Whether user packs are still loading.
+    pub fn user_packs_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn absorb(&mut self, found: Vec<Result<Pack, String>>) {
+        for item in found {
+            match item {
+                Ok(pack) => self.packs.push(pack),
+                Err(e) => self.errors.push(e),
+            }
+        }
     }
 
     pub fn tip(&self) -> Option<&Tip> {
@@ -316,6 +354,14 @@ pub fn decode(bytes: &[u8]) -> Result<Pack, String> {
         serde_json::from_slice(bytes).map_err(|e| format!("Invalid brush pack: {e}"))?;
     pack.validate()?;
     Ok(pack)
+}
+
+/// Read every user pack in a directory, in name order.
+fn user_packs(directory: &Path) -> Vec<Result<Pack, String>> {
+    let Ok(entries) = std::fs::read_dir(directory) else { return Vec::new() };
+    let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).filter(|p| is_pack(p)).collect();
+    paths.sort();
+    paths.into_iter().map(|path| import(&path).map_err(|e| format!("{}: {e}", path.display()))).collect()
 }
 
 pub fn import(path: &Path) -> Result<Pack, String> {

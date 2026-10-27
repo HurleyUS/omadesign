@@ -217,6 +217,8 @@ fn main() -> eframe::Result {
     }
 
     omadesign::telemetry::install_panic_hook();
+    // Index installed fonts while the window and GPU come up.
+    omadesign::text::start_font_index();
     let open: Vec<PathBuf> = args
         .into_iter()
         .filter(|a| !a.starts_with('-'))

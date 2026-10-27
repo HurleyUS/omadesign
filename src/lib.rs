@@ -93,3 +93,4 @@ pub(crate) mod test_support {
         }
     }
 }
+#[cfg(test)] mod startup_tests;
