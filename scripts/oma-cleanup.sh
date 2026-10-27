@@ -7,11 +7,14 @@
 #
 # Never touches: master/main, wip/*, the current checkout, worktrees with
 # uncommitted or untracked changes, locked worktrees, remote branches, or any
-# path/branch matched by --keep or the untracked .oma-cleanup.keep file.
+# path/branch matched by --keep or the untracked .oma-cleanup.keep file, or
+# anything under .artifacts/craft-gap-stack/implementation.
 set -euo pipefail
 
 apply=0
-keep=()
+# Always kept (Michael, 2026-10-27): the craft-gap-stack implementation
+# evidence tree, including its RAW camera data, whatever its age.
+keep=(".artifacts/craft-gap-stack/implementation" ".artifacts/craft-gap-stack/implementation/*")
 artifact_days=${OMA_CLEANUP_ARTIFACT_DAYS:-14}
 target_days=${OMA_CLEANUP_TARGET_DAYS:-14}
 dist_keep=${OMA_CLEANUP_DIST_KEEP:-3}
