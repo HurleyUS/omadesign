@@ -34,15 +34,8 @@ original document; Redo and save/reopen restore the exact painted document.
 
 ![Square brush outside all four artboard edges](native-canvas.png)
 
-Reproduce on an isolated Wayland display, with its XDG_RUNTIME_DIR and
-WAYLAND_DISPLAY set:
-
-```sh
-mkdir -p .t
-TMPDIR="$PWD/.t" cargo run --bin brush_qa -- --canvas "$PWD/artifacts/brush-canvas-bounds/native"
-```
-
-The replay injects egui pointer events into the actual native editor on a private
+The `brush_qa` replay binary that produced this receipt has been removed; the
+receipt above is the archived result. The replay injected egui pointer events into the actual native editor on a private
 headless Wayland display. It does not claim physical tablet testing. The owner's
 running editor and published October 13 nightly are unchanged by this unreleased
 fix.

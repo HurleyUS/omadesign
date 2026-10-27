@@ -23,8 +23,6 @@ Focused local qualification uses:
 ```sh
 OMADESIGN_BRUSH_FIXTURES=/absolute/private/source-directory \
   cargo test --lib brush -- --include-ignored --nocapture
-cargo run --bin brush_qa -- /absolute/private/source-directory/jaxgrass.abr \
-  "$PWD/artifacts/brush-packs/native"
 ```
 
 The real-source test is explicitly ignored unless requested and supplied with
