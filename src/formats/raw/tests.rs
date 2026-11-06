@@ -36,7 +36,7 @@ fn native_result_retains_its_memory_and_cancellable_decoder_ownership() {
         resources::global().usage().0,
         baseline + native.lease.bytes()
     );
-    assert!(native.image.data_size > 0 && !native.image.data.is_null());
+    assert!(native.image.data_size > 0 && native.image.data().is_some());
     drop(native);
     assert_eq!(resources::global().usage().0, baseline);
     let next = decode(DNG).unwrap();
