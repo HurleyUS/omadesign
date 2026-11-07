@@ -8,6 +8,13 @@ export type UpdatePost = {
 
 export const updates: UpdatePost[] = [
   {
+    slug: "0.6.9",
+    version: "0.6.9",
+    date: "2026-11-07",
+    title: "Export what you placed",
+    dek: "Documents with ICC-tagged placed photos and layer effects export again in every format, without changing the document. Placed images take the document's color profile and keep any extra precision.",
+  },
+  {
     slug: "0.6.8",
     version: "0.6.8",
     date: "2026-10-20",

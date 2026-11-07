@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-07 · 0.6.9 — Export what you placed
+
+- Fix: every export of a document with ICC-tagged placed photos and layer effects failed with "Apply pixel effects before high-depth export". PNG, JPEG, TIFF, SVG, PDF, PSD, PSB, ORA and IDML now export, and the document is left unchanged.
+- Placed images are converted to the document's color profile. Deeper samples keep their precision.
+- The float compositor renders raster layer effects instead of refusing the export.
+- [Release notes](docs/releases/0.6.9.md)
+
 ## 2026-10-20 · 0.6.8 — Craft parity
 
 - Ship the 0.6.4–0.6.7 milestones and the Craft parity stack (#220–#451) as one stable release.
