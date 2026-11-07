@@ -127,28 +127,18 @@ fn raw_native_placement_uses_linear_source_oetf_and_float_file_reopen() {
 }
 
 #[test]
-fn raw_native_placement_exports_png_only_after_explicit_depth_conversion() {
+fn raw_native_placement_exports_16_bit_png_matching_explicit_depth_conversion() {
     let photo = calibration();
     let mut doc = document(&photo, None, &Cancellation::default()).unwrap();
-    assert!(
-        export::encode(
-            &Source::Document(doc.clone()),
-            Settings {
-                format: Format::Png,
-                scale: 1,
-                ai: None
-            },
-            &crate::ml::NoProgress
-        )
-        .unwrap_err()
-        .contains("Floating-point")
-    );
+    // PNG cannot hold float samples: export quantizes a temporary composite to 16 bits.
+    let direct = image::load_from_memory(&encode(&doc, Format::Png)).unwrap();
     let mut target = doc.color.clone();
     target.depth = Depth::U16;
     let command = doc.color_conversion(target).unwrap();
     crate::document::apply(&mut doc, &command);
     let pixels = image::load_from_memory(&encode(&doc, Format::Png)).unwrap();
     assert_eq!(pixels.color(), image::ColorType::Rgba16);
+    assert_eq!(direct.to_rgba16().as_raw(), pixels.to_rgba16().as_raw());
     let source = doc.layers[0].kind.pixels().unwrap().samples().unwrap();
     for (decoded, sample) in pixels.to_rgba16().as_raw().iter().zip(source.iter()) {
         assert_eq!(*decoded, (*sample * 65535.).round() as u16);

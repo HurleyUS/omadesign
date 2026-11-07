@@ -254,26 +254,14 @@ fn render_layer(
     cancel: &dyn crate::resources::CancellationCheck,
 ) -> Result<(), String> {
     cancel.check()?;
-    if layer
-        .svg_filter
-        .as_ref()
-        .is_some_and(|graph| !graph.filters.is_empty())
-    {
-        return Err("Native SVG filter graphs require a float effect renderer; save .oma to retain the authored document.".into());
-    }
     if layer.opacity <= 0. {
         return Ok(());
     }
-    if !layer.artwork_masks.is_empty() {
-        return Err(
-            "High-depth live artwork mask rendering requires explicit raster conversion".into(),
-        );
+    if needs_rgba8_engine(layer) {
+        return render_layer_rgba8(doc, layer, out, w, h, scale, cancel);
     }
     if layer.is_group {
-        if layer.filters.active() {
-            return Err("High-depth group effects require explicit raster conversion".into());
-        }
-        let pass = layer.pass_through;
+        let pass = layer.pass_through && !layer.filters.active();
         let mut temp = if pass {
             crate::resources::global().copy_now(out, cancel)?
         } else {
@@ -289,6 +277,10 @@ fn render_layer(
             depth + 1,
             cancel,
         )?;
+        if layer.filters.active() {
+            let coverage = |i: usize| mask(layer, grid_point(i, w, scale, 0.), None);
+            return blend_effected(doc, layer, temp.as_mut_slice(), out, w, h, scale, &coverage, cancel);
+        }
         for (i, (dst, src)) in out.iter_mut().zip(temp.iter().copied()).enumerate() {
             if i % 4096 == 0 {
                 cancel.check()?;
@@ -314,13 +306,32 @@ fn render_layer(
         }
     } else if let Some(source) = layer.kind.pixels() {
         let pixels = source.in_document_color(&doc.color)?;
-        if layer.filters.active() {
-            drop(pixels);
-            return render_effects_rgba8(doc, layer, out, w, h, scale, cancel);
-        }
         let Some(inv) = crate::compositor::layer_pixel_transform(layer).invert() else {
             return Ok(());
         };
+        if layer.filters.active() {
+            let mut content =
+                crate::resources::global().allocate_now::<[f32; 4], _>(out.len(), cancel)?;
+            let mut cover = crate::resources::global().allocate_now::<f32, _>(out.len(), cancel)?;
+            for (i, (src, m)) in content
+                .as_mut_slice()
+                .iter_mut()
+                .zip(cover.as_mut_slice())
+                .enumerate()
+            {
+                if i % 4096 == 0 {
+                    cancel.check()?;
+                }
+                let p = grid_point(i, w, scale, 0.5);
+                let mut local = tiny_skia::Point::from_xy(p.x, p.y);
+                inv.map_point(&mut local);
+                *src = sample(&pixels, local.x, local.y);
+                *m = mask(layer, p, Some((local.x, local.y)));
+            }
+            drop(pixels);
+            let coverage = |i: usize| cover[i];
+            return blend_effected(doc, layer, content.as_mut_slice(), out, w, h, scale, &coverage, cancel);
+        }
         for (i, dst) in out.iter_mut().enumerate() {
             if i % 4096 == 0 {
                 cancel.check()?;
@@ -359,10 +370,9 @@ fn render_clipped(
     if base.opacity <= 0. {
         return Ok(());
     }
-    if base.filters.active() {
-        return Err("Native clipping base effects require the float effect renderer; save .oma to retain the editable stack".into());
-    }
     let mut normalized = base.clone();
+    // The base's effects apply once to the clipped stack, not to its unclipped content.
+    normalized.filters = Default::default();
     normalized.opacity = 1.;
     normalized.fill_opacity = 1.;
     normalized.blend = Blend::Normal;
@@ -378,7 +388,7 @@ fn render_clipped(
         depth,
         cancel,
     )?;
-    let original = if base.pass_through && base.is_group {
+    let original = if base.pass_through && base.is_group && !base.filters.active() {
         Some(crate::resources::global().copy_now(pixels.as_slice(), cancel)?)
     } else {
         None
@@ -441,6 +451,9 @@ fn render_clipped(
             }
             dst[3] = alpha;
         }
+    } else if base.filters.active() {
+        let coverage = |_: usize| 1.;
+        blend_effected(doc, base, pixels.as_mut_slice(), out, w, h, scale, &coverage, cancel)?;
     } else {
         for (i, (dst, src)) in out.iter_mut().zip(pixels.iter().copied()).enumerate() {
             if i % 4096 == 0 {
@@ -601,9 +614,142 @@ fn composite_cmyk(
     )
 }
 
-/// Draw one raster layer's effects with the RGBA8 effect engine, which the float compositor lacks.
-/// Args: source document, effected layer and output grid. Returns blended samples; only temporary copies change.
-fn render_effects_rgba8(
+/// Map an output index to document coordinates.
+fn grid_point(i: usize, w: u32, scale: f32, offset: f32) -> Pt {
+    Pt::new(
+        ((i % w as usize) as f32 + offset) / scale,
+        ((i / w as usize) as f32 + offset) / scale,
+    )
+}
+
+/// Report layer features only the RGBA8 engine draws.
+/// Args: layer. Returns true for SVG filter graphs, live artwork masks and filtered vector content.
+fn needs_rgba8_engine(layer: &Layer) -> bool {
+    layer.svg_filter.as_ref().is_some_and(|graph| !graph.filters.is_empty())
+        || !layer.artwork_masks.is_empty()
+        || !layer.is_group && layer.kind.shapes().is_some_and(|shapes| {
+            layer.filters.active()
+                || shapes.iter().any(|s| {
+                    s.filters.active()
+                        || matches!(s.style.fill, crate::document::Fill::Pattern(_))
+                        || !s.artwork_masks.is_empty()
+                        || s.layout.image.is_some()
+                })
+        })
+}
+
+/// Composite float content with its layer effects in document color.
+/// Content keeps its samples; appearance effects are built from its alpha and only pixel
+/// filters (blur, color adjustments, legacy stacks) run through the RGBA8 engine.
+/// Args: document, effected layer, straight content grid, destination, extent, scale, per-pixel mask and cancellation.
+/// Returns after blending outer effects, content and inner effects into `out`.
+#[allow(clippy::too_many_arguments)]
+fn blend_effected(
+    doc: &Document,
+    layer: &Layer,
+    content: &mut [[f32; 4]],
+    out: &mut [[f32; 4]],
+    w: u32,
+    h: u32,
+    scale: f32,
+    coverage: &dyn Fn(usize) -> f32,
+    cancel: &dyn crate::resources::CancellationCheck,
+) -> Result<(), String> {
+    let mut stack = layer.filters.clone();
+    crate::filter::scale(&mut stack, scale);
+    let independent = stack.independent();
+    let pixel_filters: Vec<_> = stack
+        .items
+        .iter()
+        .filter(|fx| !independent || fx.appearance().is_none())
+        .copied()
+        .collect();
+    if !pixel_filters.is_empty() {
+        let mut pm = to_pixmap(content, w, h, |p| p)?;
+        for fx in &pixel_filters {
+            crate::filter::apply_one(&mut pm, fx);
+        }
+        cancel.check()?;
+        for (dst, p) in content.iter_mut().zip(pm.pixels()) {
+            let p = p.demultiply();
+            *dst = [p.red(), p.green(), p.blue(), p.alpha()].map(|c| c as f32 / 255.);
+        }
+    }
+    let mut outer = Vec::new();
+    let mut inner = Vec::new();
+    if independent {
+        let alpha = to_pixmap(content, w, h, |p| [0., 0., 0., p[3]])?;
+        let color = super::cms::DocumentColor {
+            depth: Depth::F32,
+            ..doc.color.clone()
+        };
+        for fx in stack.items.iter() {
+            let Some((blend, opacity)) = fx.appearance() else {
+                continue;
+            };
+            let Some(effect) = crate::filter::effect_pixels(&alpha, fx) else {
+                continue;
+            };
+            cancel.check()?;
+            let bytes = effect
+                .pixels()
+                .iter()
+                .flat_map(|p| {
+                    let p = p.demultiply();
+                    [p.red(), p.green(), p.blue(), p.alpha()]
+                })
+                .collect();
+            // Effect colors are sRGB; convert them into the document's working space.
+            let plane = Pixels::from_rgba(w, h, bytes)
+                .ok_or("Invalid effect plane")?
+                .in_document_color(&color)?
+                .samples()?;
+            if fx.outer() {
+                outer.push((plane, blend, opacity));
+            } else {
+                inner.push((plane, blend, opacity));
+            }
+        }
+    }
+    let sample = |plane: &[f32], i: usize| [plane[i * 4], plane[i * 4 + 1], plane[i * 4 + 2], plane[i * 4 + 3]];
+    for (i, (dst, src)) in out.iter_mut().zip(content.iter().copied()).enumerate() {
+        if i % 4096 == 0 {
+            cancel.check()?;
+        }
+        let amount = layer.opacity * coverage(i);
+        for (plane, blend, opacity) in &outer {
+            *dst = blend_pixel(*dst, sample(plane, i), *blend, amount * opacity);
+        }
+        *dst = blend_pixel(*dst, src, layer.blend, amount * layer.fill_opacity);
+        for (plane, blend, opacity) in &inner {
+            *dst = blend_pixel(*dst, sample(plane, i), *blend, amount * opacity);
+        }
+    }
+    Ok(())
+}
+
+/// Quantize straight float samples into a premultiplied RGBA8 working pixmap.
+fn to_pixmap(
+    content: &[[f32; 4]],
+    w: u32,
+    h: u32,
+    pick: impl Fn([f32; 4]) -> [f32; 4],
+) -> Result<tiny_skia::Pixmap, String> {
+    let mut pm = tiny_skia::Pixmap::new(w, h).ok_or("Invalid effect working size")?;
+    for (dst, src) in pm.data_mut().chunks_exact_mut(4).zip(content) {
+        let p = pick(*src).map(|c| c.clamp(0., 1.));
+        for c in 0..3 {
+            dst[c] = (p[c] * p[3] * 255.).round() as u8;
+        }
+        dst[3] = (p[3] * 255.).round() as u8;
+    }
+    Ok(pm)
+}
+
+/// Draw a layer the float compositor cannot express through the RGBA8 engine.
+/// Used for vector or SVG-filtered content whose authored colors are already 8-bit sRGB.
+/// Args: source document, layer and output grid. Returns blended samples; only temporary copies change.
+fn render_layer_rgba8(
     doc: &Document,
     layer: &Layer,
     out: &mut [[f32; 4]],
@@ -612,14 +758,29 @@ fn render_effects_rgba8(
     scale: f32,
     cancel: &dyn crate::resources::CancellationCheck,
 ) -> Result<(), String> {
-    let mut solo = layer.clone();
-    solo.parent = None;
-    solo.clipped = false;
-    solo.blend = Blend::Normal;
-    super::strip_native(&mut solo);
-    let mut stage = Document::new(&doc.name, doc.width, doc.height, doc.dpi);
+    let mut stage = doc.clone();
+    let mut ids = vec![layer.id];
+    stage.layers = Vec::new();
+    for candidate in &doc.layers {
+        if candidate.id == layer.id
+            || candidate.parent.is_some_and(|parent| ids.contains(&parent))
+        {
+            ids.push(candidate.id);
+            let mut copy = candidate.clone();
+            if copy.id == layer.id {
+                copy.parent = None;
+                copy.clipped = false;
+                copy.blend = Blend::Normal;
+            }
+            super::strip_native(&mut copy);
+            stage.layers.push(copy);
+        }
+    }
+    stage.color = Default::default();
+    stage.color_tag = None;
     stage.transparent = true;
-    stage.layers = vec![solo];
+    stage.channels.clear();
+    stage.motion = Default::default();
     let size = crate::export::RenderSize {
         factor: scale,
         width: w,
@@ -635,11 +796,15 @@ fn render_effects_rgba8(
             [p.red(), p.green(), p.blue(), p.alpha()]
         })
         .collect();
-    let effected = Pixels::from_rgba(w, h, bytes)
-        .ok_or("Invalid effect raster")?
-        .in_document_color(&doc.color)?;
-    let samples = effected.samples()?;
-    for (i, (dst, src)) in out.iter_mut().zip(samples.chunks_exact(4)).enumerate() {
+    let color = super::cms::DocumentColor {
+        depth: Depth::F32,
+        ..doc.color.clone()
+    };
+    let rendered = Pixels::from_rgba(w, h, bytes)
+        .ok_or("Invalid layer raster")?
+        .in_document_color(&color)?
+        .samples()?;
+    for (i, (dst, src)) in out.iter_mut().zip(rendered.chunks_exact(4)).enumerate() {
         if i % 4096 == 0 {
             cancel.check()?;
         }

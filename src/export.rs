@@ -212,16 +212,34 @@ pub fn encode_scaled_admitted(
         encode_inner_admitted(source, settings, progress, cancel, Some(options), false)
     })
 }
+/// Quantize converted RGB samples into a 16-bit export raster.
+/// Args: straight RGBA pixels. Returns an owned RGBA16 image.
+fn rgba16(pixels: &crate::document::Pixels) -> Result<DynamicImage, String> {
+    let samples = pixels.samples()?;
+    let data = samples
+        .iter()
+        .map(|&v| (v.clamp(0., 1.) * 65535.).round() as u16)
+        .collect();
+    Ok(DynamicImage::ImageRgba16(
+        image::ImageBuffer::from_raw(pixels.w, pixels.h, data).ok_or("Invalid converted export")?,
+    ))
+}
+
 /// Choose the RGBA8 writer for an untagged 8-bit document carrying stray native samples.
 /// Args: document and settings. Returns true unless PSD/PSB or a deep buffer can keep native samples.
 fn rgba8_route(doc: &crate::document::Document, settings: Settings) -> bool {
-    !matches!(settings.format, Format::Psd | Format::Psb)
-        && (settings.ai.is_some()
-        || matches!(
-            settings.format,
-            Format::Jpeg | Format::Svg | Format::Pdf | Format::Ora | Format::Idml
-        )
-        || !crate::deep_color::buffers(doc).any(crate::deep_color::exceeds_rgba8))
+    if matches!(settings.format, Format::Psd | Format::Psb) {
+        return false;
+    }
+    // These writers carry 8-bit sRGB only; the copy holds each buffer's profile-converted display pixels.
+    let srgb_writer = settings.ai.is_some()
+        || matches!(settings.format, Format::Svg | Format::Pdf | Format::Ora | Format::Idml);
+    if !crate::deep_color::rgba8_document(doc) {
+        return srgb_writer;
+    }
+    srgb_writer
+        || settings.format == Format::Jpeg
+        || !crate::deep_color::buffers(doc).any(crate::deep_color::exceeds_rgba8)
 }
 fn encode_inner_admitted(
     source: &Source,
@@ -282,10 +300,11 @@ fn encode_inner_admitted(
         cancel.check()?;
         return Ok((crate::deep_color::storage::adopt(output.0)?, output.1));
     }
+    let mut cmyk_raster = None;
     if let Source::Document(doc) = source
         && doc.color.model == crate::deep_color::cms::Model::Cmyk
     {
-        if settings.format != Format::Tiff || settings.ai.is_some() {
+        if settings.ai.is_some() {
             return Err("CMYK authoring exports as PSD, PSB or TIFF. Convert the document to RGB explicitly for PNG/JPEG.".into());
         }
         let mut pixels = match options {
@@ -295,6 +314,17 @@ fn encode_inner_admitted(
             None => crate::deep_color::composite_with_cancel(doc, settings.scale, cancel)?,
         };
         pixels.native.as_mut().unwrap().depth = crate::deep_color::document_depth(doc);
+        if settings.format != Format::Tiff {
+            // PNG and JPEG carry RGB: convert the ink composite through its profile to sRGB.
+            let rgb = pixels.in_document_color(&crate::deep_color::cms::DocumentColor {
+                model: crate::deep_color::cms::Model::Rgb,
+                depth: crate::deep_color::Depth::U16,
+                icc_profile: vec![],
+                intent: doc.color.intent,
+            })?;
+            drop(pixels);
+            cmyk_raster = Some(rgba16(&rgb)?);
+        } else {
         let bytes = crate::deep_color::tiff::encode_admitted_with_density(
             &pixels,
             options.and_then(|o| o.dpi),
@@ -302,13 +332,27 @@ fn encode_inner_admitted(
         progress.check()?;
         cancel.check()?;
         return Ok((bytes, vec![]));
+        }
     }
+    // Profile embedded in the encoded file: the document's RGB profile, or none for sRGB.
+    let output_profile: &[u8] = match source {
+        Source::Document(doc)
+            if crate::deep_color::has_native(doc)
+                && doc.color.model == crate::deep_color::cms::Model::Rgb =>
+        {
+            doc.color.icc_profile.as_slice()
+        }
+        _ => &[],
+    };
     let _native_memory;
     let _ai_memory;
-    let mut raster = match source {
+    let mut raster = if let Some(raster) = cmyk_raster.take() {
+        raster
+    } else {
+    match source {
         Source::Photo(_) => unreachable!("Photo sources dispatch before document encoding"),
         Source::Document(doc) if crate::deep_color::has_native(doc) => {
-            if settings.ai.is_some() || settings.format == Format::Jpeg {
+            if settings.ai.is_some() {
                 return Err("This export would reduce native document precision. Export PNG, TIFF or PSD without AI upscaling.".into());
             }
             let mut pixels = match options {
@@ -317,12 +361,9 @@ fn encode_inner_admitted(
                 }
                 None => crate::deep_color::composite_with_cancel(doc, settings.scale, cancel)?,
             };
-            let depth = crate::deep_color::document_depth(doc);
-            if depth == crate::deep_color::Depth::F32 && settings.format != Format::Tiff {
-                return Err(
-                    "Floating-point export requires TIFF or PSD to retain float samples".into(),
-                );
-            }
+            // Only TIFF stores float samples; PNG keeps 16 bits and JPEG 8 bits per channel.
+            let float = crate::deep_color::document_depth(doc) == crate::deep_color::Depth::F32
+                && settings.format == Format::Tiff;
             let (w, h) = (pixels.w, pixels.h);
             let samples = pixels
                 .native
@@ -330,7 +371,7 @@ fn encode_inner_admitted(
                 .ok_or("Missing native export samples")?
                 .samples;
             drop(pixels);
-            if depth == crate::deep_color::Depth::F32 {
+            if float {
                 let samples = std::sync::Arc::try_unwrap(samples)
                     .map_err(|_| "Native export unexpectedly shares working samples")?;
                 let (data, memory) = samples.into_parts();
@@ -382,6 +423,7 @@ fn encode_inner_admitted(
                     .ok_or("Invalid export raster")?,
             )
         }
+    }
     };
     progress.check()?;
     if let Some(settings) = settings.ai {
@@ -414,6 +456,12 @@ fn encode_inner_admitted(
             p[3] = 255;
         }
         let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95);
+        if !output_profile.is_empty() {
+            use image::ImageEncoder;
+            encoder
+                .set_icc_profile(output_profile.to_vec())
+                .map_err(|e| e.to_string())?;
+        }
         if let Some(dpi) = options.and_then(|o| o.dpi) {
             encoder.set_pixel_density(image::codecs::jpeg::PixelDensity::dpi(dpi.round() as u16));
         }
@@ -421,12 +469,7 @@ fn encode_inner_admitted(
             .encode_image(&DynamicImage::ImageRgba8(rgba).into_rgb8())
             .map_err(|e| e.to_string())?;
     } else if let Some(dpi) = options.and_then(|o| o.dpi) {
-        let profile = match source {
-            Source::Document(doc) if crate::deep_color::has_native(doc) => {
-                doc.color.icc_profile.as_slice()
-            }
-            _ => &[],
-        };
+        let profile = output_profile;
         if settings.format == Format::Png {
             density::png(&mut bytes, &raster, profile, dpi, cancel)?;
         } else {
@@ -442,14 +485,14 @@ fn encode_inner_admitted(
     {
         use image::ImageEncoder;
         let _profile_memory = crate::resources::global().reserve_now(
-            doc.color.icc_profile.len() as u64,
+            output_profile.len() as u64,
             &crate::deep_color::storage::check,
         )?;
         if settings.format == Format::Png {
             let mut encoder = image::codecs::png::PngEncoder::new(&mut bytes);
-            if !doc.color.icc_profile.is_empty() {
+            if !output_profile.is_empty() {
                 encoder
-                    .set_icc_profile(doc.color.icc_profile.clone())
+                    .set_icc_profile(output_profile.to_vec())
                     .map_err(|e| e.to_string())?;
             }
             encoder
@@ -461,7 +504,7 @@ fn encode_inner_admitted(
                 )
                 .map_err(|e| e.to_string())?;
         } else {
-            crate::deep_color::tiff::write_rgb(&mut bytes, &raster, &doc.color.icc_profile)?;
+            crate::deep_color::tiff::write_rgb(&mut bytes, &raster, output_profile)?;
         }
     } else {
         raster

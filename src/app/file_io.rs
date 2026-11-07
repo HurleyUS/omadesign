@@ -1028,7 +1028,8 @@ mod tests {
         assert_eq!((placed.w, placed.h), (1800, 12));
         assert_eq!(existing.doc.color, target_color);
         let native = placed.native.as_ref().unwrap();
-        assert_eq!(native.depth, crate::deep_color::Depth::F32);
+        // Placed artwork takes the destination document's depth (0.6.9 follow-up).
+        assert_eq!(native.depth, target_color.depth);
         assert_eq!(native.intent, 0);
         assert_eq!(native.icc_profile.as_slice(), target_color.icc_profile.as_slice());
         assert!(existing.pending_place.is_none());
@@ -1080,7 +1081,8 @@ mod tests {
         assert_eq!(serde_json::to_value(&cancelled.doc).unwrap(), destination);
         cancelled.send_photo_to_design();
         finish_jobs(&mut cancelled);
-        assert!(cancelled.doc.layers.last().unwrap().kind.pixels().unwrap().native.is_some());
+        // The destination is an 8-bit RGB document, so the developed photo is placed at 8 bits.
+        assert!(cancelled.doc.layers.last().unwrap().kind.pixels().unwrap().native.is_none());
 
         let source = root.join("placed.dng");
         let bytes = include_bytes!("../formats/raw/synthetic.dng");
@@ -1100,7 +1102,8 @@ mod tests {
         file_place.commit_place_at(Pt::new(80., 60.));
         assert_eq!(file_place.doc.color, color);
         let native = file_place.doc.layers.last().unwrap().kind.pixels().unwrap().native.as_ref().unwrap();
-        assert_eq!(native.depth, crate::deep_color::Depth::F32);
+        // Placed RAW takes the destination document's depth along with its inks and profile.
+        assert_eq!(native.depth, color.depth);
         assert_eq!(native.intent, 3);
         assert!(native.cmyk.is_some());
         assert_eq!(native.icc_profile.as_slice(), color.icc_profile.as_slice());

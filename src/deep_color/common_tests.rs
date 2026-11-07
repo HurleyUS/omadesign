@@ -3,7 +3,7 @@ use crate::document::{Document, Fill, Layer, Shape, Style};
 use crate::geom::{CharSpan, Geom, Pt, TypeRun};
 
 #[test]
-fn common_native_svg_graph_refusal_precedes_group_raster_vector_dispatch() {
+fn common_native_svg_graph_renders_through_effect_engine_for_group_raster_vector() {
     let (imported, _) = crate::formats::svg::read(r##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><defs><filter id="f"><feGaussianBlur stdDeviation="1"/></filter></defs><g filter="url(#f)"><rect width="2" height="2"/></g></svg>"##, "Graph guard").unwrap();
     let graph = imported
         .layers
@@ -38,22 +38,15 @@ fn common_native_svg_graph_refusal_precedes_group_raster_vector_dispatch() {
         layer.svg_filter = Some(graph.clone());
         doc.layers = vec![layer];
         let before = serde_json::to_string(&doc).unwrap();
-        assert!(
-            composite(&doc, 1)
-                .unwrap_err()
-                .contains("float effect renderer")
-        );
+        // SVG filter graphs draw through the RGBA8 effect engine on a temporary copy.
+        composite(&doc, 1).unwrap();
         assert_eq!(serde_json::to_string(&doc).unwrap(), before);
         let restored = crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
         assert_eq!(
             restored.layers[0].svg_filter.as_ref().unwrap().filters,
             graph.filters
         );
-        assert!(
-            composite(&restored, 1)
-                .unwrap_err()
-                .contains("float effect renderer")
-        );
+        composite(&restored, 1).unwrap();
     }
 }
 
