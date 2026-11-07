@@ -8,6 +8,13 @@ export type UpdatePost = {
 
 export const updates: UpdatePost[] = [
   {
+    slug: "0.6.10",
+    version: "0.6.10",
+    date: "2026-11-07",
+    title: "Effects in every color space",
+    dek: "Layer, group and clipping effects render in 16-bit, float, tagged and CMYK documents without an 8-bit sRGB round trip. Placed artwork takes the document's profile and depth. Pixel filters remain 8-bit and SVG, PDF, ORA and IDML write sRGB.",
+  },
+  {
     slug: "0.6.9",
     version: "0.6.9",
     date: "2026-11-07",

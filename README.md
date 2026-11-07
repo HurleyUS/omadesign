@@ -33,9 +33,9 @@ Asahi Omarchy, current Arch ARM, and anything newer.
 
 ## Latest release
 
-**0.6.9** fixes export for documents with ICC-tagged placed photos and layer effects, and converts placed images to the document color profile. It builds on 0.6.8 Craft parity.
+**0.6.10** renders layer, group and clipping effects in 16-bit, float, tagged and CMYK documents without an 8-bit sRGB round trip, and converts placed artwork to the document's profile and depth. See the release notes for the remaining 8-bit filter and sRGB exchange limits.
 
-[What changed](docs/releases/0.6.9.md) · [Brush packs](https://omadesign.app/brushes)
+[What changed](docs/releases/0.6.10.md) · [Brush packs](https://omadesign.app/brushes)
 
 ## Install
 
