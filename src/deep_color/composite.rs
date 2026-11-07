@@ -547,6 +547,7 @@ fn composite_cmyk(
         let mut plane = doc.clone();
         plane.color = Default::default();
         for layer in &mut plane.layers {
+            separate_effect_colors(&mut layer.filters, &doc.color, component)?;
             if layer.is_group {
                 continue;
             }
@@ -809,6 +810,31 @@ fn render_layer_rgba8(
             cancel.check()?;
         }
         *dst = blend_pixel(*dst, [src[0], src[1], src[2], src[3]], layer.blend, 1.);
+    }
+    Ok(())
+}
+
+/// Express appearance-effect colors as one ink plane's gray value.
+/// Args: a plane's temporary filter copy, CMYK document color and ink index. Returns an error for an invalid profile.
+fn separate_effect_colors(
+    stack: &mut crate::filter::FilterStack,
+    color: &super::cms::DocumentColor,
+    component: usize,
+) -> Result<(), String> {
+    use crate::filter::Fx;
+    for fx in &mut stack.items {
+        let (Fx::Shadow { color: c, .. }
+        | Fx::InnerShadow { color: c, .. }
+        | Fx::OuterGlow { color: c, .. }
+        | Fx::InnerGlow { color: c, .. }
+        | Fx::ColorOverlay { color: c, .. }) = fx
+        else {
+            continue;
+        };
+        let rgb = [c.r, c.g, c.b].map(|v| v as f32 / 255.);
+        let inks = super::cms::transform(&rgb, super::cms::Model::Cmyk, &color.icc_profile, false, color.intent)?;
+        let v = ((1. - inks[component]).clamp(0., 1.) * 255.).round() as u8;
+        *c = crate::color::Rgba::new(v, v, v, c.a);
     }
     Ok(())
 }

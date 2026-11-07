@@ -218,3 +218,28 @@ fn tagged_deep_and_cmyk_documents_export_every_format() {
         assert!(px[0] < 3 && px[1] > 252 && px[2] < 3, "{format:?} {px:?}");
     }
 }
+
+#[test]
+fn cmyk_effects_separate_their_color_and_keep_authored_inks() {
+    let fogra = include_bytes!("../formats/psd/fixtures/fogra39l-cc0.icc").to_vec();
+    let authored = [0.1, 0.2, 0.3, 0.4];
+    let inks = Pixels::from_cmyk(4, 4, Depth::U16, [authored[0], authored[1], authored[2], authored[3], 1.].repeat(16), fogra.clone(), 1).unwrap();
+    let mut layer = shadowed(inks);
+    if let crate::filter::Fx::Shadow { color, .. } = &mut layer.filters.items[0] {
+        *color = Rgba::rgb(255, 0, 0);
+    }
+    let color = cms::DocumentColor { model: cms::Model::Cmyk, depth: Depth::U16, icc_profile: fogra.clone(), intent: 1 };
+    let doc = doc_with(layer, color);
+    let before = crate::project::encode(&doc).unwrap();
+    let composite = super::composite(&doc, 1).unwrap();
+    let out = composite.native.as_ref().unwrap().cmyk.as_ref().unwrap();
+    let ink = |i: usize| &out[i * 5..i * 5 + 5];
+    for (got, want) in ink(8 + 1).iter().zip(authored) {
+        assert!((got - want).abs() < 1e-4, "{:?}", ink(9));
+    }
+    let red = cms::transform(&[1., 0., 0.], cms::Model::Cmyk, &fogra, false, 1).unwrap();
+    for (got, want) in ink(5 * 8 + 5).iter().zip(red.iter()) {
+        assert!((got - want).abs() < 0.01, "{:?} vs {red:?}", ink(45));
+    }
+    assert_eq!(crate::project::encode(&doc).unwrap(), before);
+}
