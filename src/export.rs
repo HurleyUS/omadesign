@@ -212,6 +212,17 @@ pub fn encode_scaled_admitted(
         encode_inner_admitted(source, settings, progress, cancel, Some(options), false)
     })
 }
+/// Choose the RGBA8 writer for an untagged 8-bit document carrying stray native samples.
+/// Args: document and settings. Returns true unless PSD/PSB or a deep buffer can keep native samples.
+fn rgba8_route(doc: &crate::document::Document, settings: Settings) -> bool {
+    !matches!(settings.format, Format::Psd | Format::Psb)
+        && (settings.ai.is_some()
+        || matches!(
+            settings.format,
+            Format::Jpeg | Format::Svg | Format::Pdf | Format::Ora | Format::Idml
+        )
+        || !crate::deep_color::buffers(doc).any(crate::deep_color::exceeds_rgba8))
+}
 fn encode_inner_admitted(
     source: &Source,
     settings: Settings,
@@ -220,6 +231,13 @@ fn encode_inner_admitted(
     options: Option<RasterOptions>,
     svg_fonts: bool,
 ) -> Result<(EncodedBytes, Vec<String>), String> {
+    if let Source::Document(doc) = source
+        && rgba8_route(doc, settings)
+        && let Some(copy) = crate::deep_color::rgba8_export_copy(doc)
+    {
+        let copy = Source::Document(copy);
+        return encode_inner_admitted(&copy, settings, progress, cancel, options, svg_fonts);
+    }
     if let Some(options) = options {
         dimensions_scaled(source, settings, options)?;
     } else {

@@ -33,9 +33,9 @@ Asahi Omarchy, current Arch ARM, and anything newer.
 
 ## Latest release
 
-**0.6.8** ships Craft parity: conic and shape gradients in the native float compositor, Gray/Lab tagged documents (format v40), real Motion/Layout/Develop/Effect menu commands, spot channels, Asset Export variants, symbol libraries and linked styles. It also includes all of 0.6.4–0.6.7.
+**0.6.9** fixes export for documents with ICC-tagged placed photos and layer effects, and converts placed images to the document color profile. It builds on 0.6.8 Craft parity.
 
-[What changed](docs/releases/0.6.8.md) · [Brush packs](https://omadesign.app/brushes)
+[What changed](docs/releases/0.6.9.md) · [Brush packs](https://omadesign.app/brushes)
 
 ## Install
 

@@ -8,6 +8,20 @@ export type UpdatePost = {
 
 export const updates: UpdatePost[] = [
   {
+    slug: "0.6.9",
+    version: "0.6.9",
+    date: "2026-11-07",
+    title: "Export what you placed",
+    dek: "Documents with ICC-tagged placed photos and layer effects export again in every format, without changing the document. Placed images take the document's color profile and keep any extra precision.",
+  },
+  {
+    slug: "0.6.8",
+    version: "0.6.8",
+    date: "2026-10-20",
+    title: "Craft parity",
+    dek: "The first stable release since 0.6.3. A native float compositor, Gray and Lab documents, menus with real commands, saved selections and Photoshop channel exchange, richer Asset Export, layer groups with accurate merges, editable SVG type and variable font instances, plus everything from the 0.6.4 to 0.6.7 milestones.",
+  },
+  {
     slug: "0.6.7-nightly.20261016.0001",
     version: "0.6.7-nightly.20261016.0001",
     date: "2026-10-16",

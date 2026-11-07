@@ -315,7 +315,8 @@ fn render_layer(
     } else if let Some(source) = layer.kind.pixels() {
         let pixels = source.in_document_color(&doc.color)?;
         if layer.filters.active() {
-            return Err("Apply pixel effects before high-depth export; native layer effect rendering is not yet supported".into());
+            drop(pixels);
+            return render_effects_rgba8(doc, layer, out, w, h, scale, cancel);
         }
         let Some(inv) = crate::compositor::layer_pixel_transform(layer).invert() else {
             return Ok(());
@@ -598,4 +599,51 @@ fn composite_cmyk(
         doc.color.icc_profile.clone(),
         doc.color.intent,
     )
+}
+
+/// Draw one raster layer's effects with the RGBA8 effect engine, which the float compositor lacks.
+/// Args: source document, effected layer and output grid. Returns blended samples; only temporary copies change.
+fn render_effects_rgba8(
+    doc: &Document,
+    layer: &Layer,
+    out: &mut [[f32; 4]],
+    w: u32,
+    h: u32,
+    scale: f32,
+    cancel: &dyn crate::resources::CancellationCheck,
+) -> Result<(), String> {
+    let mut solo = layer.clone();
+    solo.parent = None;
+    solo.clipped = false;
+    solo.blend = Blend::Normal;
+    super::strip_native(&mut solo);
+    let mut stage = Document::new(&doc.name, doc.width, doc.height, doc.dpi);
+    stage.transparent = true;
+    stage.layers = vec![solo];
+    let size = crate::export::RenderSize {
+        factor: scale,
+        width: w,
+        height: h,
+    };
+    let pm = crate::compositor::render_export_sized(&stage, size)?;
+    cancel.check()?;
+    let bytes = pm
+        .pixels()
+        .iter()
+        .flat_map(|p| {
+            let p = p.demultiply();
+            [p.red(), p.green(), p.blue(), p.alpha()]
+        })
+        .collect();
+    let effected = Pixels::from_rgba(w, h, bytes)
+        .ok_or("Invalid effect raster")?
+        .in_document_color(&doc.color)?;
+    let samples = effected.samples()?;
+    for (i, (dst, src)) in out.iter_mut().zip(samples.chunks_exact(4)).enumerate() {
+        if i % 4096 == 0 {
+            cancel.check()?;
+        }
+        *dst = blend_pixel(*dst, [src[0], src[1], src[2], src[3]], layer.blend, 1.);
+    }
+    Ok(())
 }
