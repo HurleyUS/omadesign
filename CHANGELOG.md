@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-07 · 0.6.10 — Effects in every color space
+
+- Fix: in 16-bit, float and tagged documents, layers with effects no longer pass through 8-bit sRGB; shadows, glows and overlays keep the layer's own samples and colors.
+- Group effects, clipping-base effects and CMYK effect colors render in precise export.
+- Placed artwork takes the document's depth as well as its profile.
+- JPEG embeds the document profile; float documents export 16-bit PNG; CMYK documents export PNG and JPEG.
+- Known limits: pixel filters are 8-bit (HDR clipped), CMYK color adjustments run per ink, and SVG/PDF/ORA/IDML write 8-bit sRGB. [Release notes](docs/releases/0.6.10.md)
+
 ## 2026-11-07 · 0.6.9 — Export what you placed
 
 - Fix: every export of a document with ICC-tagged placed photos and layer effects failed with "Apply pixel effects before high-depth export". PNG, JPEG, TIFF, SVG, PDF, PSD, PSB, ORA and IDML now export, and the document is left unchanged.

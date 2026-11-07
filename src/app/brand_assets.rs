@@ -979,7 +979,7 @@ pub(super) fn conform_layers(
         if let Some(p) = layer.kind.pixels_mut() {
             *p = crate::deep_color::conform_to_document(p, color)?;
         }
-        // Masks are coverage, not color: only stray 8-bit native copies are dropped.
+        // Masks are coverage, not color: an 8-bit document keeps their 8-bit display coverage.
         let masks = layer.mask.iter_mut().chain(
             layer
                 .kind
@@ -988,7 +988,7 @@ pub(super) fn conform_layers(
                 .flatten()
                 .filter_map(|shape| shape.mask.as_mut()),
         );
-        for p in masks.filter(|p| rgba8 && !crate::deep_color::exceeds_rgba8(p)) {
+        for p in masks.filter(|_| rgba8) {
             if p.native.take().is_some() {
                 p.touch();
             }

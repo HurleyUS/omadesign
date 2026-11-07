@@ -797,31 +797,33 @@ pub(crate) fn strip_native(layer: &mut crate::document::Layer) {
     }
 }
 
-/// Build the RGBA8 export copy of an untagged 8-bit RGB document.
-/// Args: document. Returns a copy whose stray native samples became display pixels, or None for tagged/deep documents.
+/// Build a temporary 8-bit sRGB copy for writers that carry only RGBA8.
+/// Args: document. Returns a copy whose native samples became their profile-converted display
+/// pixels and whose color is untagged 8-bit RGB, or None when nothing native needs converting.
 pub fn rgba8_export_copy(doc: &crate::document::Document) -> Option<crate::document::Document> {
-    if !rgba8_document(doc) || !has_native(doc) {
+    if !has_native(doc) {
         return None;
     }
     let mut copy = doc.clone();
+    copy.color = cms::DocumentColor::default();
     copy.layers.iter_mut().for_each(strip_native);
     Some(copy)
 }
 
 /// Conform placed artwork to its destination document color.
-/// Args: incoming pixels and destination color. Returns pixels in the document's model and profile;
-/// deeper samples keep their precision, while 8-bit RGB in an untagged 8-bit document becomes plain RGBA8.
+/// Args: incoming pixels and destination color. Returns pixels converted to the document's model,
+/// profile and depth; an untagged 8-bit RGB document receives plain RGBA8 display pixels.
 pub fn conform_to_document(pixels: &Pixels, color: &cms::DocumentColor) -> Result<Pixels, String> {
-    let Some(native) = &pixels.native else {
+    if pixels.native.is_none() {
         return Ok(pixels.clone());
-    };
+    }
     let rgba8 = color.model == cms::Model::Rgb && color.depth == Depth::U8 && color.icc_profile.is_empty();
-    if rgba8 && !exceeds_rgba8(pixels) {
+    if rgba8 {
+        // The display cache is already transformed from the source profile to sRGB.
         let mut out = pixels.clone();
         out.native = None;
         out.touch();
         return Ok(out);
     }
-    let depth = [native.depth, color.depth].into_iter().max_by_key(|d| d.bits()).unwrap_or_default();
-    pixels.in_document_color(&cms::DocumentColor { depth, ..color.clone() })
+    pixels.in_document_color(color)
 }

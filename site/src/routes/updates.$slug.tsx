@@ -1,4 +1,5 @@
 import brushesFollow from "../../../docs/blog/nightly-brushes-follow-your-hand.md?raw";
+import effectsEverywhere from "../../../docs/releases/0.6.10.md?raw";
 import exportPlaced from "../../../docs/releases/0.6.9.md?raw";
 import craftParity from "../../../docs/releases/0.6.8.md?raw";
 import nativePrecision from "../../../docs/releases/0.6.7-nightly.20261016.0001.md?raw";
@@ -20,6 +21,7 @@ import { Markdown } from "../md";
 import { updateBySlug } from "../updates";
 
 const bodies: Record<string, { markdown: string; path: string }> = {
+  "0.6.10": { markdown: effectsEverywhere, path: "docs/releases/0.6.10.md" },
   "0.6.9": { markdown: exportPlaced, path: "docs/releases/0.6.9.md" },
   "0.6.8": { markdown: craftParity, path: "docs/releases/0.6.8.md" },
   "0.6.7-nightly.20261016.0001": { markdown: nativePrecision, path: "docs/releases/0.6.7-nightly.20261016.0001.md" },

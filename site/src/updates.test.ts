@@ -5,7 +5,8 @@ import { NIGHTLY_VERSION, RELEASE_VERSION } from "./release";
 describe("Release notes", () => {
   it("features the published release and preserves earlier notes", () => {
     expect(latestUpdate.version).toBe(RELEASE_VERSION);
-    expect(updateBySlug(RELEASE_VERSION)?.title).toBe("Export what you placed");
+    expect(updateBySlug(RELEASE_VERSION)?.title).toBe("Effects in every color space");
+    expect(updateBySlug("0.6.9")?.title).toBe("Export what you placed");
     expect(updateBySlug("0.6.8")?.title).toBe("Craft parity");
     expect(updateBySlug(NIGHTLY_VERSION)?.title).toBe("Keep the original precision");
     expect(updateBySlug("0.6.3-nightly.20261013.0001")?.title).toBe("Brushes that follow your hand");

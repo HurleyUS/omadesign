@@ -297,7 +297,9 @@ fn raster_export_preserves_native_color_and_float_mask_precision() {
         )
         .unwrap();
     }
-    assert!(crate::compositor::export_png(&doc, 1).is_err());
+    // PNG quantizes float samples to 16 bits; the direct exchange writers still refuse them.
+    let png = image::load_from_memory(&crate::compositor::export_png(&doc, 1).unwrap()).unwrap();
+    assert_eq!(png.color(), image::ColorType::Rgba16);
     assert!(crate::svg::export(&doc).is_err());
     assert!(crate::formats::pdf::write(&doc).is_err());
     assert!(crate::formats::openraster::write(&doc).is_err());
@@ -417,7 +419,7 @@ fn native_export_dimensions_use_checked_storage_instead_of_ai_canvas_limits() {
 }
 
 #[test]
-fn byte_vector_effects_are_refused_before_native_export_reduction() {
+fn byte_vector_effects_render_without_changing_native_mask_samples() {
     let mut doc = Document::new("Native vector effect boundary",2.,2.,72.);
     let mut layer = Layer::vector("Filtered vector");
     let mut shape = crate::document::Shape::new(crate::geom::Geom::Rect {origin:Pt::ZERO,size:Pt::new(2.,2.),radius:0.},crate::document::Style::default());
@@ -426,7 +428,9 @@ fn byte_vector_effects_are_refused_before_native_export_reduction() {
     layer.mask = Some(Pixels::from_samples(2,2,Depth::F32,[0.50001,0.50001,0.50001,1.].repeat(4)).unwrap());
     doc.layers=vec![layer];
     let before=doc.layers[0].mask.as_ref().unwrap().sample(0);
-    assert!(composite(&doc,1).unwrap_err().contains("float paint renderer"));
+    // Filtered vector content draws through the RGBA8 effect engine on a temporary copy.
+    composite(&doc,1).unwrap();
+    assert_eq!(doc.layers[0].mask.as_ref().unwrap().sample(0),before);
     let reopened=crate::project::decode(&crate::project::encode(&doc).unwrap()).unwrap();
     assert_eq!(reopened.layers[0].mask.as_ref().unwrap().sample(0),before);
     assert!(reopened.layers[0].kind.shapes().unwrap()[0].filters.active());
