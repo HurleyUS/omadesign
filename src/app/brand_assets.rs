@@ -119,6 +119,7 @@ impl Studio {
         if layers.len() > 1024 {
             return Err("The brand asset contains too many layers".into());
         }
+        conform_layers(&mut layers, &self.doc.color)?;
         let mut legacy_pixels = 0usize;
         let mut total_shapes = 0usize;
         let mut largest_id = 0;
@@ -963,4 +964,35 @@ mod tests {
             "Keep this placement"
         );
     }
+}
+
+/// Convert placed rasters and masks to the destination document's color and depth.
+/// Args: incoming layers and destination color. Returns an error when a profile conversion fails.
+pub(super) fn conform_layers(
+    layers: &mut [Layer],
+    color: &crate::deep_color::cms::DocumentColor,
+) -> Result<(), String> {
+    let rgba8 = color.model == crate::deep_color::cms::Model::Rgb
+        && color.depth == crate::deep_color::Depth::U8
+        && color.icc_profile.is_empty();
+    for layer in layers {
+        if let Some(p) = layer.kind.pixels_mut() {
+            *p = crate::deep_color::conform_to_document(p, color)?;
+        }
+        // Masks are coverage, not color: only stray 8-bit native copies are dropped.
+        let masks = layer.mask.iter_mut().chain(
+            layer
+                .kind
+                .shapes_mut()
+                .into_iter()
+                .flatten()
+                .filter_map(|shape| shape.mask.as_mut()),
+        );
+        for p in masks.filter(|p| rgba8 && !crate::deep_color::exceeds_rgba8(p)) {
+            if p.native.take().is_some() {
+                p.touch();
+            }
+        }
+    }
+    Ok(())
 }

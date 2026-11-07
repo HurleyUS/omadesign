@@ -33,12 +33,17 @@ pub fn export(doc: &Document, path: &Path) -> Result<Vec<String>, String> {
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if matches!(extension.as_str(), "png" | "tif" | "tiff" | "jpg" | "jpeg") {
-        let format = match extension.as_str() {
-            "png" => crate::export::Format::Png,
-            "tif" | "tiff" => crate::export::Format::Tiff,
-            _ => crate::export::Format::Jpeg,
-        };
+    let format = match extension.as_str() {
+        "png" => Some(crate::export::Format::Png),
+        "tif" | "tiff" => Some(crate::export::Format::Tiff),
+        "jpg" | "jpeg" => Some(crate::export::Format::Jpeg),
+        "svg" => Some(crate::export::Format::Svg),
+        "pdf" => Some(crate::export::Format::Pdf),
+        "ora" => Some(crate::export::Format::Ora),
+        "idml" => Some(crate::export::Format::Idml),
+        _ => None,
+    };
+    if let Some(format) = format {
         let (bytes, notes) = crate::export::encode_admitted(
             &crate::export::Source::Document(doc.clone()),
             crate::export::Settings {
@@ -55,27 +60,11 @@ pub fn export(doc: &Document, path: &Path) -> Result<Vec<String>, String> {
         super::write_atomic(path, output.bytes.as_slice())?;
         return Ok(output.warnings);
     }
-    if matches!(extension.as_str(), "svg" | "pdf" | "ora")
-        && doc.layers.iter().any(|l| {
-            l.kind.pixels().is_some_and(|p| p.native.is_some())
-                || l.mask.as_ref().is_some_and(|p| p.native.is_some())
-        })
-    {
-        return Err("This exchange route cannot retain native precision. Use .oma, PSD/PSB or TIFF, or explicitly convert a copy to 8-bit.".into());
+    if extension == "oma" {
+        crate::project::save_to(doc, path)?;
+        return Ok(vec![]);
     }
-    let (bytes,notes)=match extension.as_str(){
-        "oma"=>{crate::project::save_to(doc,path)?;return Ok(vec![]);}
-        "svg"=>(crate::svg::export(doc)?.into_bytes(),vec![]),
-        "png"=>(crate::compositor::export_png(doc,1)?,vec![]),
-        "jpg"|"jpeg"=>(crate::compositor::export_jpeg(doc,1,95)?,vec![]),
-        "psd"|"psb"=>{let exported=super::psd::encode(doc,extension=="psb")?;(exported.bytes,exported.warnings)},
-        "pdf"=>super::pdf::write(doc)?,
-        "ora"=>super::openraster::write(doc)?,
-        "idml"=>super::idml::write(doc)?,
-        _=>return Err("Export as .oma, .svg, .png, .jpg, .psd, .psb, .ora, .idml or .pdf. Affinity and Illustrator native writers are not available.".into())
-    };
-    super::write_atomic(path, &bytes)?;
-    Ok(notes)
+    Err("Export as .oma, .svg, .png, .jpg, .tif, .psd, .psb, .ora, .idml or .pdf. Affinity and Illustrator native writers are not available.".into())
 }
 
 pub fn run(args: &[String]) -> Option<Result<(), String>> {

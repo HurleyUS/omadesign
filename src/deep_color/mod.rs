@@ -10,6 +10,8 @@ pub mod tiff;
 pub use composite::{blend_pixel, composite, composite_scaled_with_cancel, composite_with_cancel};
 #[cfg(test)]
 mod common_tests;
+#[cfg(test)]
+mod export_effects_tests;
 
 use crate::document::Pixels;
 use crate::resources::{self, Allocation, CancellationCheck, Lease};
@@ -757,4 +759,69 @@ pub fn document_depth(doc: &crate::document::Document) -> Depth {
         .chain(std::iter::once(doc.color.depth))
         .max_by_key(|d| d.bits())
         .unwrap_or_default()
+}
+
+/// Check whether a document is untagged 8-bit RGB.
+/// Args: document. Returns true when its declared color matches the RGBA8 display cache.
+pub fn rgba8_document(doc: &crate::document::Document) -> bool {
+    doc.color.model == cms::Model::Rgb && doc.color.depth == Depth::U8 && doc.color.icc_profile.is_empty()
+}
+
+/// Check whether a buffer holds samples its RGBA8 display cache cannot express.
+/// Args: pixels. Returns true for CMYK inks or more than eight bits per sample.
+pub fn exceeds_rgba8(pixels: &Pixels) -> bool {
+    pixels
+        .native
+        .as_ref()
+        .is_some_and(|n| n.cmyk.is_some() || n.depth != Depth::U8)
+}
+
+/// Replace a layer's authored samples with their RGBA8 display caches.
+/// Args: temporary layer. Returns nothing; callers must never pass document-owned layers.
+pub(crate) fn strip_native(layer: &mut crate::document::Layer) {
+    let strip = |p: &mut Pixels| {
+        if p.native.take().is_some() {
+            p.touch();
+        }
+    };
+    if let Some(p) = layer.kind.pixels_mut() {
+        strip(p);
+    }
+    if let Some(p) = layer.mask.as_mut() {
+        strip(p);
+    }
+    for shape in layer.kind.shapes_mut().into_iter().flatten() {
+        if let Some(p) = shape.mask.as_mut() {
+            strip(p);
+        }
+    }
+}
+
+/// Build the RGBA8 export copy of an untagged 8-bit RGB document.
+/// Args: document. Returns a copy whose stray native samples became display pixels, or None for tagged/deep documents.
+pub fn rgba8_export_copy(doc: &crate::document::Document) -> Option<crate::document::Document> {
+    if !rgba8_document(doc) || !has_native(doc) {
+        return None;
+    }
+    let mut copy = doc.clone();
+    copy.layers.iter_mut().for_each(strip_native);
+    Some(copy)
+}
+
+/// Conform placed artwork to its destination document color.
+/// Args: incoming pixels and destination color. Returns pixels in the document's model and profile;
+/// deeper samples keep their precision, while 8-bit RGB in an untagged 8-bit document becomes plain RGBA8.
+pub fn conform_to_document(pixels: &Pixels, color: &cms::DocumentColor) -> Result<Pixels, String> {
+    let Some(native) = &pixels.native else {
+        return Ok(pixels.clone());
+    };
+    let rgba8 = color.model == cms::Model::Rgb && color.depth == Depth::U8 && color.icc_profile.is_empty();
+    if rgba8 && !exceeds_rgba8(pixels) {
+        let mut out = pixels.clone();
+        out.native = None;
+        out.touch();
+        return Ok(out);
+    }
+    let depth = [native.depth, color.depth].into_iter().max_by_key(|d| d.bits()).unwrap_or_default();
+    pixels.in_document_color(&cms::DocumentColor { depth, ..color.clone() })
 }

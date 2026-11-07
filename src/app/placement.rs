@@ -299,6 +299,7 @@ impl Studio {
             return Err("FrameComposition: place motion projects on the canvas or add them through Compositions to preserve their scene".into());
         }
         source.validate_hierarchy()?;
+        super::brand_assets::conform_layers(&mut source.layers, &self.doc.color)?;
         if source
             .layers
             .iter()
