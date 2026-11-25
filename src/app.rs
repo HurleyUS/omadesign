@@ -225,10 +225,9 @@ pub enum Op {
     Brush {
         layer: usize,
         erase: bool,
-        buf: Pixmap,
-        preview: Option<Pixmap>,
+        buf: crate::raster_paint::BrushBuffer,
+        preview: Option<crate::raster_paint::BrushBuffer>,
         last: Option<Pt>,
-        before: crate::document::RasterState,
         selection_generation: u64,
     },
     Retouch {

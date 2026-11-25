@@ -120,7 +120,7 @@ fn draw_complete_layer(
     pm: &mut Pixmap,
     layer: &Layer,
     transform: Transform,
-    brush: Option<(&Pixmap, f32)>,
+    brush: Option<(BrushPreview<'_>, f32)>,
     doc: &Document,
 ) {
     if layer.visible && layer.opacity > 0. && !is_paper_raster(layer) {
@@ -262,7 +262,7 @@ mod tests {
             );
             let draft = || Draft {
                 preview: None,
-                brush: Some((2, &buf, 0.63)),
+                brush: Some((2, BrushPreview::Dense(&buf), 0.63)),
             };
             let full = render_view(&doc, view, 180, 140, draft()).unwrap();
             let cached = cache

@@ -81,38 +81,57 @@ pub(super) fn resample(
 }
 
 impl Studio {
+    /// Sample a selection into one working tile without allocating a canvas-sized mask.
+    /// Takes a layer and native tile origin; returns bilinear coverage for the tile.
+    pub(crate) fn brush_selection_tile(&self, layer: usize, origin: Pt) -> Option<Vec<u8>> {
+        let values = self.pixel_sel.as_ref()?;
+        let target = self.layer_selection_space(layer)?;
+        let source = self.pixel_sel_space.unwrap_or(target);
+        if values.len() != source.w as usize * source.h as usize { return None }
+        let transform = source.transform.invert()?.pre_concat(target.transform.pre_translate(origin.x, origin.y));
+        let side = crate::raster_paint::TILE as usize;
+        let mut output = vec![0; side * side];
+        let sample = |x: i32, y: i32| -> f32 {
+            if x < 0 || y < 0 || x >= source.w as i32 || y >= source.h as i32 { 0. }
+            else { values[y as usize * source.w as usize + x as usize] as f32 }
+        };
+        for y in 0..side { for x in 0..side {
+            let mut point = tiny_skia::Point::from_xy(x as f32 + 0.5, y as f32 + 0.5);
+            transform.map_point(&mut point);
+            let (px,py) = (point.x-0.5,point.y-0.5);
+            if !px.is_finite() || !py.is_finite() || px < -1. || py < -1. || px > source.w as f32 || py > source.h as f32 {continue}
+            let (ix,iy) = (px.floor() as i32,py.floor() as i32);
+            let (fx,fy) = (px-px.floor(),py-py.floor());
+            output[y*side+x] = ((sample(ix,iy)*(1.-fx)+sample(ix+1,iy)*fx)*(1.-fy)
+                +(sample(ix,iy+1)*(1.-fx)+sample(ix+1,iy+1)*fx)*fy).round().clamp(0.,255.) as u8;
+        }}
+        Some(output)
+    }
+
     /// Finish or restore an in-flight pixel edit before changing document context.
     /// Returning true lets Undo cancel the current gesture before touching history.
     pub(crate) fn end_pixel_stroke(&mut self, cancel: bool) -> bool {
         if matches!(self.op, Some(Op::Brush { .. })) {
-            let Some(Op::Brush { layer, before, mut buf, .. }) = self.op.take() else {
-                unreachable!()
-            };
+            let Some(Op::Brush { layer, mut buf, .. }) = self.op.take() else { unreachable!() };
             self.paint_contact = None;
             self.brush.pressure = 1.0;
-            if !cancel
-                && let Some(selection) = self.cached_pixel_sel_mask(layer)
-            {
-                paint::feather_overlay(&mut buf, &selection);
-            }
-            if let Some(target) = self.doc.layers.get_mut(layer) {
-                if cancel || self.brush.opacity <= 0.0 || buf.pixels().iter().all(|p| p.alpha() == 0) {
-                    before.restore(target);
-                } else if let Some(pixels) = target.kind.pixels_mut() {
-                    if let Some(mut destination) = pixels.to_pixmap() {
-                        paint::blend_onto(&mut destination, &buf, self.brush.opacity);
-                        *pixels = Pixels::from_pixmap(&destination);
+            if !cancel {
+                for (&(x,y), pm) in &mut buf.tiles {
+                    if let Some(mask) = self.brush_selection_tile(layer, Pt::new((x * crate::raster_paint::TILE) as f32, (y * crate::raster_paint::TILE) as f32)) {
+                        paint::feather_overlay(pm, &mask);
                     }
-                    if pixels.data != before.kind.pixels().unwrap().data
-                        || target.kind.raster_xform() != before.kind.raster_xform()
-                    {
-                        let after = crate::document::RasterState::capture(target).unwrap();
-                        self.history.push(Cmd::PaintRaster {
-                            layer,
-                            before,
-                            after,
-                        });
-                        self.dirty = true;
+                }
+                if self.pixel_sel.is_some() && self.pixel_sel_space.is_none() {
+                    self.pixel_sel_space = self.layer_selection_space(layer);
+                }
+                if let Some(target) = self.doc.layers.get_mut(layer) {
+                    match crate::raster_paint::commit(target, buf, self.brush.opacity) {
+                        Ok(Some(change)) => {
+                            self.history.push(Cmd::PaintRaster { layer, change });
+                            self.dirty = true;
+                        }
+                        Ok(None) => {},
+                        Err(message) => self.status = message.into(),
                     }
                 }
             }
@@ -881,13 +900,14 @@ mod tests {
         let before = studio.doc.layers[0].kind.pixels().unwrap().data.clone();
         let mut buf = tiny_skia::Pixmap::new(16, 12).unwrap();
         buf.fill(tiny_skia::Color::from_rgba8(200, 50, 20, 255));
+        let mut stroke = crate::raster_paint::BrushBuffer::default();
+        stroke.tiles.insert((0,0),buf);
         studio.op = Some(Op::Brush {
             layer: 0,
             erase: false,
-            buf,
+            buf: stroke,
             preview: None,
             last: Some(Pt::new(4.0, 4.0)),
-            before: crate::document::RasterState::capture(&studio.doc.layers[0]).unwrap(),
             selection_generation: studio.pixel_sel_gen,
         });
         assert!(studio.end_pixel_stroke(true));

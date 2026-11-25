@@ -136,7 +136,12 @@ fn stamp_path(cx: f32, cy: f32, r: f32) -> Option<tiny_skia::Path> {
 
 pub fn stamp(pm: &mut Pixmap, pos: Pt, brush: &Brush, erase: bool) {
     let (pos, brush) = brush.dab(pos);
-    let brush = &brush;
+    stamp_dab(pm, pos, &brush, erase);
+}
+
+/// Stamp an already varied round dab.
+/// Takes the target, local center, varied settings and erase flag; updates the target.
+pub(crate) fn stamp_dab(pm: &mut Pixmap, pos: Pt, brush: &Brush, erase: bool) {
     let r = (brush.size * 0.5).max(0.75);
     let Some(path) = stamp_path(pos.x, pos.y, r) else {
         return;
@@ -467,33 +472,6 @@ pub(crate) fn clip_overlay_region(pm: &mut Pixmap, mask: &[u8], region: PixelReg
         for (pixel, &coverage) in pixels[row.clone()].iter_mut().zip(&mask[row]) {
             if coverage == 0 {
                 *pixel = tiny_skia::ColorU8::from_rgba(0, 0, 0, 0).premultiply();
-            }
-        }
-    }
-}
-
-/// Refresh the displayed soft-selection overlay from the unattenuated stroke.
-pub(crate) fn feather_overlay_region(
-    output: &mut Pixmap,
-    source: &Pixmap,
-    mask: &[u8],
-    region: PixelRegion,
-) {
-    if output.width() != source.width()
-        || output.height() != source.height()
-        || mask.len() != source.width() as usize * source.height() as usize
-    {
-        return;
-    }
-    for row in region.rows(source.width()) {
-        let bytes = row.start * 4..row.end * 4;
-        for ((out, src), &coverage) in output.data_mut()[bytes.clone()]
-            .chunks_exact_mut(4)
-            .zip(source.data()[bytes].chunks_exact(4))
-            .zip(&mask[row])
-        {
-            for (channel, &value) in out.iter_mut().zip(src) {
-                *channel = ((value as u32 * coverage as u32 + 127) / 255) as u8;
             }
         }
     }

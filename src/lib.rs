@@ -40,6 +40,7 @@ pub mod plugins;
 pub mod presets;
 pub mod project;
 pub mod raster;
+pub mod raster_paint;
 pub mod release_version;
 pub mod screen_pick;
 pub mod shape_browser;
