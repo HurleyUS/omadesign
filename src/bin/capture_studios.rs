@@ -87,6 +87,10 @@ fn schedule(scene: &str) -> Vec<Action> {
     use ActionKind::*;
     use Target::*;
     match scene {
+        "path-clipboard" => vec![
+            event(0.7,Click(FirstPathText)),event(1.2,NativeClipboard("c")),event(1.8,Click(Any("Edit"))),event(2.2,Click(Any("Paste"))),event(3.2,CheckPath("paste-alone")),
+            event(3.7,Key(egui::Key::Z,ctrl())),event(4.2,Key(egui::Key::A,ctrl())),event(4.7,NativeClipboard("c")),event(5.3,Click(Any("Edit"))),event(5.7,Click(Any("Paste"))),event(7.,CheckPath("paste-together")),event(7.5,Key(egui::Key::Z,ctrl())),
+        ],
         "area-type" => vec![
             event(0.7,Key(egui::Key::T,Modifiers::NONE)),
             drag(1.1,1.3,Drag(World(70.,100.),World(420.,350.))),
@@ -113,6 +117,7 @@ Typography stays readable with deliberate hyphenation, useful overflow controls,
             event(36.,Click(Any("Object"))),event(36.5,Click(Any("Type"))),event(37.,Click(Any("Text inside shape"))),
             drag(37.5,3.,Type("A closed outline becomes an editable text frame. Words follow its interior while every hidden word stays in the original story.")),
             event(41.,Key(egui::Key::Escape,Modifiers::NONE)),event(42.,CheckArea("shape-frame")),
+            event(43.,Key(egui::Key::S,ctrl())),event(44.2,ReopenSaved),event(45.2,CheckArea("shape-frame")),
         ],
         "path-type" => vec![
             event(0.7, Key(egui::Key::T, Modifiers::NONE)),
@@ -139,9 +144,9 @@ Typography stays readable with deliberate hyphenation, useful overflow controls,
             event(24.,Click(Any("Object"))),event(24.5,Click(Any("Type"))),event(25.,Click(Any("Release text from path"))),
             event(25.5,CheckPath("released")),
             event(26.,Key(egui::Key::Z,ctrl())),event(26.5,CheckPath("restored")),
-            event(27.,NativeClipboard("c")),event(28.,NativeClipboard("v")),
+            event(27.,NativeClipboard("c")),event(27.8,Click(Any("Edit"))),event(28.3,Click(Any("Paste"))),
             event(29.5,CheckPath("paste-alone")),event(30.,Key(egui::Key::Z,ctrl())),
-            event(31.,Key(egui::Key::A,ctrl())),event(31.5,NativeClipboard("c")),event(32.5,NativeClipboard("v")),
+            event(31.,Key(egui::Key::A,ctrl())),event(31.5,NativeClipboard("c")),event(32.2,Click(Any("Edit"))),event(32.7,Click(Any("Paste"))),
             event(34.,CheckPath("paste-together")),event(35.,Key(egui::Key::Z,ctrl())),
             event(36.,Click(FirstPathText)),
             event(37.,CheckPath("restored")),
@@ -158,6 +163,7 @@ Typography stays readable with deliberate hyphenation, useful overflow controls,
             event(49.,Click(Any("Object"))),event(49.5,Click(Any("Type"))),event(50.,Click(Any("Attach text to path"))),event(50.5,CheckPath("restored")),
             event(51.,Click(World(100.,320.))),event(51.5,Key(egui::Key::Delete,Modifiers::NONE)),event(52.,CheckPath("guide-deleted")),
             event(53.,Key(egui::Key::Z,ctrl())),event(54.,CheckPath("restored")),event(55.,Click(FirstPathText)),
+            event(56.,Key(egui::Key::S,ctrl())),event(57.2,ReopenSaved),event(58.2,CheckPath("restored")),
         ],
         "spacing" => vec![
             event(1., Key(egui::Key::A, ctrl())),
@@ -797,7 +803,7 @@ fn seed(scene: &str) -> Studio {
             let mut layer=Layer::vector("Wrap illustration");layer.kind.shapes_mut().unwrap().push(circle);s.doc.layers.push(layer);
             s.active_layer=Some(1);s.persona=Persona::Design;s.tool=Tool::Text;s.text_px=25.;s.style=Style{fill:Fill::Solid(Rgba::from_hex(0x18364A)),stroke:None};
         }
-        "path-type" => {
+        "path-type" | "path-clipboard" => {
             use omadesign::{geom::Anchor,document::{Shape,Style,Fill,Stroke}};
             s.doc=Document::new("Live type on paths · issue 149",960.,680.,96.);
             let guide=Style{fill:Fill::None,stroke:Some(Stroke{width:2.,color:Rgba::from_hex(0x7295AD),..Default::default()})};
@@ -808,6 +814,11 @@ fn seed(scene: &str) -> Studio {
             s.doc.layers[1].kind.shapes_mut().unwrap().extend([circle,curve]);
             s.active_layer=Some(1);s.persona=Persona::Design;s.tool=Tool::Text;s.text_px=32.;
             s.style=Style{fill:Fill::Solid(Rgba::from_hex(0x18364A)),stroke:None};
+            if scene=="path-clipboard" {
+                let ids:Vec<_>=s.doc.layers[1].kind.shapes().unwrap().iter().map(|shape|shape.id).collect();
+                s.place_text_on_path(Pt::new(300.,120.),(1,ids[0]));s.type_insert("Editable path clipboard");s.commit_type_edit();
+                s.place_text_on_path(Pt::new(560.,475.),(1,ids[1]));s.type_insert("Guides stay linked");s.commit_type_edit();s.tool=Tool::Select;
+            }
         }
         "paragraphs" | "opentype" | "spacing" => {
             use omadesign::{geom::{TypeRun,ParagraphStyle},document::{Shape,Style,Fill}};
@@ -969,11 +980,12 @@ fn seed(scene: &str) -> Studio {
 impl Capture {
     fn new(scene: String, directory: PathBuf, probe: bool, fps: u32) -> Self {
         let mut studio = seed(&scene);
-        if scene=="spacing" {studio.path=Some(directory.join("spacing-final.oma"));}
+        if matches!(scene.as_str(),"spacing"|"path-type"|"area-type"){studio.path=Some(directory.join(format!("{scene}-final.oma")));}
         let seconds = match scene.as_str() {
             "paragraphs" => 30,
-            "path-type" => 57,
-            "area-type" => 44,
+            "path-type" => 60,
+            "path-clipboard" => 9,
+            "area-type" => 47,
             "opentype" => 20,
             "spacing" => 40,
             "welcome-browse" => 23,
@@ -1222,7 +1234,8 @@ impl Capture {
                         }
                     }
                     ActionKind::ReopenSaved => {
-                        self.studio.open_path(self.directory.join("spacing-final.oma"));
+                        let path=self.directory.join(format!("{}-final.oma",self.scene));
+                        if !path.exists(){self.errors.push(format!("native saved file missing: {}",path.display()));}else{self.studio.open_path(path);}
                     }
                     ActionKind::Type(_) => {}
                     ActionKind::Drag(from, to) => a.points = self.target(from).zip(self.target(to)),
@@ -1310,6 +1323,7 @@ impl Capture {
 }
 impl eframe::App for Capture {
     fn raw_input_hook(&mut self, _: &egui::Context, input: &mut egui::RawInput) {
+        for event in &input.events {match event {Event::Copy=>eprintln!("native Copy frame{}",self.frame),Event::Paste(value)=>eprintln!("native Paste frame{} bytes{}",self.frame,value.len()),_=>{}}}
         input
             .events
             .retain(|e| matches!(e, Event::Screenshot { .. } | Event::Copy | Event::Cut | Event::Paste(_)));
@@ -1330,6 +1344,7 @@ impl eframe::App for Capture {
         let ctx = ui.ctx().clone();
         eframe::App::ui(&mut self.studio, ui, frame);
         self.read_labels(&ctx);
+        ctx.output(|output|{for command in &output.commands {if let egui::OutputCommand::CopyText(value)=command{eprintln!("clipboard output frame{} bytes{}",self.frame,value.len());}}});
         // Only a pointer indicator is overlaid. Every panel and artwork pixel
         // below it is the real native application viewport.
         let painter = ctx.layer_painter(egui::LayerId::new(
@@ -1420,7 +1435,7 @@ impl eframe::App for Capture {
                     fs::write(self.directory.join("area-type-result.json"),serde_json::to_vec_pretty(&serde_json::json!({"saved_and_reopened":true,"frames":frames,"unresolved_input_targets":self.errors,"renderer":"native WGPU","recording_frames":self.frame})).unwrap()).unwrap();
                     assert!(self.errors.is_empty(),"all area text native assertions and UI targets pass");
                 }
-                if self.scene=="path-type" {
+                if self.scene=="path-type" || self.scene=="path-clipboard" {
                     let project=omadesign::project::encode(&self.studio.doc).unwrap();
                     fs::write(self.directory.join("path-type.oma"),&project).unwrap();
                     let restored=omadesign::project::decode(&project).unwrap();
