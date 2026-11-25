@@ -1,5 +1,6 @@
 use super::*;
 use crate::document::LayerKind;
+use lopdf::content::Operation;
 use lopdf::dictionary;
 
 fn fixture(contents: &[&[u8]], resources: Dictionary, extra: Dictionary) -> Vec<u8> {
@@ -726,6 +727,175 @@ fn imports_cairo_generated_pdf_as_editable_vector_artwork() {
     std::fs::remove_dir_all(temp).unwrap();
 }
 
+fn pdf_subpaths(geom: Geom, rotation: f32) -> Vec<Vec<Operation>> {
+    let mut document = Document::new("Compound", 220., 160., 72.);
+    let mut shape = Shape::new(
+        geom,
+        Style {
+            fill: Fill::None,
+            stroke: Some(Stroke::default()),
+        },
+    );
+    shape.rotation = rotation;
+    document.layers[1].kind.shapes_mut().unwrap().push(shape);
+    let (bytes, warnings) = write(&document).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let pdf = Pdf::load_mem(&bytes).unwrap();
+    let page = pdf.get_pages()[&1];
+    let content = pdf.get_and_decode_page_content(page).unwrap();
+    let mut subpaths = Vec::new();
+    let mut current = Vec::new();
+    for operation in content.operations {
+        match operation.operator.as_str() {
+            "m" => {
+                if !current.is_empty() {
+                    subpaths.push(std::mem::take(&mut current));
+                }
+                current.push(operation);
+            }
+            "l" | "c" | "h" | "v" | "y" => current.push(operation),
+            _ => {
+                if !current.is_empty() {
+                    subpaths.push(std::mem::take(&mut current));
+                }
+            }
+        }
+    }
+    if !current.is_empty() {
+        subpaths.push(current);
+    }
+    subpaths
+}
+
+fn starts_near(subpath: &[Operation], x: f32, y: f32) -> bool {
+    let Some(moveto) = subpath.first() else {
+        return false;
+    };
+    let n = moveto.operands.len();
+    if n < 2 {
+        return false;
+    }
+    let number = |object: &Object| match object {
+        Object::Real(value) => *value,
+        Object::Integer(value) => *value as f32,
+        _ => f32::NAN,
+    };
+    let px = number(&moveto.operands[n - 2]);
+    let py = number(&moveto.operands[n - 1]);
+    (px - x).abs() < 0.05 && (py - y).abs() < 0.05
+}
+
+#[test]
+fn compound_path_pdf_keeps_each_contour_closed_flag_and_cubics() {
+    let curve = vec![
+        Anchor::corner(Pt::new(20., 20.)),
+        Anchor::smooth(Pt::new(70., 20.), Pt::new(0., -18.)),
+        Anchor::corner(Pt::new(70., 70.)),
+        Anchor::corner(Pt::new(20., 70.)),
+    ];
+    let open = vec![
+        Anchor::corner(Pt::new(100., 30.)),
+        Anchor::corner(Pt::new(150., 30.)),
+        Anchor::corner(Pt::new(150., 80.)),
+    ];
+    let closed_path = Geom::Path {
+        anchors: curve.clone(),
+        closed: true,
+    };
+    let as_compound = Geom::Paths {
+        paths: vec![crate::geom::PathContour {
+            anchors: curve.clone(),
+            closed: true,
+        }],
+        winding: true,
+    };
+    let single = pdf_subpaths(closed_path, 0.35);
+    let compound = pdf_subpaths(as_compound, 0.35);
+    assert_eq!(
+        single.len(),
+        1,
+        "rotated closed path should be one subpath: {single:?}"
+    );
+    assert_eq!(
+        compound.len(),
+        1,
+        "one-contour compound should match a path: {compound:?}"
+    );
+    assert!(
+        single[0].iter().any(|op| op.operator == "c"),
+        "control case lost its cubic: {single:?}"
+    );
+    let numbers = |subpaths: &[Vec<Operation>]| {
+        subpaths
+            .iter()
+            .map(|subpath| {
+                subpath
+                    .iter()
+                    .map(|op| {
+                        (
+                            op.operator.clone(),
+                            op.operands
+                                .iter()
+                                .map(|object| match object {
+                                    Object::Real(value) => *value,
+                                    Object::Integer(value) => *value as f32,
+                                    _ => f32::NAN,
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        numbers(&single),
+        numbers(&compound),
+        "compound export diverged from the single-path emitter\nsingle={single:?}\ncompound={compound:?}"
+    );
+
+    let mixed = pdf_subpaths(
+        Geom::Paths {
+            paths: vec![
+                crate::geom::PathContour {
+                    anchors: curve,
+                    closed: true,
+                },
+                crate::geom::PathContour {
+                    anchors: open,
+                    closed: false,
+                },
+            ],
+            winding: true,
+        },
+        0.0,
+    );
+    let closed = mixed
+        .iter()
+        .find(|subpath| starts_near(subpath, 20., 20.))
+        .unwrap_or_else(|| panic!("missing closed contour: {mixed:?}"));
+    let opened = mixed
+        .iter()
+        .find(|subpath| starts_near(subpath, 100., 30.))
+        .unwrap_or_else(|| panic!("missing open contour: {mixed:?}"));
+    assert!(
+        closed.iter().any(|op| op.operator == "h"),
+        "closed contour was left open: {closed:?}"
+    );
+    assert!(
+        closed.iter().any(|op| op.operator == "c"),
+        "closed compound contour was flattened: {closed:?}"
+    );
+    assert!(
+        opened.iter().all(|op| op.operator != "h"),
+        "open compound contour was closed: {opened:?}"
+    );
+    assert!(
+        opened.iter().all(|op| op.operator != "c"),
+        "straight open contour grew a curve: {opened:?}"
+    );
+}
+
 #[test]
 #[ignore = "private fixture visual QA: set OMA_PDF_FIXTURE and OMA_PDF_PREVIEW"]
 fn render_private_pdf_fixture() {
@@ -776,4 +946,78 @@ fn render_private_pdf_fixture() {
         pm.save_png(output.join(format!("native-{}.png", index + 1)))
             .unwrap();
     }
+}
+
+#[test]
+fn image_integer_width_past_24_bits_keeps_every_column() {
+    // 2^24+1 is the first integer f32 cannot represent. It is still under the
+    // 64-megapixel import limit, so the column must be kept.
+    let width: i64 = 16_777_217;
+    let bytes = fixture(&[b"/Im Do"], Dictionary::new(), Dictionary::new());
+    let mut pdf = Pdf::load_mem(&bytes).unwrap();
+    let image = pdf.add_object(Stream::new(
+        dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => width,
+            "Height" => 1i64,
+            "ColorSpace" => "DeviceGray",
+            "BitsPerComponent" => 1i64,
+        },
+        vec![0u8; (width as usize).div_ceil(8)],
+    ));
+    let page_id = pdf.get_pages()[&1];
+    let parent = pdf
+        .get_dictionary(page_id)
+        .unwrap()
+        .get(b"Parent")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    pdf.get_dictionary_mut(parent).unwrap().set(
+        "Resources",
+        dictionary! { "XObject" => dictionary! { "Im" => image } },
+    );
+    let mut bytes = Vec::new();
+    pdf.save_to(&mut bytes).unwrap();
+    let (document, warnings) = read(&bytes, "wide-image.pdf").unwrap();
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| !warning.contains("could not be imported")),
+        "{warnings:?}"
+    );
+    let pixels = document
+        .layers
+        .iter()
+        .find_map(|layer| layer.kind.pixels())
+        .expect("imported image");
+    assert_eq!(pixels.h, 1);
+    assert_eq!(pixels.w, width as u32);
+    assert_eq!(pixels.data.len(), width as usize * 4);
+}
+
+#[test]
+fn rejects_oversized_raster_dimensions_without_overflow() {
+    let mut small = Document::new("Small", 8., 8., 72.);
+    {
+        let pixels = small.layers[0].kind.pixels_mut().unwrap();
+        pixels.w = 2;
+        pixels.h = 2;
+        pixels.data = vec![
+            255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 0, 0, 255,
+        ];
+    }
+    assert!(write(&small).is_ok());
+
+    let mut huge = Document::new("Huge", 32., 32., 72.);
+    {
+        let pixels = huge.layers[0].kind.pixels_mut().unwrap();
+        // 3e9 * 3e9 fits in u64, but * 4 does not. The length check must
+        // return the export error instead of panicking on that multiply.
+        pixels.w = 3_000_000_000;
+        pixels.h = 3_000_000_000;
+    }
+    let error = write(&huge).expect_err("oversized raster must be an export error");
+    assert!(error.contains("Invalid raster buffer"), "{error}");
 }

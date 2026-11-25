@@ -306,6 +306,16 @@ fn number_value(object: &Object) -> Option<f32> {
     }
 }
 
+/// Image Width and Height. Integers past 2^24 are not exact in f32, and casting
+/// those through `number_value` drops or adds columns before the pixel limit.
+fn image_extent(object: &Object) -> Option<u32> {
+    match object {
+        Object::Integer(value) if *value > 0 => u32::try_from(*value).ok(),
+        Object::Real(value) if value.is_finite() && *value > 0. => Some(*value as u32),
+        _ => None,
+    }
+}
+
 fn rectangle(pdf: &Pdf, object: &Object) -> Option<[f32; 4]> {
     let values = resolve(pdf, object)?.as_array().ok()?;
     if values.len() != 4 {
@@ -1117,14 +1127,14 @@ impl Reader<'_> {
             .dict
             .get(b"Width")
             .ok()
-            .and_then(number_value)
-            .unwrap_or(0.) as u32;
+            .and_then(image_extent)
+            .unwrap_or(0);
         let h = stream
             .dict
             .get(b"Height")
             .ok()
-            .and_then(number_value)
-            .unwrap_or(0.) as u32;
+            .and_then(image_extent)
+            .unwrap_or(0);
         let count = (w as usize)
             .checked_mul(h as usize)
             .filter(|count| *count > 0 && *count <= PIXEL_LIMIT)
