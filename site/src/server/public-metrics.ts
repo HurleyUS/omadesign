@@ -9,7 +9,12 @@ const PRODUCT_HUNT = "https://www.producthunt.com/products/omadesign";
 const PRODUCT_HUNT_CAPTURED = { upvotes: 63, users: 28, at: "2026-09-24" };
 const PRODUCT_ID = "1313169";
 const PACKAGE = /^omadesign-.+-(?:aarch64|x86_64)-unknown-linux-gnu\.tar\.gz$/;
-const GH = { Accept: "application/vnd.github+json", "User-Agent": "Omadesign release statistics" };
+// Workers share egress IPs, so unauthenticated GitHub calls hit the 60/hour limit; GITHUB_TOKEN lifts it.
+const GH = {
+  Accept: "application/vnd.github+json",
+  "User-Agent": "Omadesign release statistics",
+  ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
+};
 const number = new Intl.NumberFormat("en-US");
 
 type Release = { draft?: boolean; assets?: { name: string; download_count: number }[] };

@@ -48,3 +48,7 @@ id_ed25519*
 credentials.json
 .cache/
 node_modules/
+
+# Cloudflare Workers local state.
+site/.wrangler/
+site/.dev.vars*

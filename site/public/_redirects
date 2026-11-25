@@ -1,0 +1,3 @@
+/install/ /install 301
+/omadesign / 301
+/omadesign/* /:splat 301

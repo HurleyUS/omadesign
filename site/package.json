@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "ship": "bun ../scripts/ship.mts",
     "build:pages": "node scripts/publish-pages.mjs",
-    "publish:pages": "node scripts/publish-pages.mjs --publish"
+    "publish:pages": "node scripts/publish-pages.mjs --publish",
+    "deploy": "vite build && wrangler deploy"
   },
   "dependencies": {
     "@clerk/tanstack-react-start": "^1.5.15",
@@ -24,6 +25,7 @@
   },
   "devDependencies": {
     "@catppuccin/tailwindcss": "^1.0.0",
+    "@cloudflare/vite-plugin": "^1.70.1",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.1.0",
     "@types/node": "^26.6.2",
@@ -35,6 +37,7 @@
     "tailwindcss": "^4.1.0",
     "typescript": "^5.9.0",
     "vite": "^7.1.0",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.1",
+    "wrangler": "^4.168.0"
   }
 }
