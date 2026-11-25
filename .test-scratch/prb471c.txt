@@ -1,0 +1,90 @@
+PRB471 label="Menu" y=13.0..30.0 clip_y=0.0..44.0 live=true
+PRB471 label="Move" y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="Shift+drag" y=851.5..864.5 clip_y=847.0..869.0 live=true
+PRB471 label="45° movement" y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="Alt+drag" y=851.5..864.5 clip_y=847.0..869.0 live=true
+PRB471 label="Clone and move" y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="Shift+click" y=851.5..864.5 clip_y=847.0..869.0 live=true
+PRB471 label="Add to selection" y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="Delete" y=851.5..864.5 clip_y=847.0..869.0 live=true
+PRB471 label="Delete selection" y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="+3 more" y=850.5..865.5 clip_y=847.0..869.0 live=true
+PRB471 label="Keys" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="V" y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Move" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="A" y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Node" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="P" y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Pen" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="N" y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Pencil" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="R" y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Rectangle" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="O" y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Ellipse" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="Y" y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Polygon" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="S" y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Star" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="L" y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Line" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="T" y=877.5..890.5 clip_y=873.0..895.0 live=true
+PRB471 label="Text" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="+10 more" y=876.5..891.5 clip_y=873.0..895.0 live=true
+PRB471 label="100%" y=820.5..837.5 clip_y=814.0..842.0 live=true
+PRB471 label="100%" y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="320 × 240 px" y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="1 selected" y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="Move" y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="V" y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="Default font: NHaasGroteskDSPro-55Rg (from AbsoluteFill)" y=821.5..836.5 clip_y=814.0..842.0 live=true
+PRB471 label="Transform" y=56.0..73.0 clip_y=51.0..238.1 live=true
+PRB471 label="Align" y=56.0..73.0 clip_y=51.0..238.1 live=true
+PRB471 label="Pathfinder" y=56.0..73.0 clip_y=51.0..238.1 live=true
+PRB471 label="X" y=101.0..118.0 clip_y=96.0..238.1 live=true
+PRB471 label="10.0" y=129.0..146.0 clip_y=96.0..238.1 live=true
+PRB471 label="Y" y=101.0..118.0 clip_y=96.0..238.1 live=true
+PRB471 label="10.0" y=129.0..146.0 clip_y=96.0..238.1 live=true
+PRB471 label="W" y=156.0..173.0 clip_y=96.0..238.1 live=true
+PRB471 label="20.0" y=184.0..201.0 clip_y=96.0..238.1 live=true
+PRB471 label="H" y=156.0..173.0 clip_y=96.0..238.1 live=true
+PRB471 label="20.0" y=184.0..201.0 clip_y=96.0..238.1 live=true
+PRB471 label="Rotate" y=209.0..226.0 clip_y=96.0..238.1 live=true
+PRB471 label="0.0" y=237.0..254.0 clip_y=96.0..238.1 live=false
+PRB471 label="Properties" y=257.0..274.0 clip_y=252.1..466.8 live=true
+PRB471 label="Appearance" y=257.0..274.0 clip_y=252.1..466.8 live=true
+PRB471 label="Stroke" y=257.0..274.0 clip_y=252.1..466.8 live=true
+PRB471 label="Color" y=257.0..274.0 clip_y=252.1..466.8 live=true
+PRB471 label="Personal" y=308.0..325.0 clip_y=303.1..472.8 live=true
+PRB471 label="Project" y=308.0..325.0 clip_y=303.1..472.8 live=true
+PRB471 label="omadesign-library-jobs-531959-5201989218944327" y=309.0..324.0 clip_y=303.1..472.8 live=true
+PRB471 label="Filter names or hex colors…" y=336.0..353.0 clip_y=303.1..472.8 live=true
+PRB471 label="+ Palette" y=364.2..381.2 clip_y=303.1..472.8 live=true
+PRB471 label="Save •" y=364.2..381.2 clip_y=303.1..472.8 live=true
+PRB471 label="+ Current color" y=364.2..398.2 clip_y=303.1..472.8 live=true
+PRB471 label="Palette 1" y=429.0..446.0 clip_y=424.2..472.8 live=true
+PRB471 label="Rename" y=474.0..491.0 clip_y=424.2..472.8 live=false
+PRB471 label="#D97C5B or #D97C5B80" y=535.9..552.9 clip_y=424.2..472.8 live=false
+PRB471 label="Layers" y=492.0..509.0 clip_y=486.8..808.0 live=true
+PRB471 label="Paths" y=492.0..509.0 clip_y=486.8..808.0 live=true
+PRB471 label="Channels" y=492.0..509.0 clip_y=486.8..808.0 live=true
+PRB471 label="Layer blend" y=536.3..553.3 clip_y=486.8..808.0 live=true
+PRB471 label="Normal" y=536.8..553.8 clip_y=486.8..808.0 live=true
+PRB471 label="Layer opacity" y=566.3..583.3 clip_y=486.8..808.0 live=true
+PRB471 label="100" y=566.8..583.8 clip_y=486.8..808.0 live=true
+PRB471 label="%" y=566.8..583.8 clip_y=486.8..808.0 live=true
+PRB471 label="Artwork" y=612.0..628.0 clip_y=602.8..772.0 live=true
+PRB471 label="Rectangle" y=649.0..665.0 clip_y=602.8..772.0 live=true
+PRB471 label="100" y=47.0..59.0 clip_y=44.0..66.0 live=true
+PRB471 label="200" y=47.0..59.0 clip_y=44.0..66.0 live=true
+PRB471 label="300" y=47.0..59.0 clip_y=44.0..66.0 live=true
+PRB471 label="400" y=47.0..59.0 clip_y=44.0..66.0 live=true
+PRB471 label="100" y=141.0..153.0 clip_y=44.0..815.0 live=true
+PRB471 label="200" y=241.0..253.0 clip_y=44.0..815.0 live=true
+PRB471 label="300" y=341.0..353.0 clip_y=44.0..815.0 live=true
+PRB471 label="400" y=441.0..453.0 clip_y=44.0..815.0 live=true
+PRB471 label="500" y=541.0..553.0 clip_y=44.0..815.0 live=true
+PRB471 label="600" y=641.0..653.0 clip_y=44.0..815.0 live=true
+PRB471 label="700" y=741.0..753.0 clip_y=44.0..815.0 live=true
+PRB471 label="px" y=49.5..60.5 clip_y=44.0..815.0 live=true
+PRB471 label="Artboard 1" y=46.0..59.0 clip_y=44.0..815.0 live=true
