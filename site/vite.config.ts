@@ -1,3 +1,4 @@
+import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
@@ -8,14 +9,20 @@ import { syncAgentDocs } from "./scripts/sync-agent-docs";
 export default defineConfig(({ mode }) => {
   syncAgentDocs();
   const pages = loadEnv(mode, ".", "GITHUB_PAGES").GITHUB_PAGES === "1";
+  // `vercel build` sets VERCEL=1; every other server build targets Cloudflare Workers.
+  const vercel = !pages && Boolean(process.env.VERCEL);
+  const workers = !pages && !vercel && !process.env.VITEST;
   return {
     base: pages ? "/omadesign/" : "/",
+    // Edge-cached HTML is keyed per build so a deploy never serves pages that point at removed assets.
+    define: { __BUILD_ID__: JSON.stringify(Date.now().toString(36)) },
     server: {
       // The website imports the shared manuals without exposing the rest of the repo.
       fs: { allow: [".", "../docs"] },
     },
     build: pages ? { outDir: ".pages-build" } : undefined,
     plugins: [
+      ...(workers ? [cloudflare({ viteEnvironment: { name: "ssr" } })] : []),
       tailwindcss(),
       tanstackStart({
         router: { basepath: pages ? "/omadesign" : "/" },
@@ -31,7 +38,7 @@ export default defineConfig(({ mode }) => {
       }),
       viteReact(),
       // Start prerenders its own static client output; Pages has no server runtime.
-      ...(pages
+      ...(!vercel
         ? []
         : [
             nitro({

@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "omadesign",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-11-24",
+  "observability": { "enabled": true },
+  "vars": {
+    "CONVEX_URL": "https://healthy-buzzard-921.convex.cloud",
+    "CONVEX_SITE_URL": "https://healthy-buzzard-921.convex.site"
+  }
+  // Secrets (wrangler secret put): CLERK_SECRET_KEY, TELEMETRY_SECRET, WAITLIST_SECRET, SENTRY_DSN, GITHUB_TOKEN (read-only, optional).
+}

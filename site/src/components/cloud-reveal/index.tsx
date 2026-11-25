@@ -1,4 +1,4 @@
-import { forwardRef, memo, useEffect, useId, useImperativeHandle, useRef } from "react";
+import { forwardRef, memo, useEffect, useId, useImperativeHandle, useRef, useState } from "react";
 import { cloudBrand } from "./brand";
 import { cloudLetters } from "./letters";
 import { CloudRenderer, type DreamFrame } from "./renderer";
@@ -48,6 +48,9 @@ export const CloudReveal=forwardRef<CloudRevealHandle,Props>(function CloudRevea
   const callbacks=useRef(props); callbacks.current=props;
   const api=useRef<CloudRevealHandle | null>(null);
   const id=`dream-${useId().replace(/[^a-zA-Z0-9]/g,"")}`;
+  // The traced lockup is ~700 KB of SVG; mount it in the browser instead of shipping it in every HTML response.
+  const [mounted,setMounted]=useState(false);
+  useEffect(()=>setMounted(true),[]);
   useImperativeHandle(ref,()=>({
     setScroll:value=>api.current?.setScroll(value),
     setMotion:enabled=>api.current?.setMotion(enabled),
@@ -56,7 +59,7 @@ export const CloudReveal=forwardRef<CloudRevealHandle,Props>(function CloudRevea
 
   useEffect(()=>{
     const element=root.current,surface=canvas.current;
-    if(!element || !surface) return;
+    if(!mounted || !element || !surface) return;
     const host=element.closest<HTMLElement>("[data-cloud-experience]") || element;
     const lockup=element.querySelector<HTMLElement>(".dream-lockup")!;
     const ring=element.querySelector<SVGCircleElement>("[data-ring-draw]")!;
@@ -210,7 +213,7 @@ export const CloudReveal=forwardRef<CloudRevealHandle,Props>(function CloudRevea
       surface.removeEventListener("webglcontextlost",lost);surface.removeEventListener("webglcontextrestored",restored);
       renderer?.dispose();
     };
-  },[]);
+  },[mounted]);
 
   return <div ref={root} className="cloud-reveal" data-settled="false" role="img" aria-label="Omadesign’s lime O maze and white wordmark above a living sea of soft moonlit clouds and golden fireflies.">
     <div className="dream-fallback" aria-hidden="true">
@@ -218,6 +221,6 @@ export const CloudReveal=forwardRef<CloudRevealHandle,Props>(function CloudRevea
       <div className="dream-fallback-fireflies">{Array.from({length:18},(_,i)=><i key={i} style={{left:`${7+(i*47)%87}%`,top:`${18+(i*23)%63}%`,animationDelay:`${-i*.7}s`}} />)}</div>
     </div>
     <canvas ref={canvas} aria-hidden="true" />
-    <BrandArtwork id={id} />
+    {mounted && <BrandArtwork id={id} />}
   </div>;
 });
